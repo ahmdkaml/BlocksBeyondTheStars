@@ -98,6 +98,18 @@ Per-item detail lives in the dated work log below.
 
 ---
 
+### ★ Deep water is see-through again — vertical depth measure, softer SSR + glint (#213, 2026-07-02)
+Looking into deep water was dominated by the depth tint + sky reflection at any non-top-down angle
+([#213](https://github.com/marceld23/BlocksBeyondTheStars/issues/213), PR
+[#216](https://github.com/marceld23/BlocksBeyondTheStars/pull/216)). The bed is rendered fully lit — the
+loss of visibility was entirely the surface compositing in `BlockAtlasTransparent.shader` (URP, Medium+):
+the water-column depth was measured **along the view ray**, so the 1/cos blow-up made even knee-deep water
+saturate the 16 m depth scale from the shore, stacking dark tint + alpha bump + fresnel SSR + a ×4 sun glint.
+- **Fix (tuning, no rewrite):** depth tint keys on vertical depth (ray column × |V.y|, floored 0.08);
+  depth alpha bump halved (+0.16 → +0.08); fresnel cap 0.7 → 0.45 and SSR blend 0.45 → 0.35; sun glint
+  ×4 → ×1.5 clamped. Built-in RP pass, Potato/Low path and waterfall/river/foam branches unchanged.
+- **Verified:** local Unity build green; in-game: 4–6 m bed clearly readable at ~45°, sheen preserved.
+
 ### ★ Ship hatch exit, part 3 — THE actual cause: 2-tall hatch vs step-up headroom (#211, 2026-07-02)
 Parts 1+2 removed real pinches but the jump-to-exit persisted. A /bump on the fixed build nailed it: the
 player froze with the capsule front EXACTLY at the door wall's inner face plane, grounded, doorway
