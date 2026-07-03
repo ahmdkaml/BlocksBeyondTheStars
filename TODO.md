@@ -5503,6 +5503,10 @@ Found by building the dedicated-server Docker image locally and playing at `/pla
   browser menu already required one. `TryGetConfiguredServer` no longer requires the Glitch config, so the portal's
   `?server_host=` deep-link finally works in plain self-host builds — and a deep-linked browser menu hides the manual
   server picker. Server-side duplicate-name rejection existed already (online-name + per-install token claim).
+- **Follow-up: splash screens showed raw `ui.studio.*`/`ui.splash.*` keys on WebGL.** The browser streams
+  StreamingAssets, so the studio/title splashes build their texts before the localizer exists and `L()` falls back
+  to the key (desktop loads synchronously → never affected). Both splashes now queue texts built without a localizer
+  and re-localize them in `Update` once content arrives. Browser-verified (DE slogan/contributors/tagline/build badge).
 
 ## ✅ Done (2026-07-02): world-options overlay footer — no more overlapping buttons (#209)
 - **"Done" partially covered the "Advanced: planet types…" button ([#209](https://github.com/marceld23/BlocksBeyondTheStars/issues/209), PR [#210](https://github.com/marceld23/BlocksBeyondTheStars/pull/210)).**

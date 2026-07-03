@@ -1,6 +1,7 @@
 // Blocks Beyond the Stars — Copyright (c) 2026 Justus Dütscher & Marcel Dütscher (JuMaVe Games)
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -35,6 +36,10 @@ namespace BlocksBeyondTheStars.Client
         private readonly CanvasGroup[] _cubes = new CanvasGroup[5];
         private readonly Image[] _stars = new Image[7];
 
+        // Texts built before the localizer was up (WebGL streams content, so the splash can outrun it and
+        // would otherwise show raw "ui.studio.*" keys) — re-localized in Update once content arrives.
+        private readonly List<(Text Text, string Key)> _pendingLocalization = new();
+
         public StudioSplash(AppShell shell) => _shell = shell;
 
         public void Update()
@@ -51,6 +56,20 @@ namespace BlocksBeyondTheStars.Client
             }
 
             EnsureBuilt();
+
+            if (_pendingLocalization.Count > 0 && _shell.Localizer != null)
+            {
+                foreach (var (text, key) in _pendingLocalization)
+                {
+                    if (text != null)
+                    {
+                        text.text = _shell.L(key);
+                    }
+                }
+
+                _pendingLocalization.Clear();
+            }
+
             _elapsed += Time.deltaTime;
             Animate(_elapsed);
 
@@ -238,10 +257,10 @@ namespace BlocksBeyondTheStars.Client
             slrt.anchoredPosition = new Vector2(0f, -230f);
             slrt.sizeDelta = new Vector2(900f, 40f);
             _sloganGroup = slGo.AddComponent<CanvasGroup>();
-            Part(slrt, Vector2.zero, 24, new Color(0.8f, 0.88f, 0.96f), _shell.L("ui.studio.slogan"));
+            LocalizedPart(slrt, Vector2.zero, 24, new Color(0.8f, 0.88f, 0.96f), "ui.studio.slogan");
 
             // Open-source invite: "Contributors: your name could be here" — fades in with the slogan group.
-            Part(slrt, new Vector2(0f, -46f), 18, new Color(0.55f, 0.80f, 1f), _shell.L("ui.studio.contributors"));
+            LocalizedPart(slrt, new Vector2(0f, -46f), 18, new Color(0.55f, 0.80f, 1f), "ui.studio.contributors");
 
             // Full-screen reveal flash (on top).
             _flash = Full(root, "Flash", new Color(1f, 1f, 1f, 0f));
@@ -299,7 +318,18 @@ namespace BlocksBeyondTheStars.Client
             return group;
         }
 
-        private static void Part(Transform parent, Vector2 pos, int fontSize, Color color, string text)
+        /// <summary>A <see cref="Part"/> whose text comes from the localizer; queued for re-localization
+        /// when the localizer isn't loaded yet (WebGL streams content after the splash starts).</summary>
+        private void LocalizedPart(Transform parent, Vector2 pos, int fontSize, Color color, string key)
+        {
+            var text = Part(parent, pos, fontSize, color, _shell.L(key));
+            if (_shell.Localizer == null)
+            {
+                _pendingLocalization.Add((text, key));
+            }
+        }
+
+        private static Text Part(Transform parent, Vector2 pos, int fontSize, Color color, string text)
         {
             var go = new GameObject("T", typeof(RectTransform));
             go.transform.SetParent(parent, false);
@@ -317,6 +347,7 @@ namespace BlocksBeyondTheStars.Client
             t.verticalOverflow = VerticalWrapMode.Overflow;
             t.raycastTarget = false;
             t.text = text;
+            return t;
         }
 
         /// <summary>A soft round dot (bright core → transparent rim) for the glow, stars and rocket.</summary>

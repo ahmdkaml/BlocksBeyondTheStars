@@ -1,6 +1,7 @@
 // Blocks Beyond the Stars — Copyright (c) 2026 Justus Dütscher & Marcel Dütscher (JuMaVe Games)
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -24,6 +25,11 @@ namespace BlocksBeyondTheStars.Client
         private CanvasGroup _titleGroup;
         private CanvasGroup _lateGroup;
 
+        // Texts built before the localizer was up (WebGL streams content, so the splash can outrun it and
+        // would otherwise show raw "ui.splash.*" keys) — re-localized in Update once content arrives.
+        // Suffix covers the build badge, which appends the version to the localized part.
+        private readonly List<(Text Text, string Key, string Suffix)> _pendingLocalization = new();
+
         public SplashScreen(AppShell shell) => _shell = shell;
 
         public void Update()
@@ -40,6 +46,20 @@ namespace BlocksBeyondTheStars.Client
             }
 
             EnsureBuilt();
+
+            if (_pendingLocalization.Count > 0 && _shell.Localizer != null)
+            {
+                foreach (var (text, key, suffix) in _pendingLocalization)
+                {
+                    if (text != null)
+                    {
+                        text.text = _shell.L(key) + suffix;
+                    }
+                }
+
+                _pendingLocalization.Clear();
+            }
+
             _elapsed += Time.deltaTime;
             Animate(_elapsed);
 
@@ -116,12 +136,24 @@ namespace BlocksBeyondTheStars.Client
             lrt.offsetMin = lrt.offsetMax = Vector2.zero;
             _lateGroup = lateGo.AddComponent<CanvasGroup>();
 
-            Centered(lateGo.transform, new Vector2(0f, -65f), 18, new Color(0.75f, 0.85f, 0.95f), _shell.L("ui.splash.tagline"), false);
-            Centered(lateGo.transform, new Vector2(0f, -108f), 18, new Color(1f, 0.72f, 0.2f), $"{_shell.L("ui.splash.build")}   v{AppShell.Version}", false);
-            Centered(lateGo.transform, new Vector2(0f, -150f), 17, new Color(0.5f, 0.85f, 1f), _shell.L("ui.splash.contribute"), true);
-            Centered(lateGo.transform, new Vector2(0f, -432f), 18, new Color(0.7f, 0.8f, 0.9f, 0.6f), _shell.L("ui.splash.skip"), false);
+            LocalizedCentered(lateGo.transform, new Vector2(0f, -65f), 18, new Color(0.75f, 0.85f, 0.95f), "ui.splash.tagline", false);
+            LocalizedCentered(lateGo.transform, new Vector2(0f, -108f), 18, new Color(1f, 0.72f, 0.2f), "ui.splash.build", false, $"   v{AppShell.Version}");
+            LocalizedCentered(lateGo.transform, new Vector2(0f, -150f), 17, new Color(0.5f, 0.85f, 1f), "ui.splash.contribute", true);
+            LocalizedCentered(lateGo.transform, new Vector2(0f, -432f), 18, new Color(0.7f, 0.8f, 0.9f, 0.6f), "ui.splash.skip", false);
 
             Animate(0f);
+        }
+
+        /// <summary>A <see cref="Centered"/> whose text comes from the localizer (plus an optional literal
+        /// suffix, e.g. the version on the build badge); queued for re-localization when the localizer
+        /// isn't loaded yet (WebGL streams content after the splash starts).</summary>
+        private void LocalizedCentered(Transform parent, Vector2 pos, int fontSize, Color color, string key, bool bold, string suffix = "")
+        {
+            var text = Centered(parent, pos, fontSize, color, _shell.L(key) + suffix, bold);
+            if (_shell.Localizer == null)
+            {
+                _pendingLocalization.Add((text, key, suffix));
+            }
         }
 
         private static Text Centered(Transform parent, Vector2 pos, int fontSize, Color color, string text, bool bold)
