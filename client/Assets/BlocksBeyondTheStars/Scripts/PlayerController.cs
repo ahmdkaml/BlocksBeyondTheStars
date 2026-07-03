@@ -1237,6 +1237,14 @@ namespace BlocksBeyondTheStars.Client
                         continue; // solid floor but chest-deep underwater — not a usable surface shot
                     }
 
+                    // Lava has no collider either, so the down-ray hits the rock UNDER a lava lake and the spot
+                    // would leave the player standing in lava — burning, with the damage flash in the frame.
+                    string feet = BlockKeyAt(stand + Vector3.up * 0.3f);
+                    if (feet == "lava" || BlockKeyAt(stand + Vector3.up * 1.1f) == "lava")
+                    {
+                        continue;
+                    }
+
                     // Open sky overhead? A hit means a ceiling above us (ship hull / cave / overhang) → indoors.
                     if (Physics.Raycast(stand + Vector3.up * 0.3f, Vector3.up, out var up, 5f, ~0, QueryTriggerInteraction.Ignore)
                         && up.collider != _controller)
