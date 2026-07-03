@@ -89,7 +89,7 @@ More on our YouTube channel:
     <td width="25%"><img src="docs/screenshots/en/surface_fungal.png" width="100%" alt="Fungal world"><br><sub>Fungal</sub></td>
     <td width="25%"><img src="docs/screenshots/en/surface_skylands.png" width="100%" alt="Skylands world"><br><sub>Skylands</sub></td>
     <td width="25%"><img src="docs/screenshots/en/surface_ocean.png" width="100%" alt="Ocean world"><br><sub>Ocean</sub></td>
-    <td width="25%"></td>
+    <td width="25%"><img src="docs/screenshots/en/surface_desert.png" width="100%" alt="Desert world"><br><sub>Desert</sub></td>
   </tr>
 </table>
 

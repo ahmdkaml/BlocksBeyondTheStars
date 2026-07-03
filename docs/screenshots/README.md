@@ -49,7 +49,7 @@ variety. Each is a separate run that spawns a fresh world pinned to that type
   </tr>
   <tr>
     <td width="50%"><img src="en/surface_ocean.png" width="100%" alt="Ocean surface"><br><sub><b>surface_ocean.png</b> — Ocean world (water-dominated, so the view is mostly sea)</sub></td>
-    <td width="50%"><img src="en/surface_desert.png" width="100%" alt="Desert surface"><br><sub><b>surface_desert.png</b> — Arid/forested world (framing obstructed — reshoot pending)</sub></td>
+    <td width="50%"><img src="en/surface_desert.png" width="100%" alt="Desert surface"><br><sub><b>surface_desert.png</b> — Arid/forested world</sub></td>
   </tr>
 </table>
 
@@ -106,6 +106,13 @@ because some state can't be reached without input during an unattended run:
 
 **Determinism:** a fixed world (`MarketingShots`) + a fixed seed (`-seed`, default `424242`) make
 every run reproducible, so the set can be regenerated after any game change.
+
+Two planet surfaces use hand-picked seeds because the default seed framed them badly (jungle: camera
+against a tree trunk; lava: dark, no lava in view): **jungle = `-Seed 133742`**, **lava = `-Seed 8080`**.
+Note that the per-planet worlds are persisted saves (`singleplayer-saves/MarketingShots_<type>`) — a
+re-run reuses the existing world and ignores `-seed`; delete the save to regenerate from a new seed.
+The very first run on a fresh world catches the VEGA intro dialog in the frame, so after deleting a
+save do one throwaway run before the real capture.
 
 ### Tuning
 

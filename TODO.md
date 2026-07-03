@@ -98,6 +98,20 @@ Per-item detail lives in the dated work log below.
 
 ---
 
+### ★ Marketing screenshots regenerated — desert linked, jungle/lava reshot, lava-safe capture placement (2026-07-03)
+Full re-capture of the DE+EN marketing set (26 PNGs) from the current build via `scripts/capture-screenshots.ps1`.
+- **README galleries:** `surface_desert.png` is now linked in the root README planet gallery (the fresh shot is
+  no longer tree-obstructed); the stale "reshoot pending" note in docs/screenshots/README.md removed.
+- **Better jungle/lava shots:** the default seed framed jungle against a tree trunk and lava as a dark no-lava
+  scene; both now use hand-picked seeds (jungle `133742`, lava `8080`), documented in docs/screenshots/README.md.
+- **Capture placement fix:** `PlayerController.PlaceForCaptureNear` now rejects footing in lava — lava (like
+  water) has no collider, so the surface down-ray hit the rock *under* a lava lake and the player burned with
+  "Taking damage!" in the frame.
+- **Pipeline gotchas documented:** per-planet capture worlds are persisted saves (re-runs ignore `-seed`;
+  delete the save to reroll), and the first run on a fresh world catches the VEGA intro dialog → one throwaway
+  run before the real capture.
+- **Verified:** local Unity build green; all 26 shots re-captured through the new build and visually reviewed.
+
 ### ★ Deep water is see-through again — vertical depth measure, softer SSR + glint (#213, 2026-07-02)
 Looking into deep water was dominated by the depth tint + sky reflection at any non-top-down angle
 ([#213](https://github.com/marceld23/BlocksBeyondTheStars/issues/213), PR
