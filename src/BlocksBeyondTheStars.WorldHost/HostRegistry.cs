@@ -47,7 +47,17 @@ public static class WorldStatus
     public const string Stopped = "stopped";
     public const string Starting = "starting";
     public const string Running = "running";
+
+    /// <summary>Long-inactive: saves moved to the archive folder, instance claim ended. A join
+    /// transparently restores + wakes the world (it just takes a moment longer).</summary>
+    public const string Archived = "archived";
 }
+
+/// <summary>Registry gauges for the /metrics scrape.</summary>
+public sealed record RegistryCounts(
+    long Accounts,
+    long OpenReports,
+    IReadOnlyList<(string Status, long Count)> WorldsByStatus);
 
 /// <summary>
 /// The control plane's registry — accounts, bearer sessions and worlds in one SQLite file. Deliberately
@@ -104,7 +114,8 @@ public sealed class HostRegistry : IDisposable
                 status TEXT NOT NULL,
                 container_id TEXT NOT NULL DEFAULT '',
                 created_unix INTEGER NOT NULL,
-                last_started_unix INTEGER NOT NULL DEFAULT 0);
+                last_started_unix INTEGER NOT NULL DEFAULT 0,
+                last_active_unix INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE IF NOT EXISTS report(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 world_id TEXT NOT NULL,
@@ -125,6 +136,7 @@ public sealed class HostRegistry : IDisposable
             "ALTER TABLE account ADD COLUMN ban_reason TEXT NOT NULL DEFAULT '';",
             "ALTER TABLE account ADD COLUMN terms_version INTEGER NOT NULL DEFAULT 0;",
             "ALTER TABLE account ADD COLUMN terms_accepted_unix INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE world ADD COLUMN last_active_unix INTEGER NOT NULL DEFAULT 0;",
         })
         {
             try
@@ -152,6 +164,16 @@ public sealed class HostRegistry : IDisposable
     private static string NormalizeName(string? name)
         => new((name ?? string.Empty).ToLowerInvariant().Where(c => c is not (' ' or '-' or '_')).ToArray());
 
+    /// <summary>True when a name contains a blocked word (kid-facing name hygiene) — same normalization
+    /// as the reservation check, so separator tricks don't slip past. Substring match on a deliberately
+    /// short, unambiguous list.</summary>
+    public bool IsBlockedName(string? name)
+    {
+        string normalized = NormalizeName(name);
+        return normalized.Length > 0
+               && _config.BlockedNameWords.Any(w => NormalizeName(w) is { Length: > 0 } bad && normalized.Contains(bad));
+    }
+
     public static bool IsValidWorldId(string id) => WorldIdRx.IsMatch(id);
 
     // ---------------- Accounts & sessions ----------------
@@ -178,6 +200,11 @@ public sealed class HostRegistry : IDisposable
         if ((password ?? string.Empty).Length < 8)
         {
             return (false, "Password must be at least 8 characters.", string.Empty, string.Empty);
+        }
+
+        if (IsBlockedName(name))
+        {
+            return (false, "Please choose a different name.", string.Empty, string.Empty);
         }
 
         bool isDeveloper = false;
@@ -393,6 +420,11 @@ public sealed class HostRegistry : IDisposable
             return (false, "World name must be 1-40 printable characters.", null);
         }
 
+        if (IsBlockedName(displayName))
+        {
+            return (false, "Please choose a different world name.", null);
+        }
+
         lock (_gate)
         {
             using (var count = Cmd("SELECT COUNT(*) FROM world WHERE owner_account_id = $o"))
@@ -466,13 +498,15 @@ public sealed class HostRegistry : IDisposable
         }
     }
 
-    /// <summary>Worlds currently marked running/starting — the reaper reconciles these against Docker.</summary>
+    /// <summary>Worlds currently marked running/starting — the reaper reconciles these against Docker.
+    /// Explicitly excludes archived worlds (they have no container by definition).</summary>
     public IReadOnlyList<WorldRecord> ListActiveWorlds()
     {
         lock (_gate)
         {
-            using var cmd = Cmd(SelectWorld + " WHERE status != $st");
-            cmd.Parameters.AddWithValue("$st", WorldStatus.Stopped);
+            using var cmd = Cmd(SelectWorld + " WHERE status IN ($starting, $running)");
+            cmd.Parameters.AddWithValue("$starting", WorldStatus.Starting);
+            cmd.Parameters.AddWithValue("$running", WorldStatus.Running);
             using var reader = cmd.ExecuteReader();
             var list = new List<WorldRecord>();
             while (reader.Read())
@@ -511,6 +545,70 @@ public sealed class HostRegistry : IDisposable
             cmd.Parameters.AddWithValue("$now", NowUnix());
             cmd.Parameters.AddWithValue("$i", worldId);
             cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>Stamps a world as active now — set on every successful join/wake so the archive sweep
+    /// measures real inactivity, not time since creation.</summary>
+    public void TouchWorldActive(string worldId)
+    {
+        lock (_gate)
+        {
+            using var cmd = Cmd("UPDATE world SET last_active_unix = $now WHERE id = $i");
+            cmd.Parameters.AddWithValue("$now", NowUnix());
+            cmd.Parameters.AddWithValue("$i", worldId);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>Stopped worlds whose last activity (or creation, if never joined) predates the cutoff —
+    /// the archive sweep's work list.</summary>
+    public IReadOnlyList<WorldRecord> ListArchiveCandidates(long cutoffUnix)
+    {
+        lock (_gate)
+        {
+            using var cmd = Cmd(SelectWorld + " WHERE status = $st AND MAX(last_active_unix, created_unix) < $cutoff");
+            cmd.Parameters.AddWithValue("$st", WorldStatus.Stopped);
+            cmd.Parameters.AddWithValue("$cutoff", cutoffUnix);
+            using var reader = cmd.ExecuteReader();
+            var list = new List<WorldRecord>();
+            while (reader.Read())
+            {
+                list.Add(ReadWorld(reader));
+            }
+
+            return list;
+        }
+    }
+
+    /// <summary>Gauge snapshot for /metrics.</summary>
+    public RegistryCounts CountForMetrics()
+    {
+        lock (_gate)
+        {
+            long accounts;
+            using (var cmd = Cmd("SELECT COUNT(*) FROM account"))
+            {
+                accounts = Convert.ToInt64(cmd.ExecuteScalar());
+            }
+
+            long openReports;
+            using (var cmd = Cmd("SELECT COUNT(*) FROM report WHERE status = 'open'"))
+            {
+                openReports = Convert.ToInt64(cmd.ExecuteScalar());
+            }
+
+            var byStatus = new List<(string, long)>();
+            using (var cmd = Cmd("SELECT status, COUNT(*) FROM world GROUP BY status"))
+            using (var reader = cmd.ExecuteReader())
+            {
+                while (reader.Read())
+                {
+                    byStatus.Add((reader.GetString(0), reader.GetInt64(1)));
+                }
+            }
+
+            return new RegistryCounts(accounts, openReports, byStatus);
         }
     }
 

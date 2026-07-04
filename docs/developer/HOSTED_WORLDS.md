@@ -194,6 +194,33 @@ when one of these becomes true: a second control-plane node (HA), multi-host pla
 or the wish to join registry + world data in one operational database. `HostRegistry` is a single
 class behind plain methods, so swapping the backend later is contained.
 
+## Phase 3 hardening (implemented)
+
+- **Archive after inactivity.** `BBS_WH_ARCHIVE_MONTHS` (default 6, 0 = off): an hourly sweep moves
+  a stopped world's saves to `<WorldsDir>/_archive/<id>/` and flips its status to `archived` once its
+  last activity (join/wake or reaper stamp — `world.last_active_unix`) is older than the window.
+  Joining an archived world **transparently restores it** (rename back + normal wake) — from the
+  player's side it is just a world that takes a moment longer. Deleting stays separate; archive never
+  destroys data. Ports remain allocated to archived worlds (the range bounds total worlds at
+  `PortRangeSize`; revisit only if that ever pinches).
+- **Rate limits** (fixed windows, in-memory, operator knobs): signups 5/h and logins 10/min per
+  client IP (real IP via X-Forwarded-For — the app now honors forwarded headers from Caddy), save
+  uploads 6/h and reports 10/h per account. Over-budget calls get HTTP 429 with a friendly text.
+- **Blocked-name hygiene** (kid-facing): a short, unambiguous word list (operator-extendable via
+  `BBS_WH_BLOCKED_WORDS`) is enforced on account names, world names AND in-game player names at the
+  join grant — matched with the same normalization as reserved names, so separator tricks are caught.
+  Deliberately minimal to avoid Scunthorpe-style false positives; the report button covers the rest.
+- **Prometheus metrics.** `GET /metrics` (loopback only — Caddy does not route it): gauges
+  (`bbs_accounts_total`, `bbs_worlds{status=…}`, `bbs_reports_open`) + counters (joins granted,
+  wakes, reaped, archived, rate-limited).
+
+## Version policy (fleet)
+
+The fleet pins one image tag (`BBS_WH_SERVER_IMAGE`) — all instances run the same server version.
+`Protocol.Version` gates incompatible clients at join (the server rejects mismatches with a clear
+message). Save-schema changes must remain load-compatible with saves one release older (uploads are
+validated but never migrated silently); document per release in the changelog.
+
 ## Open (tracked in the plan)
 
 - Browser play for hosted worlds: a central `/play` on the portal that deep-links the WebGL client
@@ -201,5 +228,4 @@ class behind plain methods, so swapping the backend later is contained.
 - **Impressum + Datenschutzerklärung** pages before public launch (operator-specific content).
 - End-to-end playtest against a real Docker fleet (everything below the HTTP layer is unit-tested;
   the docker CLI path and Caddy routing need one real run on the VPS).
-- Phase 3: archive-after-inactivity (6 months), rate limits, world-name profanity filter,
-  Prometheus metrics, multi-host placement (registry → Postgres if needed).
+- Multi-host placement when one host stops being enough (spawner agent per node; registry → Postgres).

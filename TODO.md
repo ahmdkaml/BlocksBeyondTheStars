@@ -5500,6 +5500,25 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-04): hosted-worlds Phase 3 — archiving, rate limits, name hygiene, metrics
+Hardening of the WorldHost control plane (details: [HOSTED_WORLDS.md](docs/developer/HOSTED_WORLDS.md)).
+Multi-host placement stays deliberately deferred until one host stops being enough.
+- **Archive after inactivity** (`BBS_WH_ARCHIVE_MONTHS`, default 6, 0=off): hourly sweep moves a stopped
+  world's saves to `_archive/` and flips status to `archived` once `last_active_unix` (stamped on every
+  join/wake and by the reaper) ages out. **Joining an archived world restores it transparently** — never
+  destructive, deletion stays a separate owner action.
+- **Rate limits** (fixed-window, operator-configurable): signups 5/h + logins 10/min per client IP (the app
+  now honors X-Forwarded-For from Caddy), uploads 6/h + reports 10/h per account; HTTP 429 with friendly text.
+- **Blocked-name hygiene** on account names, world names and in-game player names (same normalization as the
+  reserved-name check, so "H-i-t-l-e-r" is caught); short unambiguous default list, extendable via
+  `BBS_WH_BLOCKED_WORDS` — deliberately minimal against Scunthorpe false positives ("Hilda" passes).
+- **Prometheus `GET /metrics`** (loopback only, not routed by Caddy): world/account/report gauges + counters
+  for joins, wakes, reaps, archives, rate-limited calls.
+- **Version policy documented** (fleet pins one image tag; Protocol.Version gates clients; save schema stays
+  one release load-compatible).
+- Tests: `WorldHostPhase3Tests` (8) — limiter window/reset/disable, blocked names across all three surfaces,
+  archive sweep + transparent restore round-trip, recently-active spared, sweep off, metrics rendering.
+
 ## ✅ Done (2026-07-04): bug-report inbox (ReportHost) — self-owned Docker service replacing the Wix dependency
 A standalone container (`src/BlocksBeyondTheStars.ReportHost/`) that receives the game's F1 feedback and
 automatic crash reports on the EXACT Wix wire contract (POST `/api/bugreport`, `x-bugreport-key`,

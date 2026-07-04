@@ -86,6 +86,34 @@ public sealed class WorldHostConfig
     /// disables the admin API entirely.</summary>
     public string AdminToken { get; set; } = string.Empty;
 
+    // --- Phase 3: lifecycle & abuse hardening (all operator policy) ---
+
+    /// <summary>Months of inactivity after which a stopped world is archived: its saves move to the
+    /// archive folder and its instance claim ends. Joining an archived world transparently restores it
+    /// (it just takes a moment longer to wake). 0 = never archive.</summary>
+    public int ArchiveAfterMonths { get; set; } = 6;
+
+    /// <summary>Words that may not appear in account names, world names or in-game player names —
+    /// matched against the same normalization as reserved names (lowercase, separators stripped), so
+    /// "H-i-t-l-e-r" is caught too. Kid-facing service: better safe. <c>BBS_WH_BLOCKED_WORDS</c>
+    /// (comma-separated) EXTENDS this list. Deliberately short and unambiguous to avoid Scunthorpe-style
+    /// false positives.</summary>
+    public List<string> BlockedNameWords { get; set; } = new()
+    {
+        "hitler", "nazi", "nigger", "neger", "fuck", "bitch", "hurensohn", "fotze", "wichser", "arschloch",
+    };
+
+    // Rate limits (fixed windows). Signup/login key on the caller IP, uploads/reports on the account —
+    // they exist to blunt scripted abuse, not to inconvenience players.
+
+    public int SignupPerHourPerIp { get; set; } = 5;
+
+    public int LoginPerMinutePerIp { get; set; } = 10;
+
+    public int UploadsPerHourPerAccount { get; set; } = 6;
+
+    public int ReportsPerHourPerAccount { get; set; } = 10;
+
     /// <summary>Loads config from BBS_WH_* environment variables over the defaults.</summary>
     public static WorldHostConfig FromEnvironment()
     {
@@ -121,6 +149,16 @@ public sealed class WorldHostConfig
         if (Env("BBS_WH_TERMS_VERSION") is { } tvStr && int.TryParse(tvStr, out var tv)) { c.TermsVersion = tv; }
         if (Env("BBS_WH_UPLOAD_MAX_BYTES") is { } upStr && long.TryParse(upStr, out var up)) { c.UploadMaxBytes = up; }
         if (Env("BBS_WH_ADMIN_TOKEN") is { } adminToken) { c.AdminToken = adminToken; }
+        if (Env("BBS_WH_ARCHIVE_MONTHS") is { } amStr && int.TryParse(amStr, out var am)) { c.ArchiveAfterMonths = am; }
+        if (Env("BBS_WH_BLOCKED_WORDS") is { } blocked)
+        {
+            c.BlockedNameWords.AddRange(blocked.Split(',').Select(w => w.Trim()).Where(w => w.Length > 0));
+        }
+
+        if (Env("BBS_WH_SIGNUPS_PER_HOUR") is { } suStr && int.TryParse(suStr, out var su)) { c.SignupPerHourPerIp = su; }
+        if (Env("BBS_WH_LOGINS_PER_MINUTE") is { } liStr && int.TryParse(liStr, out var li)) { c.LoginPerMinutePerIp = li; }
+        if (Env("BBS_WH_UPLOADS_PER_HOUR") is { } ulStr && int.TryParse(ulStr, out var ul)) { c.UploadsPerHourPerAccount = ul; }
+        if (Env("BBS_WH_REPORTS_PER_HOUR") is { } rpStr && int.TryParse(rpStr, out var rp)) { c.ReportsPerHourPerAccount = rp; }
 
         return c;
     }

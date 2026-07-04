@@ -34,6 +34,7 @@ public sealed class WorldOrchestrator
     private readonly HostRegistry _registry;
     private readonly IInstanceLauncher _launcher;
     private readonly Func<WorldRecord, Task<bool>> _healthProbe;
+    private readonly WorldHostMetrics _metrics;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _wakeLocks = new();
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(3) };
 
@@ -41,12 +42,14 @@ public sealed class WorldOrchestrator
         WorldHostConfig config,
         HostRegistry registry,
         IInstanceLauncher launcher,
-        Func<WorldRecord, Task<bool>>? healthProbe = null)
+        Func<WorldRecord, Task<bool>>? healthProbe = null,
+        WorldHostMetrics? metrics = null)
     {
         _config = config;
         _registry = registry;
         _launcher = launcher;
         _healthProbe = healthProbe ?? DefaultProbeAsync;
+        _metrics = metrics ?? new WorldHostMetrics();
     }
 
     /// <summary>Default probe: the instance's WS gateway answers /status on the world's (loopback-bound)
@@ -82,6 +85,12 @@ public sealed class WorldOrchestrator
             return (null, "This player name is reserved.");
         }
 
+        // Kid-facing name hygiene applies to in-game identities too, not only account/world names.
+        if (_registry.IsBlockedName(playerName))
+        {
+            return (null, "Please choose a different player name.");
+        }
+
         // Community-rules enforcement happens at the join grant — the choke point every hosted-world
         // entry goes through, regardless of which client asked.
         if (account.IsBanned)
@@ -101,6 +110,9 @@ public sealed class WorldOrchestrator
         {
             return (null, error);
         }
+
+        _metrics.JoinGranted();
+        _registry.TouchWorldActive(world.Id); // real player interest — resets the archive-inactivity clock
 
         long expires = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + JoinTokenTtlSeconds;
         string token = HostedJoinToken.Create(world.JoinSecret, world.Id, account.Id, playerName, expires);
@@ -139,9 +151,17 @@ public sealed class WorldOrchestrator
                 return (world, string.Empty);
             }
 
+            // Archived world: transparently restore its saves first — from the player's side an archived
+            // world is just one that takes a moment longer to wake.
+            if (world.Status == WorldStatus.Archived)
+            {
+                SavePaths.RestoreFromArchive(_config, world.Id);
+                _registry.SetWorldStatus(world.Id, WorldStatus.Stopped, string.Empty);
+            }
+
             // Registry says active but the container is gone (idle shutdown, crash, host reboot) — reconcile,
             // then fall through to a fresh start.
-            if (world.Status != WorldStatus.Stopped)
+            if (world.Status != WorldStatus.Stopped && world.Status != WorldStatus.Archived)
             {
                 _registry.SetWorldStatus(world.Id, WorldStatus.Stopped, string.Empty);
             }
@@ -159,6 +179,7 @@ public sealed class WorldOrchestrator
                 return (null, "The world could not be started — please try again in a moment.");
             }
 
+            _metrics.Woke();
             return await AwaitHealthyAsync(_registry.GetWorld(world.Id)!).ConfigureAwait(false);
         }
         finally
@@ -210,10 +231,40 @@ public sealed class WorldOrchestrator
             if (!_launcher.IsRunning(world.ContainerId))
             {
                 _registry.SetWorldStatus(world.Id, WorldStatus.Stopped, string.Empty);
+                _registry.TouchWorldActive(world.Id); // it WAS just running — inactivity starts now
                 reaped++;
             }
         }
 
+        _metrics.Reaped(reaped);
         return reaped;
+    }
+
+    /// <summary>Archives stopped worlds whose last activity predates the configured window: saves move
+    /// to the archive folder, status flips to archived. Joining later restores them transparently.
+    /// Time is passed in so the sweep is testable; returns the number archived.</summary>
+    public int ArchiveSweep(long nowUnix)
+    {
+        if (_config.ArchiveAfterMonths <= 0)
+        {
+            return 0;
+        }
+
+        long cutoff = nowUnix - (long)_config.ArchiveAfterMonths * 30 * 86400;
+        int archived = 0;
+        foreach (var world in _registry.ListArchiveCandidates(cutoff))
+        {
+            if (_launcher.IsRunning(world.ContainerId))
+            {
+                continue; // belt and braces — never archive under a live container
+            }
+
+            SavePaths.MoveToArchive(_config, world.Id);
+            _registry.SetWorldStatus(world.Id, WorldStatus.Archived, string.Empty);
+            archived++;
+        }
+
+        _metrics.Archived(archived);
+        return archived;
     }
 }
