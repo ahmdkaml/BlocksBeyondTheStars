@@ -5500,6 +5500,25 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-04): bug-report inbox (ReportHost) — self-owned Docker service replacing the Wix dependency
+A standalone container (`src/BlocksBeyondTheStars.ReportHost/`) that receives the game's F1 feedback and
+automatic crash reports on the EXACT Wix wire contract (POST `/api/bugreport`, `x-bugreport-key`,
+`{ok, bugReportId}`) — client + `CrashReportUploader` work unchanged, only the endpoint URL moves.
+- **Storage**: SQLite (WAL) + screenshots as files on one `/data` volume (base64 stripped before the DB);
+  triage fields (`category` crash/feedback, `source`, `kind`) lifted from `reportJson` at ingest.
+- **Read API for pull scripts/CI**: separate rotatable `x-report-read-key`; `GET /api/reports` with
+  exclusive `since` + keyset cursor (gap-free delta sync, matches the planned bugreport-puller contract).
+- **Admin UI** (server-rendered, app-level Basic Auth): filterable list, detail w/ screenshot + pretty
+  JSON, status new/triaged/done, GDPR delete; everything HTML-encoded. `PATCH`/`DELETE /api/reports/{id}`
+  for scripted triage.
+- **Fail closed**: no write key = ingest off, no read key = read API off, no admin creds = UI off. Per-IP
+  rate limit, 4 MB body cap, oversized screenshot dropped-not-rejected, optional retention pruning.
+- `Dockerfile.reports` + `docker-compose.reports.yml` (loopback port mapping; TLS via fronting proxy);
+  docs `docs/developer/REPORT_HOST.md` + SELF_HOSTING §11 (self-hosters run their OWN inbox via
+  `BBS_CRASH_REPORT_ENDPOINT`/`_KEY`; default stays no-phone-home). 13 new tests (`ReportHostTests`).
+- OPEN (later, own PR): flip `FeedbackUploader.DefaultEndpoint` to `reports.blocksbeyondthestars.de`
+  once the domain is registered + deployed; optional one-time Wix import; GHCR image workflow.
+
 ## ✅ Done (2026-07-04): hosted-worlds client integration — Official Worlds menu, report button, welcome MOTD
 The native-client side of hosted worlds (WebGL untouched by design — the browser never picks servers).
 - **"Official Worlds" main-menu entry** (native `#if` branch only): sign in with the portal account (bearer

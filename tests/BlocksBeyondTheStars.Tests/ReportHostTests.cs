@@ -1,0 +1,336 @@
+// Blocks Beyond the Stars — Copyright (c) 2026 Justus Dütscher & Marcel Dütscher (JuMaVe Games)
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Text.Json;
+using BlocksBeyondTheStars.ReportHost;
+using Xunit;
+
+namespace BlocksBeyondTheStars.Tests;
+
+/// <summary>
+/// Bug-report inbox (ReportHost): the Wix-compatible ingest parser, the SQLite + screenshot-file store
+/// with its keyset pagination and retention pruning, the per-IP rate limiter, and the admin Basic-Auth
+/// check — all pure logic, no HTTP server needed (the Program.cs wiring stays thin, like WorldHost).
+/// </summary>
+public sealed class ReportHostTests : IDisposable
+{
+    private readonly string _root;
+    private readonly List<ReportStore> _stores = new();
+
+    public ReportHostTests()
+    {
+        _root = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "bbts_rh_" + Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(_root);
+    }
+
+    private ReportStore NewStore(ReportHostConfig? config = null)
+    {
+        string dir = System.IO.Path.Combine(_root, Guid.NewGuid().ToString("N"));
+        var store = new ReportStore(config ?? new ReportHostConfig(), System.IO.Path.Combine(dir, "reports.db"));
+        _stores.Add(store);
+        return store;
+    }
+
+    /// <summary>A payload exactly as the game's FeedbackUploader serializes it (camelCase FeedbackReport).</summary>
+    private static string FeedbackPayload(string description = "The door on my ship eats my hat.", bool withScreenshot = false)
+    {
+        var report = new Dictionary<string, object?>
+        {
+            ["title"] = "Hat eaten by door",
+            ["description"] = description,
+            ["email"] = "pilot@example.com",
+            ["gameVersion"] = "0.4.2",
+            ["buildNumber"] = "1234",
+            ["playerId"] = "token-abc",
+            ["playerName"] = "Justus",
+            ["sessionId"] = "s-1",
+            ["platform"] = "WindowsPlayer",
+            ["clientTimestamp"] = "2026-07-04T12:00:00Z",
+            ["reportJson"] = new Dictionary<string, object?> { ["scene"] = "planet", ["seed"] = 42 },
+        };
+        if (withScreenshot)
+        {
+            report["screenshot"] = new Dictionary<string, object?>
+            {
+                ["fileName"] = "feedback.jpg",
+                ["mimeType"] = "image/jpeg",
+                ["base64"] = Convert.ToBase64String(new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3 }),
+            };
+        }
+
+        return JsonSerializer.Serialize(report);
+    }
+
+    /// <summary>A payload shaped like CrashReportWriter's automatic server crash report.</summary>
+    private static string CrashPayload() => JsonSerializer.Serialize(new Dictionary<string, object?>
+    {
+        ["title"] = "Server crash [tick-fault] Creatures: NullReferenceException",
+        ["description"] = "System.NullReferenceException: boom\n\nat Tick()",
+        ["email"] = "",
+        ["gameVersion"] = "0.4.2",
+        ["platform"] = "server",
+        ["clientTimestamp"] = "2026-07-04T12:00:00Z",
+        ["reportJson"] = new Dictionary<string, object?>
+        {
+            ["schemaVersion"] = 1,
+            ["kind"] = "tick-fault",
+            ["source"] = "server",
+            ["world"] = "world_001",
+        },
+    });
+
+    // ---------------- Ingest parsing ----------------
+
+    [Fact]
+    public void Parse_FeedbackPayload_ExtractsFields_AndScreenshot()
+    {
+        var parsed = ReportIngest.Parse(FeedbackPayload(withScreenshot: true), new ReportHostConfig(), out var error);
+
+        Assert.NotNull(parsed);
+        Assert.Equal("", error);
+        Assert.Equal("Hat eaten by door", parsed!.Title);
+        Assert.Equal("pilot@example.com", parsed.Email);
+        Assert.Equal("Justus", parsed.PlayerName);
+        Assert.Equal("feedback", parsed.Category);
+        Assert.Equal("", parsed.Kind);
+        Assert.NotNull(parsed.ScreenshotBytes);
+        Assert.Equal("jpg", parsed.ScreenshotExtension);
+
+        // The stored raw JSON keeps everything EXCEPT the screenshot (no megabytes of base64 in the DB).
+        using var doc = JsonDocument.Parse(parsed.ReportJson);
+        Assert.False(doc.RootElement.TryGetProperty("screenshot", out _));
+        Assert.Equal("Hat eaten by door", doc.RootElement.GetProperty("title").GetString());
+        Assert.Equal(42, doc.RootElement.GetProperty("reportJson").GetProperty("seed").GetInt32());
+    }
+
+    [Fact]
+    public void Parse_CrashPayload_IsCategorizedAsCrash()
+    {
+        var parsed = ReportIngest.Parse(CrashPayload(), new ReportHostConfig(), out _);
+
+        Assert.NotNull(parsed);
+        Assert.Equal("crash", parsed!.Category);
+        Assert.Equal("tick-fault", parsed.Kind);
+        Assert.Equal("server", parsed.Source);
+        Assert.Null(parsed.ScreenshotBytes);
+    }
+
+    [Fact]
+    public void Parse_RejectsMissingDescription_AndInvalidJson()
+    {
+        Assert.Null(ReportIngest.Parse("{\"title\":\"no text\"}", new ReportHostConfig(), out var e1));
+        Assert.Equal("empty_description", e1);
+
+        Assert.Null(ReportIngest.Parse("{\"description\":\"   \"}", new ReportHostConfig(), out var e2));
+        Assert.Equal("empty_description", e2);
+
+        Assert.Null(ReportIngest.Parse("not json at all", new ReportHostConfig(), out var e3));
+        Assert.Equal("invalid_json", e3);
+
+        Assert.Null(ReportIngest.Parse("[1,2,3]", new ReportHostConfig(), out var e4));
+        Assert.Equal("invalid_json", e4);
+    }
+
+    [Fact]
+    public void Parse_OversizedOrBrokenScreenshot_DropsImage_KeepsReport()
+    {
+        var config = new ReportHostConfig { MaxScreenshotBase64Length = 8 };
+        var oversized = ReportIngest.Parse(FeedbackPayload(withScreenshot: true), config, out _);
+        Assert.NotNull(oversized);
+        Assert.Null(oversized!.ScreenshotBytes);
+
+        string broken = FeedbackPayload(withScreenshot: true).Replace(
+            Convert.ToBase64String(new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3 }), "!!!not-base64!!!");
+        var parsed = ReportIngest.Parse(broken, new ReportHostConfig(), out _);
+        Assert.NotNull(parsed);
+        Assert.Null(parsed!.ScreenshotBytes);
+    }
+
+    [Fact]
+    public void Parse_CapsDescriptionAndTitle()
+    {
+        var config = new ReportHostConfig { MaxDescriptionLength = 10, MaxTitleLength = 5 };
+        var parsed = ReportIngest.Parse(FeedbackPayload(description: new string('x', 100)), config, out _);
+
+        Assert.NotNull(parsed);
+        Assert.Equal(10, parsed!.Description.Length);
+        Assert.Equal(5, parsed.Title.Length);
+    }
+
+    // ---------------- Store ----------------
+
+    [Fact]
+    public void Add_Get_RoundTrips_WithScreenshotFile()
+    {
+        var store = NewStore();
+        var parsed = ReportIngest.Parse(FeedbackPayload(withScreenshot: true), new ReportHostConfig(), out _)!;
+
+        string id = store.Add(parsed, nowUnix: 1000);
+        var record = store.Get(id);
+
+        Assert.NotNull(record);
+        Assert.Equal("Hat eaten by door", record!.Title);
+        Assert.Equal(BugReportStatus.New, record.Status);
+        Assert.Equal(1000, record.CreatedUnix);
+        Assert.Equal(id + ".jpg", record.ScreenshotFile);
+
+        string? path = store.ScreenshotPath(record);
+        Assert.NotNull(path);
+        Assert.True(System.IO.File.Exists(path));
+        Assert.Null(store.Get("does-not-exist"));
+    }
+
+    [Fact]
+    public void Query_PaginatesWithKeysetCursor_AndFilters()
+    {
+        var store = NewStore();
+        var config = new ReportHostConfig();
+        for (int i = 0; i < 5; i++)
+        {
+            store.Add(ReportIngest.Parse(FeedbackPayload(description: "report " + i), config, out _)!, nowUnix: 1000 + i);
+        }
+
+        store.Add(ReportIngest.Parse(CrashPayload(), config, out _)!, nowUnix: 2000);
+
+        // Page 1 of 3 → cursor → page 2; ascending created order, no gaps, no repeats.
+        var (page1, more1) = store.Query(limit: 3);
+        Assert.Equal(3, page1.Count);
+        Assert.True(more1);
+        var (page2, more2) = store.Query(limit: 3, afterCreatedUnix: page1[^1].CreatedUnix, afterId: page1[^1].Id);
+        Assert.Equal(3, page2.Count);
+        Assert.False(more2);
+        Assert.Empty(page1.Select(r => r.Id).Intersect(page2.Select(r => r.Id)));
+        Assert.Equal("report 0", page1[0].Description);
+
+        // since filter is exclusive (createdAt > since) so delta syncs never re-fetch the last row.
+        var (delta, _) = store.Query(sinceUnix: 1003);
+        Assert.Equal(2, delta.Count);
+
+        var (crashes, _) = store.Query(category: "crash");
+        Assert.Single(crashes);
+        Assert.Equal("tick-fault", crashes[0].Kind);
+
+        var (fromServer, _) = store.Query(source: "server");
+        Assert.Single(fromServer);
+    }
+
+    [Fact]
+    public void SetStatus_ValidatesAndUpdates()
+    {
+        var store = NewStore();
+        string id = store.Add(ReportIngest.Parse(FeedbackPayload(), new ReportHostConfig(), out _)!, nowUnix: 1000);
+
+        Assert.True(store.SetStatus(id, BugReportStatus.Triaged));
+        Assert.Equal(BugReportStatus.Triaged, store.Get(id)!.Status);
+
+        Assert.False(store.SetStatus(id, "nonsense"));
+        Assert.False(store.SetStatus("missing", BugReportStatus.Done));
+
+        var (triaged, _) = store.Query(status: BugReportStatus.Triaged);
+        Assert.Single(triaged);
+    }
+
+    [Fact]
+    public void Delete_RemovesRowAndScreenshotFile()
+    {
+        var store = NewStore();
+        string id = store.Add(ReportIngest.Parse(FeedbackPayload(withScreenshot: true), new ReportHostConfig(), out _)!, nowUnix: 1000);
+        string path = store.ScreenshotPath(store.Get(id)!)!;
+
+        Assert.True(store.Delete(id));
+        Assert.Null(store.Get(id));
+        Assert.False(System.IO.File.Exists(path));
+        Assert.False(store.Delete(id));
+    }
+
+    [Fact]
+    public void Prune_RemovesOldReports_IncludingScreenshots_ZeroKeepsForever()
+    {
+        var store = NewStore();
+        var config = new ReportHostConfig();
+        string oldId = store.Add(ReportIngest.Parse(FeedbackPayload(withScreenshot: true), config, out _)!, nowUnix: 0);
+        string newId = store.Add(ReportIngest.Parse(FeedbackPayload(), config, out _)!, nowUnix: 100 * 86400);
+        string oldShot = store.ScreenshotPath(store.Get(oldId)!)!;
+
+        Assert.Equal(0, store.Prune(retentionDays: 0, nowUnix: 200 * 86400));
+
+        Assert.Equal(1, store.Prune(retentionDays: 30, nowUnix: 100 * 86400));
+        Assert.Null(store.Get(oldId));
+        Assert.NotNull(store.Get(newId));
+        Assert.False(System.IO.File.Exists(oldShot));
+    }
+
+    [Fact]
+    public void CountByStatus_ReportsBuckets()
+    {
+        var store = NewStore();
+        var config = new ReportHostConfig();
+        string a = store.Add(ReportIngest.Parse(FeedbackPayload(), config, out _)!, nowUnix: 1);
+        store.Add(ReportIngest.Parse(FeedbackPayload(), config, out _)!, nowUnix: 2);
+        store.SetStatus(a, BugReportStatus.Done);
+
+        var counts = store.CountByStatus();
+        Assert.Equal(1, counts[BugReportStatus.New]);
+        Assert.Equal(1, counts[BugReportStatus.Done]);
+    }
+
+    // ---------------- Rate limiter ----------------
+
+    [Fact]
+    public void RateLimiter_BlocksBeyondBudget_ResetsNextMinute_AndIsPerKey()
+    {
+        var limiter = new IngestRateLimiter(perMinute: 2);
+
+        Assert.True(limiter.Allow("1.2.3.4", nowUnix: 60));
+        Assert.True(limiter.Allow("1.2.3.4", nowUnix: 61));
+        Assert.False(limiter.Allow("1.2.3.4", nowUnix: 62));
+
+        Assert.True(limiter.Allow("5.6.7.8", nowUnix: 62));   // other key unaffected
+        Assert.True(limiter.Allow("1.2.3.4", nowUnix: 120));  // next window resets
+
+        Assert.True(new IngestRateLimiter(perMinute: 0).Allow("x", 0)); // 0 = disabled
+    }
+
+    // ---------------- Admin Basic Auth ----------------
+
+    private static string Header(string user, string pass)
+        => "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes(user + ":" + pass));
+
+    [Fact]
+    public void BasicAuth_AcceptsOnlyExactCredentials()
+    {
+        Assert.True(BasicAuth.IsAuthorized(Header("admin", "pw-123"), "admin", "pw-123"));
+
+        Assert.False(BasicAuth.IsAuthorized(Header("admin", "wrong"), "admin", "pw-123"));
+        Assert.False(BasicAuth.IsAuthorized(Header("other", "pw-123"), "admin", "pw-123"));
+        Assert.False(BasicAuth.IsAuthorized(null, "admin", "pw-123"));
+        Assert.False(BasicAuth.IsAuthorized("", "admin", "pw-123"));
+        Assert.False(BasicAuth.IsAuthorized("Bearer abc", "admin", "pw-123"));
+        Assert.False(BasicAuth.IsAuthorized("Basic %%%not-base64%%%", "admin", "pw-123"));
+
+        // Unconfigured credentials NEVER match — the admin surface is off by default.
+        Assert.False(BasicAuth.IsAuthorized(Header("", ""), "", ""));
+        Assert.False(BasicAuth.IsAuthorized(Header("admin", ""), "admin", ""));
+    }
+
+    public void Dispose()
+    {
+        foreach (var store in _stores)
+        {
+            store.Dispose();
+        }
+
+        try
+        {
+            System.IO.Directory.Delete(_root, recursive: true);
+        }
+        catch (System.IO.IOException)
+        {
+            // Windows can hold SQLite WAL handles briefly; temp cleanup is best-effort.
+        }
+    }
+}

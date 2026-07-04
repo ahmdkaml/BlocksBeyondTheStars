@@ -1,0 +1,36 @@
+# Blocks Beyond the Stars — bug-report inbox ("ReportHost"): a standalone service that receives the
+# game's F1 player feedback and automatic crash reports, independent of any game-server deployment.
+# See docs/developer/REPORT_HOST.md for the API, the admin UI and how to point the game at it.
+#
+#   BBS_REPORTS_WRITE_KEY=... BBS_REPORTS_READ_KEY=... \
+#   BBS_REPORTS_ADMIN_USER=me BBS_REPORTS_ADMIN_PASSWORD=... \
+#     docker compose -f docker-compose.reports.yml up -d
+#
+# The service speaks plain HTTP on 31418. For a PUBLIC deployment put a TLS-terminating reverse proxy
+# (e.g. Caddy) in front and keep the port mapping bound to localhost as below; the game then posts to
+# https://reports.example.com/api/bugreport. All three credentials are required-by-default: without the
+# write key ingest rejects everything, without the read key / admin password those surfaces are off.
+
+name: bbs-reports
+
+services:
+  reports:
+    build:
+      context: .
+      dockerfile: Dockerfile.reports
+    image: blocks-beyond-the-stars-reports:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:31418:31418/tcp"   # keep loopback-only; a reverse proxy (or SSH tunnel) provides remote access
+    environment:
+      BBS_REPORTS_WRITE_KEY: "${BBS_REPORTS_WRITE_KEY:?set BBS_REPORTS_WRITE_KEY (the x-bugreport-key clients send)}"
+      BBS_REPORTS_READ_KEY: "${BBS_REPORTS_READ_KEY:-}"          # empty = read API off
+      BBS_REPORTS_ADMIN_USER: "${BBS_REPORTS_ADMIN_USER:-}"      # empty = admin UI off
+      BBS_REPORTS_ADMIN_PASSWORD: "${BBS_REPORTS_ADMIN_PASSWORD:-}"
+      # BBS_REPORTS_RETENTION_DAYS: "180"   # prune reports (incl. screenshots) after N days; 0/unset = keep
+      # BBS_REPORTS_TRUST_PROXY: "true"     # rate-limit on X-Forwarded-For — ONLY behind a trusted proxy
+    volumes:
+      - reports_data:/data              # reports.db + screenshots/
+
+volumes:
+  reports_data:
