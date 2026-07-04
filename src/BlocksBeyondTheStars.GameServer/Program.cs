@@ -63,16 +63,34 @@ logger.Info($"Persistence backend: {WorldRepositoryFactory.DisplayName(config)}.
 // Native UDP for the Windows client; optionally also WebSocket for browser clients
 // (same protocol, same authoritative server). Both share the gameplay port number.
 var native = new LiteNetLibServerTransport(config.MaxPlayers);
-using IServerTransport transport = config.EnableWebSocket
-    ? new CompositeServerTransport(native, new WebSocketServerTransport(config.WebSocketBindAddress))
+var webSocket = config.EnableWebSocket ? new WebSocketServerTransport(config.WebSocketBindAddress) : null;
+using IServerTransport transport = webSocket != null
+    ? new CompositeServerTransport(native, webSocket)
     : native;
 
-if (config.EnableWebSocket)
+if (webSocket != null)
 {
     logger.Info($"WebSocket gateway enabled on {config.WebSocketBindAddress}:{config.GameplayPort} (browser clients).");
 }
 
 var server = new GameServer(config, content, transport, repo, logger);
+
+// Hosted-worlds wiring: the WebSocket gateway serves the live status snapshot (GET /status) a control
+// plane polls; idle shutdown + join-token enforcement live inside the server and only need their config.
+if (webSocket != null)
+{
+    webSocket.StatusJsonProvider = () => server.StatusJson;
+}
+
+if (config.IdleShutdownMinutes > 0)
+{
+    logger.Info($"Idle shutdown armed: the server stops (with a save) after {config.IdleShutdownMinutes} min without players.");
+}
+
+if (!string.IsNullOrEmpty(config.JoinTokenSecret))
+{
+    logger.Info("Join-token enforcement is ON: only control-plane-issued tokens can join this world.");
+}
 
 // Last-resort crash capture. The per-tick Guards (GameServerResilience) already contain simulation faults;
 // these handlers catch what those can't see — exceptions on background threads / tasks, or anything that

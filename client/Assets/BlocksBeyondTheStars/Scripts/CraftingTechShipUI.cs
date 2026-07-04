@@ -3,8 +3,10 @@
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UI;
+using BlocksBeyondTheStars.Client.Portal;
 using BlocksBeyondTheStars.Shared.Definitions;
 using BlocksBeyondTheStars.Shared.State;
 using BlocksBeyondTheStars.Networking.Messages;
@@ -1782,9 +1784,21 @@ namespace BlocksBeyondTheStars.Client
                     continue;
                 }
 
-                UiKit.AddText(_listContent, 8, y + 8, 480, 40, AllianceName(p.Name, id), 22, UiKit.TextCol, TextAnchor.MiddleLeft, FontStyle.Bold);
-                var btn = UiKit.AddButton(_listContent, 500, y + 6, 250, 44, L("ui.alliance.propose"), () => Game.Network?.SendRequestAlliance(id));
+                // On official hosted worlds a "report player" button sits next to each name — kids need a
+                // one-tap way to flag misbehaviour (reviewed by the operators; nobody is auto-punished).
+                bool canReport = !string.IsNullOrEmpty(Game.HostedToken) && !string.IsNullOrEmpty(Game.PortalSession);
+                float nameW = canReport ? 340 : 480;
+                UiKit.AddText(_listContent, 8, y + 8, nameW, 40, AllianceName(p.Name, id), 22, UiKit.TextCol, TextAnchor.MiddleLeft, FontStyle.Bold);
+                var btn = UiKit.AddButton(_listContent, canReport ? 360 : 500, y + 6, canReport ? 220 : 250, 44,
+                    L("ui.alliance.propose"), () => Game.Network?.SendRequestAlliance(id));
                 btn.GetComponent<Image>().color = new Color(0.2f, 0.45f, 0.7f);
+                if (canReport)
+                {
+                    Button reportBtn = null;
+                    reportBtn = UiKit.AddButton(_listContent, 592, y + 6, 160, 44, L("ui.portal.report"), () => ReportPlayer(id, reportBtn));
+                    reportBtn.GetComponent<Image>().color = new Color(0.55f, 0.25f, 0.2f);
+                }
+
                 y += 58f;
                 shown++;
             }
@@ -1796,6 +1810,32 @@ namespace BlocksBeyondTheStars.Client
             }
 
             return y;
+        }
+
+        /// <summary>Files a player report against the worlds portal (official hosted worlds only — the button
+        /// exists only when a portal session + hosted join are present). One tap, category "other"; the
+        /// button itself becomes the confirmation. Reports are reviewed by the operators, never auto-punish.</summary>
+        private async void ReportPlayer(string playerName, Button button)
+        {
+            string portalUrl = Game.PortalUrl;
+            string session = Game.PortalSession;
+            var portal = new PortalClient(portalUrl);
+            var result = await Task.Run(() => portal.Report(session, playerName, "other", "in-game report"));
+            if (button == null)
+            {
+                return; // menu closed while the request ran
+            }
+
+            var label = button.GetComponentInChildren<Text>();
+            if (label != null)
+            {
+                label.text = result.Ok ? L("ui.portal.reported") : L("ui.portal.report_failed");
+            }
+
+            if (result.Ok)
+            {
+                button.interactable = false; // one report per player per menu visit is plenty
+            }
         }
 
         /// <summary>The radio (Funk) scrollback in the list pane — a live Text refreshed each frame (see Update),

@@ -45,6 +45,10 @@ namespace BlocksBeyondTheStars.Client
         public string PlayerName = ""; // empty until chosen — the menu gates play actions on it (#221)
         public string Password = "";
 
+        /// <summary>Join grant for an OFFICIAL hosted world (set by the Official-Worlds menu right before
+        /// StartJoin; short-lived). Must stay empty for singleplayer/LAN/self-host joins.</summary>
+        public string HostedToken = "";
+
         /// <summary>One-shot notice shown on the main menu (e.g. why the last join was refused).</summary>
         public string MenuNotice = "";
 

@@ -511,3 +511,25 @@ services:
 
 > Bundling LangChain/LangGraph makes the image noticeably larger. The AI backend is still entirely
 > optional and the game runs identically without it; only the image size grows.
+
+## 11. Optional: your own bug-report inbox (ReportHost)
+
+By default a self-hosted server **never phones home**: automatic crash reports are only written to the
+local `crashreports/` folder, and uploading stays off until you set an endpoint key. If you want your
+players' server crashes collected in one place **you** control, run the standalone **ReportHost**
+container (SQLite + screenshots, keyed read API, Basic-Auth admin UI) and point your game server at it:
+
+```bash
+# 1) run the inbox (see docker-compose.reports.yml / docs/developer/REPORT_HOST.md)
+BBS_REPORTS_WRITE_KEY=my-write-key BBS_REPORTS_ADMIN_USER=me BBS_REPORTS_ADMIN_PASSWORD=secret \
+  docker compose -f docker-compose.reports.yml up -d
+
+# 2) tell the game server to upload its crash reports there
+#    (docker-compose.yml → services.server.environment, or config/server.json)
+BBS_CRASH_REPORT_ENDPOINT: "http://reports-host:31418/api/bugreport"
+BBS_CRASH_REPORT_KEY: "my-write-key"
+```
+
+Reports are then browsable at `http://localhost:31418/admin` (Basic Auth). The player-facing **F1
+feedback** dialog is unaffected — it reports to the official developers regardless of which server the
+player is on. Full endpoint/config reference: [REPORT_HOST.md](REPORT_HOST.md).

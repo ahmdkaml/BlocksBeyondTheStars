@@ -31,6 +31,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BlocksBeyondTheStars.Launch
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BlocksBeyondTheStars.Client.Tests", "tests\BlocksBeyondTheStars.Client.Tests\BlocksBeyondTheStars.Client.Tests.csproj", "{AD9BFFCA-6AA8-4055-8AF7-87293CD0169C}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BlocksBeyondTheStars.WorldHost", "src\BlocksBeyondTheStars.WorldHost\BlocksBeyondTheStars.WorldHost.csproj", "{26A378C5-8440-41D0-AB50-7A7F4515E9AA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BlocksBeyondTheStars.ReportHost", "src\BlocksBeyondTheStars.ReportHost\BlocksBeyondTheStars.ReportHost.csproj", "{5B8E0F42-9C7A-4E31-B6D8-3F2A91C05E77}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -88,6 +92,14 @@ Global
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.Build.0 = Release|Any CPU
+		{26A378C5-8440-41D0-AB50-7A7F4515E9AA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{26A378C5-8440-41D0-AB50-7A7F4515E9AA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{26A378C5-8440-41D0-AB50-7A7F4515E9AA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{26A378C5-8440-41D0-AB50-7A7F4515E9AA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5B8E0F42-9C7A-4E31-B6D8-3F2A91C05E77}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5B8E0F42-9C7A-4E31-B6D8-3F2A91C05E77}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5B8E0F42-9C7A-4E31-B6D8-3F2A91C05E77}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5B8E0F42-9C7A-4E31-B6D8-3F2A91C05E77}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{272C63C1-D696-4BB2-8D7F-318C413D42A1} = {D5BFF529-F193-4741-A68E-64309534FDD9}
@@ -102,5 +114,7 @@ Global
 		{192F034A-E087-45D9-BF5C-E17FD4B1FE3D} = {D5BFF529-F193-4741-A68E-64309534FDD9}
 		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890} = {D5BFF529-F193-4741-A68E-64309534FDD9}
 		{AD9BFFCA-6AA8-4055-8AF7-87293CD0169C} = {FF46D2FF-F25E-4693-9D75-3BB4B77699E3}
+		{26A378C5-8440-41D0-AB50-7A7F4515E9AA} = {D5BFF529-F193-4741-A68E-64309534FDD9}
+		{5B8E0F42-9C7A-4E31-B6D8-3F2A91C05E77} = {D5BFF529-F193-4741-A68E-64309534FDD9}
 	EndGlobalSection
 EndGlobal

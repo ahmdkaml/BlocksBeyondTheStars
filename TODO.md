@@ -5500,6 +5500,114 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-04): bug-report inbox (ReportHost) — self-owned Docker service replacing the Wix dependency
+A standalone container (`src/BlocksBeyondTheStars.ReportHost/`) that receives the game's F1 feedback and
+automatic crash reports on the EXACT Wix wire contract (POST `/api/bugreport`, `x-bugreport-key`,
+`{ok, bugReportId}`) — client + `CrashReportUploader` work unchanged, only the endpoint URL moves.
+- **Storage**: SQLite (WAL) + screenshots as files on one `/data` volume (base64 stripped before the DB);
+  triage fields (`category` crash/feedback, `source`, `kind`) lifted from `reportJson` at ingest.
+- **Read API for pull scripts/CI**: separate rotatable `x-report-read-key`; `GET /api/reports` with
+  exclusive `since` + keyset cursor (gap-free delta sync, matches the planned bugreport-puller contract).
+- **Admin UI** (server-rendered, app-level Basic Auth): filterable list, detail w/ screenshot + pretty
+  JSON, status new/triaged/done, GDPR delete; everything HTML-encoded. `PATCH`/`DELETE /api/reports/{id}`
+  for scripted triage.
+- **Fail closed**: no write key = ingest off, no read key = read API off, no admin creds = UI off. Per-IP
+  rate limit, 4 MB body cap, oversized screenshot dropped-not-rejected, optional retention pruning.
+- `Dockerfile.reports` + `docker-compose.reports.yml` (loopback port mapping; TLS via fronting proxy);
+  docs `docs/developer/REPORT_HOST.md` + SELF_HOSTING §11 (self-hosters run their OWN inbox via
+  `BBS_CRASH_REPORT_ENDPOINT`/`_KEY`; default stays no-phone-home). 13 new tests (`ReportHostTests`).
+- OPEN (later, own PR): flip `FeedbackUploader.DefaultEndpoint` to `reports.blocksbeyondthestars.de`
+  once the domain is registered + deployed; optional one-time Wix import; GHCR image workflow.
+
+## ✅ Done (2026-07-04): hosted-worlds client integration — Official Worlds menu, report button, welcome MOTD
+The native-client side of hosted worlds (WebGL untouched by design — the browser never picks servers).
+- **"Official Worlds" main-menu entry** (native `#if` branch only): sign in with the portal account (bearer
+  session persisted in ClientSettings — never the password; `PortalUrl` setting empty = official portal),
+  world list with one-click Play — the join grant feeds `AppShell.HostedToken → GameBootstrap →
+  JoinRequest.HostedToken`; SP/LAN/manual joins clear the token so a grant can never leak across paths.
+- **`PortalClient`** in Client.Core (mirrors FeedbackUploader: HttpClient + System.Text.Json, sync, never
+  throws, runs headless in tests): login / list worlds / join (120 s ceiling — waking a world takes time) /
+  report; response parsing unit-tested (5 new client tests incl. error paths unauthorized/offline/proxy-html).
+- **In-game "Report" button** on every player row of the Alliances→find-players list — only on hosted worlds
+  (portal session + hosted join present); one tap files the report, the button becomes the confirmation.
+- **One-time welcome MOTD** (server): first join of a player on a hosted world sends one bilingual system
+  line (be kind + rules + beta notice); `PlayerState.HostedWelcomeShown` persisted via PlayerSnapshot
+  (JSON blob — additive, old saves unaffected). Keyed on the join-token gate; self-hosting unaffected.
+- New locale keys `ui.menu.official` + `ui.portal.*` (EN+DE, parity-tested).
+
+## ✅ Done (2026-07-04): hosted-worlds portal & safety — rules acceptance, reports, bans, save round-trip
+Phase-2 server side on top of the WorldHost MVP (client integration — native "Official worlds" menu, in-game
+report button, welcome MOTD — still open). Details in [HOSTED_WORLDS.md](docs/developer/HOSTED_WORLDS.md).
+- **Portal pages** (self-contained dark-style like the per-instance portal): landing with sign-in/sign-up —
+  signup REQUIRES the community-rules + beta checkbox; "My Worlds" (create/play/stop/delete, save upload +
+  download, report form); `/rules` — bilingual kid-friendly rules (family project, be kind, **no hate/mobbing/
+  racism → immediate ban**, no personal data) + **beta notice** (worlds/saves can break or vanish — download
+  backups).
+- **Rules versioning**: `BBS_WH_TERMS_VERSION`; accounts store accepted version + timestamp; login reports
+  `termsOutdated`, world actions blocked until `POST /api/accept-terms`; join grant re-checks server-side.
+- **Player reports ("Spieler melden")**: `POST /api/reports` (name, category chat/name/griefing/other, message
+  capped 500); manual review via admin API (`BBS_WH_ADMIN_TOKEN`): list/close reports, **ban/unban with reason**.
+  Banned accounts are refused at the join grant (reason shown) but may still file reports.
+- **Save upload/export (SP↔hosted round-trip)**: instances now bind-mount `<worldsDir>/<id>/saves` (not a named
+  volume); `POST/GET /api/worlds/{id}/save` (owner, stopped only) with hard size cap (50 MB default), SQLite
+  magic + `PRAGMA quick_check` + `world_meta` schema anchor validation, previous save kept as `.bak`.
+- Tests: WorldHostTests now 23 (terms gate, rules-change re-acceptance, ban/unban join flow, report
+  file/list/close + validation, upload validation garbage/foreign-sqlite/genuine-save).
+
+## ✅ Done (2026-07-04): hosted-worlds control plane MVP — WorldHost (accounts, registry, wake-on-demand)
+The Realms-style control plane over the Phase-0 server foundations. New project
+`src/BlocksBeyondTheStars.WorldHost` (in the solution; tests reference it); architecture doc
+[docs/developer/HOSTED_WORLDS.md](docs/developer/HOSTED_WORLDS.md) (routing/DNS/certs/lifecycle/security).
+- **Accounts + sessions (privacy-minimal).** Name + PBKDF2-SHA256(210k) password hash, NO email; bearer
+  sessions stored hashed; uniform login failures (no name oracle). Operator quotas via `BBS_WH_*` env —
+  never player-facing: 2 worlds/account, 12 players, idle 20 min.
+- **World registry (SQLite `worldhost/worldhost.db`).** World = 12-hex id (⇒ subdomain `w-<id>`), per-world
+  join secret, stable host port from a configured range (released on delete), status stopped/starting/running.
+- **Orchestrator: route-or-wake.** `POST /api/worlds/{id}/join` reuses the live instance or `docker run`s one
+  and polls its `/status` until healthy; returns a JoinGrant (wssUrl for browsers, host:port for native UDP,
+  120-s HMAC join token the instance verifies offline). Per-world locks serialize concurrent wakes; a 30-s
+  reaper marks idle-exited instances stopped. Docker CLI via `ArgumentList` (argv-level, no shell injection);
+  containers run `--restart=no` (an auto-restart policy would defeat idle sleep), volume `bbs-world-<id>-saves`,
+  caddy-docker-proxy labels for `w-<id>.<domain>` wss routing.
+- **Caddy on-demand TLS gate.** `GET /ask?domain=…` answers 200 only for the portal host + real worlds' subdomains
+  — required because DNS lives at Strato (no API ⇒ no DNS-challenge wildcard); wildcard A record + per-subdomain
+  HTTP-01 on first request instead. Fallback documented: delegate the `play` subzone to Cloudflare/Hetzner DNS.
+- **Client model fixed (Phase 2 requirement).** Native menu keeps self-hosting AND gains "Official worlds"
+  (login → list/create/join via WorldHost). The WEB client never gets a server picker: a self-hosted Docker's
+  `/play` stays bound to that installation; the official portal binds to the official fleet.
+- **Reserved developer names.** Marcel, Justus, Verena, juju, JuMaVe Games, FlashMiner, JustusJulius, BloddyMary
+  (list via `BBS_WH_RESERVED_NAMES`) are blocked at signup AND as in-game names on hosted worlds; matching is
+  normalized (case + space/`-`/`_` stripped, so "ju ju"/"J_ustus" are caught). Developers claim theirs once via
+  `BBS_WH_RESERVED_CLAIM_CODE` at signup → permanent `is_developer` flag (unset code = unclaimable, safe default).
+- Tests: `WorldHostTests` (18) — password hashing, signup/login/sessions, quota + port allocation + name
+  validation, subdomain resolution, wake/reuse/reap/failed-start orchestration against a fake launcher,
+  reserved-name signup/claim/in-game gates.
+- Open next (Phase 2): portal "My Worlds" UI, save upload/export, native "Official worlds" menu, WebGL deep-links,
+  **rules/beta acceptance flow** (kid-friendly bilingual community rules + "beta: saves may break/vanish" notice at
+  signup, stored terms version, one-time in-game welcome, `banned` account flag; Impressum/Datenschutz pages) —
+  analysis in HOSTED_WORLDS.md.
+
+## ✅ Done (2026-07-04): hosted-worlds server foundations — idle shutdown, /status, join tokens, owner bootstrap
+Groundwork for running MANY per-world server instances behind a control plane ("hosted worlds", Realms-style;
+plan: wildcard subdomains under `play.blocksbeyondthestars.de`). All four features are **inert by default** —
+singleplayer, LAN hosting and classic self-hosting behave exactly as before. Server-side only, no client changes.
+- **Idle shutdown.** `IdleShutdownMinutes` / `BBS_IDLE_SHUTDOWN_MINUTES` (default 0 = off): an empty server stops
+  itself cleanly (drain + save, the Ctrl+C path) after N minutes without a joined player — counted from startup
+  too, so a woken instance nobody joins goes back to sleep. Containers using it must not auto-restart.
+- **Live `/status` snapshot.** The WebSocket gateway answers `GET /status` with JSON (world, joined players, max,
+  uptime, idle state, versions) — built once a second on the tick thread, served thread-safely from the accept
+  loop. This is what a control plane polls; the admin API only sees persisted rows, not live sessions.
+- **HMAC join tokens.** New `Shared/Security/HostedJoinToken` (HMAC-SHA256, bound to world + name + account +
+  expiry, base64url fields, netstandard2.1-safe). With `JoinTokenSecret` / `BBS_JOIN_TOKEN_SECRET` set, network
+  joins require a valid control-plane token (rejections localized DE/EN); validation is offline — a control-plane
+  outage can never lock players out of a running world. `JoinRequest.HostedToken` is additive (both codecs are
+  contractless) → **no protocol bump**; local/singleplayer sessions bypass the gate by design.
+- **Owner bootstrap.** `WorldOwnerAccountId` / `BBS_WORLD_OWNER`: the token-verified owner account is granted
+  WorldAdmin even when an uploaded singleplayer save already carries someone else's first-joiner WorldAdmin —
+  otherwise an uploader could be locked out of administering their own hosted world.
+- Tests: `HostedWorldsFoundationTests` (18) — token roundtrip/tamper/expiry/wrong-world, idle fire/never-fires,
+  status content, join gate accept/reject paths, owner bootstrap on a foreign-founder save.
+
 ## ✅ Done (2026-07-03): browser-play polish — five bugs from the first local Docker browser test (#217–#221)
 Found by building the dedicated-server Docker image locally and playing at `/play`:
 - **Compose project name ([#217](https://github.com/marceld23/BlocksBeyondTheStars/issues/217)).** `docker compose`

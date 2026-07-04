@@ -22,6 +22,11 @@ public sealed class JoinRequest
     /// server-side. Optional — clients without one leave the name unclaimed.</summary>
     public string? Token { get; set; }
 
+    /// <summary>Opaque control-plane join token for hosted worlds (see <c>HostedJoinToken</c> in Shared).
+    /// Required only when the server runs with a JoinTokenSecret; everywhere else it is ignored. Additive
+    /// field — both codecs are contractless, so clients without it stay wire-compatible.</summary>
+    public string? HostedToken { get; set; }
+
     /// <summary>The player's chosen UI language ("en"/"de"). The server remembers it so dynamic, server-authored
     /// text (item 15: LLM NPC greetings) is generated in the player's language. Defaults to English.</summary>
     public string Locale { get; set; } = "en";
