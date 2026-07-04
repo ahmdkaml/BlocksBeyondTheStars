@@ -5500,6 +5500,25 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-04): hosted-worlds portal & safety — rules acceptance, reports, bans, save round-trip
+Phase-2 server side on top of the WorldHost MVP (client integration — native "Official worlds" menu, in-game
+report button, welcome MOTD — still open). Details in [HOSTED_WORLDS.md](docs/developer/HOSTED_WORLDS.md).
+- **Portal pages** (self-contained dark-style like the per-instance portal): landing with sign-in/sign-up —
+  signup REQUIRES the community-rules + beta checkbox; "My Worlds" (create/play/stop/delete, save upload +
+  download, report form); `/rules` — bilingual kid-friendly rules (family project, be kind, **no hate/mobbing/
+  racism → immediate ban**, no personal data) + **beta notice** (worlds/saves can break or vanish — download
+  backups).
+- **Rules versioning**: `BBS_WH_TERMS_VERSION`; accounts store accepted version + timestamp; login reports
+  `termsOutdated`, world actions blocked until `POST /api/accept-terms`; join grant re-checks server-side.
+- **Player reports ("Spieler melden")**: `POST /api/reports` (name, category chat/name/griefing/other, message
+  capped 500); manual review via admin API (`BBS_WH_ADMIN_TOKEN`): list/close reports, **ban/unban with reason**.
+  Banned accounts are refused at the join grant (reason shown) but may still file reports.
+- **Save upload/export (SP↔hosted round-trip)**: instances now bind-mount `<worldsDir>/<id>/saves` (not a named
+  volume); `POST/GET /api/worlds/{id}/save` (owner, stopped only) with hard size cap (50 MB default), SQLite
+  magic + `PRAGMA quick_check` + `world_meta` schema anchor validation, previous save kept as `.bak`.
+- Tests: WorldHostTests now 23 (terms gate, rules-change re-acceptance, ban/unban join flow, report
+  file/list/close + validation, upload validation garbage/foreign-sqlite/genuine-save).
+
 ## ✅ Done (2026-07-04): hosted-worlds control plane MVP — WorldHost (accounts, registry, wake-on-demand)
 The Realms-style control plane over the Phase-0 server foundations. New project
 `src/BlocksBeyondTheStars.WorldHost` (in the solution; tests reference it); architecture doc

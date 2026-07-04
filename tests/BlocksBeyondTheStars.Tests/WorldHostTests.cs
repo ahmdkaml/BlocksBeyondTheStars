@@ -84,7 +84,7 @@ public sealed class WorldHostTests : IDisposable
     {
         var registry = NewRegistry();
 
-        var (ok, _, accountId, session) = registry.CreateAccount("Pilot", "super-secret-1");
+        var (ok, _, accountId, session) = registry.CreateAccount("Pilot", "super-secret-1", acceptedTermsVersion: Terms);
         Assert.True(ok);
         Assert.Equal("Pilot", registry.ResolveSession(session)!.Name);
 
@@ -103,12 +103,12 @@ public sealed class WorldHostTests : IDisposable
     public void Signup_Rejects_TakenNames_CaseInsensitive_AndInvalidInput()
     {
         var registry = NewRegistry();
-        Assert.True(registry.CreateAccount("Pilot", "super-secret-1").Ok);
+        Assert.True(registry.CreateAccount("Pilot", "super-secret-1", acceptedTermsVersion: Terms).Ok);
 
-        Assert.False(registry.CreateAccount("pilot", "super-secret-1").Ok);    // taken (NOCASE)
-        Assert.False(registry.CreateAccount("ab", "super-secret-1").Ok);       // too short
-        Assert.False(registry.CreateAccount("has space", "super-secret-1").Ok); // bad charset
-        Assert.False(registry.CreateAccount("Fine", "short").Ok);              // weak password
+        Assert.False(registry.CreateAccount("pilot", "super-secret-1", acceptedTermsVersion: Terms).Ok);    // taken (NOCASE)
+        Assert.False(registry.CreateAccount("ab", "super-secret-1", acceptedTermsVersion: Terms).Ok);       // too short
+        Assert.False(registry.CreateAccount("has space", "super-secret-1", acceptedTermsVersion: Terms).Ok); // bad charset
+        Assert.False(registry.CreateAccount("Fine", "short", acceptedTermsVersion: Terms).Ok);              // weak password
     }
 
     // ---------------- World registry ----------------
@@ -118,7 +118,7 @@ public sealed class WorldHostTests : IDisposable
     {
         var config = new WorldHostConfig { MaxWorldsPerAccount = 2, PortRangeStart = 32000 };
         var registry = NewRegistry(config);
-        var (_, _, accountId, _) = registry.CreateAccount("Owner", "super-secret-1");
+        var (_, _, accountId, _) = registry.CreateAccount("Owner", "super-secret-1", acceptedTermsVersion: Terms);
 
         var w1 = registry.CreateWorld(accountId, "First World");
         var w2 = registry.CreateWorld(accountId, "Second World");
@@ -142,7 +142,7 @@ public sealed class WorldHostTests : IDisposable
     public void CreateWorld_ValidatesDisplayName()
     {
         var registry = NewRegistry();
-        var (_, _, accountId, _) = registry.CreateAccount("Owner", "super-secret-1");
+        var (_, _, accountId, _) = registry.CreateAccount("Owner", "super-secret-1", acceptedTermsVersion: Terms);
 
         Assert.False(registry.CreateWorld(accountId, "").Ok);
         Assert.False(registry.CreateWorld(accountId, "   ").Ok);
@@ -155,7 +155,7 @@ public sealed class WorldHostTests : IDisposable
     public void FindBySubdomain_ResolvesRealWorlds_AndRejectsGarbage()
     {
         var registry = NewRegistry();
-        var (_, _, accountId, _) = registry.CreateAccount("Owner", "super-secret-1");
+        var (_, _, accountId, _) = registry.CreateAccount("Owner", "super-secret-1", acceptedTermsVersion: Terms);
         var world = registry.CreateWorld(accountId, "My World").World!;
 
         Assert.Equal(world.Id, registry.FindBySubdomain(world.Subdomain)!.Id);
@@ -166,9 +166,12 @@ public sealed class WorldHostTests : IDisposable
 
     // ---------------- Orchestrator: route-or-wake ----------------
 
+    /// <summary>Signups in tests accept the default rules version 1 — the terms gate has its own tests.</summary>
+    private const int Terms = 1;
+
     private static (string AccountId, AccountRecord Account) NewAccount(HostRegistry registry, string name = "Owner")
     {
-        var (ok, error, accountId, session) = registry.CreateAccount(name, "super-secret-1");
+        var (ok, error, accountId, session) = registry.CreateAccount(name, "super-secret-1", acceptedTermsVersion: Terms);
         Assert.True(ok, error);
         return (accountId, registry.ResolveSession(session)!);
     }
@@ -282,7 +285,7 @@ public sealed class WorldHostTests : IDisposable
     public void Signup_RejectsReservedNames_WhenNoClaimCodeIsConfigured(string name)
     {
         var registry = NewRegistry(); // default config: claim code empty ⇒ reserved names unclaimable
-        var result = registry.CreateAccount(name, "super-secret-1");
+        var result = registry.CreateAccount(name, "super-secret-1", acceptedTermsVersion: Terms);
         Assert.False(result.Ok);
         Assert.Contains("reserved", result.Error, StringComparison.OrdinalIgnoreCase);
     }
@@ -293,14 +296,14 @@ public sealed class WorldHostTests : IDisposable
         var config = new WorldHostConfig { ReservedClaimCode = "dev-code-123" };
         var registry = NewRegistry(config);
 
-        Assert.False(registry.CreateAccount("Justus", "super-secret-1", "wrong-code").Ok);
+        Assert.False(registry.CreateAccount("Justus", "super-secret-1", "wrong-code", Terms).Ok);
 
-        var (ok, error, _, session) = registry.CreateAccount("Justus", "super-secret-1", "dev-code-123");
+        var (ok, error, _, session) = registry.CreateAccount("Justus", "super-secret-1", "dev-code-123", Terms);
         Assert.True(ok, error);
         Assert.True(registry.ResolveSession(session)!.IsDeveloper);
 
         // Ordinary names don't need (and don't get) developer status, code or not.
-        var (okPlain, _, _, plainSession) = registry.CreateAccount("Pilot", "super-secret-1");
+        var (okPlain, _, _, plainSession) = registry.CreateAccount("Pilot", "super-secret-1", acceptedTermsVersion: Terms);
         Assert.True(okPlain);
         Assert.False(registry.ResolveSession(plainSession)!.IsDeveloper);
     }
@@ -321,9 +324,123 @@ public sealed class WorldHostTests : IDisposable
         Assert.Contains("reserved", error, StringComparison.OrdinalIgnoreCase);
 
         // The claimed developer account may play under the reserved name.
-        var (_, _, _, devSession) = registry.CreateAccount("FlashMiner", "super-secret-1", "dev-code-123");
+        var (_, _, _, devSession) = registry.CreateAccount("FlashMiner", "super-secret-1", "dev-code-123", Terms);
         var dev = registry.ResolveSession(devSession)!;
         Assert.NotNull((await orchestrator.JoinAsync(world.Id, dev, "Justus")).Grant);
+    }
+
+    // ---------------- Community rules acceptance, bans, reports ----------------
+
+    [Fact]
+    public void Signup_RequiresAcceptingTheCurrentRulesVersion()
+    {
+        var registry = NewRegistry(); // default TermsVersion = 1
+
+        var without = registry.CreateAccount("Pilot", "super-secret-1"); // acceptedTermsVersion defaults to 0
+        Assert.False(without.Ok);
+        Assert.Contains("rules", without.Error, StringComparison.OrdinalIgnoreCase);
+
+        Assert.False(registry.CreateAccount("Pilot", "super-secret-1", acceptedTermsVersion: 99).Ok); // wrong version
+        Assert.True(registry.CreateAccount("Pilot", "super-secret-1", acceptedTermsVersion: 1).Ok);
+    }
+
+    [Fact]
+    public async Task RulesChange_BlocksJoins_UntilReaccepted()
+    {
+        var config = new WorldHostConfig { WakeTimeoutSeconds = 5 };
+        var registry = NewRegistry(config);
+        var orchestrator = NewOrchestrator(registry, new FakeLauncher(), config);
+        var (accountId, account) = NewAccount(registry);
+        var world = registry.CreateWorld(accountId, "My World").World!;
+
+        // The operator bumps the rules version: existing accounts must re-accept before playing.
+        config.TermsVersion = 2;
+        var (grant, error) = await orchestrator.JoinAsync(world.Id, account, "P1");
+        Assert.Null(grant);
+        Assert.Contains("rules", error, StringComparison.OrdinalIgnoreCase);
+
+        registry.AcceptTerms(accountId, 2);
+        var refreshed = account with { AcceptedTermsVersion = 2 }; // what a fresh ResolveSession would carry
+        Assert.NotNull((await orchestrator.JoinAsync(world.Id, refreshed, "P1")).Grant);
+    }
+
+    [Fact]
+    public async Task BannedAccount_CannotJoin_UntilUnbanned()
+    {
+        var config = new WorldHostConfig { WakeTimeoutSeconds = 5 };
+        var registry = NewRegistry(config);
+        var orchestrator = NewOrchestrator(registry, new FakeLauncher(), config);
+        var (accountId, account) = NewAccount(registry);
+        var world = registry.CreateWorld(accountId, "My World").World!;
+
+        registry.SetBanned(accountId, true, "Hate speech in chat");
+        var banned = registry.ResolveSession(registry.Login("Owner", "super-secret-1")!.Value.SessionToken)!;
+        Assert.True(banned.IsBanned);
+
+        var (grant, error) = await orchestrator.JoinAsync(world.Id, banned, "P1");
+        Assert.Null(grant);
+        Assert.Contains("banned", error, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Hate speech", error, StringComparison.Ordinal); // the reason is shown to the player
+
+        registry.SetBanned(accountId, false, string.Empty);
+        var unbanned = registry.ResolveSession(registry.Login("Owner", "super-secret-1")!.Value.SessionToken)!;
+        Assert.NotNull((await orchestrator.JoinAsync(world.Id, unbanned, "P1")).Grant);
+    }
+
+    [Fact]
+    public void Reports_FileListAndClose()
+    {
+        var registry = NewRegistry();
+        var (accountId, _) = NewAccount(registry);
+
+        Assert.False(registry.CreateReport(accountId, "w1", "Meanie", "nonsense-category", "msg").Ok);
+        Assert.False(registry.CreateReport(accountId, "w1", "", "chat", "msg").Ok);
+
+        Assert.True(registry.CreateReport(accountId, "w1", "Meanie", "chat", new string('x', 600)).Ok);
+        var open = registry.ListOpenReports();
+        var report = Assert.Single(open);
+        Assert.Equal("Meanie", report.ReportedName);
+        Assert.Equal(500, report.Message.Length); // free text is length-capped server-side
+
+        registry.CloseReport(report.Id, "reviewed");
+        Assert.Empty(registry.ListOpenReports());
+    }
+
+    // ---------------- Save upload validation ----------------
+
+    [Fact]
+    public void UploadValidation_AcceptsOnlyRealWorldSaves()
+    {
+        string garbage = System.IO.Path.Combine(_root, "garbage.db");
+        System.IO.File.WriteAllText(garbage, "definitely not sqlite");
+        Assert.False(SavePaths.ValidateUploadedSave(garbage).Ok);
+
+        // A real SQLite file, but not one of our saves (no world_meta table).
+        string foreign = System.IO.Path.Combine(_root, "foreign.db");
+        using (var db = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={foreign}"))
+        {
+            db.Open();
+            using var cmd = db.CreateCommand();
+            cmd.CommandText = "CREATE TABLE something(id INTEGER)";
+            cmd.ExecuteNonQuery();
+        }
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Assert.False(SavePaths.ValidateUploadedSave(foreign).Ok);
+
+        // The shape a genuine world.db has (world_meta anchor table) passes.
+        string save = System.IO.Path.Combine(_root, "save.db");
+        using (var db = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={save}"))
+        {
+            db.Open();
+            using var cmd = db.CreateCommand();
+            cmd.CommandText = "CREATE TABLE world_meta(key TEXT PRIMARY KEY, value TEXT)";
+            cmd.ExecuteNonQuery();
+        }
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        var result = SavePaths.ValidateUploadedSave(save);
+        Assert.True(result.Ok, result.Error);
     }
 
     public void Dispose()

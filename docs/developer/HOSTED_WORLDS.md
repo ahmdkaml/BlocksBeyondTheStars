@@ -108,24 +108,41 @@ Matching is normalized — lowercase, with spaces/`-`/`_` stripped — so "ju ju
 "JuMaVeGames" are all caught. Self-hosted servers are out of scope (operators control their own
 worlds; the per-save name-token claim still applies there).
 
-## Welcome / rules / beta notice (planned — Phase 2, analysis 2026-07-04)
+## Community rules, beta notice, reports & bans (implemented server-side)
 
-The service needs a lightweight acceptance flow, not a legal EULA (the software is AGPL; this
-covers the hosted SERVICE). Standard shape for community game services, adapted kid-friendly:
+Not a legal EULA (the software is AGPL; this covers the hosted SERVICE) — a lightweight,
+kid-friendly acceptance + enforcement loop:
 
-- **Community rules acceptance at signup** (required checkbox + stored `terms_version` + timestamp
-  per account): a SHORT, warm, bilingual (DE/EN) text — family & community project, be kind; no
-  hate, bullying, racism or harassment; violations can mean an immediate ban. Acceptance at the
-  ACCOUNT level is what makes bans enforceable and re-acceptance possible when the text changes.
-- **Beta notice in the same screen** (and repeated on world creation): this is a beta — hosted
-  worlds/saves can break or disappear at any time; export your world if you care about it.
-- **First-join welcome (MOTD)** in-game on hosted worlds: one short welcome + rules reminder +
-  beta notice, shown once per player per world (persisted flag), not a wall of text every join.
-- **Enforcement backend**: `banned` flag + reason on the account (join grants refused), per-world
-  kick/ban by the world owner; ties into the still-open kid-friendly Stage 3 items (profanity
-  filter, report button).
-- **German legal hygiene for the public portal**: Impressum + Datenschutzerklärung pages (DSGVO).
-  The privacy story is strong — name + password hash only, no email — and should be said out loud.
+- **Rules acceptance at signup** — the portal signup requires the checkbox and sends
+  `acceptedTermsVersion`; the registry stores version + timestamp per account. The bilingual rules
+  live at `/rules` (family project, be kind; **no hate, bullying, racism, insults → immediate
+  ban**; never share personal data; beta notice). When the operator bumps
+  `BBS_WH_TERMS_VERSION`, logins report `termsOutdated` and world actions are refused until the
+  account re-accepts (`POST /api/accept-terms`).
+- **Beta notice** — on the landing page, the worlds page and in the rules: hosted worlds/saves can
+  break or disappear at any time; download backups (the export endpoint is the answer).
+- **Player reports ("Spieler melden")** — `POST /api/reports` (Bearer): reported in-game name,
+  category (chat / name / griefing / other), optional message (capped 500 chars), optional world.
+  Reports are reviewed manually — nothing auto-punishes. Operator review via the admin API
+  (`X-Admin-Token`, enabled by `BBS_WH_ADMIN_TOKEN`): `GET /api/admin/reports`,
+  `POST /api/admin/reports/{id}/close`, `POST /api/admin/ban` (ban/unban + reason).
+- **Bans** — `banned` flag + reason on the account; the join grant (the choke point every hosted
+  entry passes) refuses banned accounts with the reason. Banned players can still file reports.
+- Still open (client-side, Phase 2 rest): in-game report button on hosted worlds, first-join
+  welcome MOTD, **Impressum + Datenschutzerklärung** pages before public launch (DSGVO — say the
+  minimal-data story out loud: name + password hash, no email).
+
+## Save upload / export (implemented)
+
+The SP↔hosted round-trip. Instances bind-mount `<BBS_WH_WORLDS_DIR>/<worldId>/saves` at
+`/app/saves` (a bind mount, not a named volume, precisely so WorldHost can do this):
+
+- `POST /api/worlds/{id}/save` (owner, world stopped, raw `world.db` bytes): streamed to a temp
+  file with a hard cap (`BBS_WH_UPLOAD_MAX_BYTES`, default 50 MB), then validated — SQLite magic
+  header, `PRAGMA quick_check`, and the game schema anchor (`world_meta` table) — before it
+  replaces the live file; the previous generation is kept as `world.db.bak`.
+- `GET /api/worlds/{id}/save` (owner, world stopped): downloads the current `world.db` — the
+  backup path the beta notice points players to, and the way back into singleplayer.
 
 ## Security notes
 
@@ -170,8 +187,8 @@ class behind plain methods, so swapping the backend later is contained.
 
 ## Open (tracked in the plan)
 
-- Phase 2: portal "My Worlds" UI, save upload/import (size cap, `PRAGMA integrity_check`, schema
-  version gate) + world export, native-client "Official worlds" menu, WebGL join deep-links,
-  rules/beta acceptance flow + welcome MOTD + ban flag (see above), Impressum/Datenschutz pages.
+- Phase 2 rest (client side): native-client "Official worlds" menu (login, list/create/join —
+  self-hosting stays alongside), in-game report button on hosted worlds, first-join welcome MOTD,
+  WebGL join deep-links from the portal, Impressum/Datenschutz pages.
 - Phase 3: archive-after-inactivity (6 months), rate limits, world-name profanity filter,
   Prometheus metrics, multi-host placement (registry → Postgres if needed).

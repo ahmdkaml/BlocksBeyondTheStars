@@ -7,7 +7,13 @@ using Microsoft.Data.Sqlite;
 
 namespace BlocksBeyondTheStars.WorldHost;
 
-public sealed record AccountRecord(string Id, string Name, bool IsDeveloper = false);
+public sealed record AccountRecord(
+    string Id,
+    string Name,
+    bool IsDeveloper = false,
+    bool IsBanned = false,
+    string BanReason = "",
+    int AcceptedTermsVersion = 0);
 
 public sealed record WorldRecord(
     string Id,
@@ -23,6 +29,17 @@ public sealed record WorldRecord(
     /// <summary>The public routing label: <c>w-&lt;id&gt;.&lt;BaseDomain&gt;</c> resolves to this world's instance.</summary>
     public string Subdomain => "w-" + Id;
 }
+
+/// <summary>A filed player report awaiting (or after) operator review.</summary>
+public sealed record ReportRecord(
+    long Id,
+    string WorldId,
+    string ReporterAccountId,
+    string ReportedName,
+    string Category,
+    string Message,
+    string Status,
+    long CreatedUnix);
 
 /// <summary>World lifecycle states tracked in the registry.</summary>
 public static class WorldStatus
@@ -69,6 +86,10 @@ public sealed class HostRegistry : IDisposable
                 name TEXT NOT NULL COLLATE NOCASE UNIQUE,
                 password_hash TEXT NOT NULL,
                 is_developer INTEGER NOT NULL DEFAULT 0,
+                banned INTEGER NOT NULL DEFAULT 0,
+                ban_reason TEXT NOT NULL DEFAULT '',
+                terms_version INTEGER NOT NULL DEFAULT 0,
+                terms_accepted_unix INTEGER NOT NULL DEFAULT 0,
                 created_unix INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS session(
                 token_hash TEXT PRIMARY KEY,
@@ -84,17 +105,36 @@ public sealed class HostRegistry : IDisposable
                 container_id TEXT NOT NULL DEFAULT '',
                 created_unix INTEGER NOT NULL,
                 last_started_unix INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE IF NOT EXISTS report(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                world_id TEXT NOT NULL,
+                reporter_account_id TEXT NOT NULL,
+                reported_name TEXT NOT NULL,
+                category TEXT NOT NULL,
+                message TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                created_unix INTEGER NOT NULL);
             """);
 
-        // Tolerant upgrade for registries created before the developer flag existed (pre-deployment dev
-        // databases only); SQLite has no ADD COLUMN IF NOT EXISTS.
-        try
+        // Tolerant upgrades for registries created before newer account columns existed (pre-deployment
+        // dev databases only); SQLite has no ADD COLUMN IF NOT EXISTS.
+        foreach (var alter in new[]
         {
-            Exec("ALTER TABLE account ADD COLUMN is_developer INTEGER NOT NULL DEFAULT 0;");
-        }
-        catch (SqliteException)
+            "ALTER TABLE account ADD COLUMN is_developer INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE account ADD COLUMN banned INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE account ADD COLUMN ban_reason TEXT NOT NULL DEFAULT '';",
+            "ALTER TABLE account ADD COLUMN terms_version INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE account ADD COLUMN terms_accepted_unix INTEGER NOT NULL DEFAULT 0;",
+        })
         {
-            // column already exists
+            try
+            {
+                Exec(alter);
+            }
+            catch (SqliteException)
+            {
+                // column already exists
+            }
         }
     }
 
@@ -117,11 +157,19 @@ public sealed class HostRegistry : IDisposable
     // ---------------- Accounts & sessions ----------------
 
     /// <summary>Creates an account and returns a fresh session token. Fails on invalid/taken/reserved
-    /// names or a too-short password. A developer registering a reserved name presents the operator's
-    /// claim code, which permanently flags the account as a developer account. The error string is safe
-    /// to show to the player.</summary>
-    public (bool Ok, string Error, string AccountId, string SessionToken) CreateAccount(string name, string password, string? claimCode = null)
+    /// names, a too-short password, or when the caller has not accepted the CURRENT community rules
+    /// (<paramref name="acceptedTermsVersion"/> must match the configured version — the signup UI sends it
+    /// with the required checkbox). A developer registering a reserved name presents the operator's claim
+    /// code, which permanently flags the account as a developer account. The error string is safe to show
+    /// to the player.</summary>
+    public (bool Ok, string Error, string AccountId, string SessionToken) CreateAccount(
+        string name, string password, string? claimCode = null, int acceptedTermsVersion = 0)
     {
+        if (acceptedTermsVersion != _config.TermsVersion)
+        {
+            return (false, "Please accept the community rules to create an account.", string.Empty, string.Empty);
+        }
+
         if (!AccountNameRx.IsMatch(name ?? string.Empty))
         {
             return (false, "Name must be 3-24 characters: letters, digits, '-' or '_'.", string.Empty, string.Empty);
@@ -156,12 +204,17 @@ public sealed class HostRegistry : IDisposable
             }
 
             string id = "acc-" + RandomHex(12);
-            using (var ins = Cmd("INSERT INTO account(id, name, password_hash, is_developer, created_unix) VALUES($i, $n, $p, $d, $c)"))
+            using (var ins = Cmd("""
+                INSERT INTO account(id, name, password_hash, is_developer, terms_version, terms_accepted_unix, created_unix)
+                VALUES($i, $n, $p, $d, $tv, $ta, $c)
+                """))
             {
                 ins.Parameters.AddWithValue("$i", id);
                 ins.Parameters.AddWithValue("$n", name);
                 ins.Parameters.AddWithValue("$p", PasswordHasher.Hash(password!));
                 ins.Parameters.AddWithValue("$d", isDeveloper ? 1 : 0);
+                ins.Parameters.AddWithValue("$tv", acceptedTermsVersion);
+                ins.Parameters.AddWithValue("$ta", NowUnix());
                 ins.Parameters.AddWithValue("$c", NowUnix());
                 ins.ExecuteNonQuery();
             }
@@ -201,13 +254,119 @@ public sealed class HostRegistry : IDisposable
         lock (_gate)
         {
             using var cmd = Cmd("""
-                SELECT a.id, a.name, a.is_developer FROM session s JOIN account a ON a.id = s.account_id
+                SELECT a.id, a.name, a.is_developer, a.banned, a.ban_reason, a.terms_version
+                FROM session s JOIN account a ON a.id = s.account_id
                 WHERE s.token_hash = $t AND s.expires_unix >= $now
                 """);
             cmd.Parameters.AddWithValue("$t", Sha256Hex(token));
             cmd.Parameters.AddWithValue("$now", NowUnix());
             using var reader = cmd.ExecuteReader();
-            return reader.Read() ? new AccountRecord(reader.GetString(0), reader.GetString(1), reader.GetInt32(2) != 0) : null;
+            return reader.Read()
+                ? new AccountRecord(reader.GetString(0), reader.GetString(1), reader.GetInt32(2) != 0,
+                    reader.GetInt32(3) != 0, reader.GetString(4), reader.GetInt32(5))
+                : null;
+        }
+    }
+
+    /// <summary>Records that an account accepted the (current) community rules version — the re-acceptance
+    /// path after the operator bumps <see cref="WorldHostConfig.TermsVersion"/>.</summary>
+    public void AcceptTerms(string accountId, int version)
+    {
+        lock (_gate)
+        {
+            using var cmd = Cmd("UPDATE account SET terms_version = $v, terms_accepted_unix = $now WHERE id = $i");
+            cmd.Parameters.AddWithValue("$v", version);
+            cmd.Parameters.AddWithValue("$now", NowUnix());
+            cmd.Parameters.AddWithValue("$i", accountId);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>Bans (or, with <paramref name="banned"/> false, unbans) an account. Banned accounts keep
+    /// their session but every world action is refused with the reason.</summary>
+    public void SetBanned(string accountId, bool banned, string reason)
+    {
+        lock (_gate)
+        {
+            using var cmd = Cmd("UPDATE account SET banned = $b, ban_reason = $r WHERE id = $i");
+            cmd.Parameters.AddWithValue("$b", banned ? 1 : 0);
+            cmd.Parameters.AddWithValue("$r", reason ?? string.Empty);
+            cmd.Parameters.AddWithValue("$i", accountId);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    // ---------------- Player reports ----------------
+
+    /// <summary>Files a player report ("Spieler melden"): who (in-game name) misbehaved on which world,
+    /// a category and an optional free-text message. Length-capped server-side; review is manual via the
+    /// operator admin endpoints (an open report never auto-punishes anyone).</summary>
+    public (bool Ok, string Error) CreateReport(string reporterAccountId, string worldId, string reportedName, string category, string message)
+    {
+        reportedName = (reportedName ?? string.Empty).Trim();
+        if (reportedName.Length is < 1 or > 24)
+        {
+            return (false, "Reported player name must be 1-24 characters.");
+        }
+
+        category = (category ?? string.Empty).Trim().ToLowerInvariant();
+        if (category is not ("chat" or "name" or "griefing" or "other"))
+        {
+            return (false, "Unknown report category.");
+        }
+
+        message = (message ?? string.Empty).Trim();
+        if (message.Length > 500)
+        {
+            message = message.Substring(0, 500);
+        }
+
+        lock (_gate)
+        {
+            using var cmd = Cmd("""
+                INSERT INTO report(world_id, reporter_account_id, reported_name, category, message, created_unix)
+                VALUES($w, $r, $n, $c, $m, $now)
+                """);
+            cmd.Parameters.AddWithValue("$w", worldId ?? string.Empty);
+            cmd.Parameters.AddWithValue("$r", reporterAccountId);
+            cmd.Parameters.AddWithValue("$n", reportedName);
+            cmd.Parameters.AddWithValue("$c", category);
+            cmd.Parameters.AddWithValue("$m", message);
+            cmd.Parameters.AddWithValue("$now", NowUnix());
+            cmd.ExecuteNonQuery();
+            return (true, string.Empty);
+        }
+    }
+
+    public IReadOnlyList<ReportRecord> ListOpenReports()
+    {
+        lock (_gate)
+        {
+            using var cmd = Cmd("""
+                SELECT id, world_id, reporter_account_id, reported_name, category, message, status, created_unix
+                FROM report WHERE status = 'open' ORDER BY created_unix
+                """);
+            using var reader = cmd.ExecuteReader();
+            var list = new List<ReportRecord>();
+            while (reader.Read())
+            {
+                list.Add(new ReportRecord(reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
+                    reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6), reader.GetInt64(7)));
+            }
+
+            return list;
+        }
+    }
+
+    /// <summary>Closes a report after operator review (status "reviewed" or "dismissed").</summary>
+    public void CloseReport(long reportId, string status)
+    {
+        lock (_gate)
+        {
+            using var cmd = Cmd("UPDATE report SET status = $s WHERE id = $i");
+            cmd.Parameters.AddWithValue("$s", status);
+            cmd.Parameters.AddWithValue("$i", reportId);
+            cmd.ExecuteNonQuery();
         }
     }
 

@@ -70,6 +70,22 @@ public sealed class WorldHostConfig
     /// <summary>Directory holding the registry database (worldhost.db).</summary>
     public string DataDir { get; set; } = "worldhost";
 
+    /// <summary>Base directory for per-world save data, bind-mounted into each instance at /app/saves —
+    /// a bind mount (not a named volume) so THIS process can implement save upload/export directly.</summary>
+    public string WorldsDir { get; set; } = Path.Combine("worldhost", "worlds");
+
+    /// <summary>Version of the community rules text. Bump when the rules change: accounts that accepted an
+    /// older version are asked to re-accept before they can create/join worlds.</summary>
+    public int TermsVersion { get; set; } = 1;
+
+    /// <summary>Upload size cap for a world.db save (bytes). Saves are block-edit deltas, so even large
+    /// builds stay small; the cap mainly bounds abuse.</summary>
+    public long UploadMaxBytes { get; set; } = 50 * 1024 * 1024;
+
+    /// <summary>Operator token for the admin endpoints (report review, account bans). Empty (default)
+    /// disables the admin API entirely.</summary>
+    public string AdminToken { get; set; } = string.Empty;
+
     /// <summary>Loads config from BBS_WH_* environment variables over the defaults.</summary>
     public static WorldHostConfig FromEnvironment()
     {
@@ -101,6 +117,10 @@ public sealed class WorldHostConfig
 
         if (Env("BBS_WH_RESERVED_CLAIM_CODE") is { } claimCode) { c.ReservedClaimCode = claimCode; }
         if (Env("BBS_WH_DATA_DIR") is { } dataDir) { c.DataDir = dataDir; }
+        if (Env("BBS_WH_WORLDS_DIR") is { } worldsDir) { c.WorldsDir = worldsDir; }
+        if (Env("BBS_WH_TERMS_VERSION") is { } tvStr && int.TryParse(tvStr, out var tv)) { c.TermsVersion = tv; }
+        if (Env("BBS_WH_UPLOAD_MAX_BYTES") is { } upStr && long.TryParse(upStr, out var up)) { c.UploadMaxBytes = up; }
+        if (Env("BBS_WH_ADMIN_TOKEN") is { } adminToken) { c.AdminToken = adminToken; }
 
         return c;
     }

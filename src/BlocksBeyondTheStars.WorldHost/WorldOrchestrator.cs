@@ -82,6 +82,20 @@ public sealed class WorldOrchestrator
             return (null, "This player name is reserved.");
         }
 
+        // Community-rules enforcement happens at the join grant — the choke point every hosted-world
+        // entry goes through, regardless of which client asked.
+        if (account.IsBanned)
+        {
+            return (null, string.IsNullOrEmpty(account.BanReason)
+                ? "This account is banned."
+                : $"This account is banned: {account.BanReason}");
+        }
+
+        if (account.AcceptedTermsVersion < _config.TermsVersion)
+        {
+            return (null, "The community rules have changed — please accept them on the portal first.");
+        }
+
         var (world, error) = await EnsureRunningAsync(worldId).ConfigureAwait(false);
         if (world is null)
         {

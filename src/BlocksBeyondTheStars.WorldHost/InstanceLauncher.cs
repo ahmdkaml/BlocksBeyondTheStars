@@ -42,6 +42,11 @@ public sealed class DockerCliLauncher : IInstanceLauncher
 
     public string Start(WorldRecord world)
     {
+        // Bind mount (not a named volume) so WorldHost itself can implement save upload/export by touching
+        // the world.db directly while the instance is stopped.
+        string savesDir = SavePaths.HostSavesDir(_config, world.Id);
+        Directory.CreateDirectory(savesDir);
+
         var args = new List<string>
         {
             "run", "-d",
@@ -51,7 +56,7 @@ public sealed class DockerCliLauncher : IInstanceLauncher
             "--network", _config.DockerNetwork,
             "-p", $"{world.HostPort}:31415/udp",
             "-p", $"127.0.0.1:{world.HostPort}:31415/tcp", // tcp side only for the local /status probe; public wss goes through Caddy
-            "-v", $"bbs-world-{world.Id}-saves:/app/saves",
+            "-v", $"{savesDir}:/app/saves",
             "-e", $"BBS_WORLD={world.Id}",
             "-e", $"BBS_SERVER_NAME={world.DisplayName}",
             "-e", $"BBS_MAX_PLAYERS={_config.MaxPlayersPerWorld}",
