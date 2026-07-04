@@ -1,0 +1,10 @@
+{
+	# On-demand TLS for w-<id>.play.blocksbeyondthestars.de (Strato has no DNS API, so no
+	# DNS-challenge wildcard certificate). WorldHost authorizes each subdomain via GET /ask —
+	# only the portal host and worlds that exist in the registry get certificates, so nobody can
+	# burn Let's Encrypt rate limits by aiming random names at the IP. Inert until the worldhost
+	# container exists on the bbs-hosted network.
+	on_demand_tls {
+		ask http://worldhost:31417/ask
+	}
+}

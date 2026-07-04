@@ -1,0 +1,41 @@
+# WorldHost — the hosted-worlds control plane (docs/developer/HOSTED_WORLDS.md), fleet deployment.
+# Interpolation values + secrets come from /opt/bbs/worldhost/.env on the host (see .env.example);
+# deploy.yml syncs this file but NEVER touches the real .env.
+#
+# The service name doubles as the DNS alias on the bbs-hosted network — the caddy BaseCaddyfile's
+# on-demand-TLS ask endpoint (http://worldhost:31417/ask) depends on it, so don't rename it.
+services:
+  worldhost:
+    image: ghcr.io/marceld23/blocks-beyond-the-stars-worldhost:${WORLDHOST_TAG:-latest}
+    container_name: bbs-worldhost
+    restart: unless-stopped
+    networks:
+      - bbs-hosted
+    volumes:
+      # WorldHost drives the HOST docker daemon (one container per world) — root-equivalent by design.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Registry database (worldhost.db).
+      - /opt/bbs/worldhost/data:/data
+      # Per-world saves. MUST be the SAME absolute path inside and outside the container: WorldHost
+      # passes <worlds>/<id>/saves to `docker run -v`, and the host daemon resolves that path on the
+      # HOST filesystem (SavePaths.HostSavesDir).
+      - /opt/bbs/worldhost/worlds:/opt/bbs/worldhost/worlds
+    environment:
+      BBS_WH_BIND: 0.0.0.0
+      BBS_WH_DATA_DIR: /data
+      BBS_WH_WORLDS_DIR: /opt/bbs/worldhost/worlds
+      BBS_WH_DOCKER_NETWORK: bbs-hosted
+      BBS_WH_BASE_DOMAIN: ${BBS_WH_BASE_DOMAIN:?set in /opt/bbs/worldhost/.env}
+      BBS_WH_PUBLIC_HOST: ${BBS_WH_PUBLIC_HOST:?set in /opt/bbs/worldhost/.env}
+      BBS_WH_SERVER_IMAGE: ${BBS_WH_SERVER_IMAGE:?set in /opt/bbs/worldhost/.env}
+      BBS_WH_RESERVED_CLAIM_CODE: ${BBS_WH_RESERVED_CLAIM_CODE:-}   # empty = reserved names unclaimable
+      BBS_WH_ADMIN_TOKEN: ${BBS_WH_ADMIN_TOKEN:-}                   # empty = admin API off
+    labels:
+      # Portal + API domain. Worlds announce their own w-<id> subdomains via labels WorldHost puts on
+      # each instance container.
+      caddy: ${BBS_WH_BASE_DOMAIN:?set in /opt/bbs/worldhost/.env}
+      caddy.reverse_proxy: "{{upstreams 31417}}"
+
+networks:
+  bbs-hosted:
+    external: true
