@@ -79,13 +79,22 @@ Native desktop clients use UDP and bypass Caddy entirely: each world publishes i
 that port binds to loopback only — it exists for WorldHost's `/status` probe; public wss goes
 through Caddy.
 
-## Client integration model (Phase 2 — requirement fixed 2026-07-04)
+## Client integration (implemented for the native client)
 
-- **Native client (desktop):** the menu offers BOTH worlds — self-hosting exactly as today
-  (Singleplayer / Host (LAN) / Join-by-address) AND "Official worlds": sign in to
-  `play.blocksbeyondthestars.de`, list/create/join your hosted worlds via the WorldHost API. The
-  join grant's `nativeHost:nativePort` + `joinToken` feed the existing connect path
-  (`JoinRequest.HostedToken`).
+- **Native client (desktop):** the main menu offers BOTH worlds — self-hosting exactly as today
+  (Singleplayer / Host (LAN) / Join-by-address) AND **"Official Worlds"** (`UiMainMenu`, native-only
+  `#if` branch): sign in with the portal account (session stored in `ClientSettings.PortalSessionToken`,
+  never the password; `PortalUrl` empty = the official portal, settable for self-hosted WorldHosts),
+  list your worlds, one click joins — the join grant's `nativeHost:nativePort` + `joinToken` feed the
+  existing connect path (`AppShell.HostedToken` → `GameBootstrap` → `JoinRequest.HostedToken`). The
+  HTTP side is `Client.Core/Portal/PortalClient` (mirrors FeedbackUploader: HttpClient, sync, never
+  throws, testable headless). Manual/SP/LAN joins explicitly clear the hosted token.
+- **In-game report button:** on hosted worlds (portal session + hosted join present) every player row
+  in the Alliances → find-players list carries a "Report" button — one tap files a report via
+  `POST /api/reports`, the button becomes the confirmation. Absent everywhere else.
+- **One-time welcome (MOTD):** on a hosted world's FIRST join of a player, the server sends one
+  bilingual system line (be kind + rules + beta notice) — `PlayerState.HostedWelcomeShown` persists
+  so it never repeats. Keyed on the join-token gate, so self-hosted servers are unaffected.
 - **Web client:** NO server choice, ever. The browser client is always bound to whoever serves it:
   a self-hosted Docker's `/play` page points at that same installation's server (exactly as today,
   via the portal deep-link parameters), and the official portal's pages point at the official
@@ -187,8 +196,10 @@ class behind plain methods, so swapping the backend later is contained.
 
 ## Open (tracked in the plan)
 
-- Phase 2 rest (client side): native-client "Official worlds" menu (login, list/create/join —
-  self-hosting stays alongside), in-game report button on hosted worlds, first-join welcome MOTD,
-  WebGL join deep-links from the portal, Impressum/Datenschutz pages.
+- Browser play for hosted worlds: a central `/play` on the portal that deep-links the WebGL client
+  at `w-<id>` subdomains (incl. passing the join token through the page URL).
+- **Impressum + Datenschutzerklärung** pages before public launch (operator-specific content).
+- End-to-end playtest against a real Docker fleet (everything below the HTTP layer is unit-tested;
+  the docker CLI path and Caddy routing need one real run on the VPS).
 - Phase 3: archive-after-inactivity (6 months), rate limits, world-name profanity filter,
   Prometheus metrics, multi-host placement (registry → Postgres if needed).

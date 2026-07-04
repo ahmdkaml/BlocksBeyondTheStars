@@ -167,6 +167,17 @@ namespace BlocksBeyondTheStars.Client
         /// under a name claims it, later joins must match. Generated once on load, never shown in UI.</summary>
         public string PlayerToken = "";
 
+        /// <summary>Base URL of the official worlds portal (hosted-worlds control plane). Kept as a setting
+        /// so self-hosters can point the menu at their own WorldHost; empty = the official default.</summary>
+        public string PortalUrl = "";
+
+        /// <summary>Bearer session for the worlds portal, saved after a successful sign-in so the menu stays
+        /// signed in across launches. Only the session is stored — never the password.</summary>
+        public string PortalSessionToken = "";
+
+        /// <summary>Account name belonging to <see cref="PortalSessionToken"/> (display only).</summary>
+        public string PortalAccountName = "";
+
         // Accessibility (flags wired now; visual effects applied when the render layer lands)
         public bool ReducedEffects = false;
         public bool LargeUi = false;

@@ -30,6 +30,15 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>Per-install name-verification secret (see <see cref="ClientSettings.PlayerToken"/>).</summary>
         public string Token = "";
 
+        /// <summary>Control-plane join grant for OFFICIAL hosted worlds (short-lived HMAC token from the
+        /// worlds portal). Empty everywhere else — singleplayer, LAN and self-hosted joins don't use it.</summary>
+        public string HostedToken = "";
+
+        /// <summary>Portal base URL + bearer session, carried into the game so in-game portal actions
+        /// (the "report player" button) work while on a hosted world. Empty otherwise.</summary>
+        public string PortalUrl = "";
+        public string PortalSession = "";
+
         /// <summary>The player's chosen render distance in chunks, forwarded to the server in the JoinRequest so a
         /// remote/dedicated host streams terrain at this radius (not just the local fog). 0 = let the server decide.</summary>
         public int ViewDistanceChunks = 0;
@@ -1202,7 +1211,8 @@ namespace BlocksBeyondTheStars.Client
                     {
                         Debug.Log($"Sending join request to {Host}:{Port} as {PlayerName}.");
                         Network.Join(PlayerName, string.IsNullOrEmpty(Password) ? null : Password, German ? "de" : "en",
-                            string.IsNullOrEmpty(Token) ? null : Token, ViewDistanceChunks);
+                            string.IsNullOrEmpty(Token) ? null : Token, ViewDistanceChunks,
+                            string.IsNullOrEmpty(HostedToken) ? null : HostedToken);
                         Network.SendAppearance(SkinRgb, TorsoRgb, ArmRgb, LegRgb, HullRgb);
                         if (!string.IsNullOrEmpty(FacePixels))
                         {

@@ -95,6 +95,10 @@ public sealed class PlayerState
     /// tokenless client) — the next join that brings a token claims the name. Persisted.</summary>
     public string NameTokenHash { get; set; } = string.Empty;
 
+    /// <summary>Hosted worlds: the one-time welcome (rules + beta notice) was already shown to this player
+    /// on this world — greet once, not on every join. Persisted.</summary>
+    public bool HostedWelcomeShown { get; set; }
+
     /// <summary>Stealth field active (from a stealth suit) — creatures/enemies ignore the player. Not persisted.</summary>
     public bool Stealthed { get; set; }
 

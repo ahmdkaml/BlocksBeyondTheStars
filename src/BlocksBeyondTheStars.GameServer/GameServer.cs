@@ -1889,6 +1889,20 @@ public sealed partial class GameServer
         SendExistingFaces(session);     // custom pixel faces of already-online players
         ShipAiOnJoin(session); // boot VEGA: onboarding intro / veteran skip / resume objective
 
+        // Hosted worlds: one-time welcome (community rules + beta notice) on the player's FIRST join of
+        // this world — the acceptance screen lives on the portal; this is the friendly in-game reminder.
+        // Keyed on the join-token gate (only official hosted instances run with a secret).
+        if (!string.IsNullOrEmpty(_config.JoinTokenSecret) && !state.HostedWelcomeShown)
+        {
+            Send(session, new ServerMessage
+            {
+                Text = de
+                    ? "Willkommen! Diese Welt ist Teil eines Familien-Projekts — sei nett zu anderen. Keine Hetze, kein Mobbing, kein Rassismus (führt zum Bann). Beta: Welten können verloren gehen — lade im Portal Sicherungen herunter!"
+                    : "Welcome! This world is part of a family project — be kind to others. No hate, bullying or racism (leads to a ban). Beta: worlds can be lost — download backups on the portal!",
+            });
+            state.HostedWelcomeShown = true; // persists with the next save cycle
+        }
+
         _log.Info($"Player '{name}' joined (connection {connectionId}).");
     }
 

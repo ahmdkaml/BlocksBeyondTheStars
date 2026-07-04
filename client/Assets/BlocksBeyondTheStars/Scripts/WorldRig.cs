@@ -32,6 +32,9 @@ namespace BlocksBeyondTheStars.Client
             boot.PlayerName = string.IsNullOrWhiteSpace(shell.PlayerName) ? "Pilot" : shell.PlayerName;
             boot.Password = shell.Password ?? "";
             boot.Token = shell.Settings.PlayerToken ?? "";
+            boot.HostedToken = shell.HostedToken ?? ""; // official-worlds join grant (empty for SP/LAN/self-host)
+            boot.PortalUrl = shell.Settings.PortalUrl ?? "";
+            boot.PortalSession = shell.Settings.PortalSessionToken ?? "";
             boot.HostInfo = shell.HostInfo ?? "";
             boot.German = shell.Settings.Language == "de";
             boot.ViewDistanceChunks = shell.Settings.ViewDistanceChunks; // forward the slider so remote hosts stream this radius

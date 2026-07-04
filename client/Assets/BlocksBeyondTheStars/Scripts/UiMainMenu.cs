@@ -1,6 +1,9 @@
 // Blocks Beyond the Stars — Copyright (c) 2026 Justus Dütscher & Marcel Dütscher (JuMaVe Games)
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using BlocksBeyondTheStars.Client.Portal;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -42,6 +45,9 @@ namespace BlocksBeyondTheStars.Client
             // dlgName mirrors the dialog's name input so openers can carry the menu's name field over.
             GameObject connect = null;
             InputField dlgName = null;
+
+            // Official-worlds overlay (native only; built below). Captured by its menu button.
+            GameObject official = null;
 
             // --- One-shot notice (e.g. why the last join was refused) ---
             if (!string.IsNullOrEmpty(shell.MenuNotice))
@@ -123,6 +129,7 @@ namespace BlocksBeyondTheStars.Client
                 shell.PlayerName = natName[0].Trim();
                 shell.Settings.PlayerName = shell.PlayerName; // remember the identity across sessions
                 shell.Settings.Save();
+                shell.HostedToken = ""; // never let an official-worlds grant leak into SP/LAN/manual joins
                 return true;
             }
 
@@ -138,10 +145,17 @@ namespace BlocksBeyondTheStars.Client
                     connect.SetActive(true);
                 }
             }, "btn_join");
-            UiKit.AddButton(root, bx, nby + gap * 3f, bw, bh, shell.L("ui.menu.editors"), () => shell.GoTo(ShellPhase.Editors), "btn_singleplayer");
-            UiKit.AddButton(root, bx, nby + gap * 4f, bw, bh, shell.L("ui.menu.settings"), shell.OpenSettings, "btn_settings");
-            UiKit.AddButton(root, bx, nby + gap * 5f, bw, bh, shell.L("ui.menu.credits"), () => shell.GoTo(ShellPhase.Credits), "btn_credits");
-            UiKit.AddButton(root, bx, nby + gap * 6f, bw, bh, shell.L("ui.menu.quit"), shell.Quit, "btn_exit");
+            UiKit.AddButton(root, bx, nby + gap * 3f, bw, bh, shell.L("ui.menu.official"), () =>
+            {
+                if (CommitName() && official != null)
+                {
+                    official.SetActive(true);
+                }
+            }, "btn_join");
+            UiKit.AddButton(root, bx, nby + gap * 4f, bw, bh, shell.L("ui.menu.editors"), () => shell.GoTo(ShellPhase.Editors), "btn_singleplayer");
+            UiKit.AddButton(root, bx, nby + gap * 5f, bw, bh, shell.L("ui.menu.settings"), shell.OpenSettings, "btn_settings");
+            UiKit.AddButton(root, bx, nby + gap * 6f, bw, bh, shell.L("ui.menu.credits"), () => shell.GoTo(ShellPhase.Credits), "btn_credits");
+            UiKit.AddButton(root, bx, nby + gap * 7f, bw, bh, shell.L("ui.menu.quit"), shell.Quit, "btn_exit");
 #endif
 
             // --- World / server info panel (bottom-right, decorative) ---
@@ -198,10 +212,164 @@ namespace BlocksBeyondTheStars.Client
                 shell.Host = string.IsNullOrWhiteSpace(host[0]) ? "127.0.0.1" : host[0].Trim();
                 shell.Port = string.IsNullOrWhiteSpace(port[0]) ? shell.Port : port[0].Trim();
                 shell.Password = pass[0] ?? "";
+                shell.HostedToken = ""; // manual join: no official-worlds grant
                 shell.StartJoin();
             }, "btn_join");
             UiKit.AddButton(dlg, 310f, 432f, 260f, 54f, shell.L("ui.menu.back"), () => connect.SetActive(false), "btn_exit");
             connect.SetActive(false);
+
+#if !UNITY_WEBGL || UNITY_EDITOR
+            // --- Official-worlds overlay (native only; HOSTED_WORLDS.md: the browser NEVER picks servers).
+            // Sign in to the worlds portal, list your hosted worlds and join one — the portal answers with
+            // host/port + a short-lived join grant that is threaded through shell.HostedToken.
+            var odim = UiKit.AddModalDim(root);
+            official = odim.gameObject;
+            var odlg = UiKit.AddPanel(official.transform, 610f, 180f, 700f, 720f, UiKit.Panel).transform;
+            UiKit.AddText(odlg, 30f, 24f, 640f, 30f, shell.L("ui.portal.title"), 22, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
+            var oStatus = UiKit.AddText(odlg, 30f, 592f, 640f, 48f, "", 14,
+                new Color(1f, 0.55f, 0.4f), TextAnchor.UpperLeft, FontStyle.Bold);
+            UiKit.AddButton(odlg, 400f, 648f, 270f, 54f, shell.L("ui.menu.back"), () => official.SetActive(false), "btn_exit");
+
+            // Content area rebuilt on every state change (signed out ↔ signed in ↔ fresh world list).
+            var oContent = UiKit.AddPanel(odlg, 0f, 60f, 700f, 530f, new Color(0f, 0f, 0f, 0f)).transform;
+            var oWorlds = new List<PortalWorldInfo>();
+
+            string PortalBase() => string.IsNullOrWhiteSpace(shell.Settings.PortalUrl)
+                ? PortalClient.DefaultPortalUrl
+                : shell.Settings.PortalUrl;
+
+            bool SignedIn() => !string.IsNullOrEmpty(shell.Settings.PortalSessionToken);
+
+            void SignOut()
+            {
+                shell.Settings.PortalSessionToken = "";
+                shell.Settings.PortalAccountName = "";
+                shell.Settings.Save();
+                oStatus.text = "";
+                RebuildPortal();
+            }
+
+            async void DoRefresh()
+            {
+                oStatus.text = shell.L("ui.portal.working");
+                var portal = new PortalClient(PortalBase());
+                string session = shell.Settings.PortalSessionToken;
+                var r = await Task.Run(() => portal.ListWorlds(session));
+                if (official == null) { return; } // menu was torn down while the request ran
+                if (!r.Ok)
+                {
+                    if (r.Error == "unauthorized") { SignOut(); return; } // session expired → back to sign-in
+                    oStatus.text = r.Error;
+                    return;
+                }
+
+                oStatus.text = "";
+                oWorlds.Clear();
+                oWorlds.AddRange(r.Worlds);
+                RebuildPortal();
+            }
+
+            async void DoLogin(string account, string password)
+            {
+                oStatus.text = shell.L("ui.portal.working");
+                var portal = new PortalClient(PortalBase());
+                var r = await Task.Run(() => portal.Login(account, password));
+                if (official == null) { return; }
+                if (!r.Ok)
+                {
+                    oStatus.text = shell.L("ui.portal.login_failed") + (r.Error.Length > 0 ? " (" + r.Error + ")" : "");
+                    return;
+                }
+
+                shell.Settings.PortalSessionToken = r.SessionToken; // session only — the password is never stored
+                shell.Settings.PortalAccountName = account;
+                shell.Settings.Save();
+                oStatus.text = r.TermsOutdated ? shell.L("ui.portal.terms_outdated") : "";
+                RebuildPortal();
+                DoRefresh();
+            }
+
+            async void DoJoinWorld(string worldId)
+            {
+                if (!CommitName())
+                {
+                    oStatus.text = shell.L("ui.webgl.need_name");
+                    return;
+                }
+
+                oStatus.text = shell.L("ui.portal.waking"); // waking a sleeping world can take a moment
+                var portal = new PortalClient(PortalBase());
+                string session = shell.Settings.PortalSessionToken;
+                string playerName = shell.PlayerName;
+                var r = await Task.Run(() => portal.JoinWorld(session, worldId, playerName));
+                if (official == null) { return; }
+                if (!r.Ok)
+                {
+                    oStatus.text = r.Error;
+                    return;
+                }
+
+                shell.Host = r.NativeHost;
+                shell.Port = r.NativePort.ToString();
+                shell.Password = "";
+                shell.HostedToken = r.JoinToken; // the grant the server-side token gate verifies
+                shell.StartJoin();
+            }
+
+            void RebuildPortal()
+            {
+                for (int i = oContent.childCount - 1; i >= 0; i--)
+                {
+                    Object.Destroy(oContent.GetChild(i).gameObject);
+                }
+
+                if (!SignedIn())
+                {
+                    string[] acc = { shell.Settings.PortalAccountName };
+                    string[] pw = { "" };
+                    UiKit.AddText(oContent, 30f, 20f, 640f, 22f, shell.L("ui.portal.account"), 15, UiKit.TextCol, TextAnchor.MiddleLeft);
+                    UiKit.AddInput(oContent, 30f, 46f, 640f, 38f, acc[0], v => acc[0] = v);
+                    UiKit.AddText(oContent, 30f, 100f, 640f, 22f, shell.L("ui.menu.connect_password"), 15, UiKit.TextCol, TextAnchor.MiddleLeft);
+                    var pwInput = UiKit.AddInput(oContent, 30f, 126f, 640f, 38f, pw[0], v => pw[0] = v);
+                    pwInput.contentType = InputField.ContentType.Password;
+                    UiKit.AddButton(oContent, 30f, 184f, 300f, 54f, shell.L("ui.portal.login"), () => DoLogin(acc[0].Trim(), pw[0]), "btn_join");
+                    UiKit.AddText(oContent, 30f, 260f, 640f, 44f, shell.L("ui.portal.signup_hint"), 14, UiKit.CyanDim, TextAnchor.UpperLeft);
+                    UiKit.AddText(oContent, 30f, 306f, 640f, 24f, PortalBase(), 15, UiKit.Cyan, TextAnchor.UpperLeft, FontStyle.Bold);
+                    return;
+                }
+
+                UiKit.AddText(oContent, 30f, 16f, 420f, 26f,
+                    shell.L("ui.portal.signed_in") + " " + shell.Settings.PortalAccountName, 16, UiKit.Ok, TextAnchor.MiddleLeft, FontStyle.Bold);
+                UiKit.AddButton(oContent, 460f, 8f, 210f, 42f, shell.L("ui.portal.logout"), SignOut, "btn_exit");
+                UiKit.AddButton(oContent, 30f, 54f, 210f, 42f, shell.L("ui.portal.refresh"), DoRefresh, "btn_settings");
+
+                if (oWorlds.Count == 0)
+                {
+                    UiKit.AddText(oContent, 30f, 120f, 640f, 48f, shell.L("ui.portal.no_worlds"), 15, UiKit.TextCol, TextAnchor.UpperLeft);
+                    UiKit.AddText(oContent, 30f, 170f, 640f, 24f, PortalBase(), 15, UiKit.Cyan, TextAnchor.UpperLeft, FontStyle.Bold);
+                    return;
+                }
+
+                float ry = 116f;
+                foreach (var world in oWorlds)
+                {
+                    string id = world.Id; // capture per row
+                    UiKit.AddText(oContent, 30f, ry + 10f, 380f, 26f, world.Name, 17, UiKit.TextCol, TextAnchor.MiddleLeft, FontStyle.Bold);
+                    UiKit.AddText(oContent, 414f, ry + 10f, 110f, 26f, world.Status, 13, UiKit.CyanDim, TextAnchor.MiddleLeft);
+                    UiKit.AddButton(oContent, 530f, ry, 140f, 46f, shell.L("ui.portal.play"), () => DoJoinWorld(id), "btn_join");
+                    ry += 56f;
+                    if (ry > 470f) { break; } // quota keeps this short; guard against overflow anyway
+                }
+            }
+
+            RebuildPortal();
+            if (SignedIn())
+            {
+                DoRefresh(); // stay signed in across launches: populate the list right away
+            }
+
+            official.SetActive(false);
+#endif
 
             // --- Participate / "Join in" overlay (added last so it draws on top; hidden until "Mach mit") ---
             var pdim = UiKit.AddModalDim(root);

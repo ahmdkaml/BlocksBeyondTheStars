@@ -5500,6 +5500,22 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-04): hosted-worlds client integration — Official Worlds menu, report button, welcome MOTD
+The native-client side of hosted worlds (WebGL untouched by design — the browser never picks servers).
+- **"Official Worlds" main-menu entry** (native `#if` branch only): sign in with the portal account (bearer
+  session persisted in ClientSettings — never the password; `PortalUrl` setting empty = official portal),
+  world list with one-click Play — the join grant feeds `AppShell.HostedToken → GameBootstrap →
+  JoinRequest.HostedToken`; SP/LAN/manual joins clear the token so a grant can never leak across paths.
+- **`PortalClient`** in Client.Core (mirrors FeedbackUploader: HttpClient + System.Text.Json, sync, never
+  throws, runs headless in tests): login / list worlds / join (120 s ceiling — waking a world takes time) /
+  report; response parsing unit-tested (5 new client tests incl. error paths unauthorized/offline/proxy-html).
+- **In-game "Report" button** on every player row of the Alliances→find-players list — only on hosted worlds
+  (portal session + hosted join present); one tap files the report, the button becomes the confirmation.
+- **One-time welcome MOTD** (server): first join of a player on a hosted world sends one bilingual system
+  line (be kind + rules + beta notice); `PlayerState.HostedWelcomeShown` persisted via PlayerSnapshot
+  (JSON blob — additive, old saves unaffected). Keyed on the join-token gate; self-hosting unaffected.
+- New locale keys `ui.menu.official` + `ui.portal.*` (EN+DE, parity-tested).
+
 ## ✅ Done (2026-07-04): hosted-worlds portal & safety — rules acceptance, reports, bans, save round-trip
 Phase-2 server side on top of the WorldHost MVP (client integration — native "Official worlds" menu, in-game
 report button, welcome MOTD — still open). Details in [HOSTED_WORLDS.md](docs/developer/HOSTED_WORLDS.md).

@@ -177,7 +177,7 @@ public sealed class WorldHostTests : IDisposable
     }
 
     [Fact]
-    public async Task Join_WakesAStoppedWorld_AndIssuesAValidToken()
+    public async Task Join_WakesAStoppedWorld_AndIssuesAValidTokenAsync()
     {
         var config = new WorldHostConfig { WakeTimeoutSeconds = 5, BaseDomain = "play.example.de", PublicHost = "play.example.de" };
         var registry = NewRegistry(config);
@@ -203,7 +203,7 @@ public sealed class WorldHostTests : IDisposable
     }
 
     [Fact]
-    public async Task Join_ReusesTheRunningInstance()
+    public async Task Join_ReusesTheRunningInstanceAsync()
     {
         var config = new WorldHostConfig { WakeTimeoutSeconds = 5 };
         var registry = NewRegistry(config);
@@ -219,7 +219,7 @@ public sealed class WorldHostTests : IDisposable
     }
 
     [Fact]
-    public async Task Reap_MarksIdleExitedWorldsStopped_AndNextJoinRewakes()
+    public async Task Reap_MarksIdleExitedWorldsStopped_AndNextJoinRewakesAsync()
     {
         var config = new WorldHostConfig { WakeTimeoutSeconds = 5 };
         var registry = NewRegistry(config);
@@ -243,7 +243,7 @@ public sealed class WorldHostTests : IDisposable
     }
 
     [Fact]
-    public async Task Join_FailedStart_LeavesTheWorldStopped_WithAPlayerSafeError()
+    public async Task Join_FailedStart_LeavesTheWorldStopped_WithAPlayerSafeErrorAsync()
     {
         var config = new WorldHostConfig { WakeTimeoutSeconds = 1 };
         var registry = NewRegistry(config);
@@ -261,7 +261,7 @@ public sealed class WorldHostTests : IDisposable
     }
 
     [Fact]
-    public async Task Join_RejectsUnknownWorlds_AndBadPlayerNames()
+    public async Task Join_RejectsUnknownWorlds_AndBadPlayerNamesAsync()
     {
         var config = new WorldHostConfig { WakeTimeoutSeconds = 1 };
         var registry = NewRegistry(config);
@@ -309,7 +309,7 @@ public sealed class WorldHostTests : IDisposable
     }
 
     [Fact]
-    public async Task Join_ReservedInGameName_OnlyForDeveloperAccounts()
+    public async Task Join_ReservedInGameName_OnlyForDeveloperAccountsAsync()
     {
         var config = new WorldHostConfig { WakeTimeoutSeconds = 5, ReservedClaimCode = "dev-code-123" };
         var registry = NewRegistry(config);
@@ -345,7 +345,7 @@ public sealed class WorldHostTests : IDisposable
     }
 
     [Fact]
-    public async Task RulesChange_BlocksJoins_UntilReaccepted()
+    public async Task RulesChange_BlocksJoins_UntilReacceptedAsync()
     {
         var config = new WorldHostConfig { WakeTimeoutSeconds = 5 };
         var registry = NewRegistry(config);
@@ -365,7 +365,7 @@ public sealed class WorldHostTests : IDisposable
     }
 
     [Fact]
-    public async Task BannedAccount_CannotJoin_UntilUnbanned()
+    public async Task BannedAccount_CannotJoin_UntilUnbannedAsync()
     {
         var config = new WorldHostConfig { WakeTimeoutSeconds = 5 };
         var registry = NewRegistry(config);
