@@ -168,15 +168,23 @@ The SP↔hosted round-trip. Instances bind-mount `<BBS_WH_WORLDS_DIR>/<worldId>/
 
 ## Operations quick reference
 
+Deployment is codified in **`deploy/`** (compose files for caddy / worldhost / reports — the source
+of truth for `/opt/bbs/` on the VPS, see `deploy/README.md`) and two GitHub Actions workflows:
+`worldhost-image.yml` builds `ghcr.io/marceld23/blocks-beyond-the-stars-worldhost` on main pushes
+(`:latest` + immutable `:sha-<short>`), and `deploy.yml` (manual dispatch, `production` environment
+with approval gate, single `DEPLOY_SSH_KEY` secret) rsyncs `deploy/` to the host and runs
+`remote-deploy.sh` with per-service health checks. All operator secrets (claim code, admin token,
+report keys) live only in `/opt/bbs/<service>/.env` on the host — never in CI.
+
 ```bash
 # One-time host setup: shared network + caddy-docker-proxy with on-demand TLS ask endpoint
 docker network create bbs-hosted
-# Caddy global option:  on_demand_tls { ask http://worldhost:31417/ask }
+# Caddy global option:  on_demand_tls { ask http://worldhost:31417/ask }   (deploy/caddy/BaseCaddyfile)
 
-# WorldHost env (systemd unit or compose service; needs /var/run/docker.sock)
+# WorldHost operator env → /opt/bbs/worldhost/.env (template: deploy/worldhost/.env.example)
 BBS_WH_BASE_DOMAIN=play.blocksbeyondthestars.de
 BBS_WH_PUBLIC_HOST=play.blocksbeyondthestars.de
-BBS_WH_SERVER_IMAGE=ghcr.io/marceld23/blocks-beyond-the-stars-server:latest
+BBS_WH_SERVER_IMAGE=ghcr.io/marceld23/blocks-beyond-the-stars-server:0.6.2   # fleet version pin (WP14)
 # quotas (operator policy): BBS_WH_MAX_WORLDS_PER_ACCOUNT=2, BBS_WH_MAX_PLAYERS=12, BBS_WH_IDLE_MINUTES=20
 ```
 
