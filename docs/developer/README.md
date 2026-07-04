@@ -38,6 +38,8 @@ belongs in TODO.md). Each doc states its own status near the top. Last reorganis
 - [CLIENT_COMPLETION.md](CLIENT_COMPLETION.md) — how the client is wired (AppShell/WorldRig, mesher/atlas,
   hosting model, SpaceView, presence, audio).
 - [CLIENT_SHELL_AND_ASSETS.md](CLIENT_SHELL_AND_ASSETS.md) — branding, splash, menu, settings and asset strategy.
+- [INPUT_AND_CONTROLLER.md](INPUT_AND_CONTROLLER.md) — the input abstraction (`IInputSource`): keyboard/mouse,
+  gamepad (bindings + glyphs), on-screen touch controls and WebGL text entry.
 - [URP_MIGRATION.md](URP_MIGRATION.md) — the URP rendering setup (custom unlit voxel shaders, post, shadows).
 - [ADVANCED_GRAPHICS.md](ADVANCED_GRAPHICS.md) — graphics: what shipped + the remaining roadmap.
 - [UI_AND_RENDER_CONCEPT.md](UI_AND_RENDER_CONCEPT.md) — UI + render concept, done vs. open.

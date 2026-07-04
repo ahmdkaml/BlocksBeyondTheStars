@@ -41,6 +41,11 @@ dotnet test                                # all .NET xUnit suites (server/share
 ./scripts/run-tests.sh --suites ClientCore  # just the headless client<->server integration tests
 ```
 
+CI runs these suites **two-tiered** (`.github/workflows/ci.yml`): pull requests skip the ~31 statistical /
+soak tests marked `[Trait("Category", "Slow")]` for a fast gate (~3 min instead of ~13), while every push to
+`main` — and `release.yml` before publishing — runs the complete suite. Reproduce the fast PR tier locally
+with `dotnet test --filter "Category!=Slow"`.
+
 `run-tests.ps1` selects suites via `-Suites` (`Dotnet`, `ClientCore`, `UnityEdit`, `UnityPlay`, `All`); the
 Unity suites are opt-in so they don't slow the common loop, and need `Unity.exe` (pass `-UnityPath` if not at
 the default `6000.4.9f1` path). The client is tested against the **real** server at three tiers — the design,

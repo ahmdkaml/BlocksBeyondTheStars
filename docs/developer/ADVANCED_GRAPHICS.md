@@ -1,6 +1,6 @@
 # Advanced graphics — how it works + roadmap
 
-Status: implemented (foundation + several phases) — see TODO.md for live Done/Open status. Date: 2026-06-19.
+Status: implemented (foundation + several phases) — see TODO.md for live Done/Open status. Date: 2026-06-19, updated 2026-07-04 (organic look pass, PR #192).
 
 This doc covers the renderer's advanced-look features: what has shipped, how it works, and the research
 roadmap for the polish milestones still ahead. The historical "Built-in RP, no URP" framing of the
@@ -29,6 +29,11 @@ renders in **linear colour space**, and the hand-written shaders are all dual-pi
   depth for a shallow→deep colour gradient + shoreline/object foam, and composites the bed from the
   opaque texture at a wave-distorted screen UV so the surface refracts what's beneath.
 - **Linear colour space** (2026-06-12, see `PROFESSIONAL_LOOK_IMPLEMENTATION.md`).
+- **Organic look pass** (2026-07-01, PR #192): per-vertex ambient occlusion + texture-scale cavity AO +
+  beveled convex edges (chunk mesher + `BlockAtlas`); **GPU-instanced ground-detail scatter** (grass tufts +
+  pebbles on open ground, distance-culled, preset-gated); **3D mesh flora** (leafy flora as leaning 3-plane
+  rosettes, solid flora like cactus/crystal/mushroom as real shapes); sparse **ship-hull greeble** plating on
+  exposed hull faces. All client presentation only — server data unchanged.
 
 ## Design rationale worth keeping
 
@@ -59,14 +64,15 @@ Ordered by impact ÷ effort. These are the next polish milestones; each is prese
   + distance, keep heightScale small (voxel faces are 1 unit).
 - **Sky / atmosphere / volumetrics:** denser per-system nebula skybox, Rayleigh-ish atmospheric
   scattering (horizon glow + sunrise/sunset tints), volumetric light shafts / god rays from the sun.
-- **Detail scatter:** GPU-instanced grass tufts / pebbles / flowers (`DrawMeshInstancedIndirect`),
-  wind-animated, density by preset + distance. Pairs with grass shells.
+- **Detail-scatter extensions:** the base GPU-instanced scatter (grass tufts + pebbles) shipped with the
+  organic look pass — still open: flowers as a third scatter kind, wind sway, pairing with grass shells.
 - **Translucency / fake SSS:** wrap-lighting + back-light for leaves, thin fauna membranes, ice,
   crystals.
 - **Reflections:** reflection probes per interior/station (extends the current Fresnel sky reflection);
   SSR for wet floors / hull is deferred (risky full-screen pass, low ROI).
 - **Decals:** scorch marks, impact craters, scanner pings — extends the existing `WeaponFx` impacts.
-- **Triplanar mapping** for sloped/carved faces once non-axis geometry exists.
+- **Triplanar mapping** for sloped/carved faces — unblocked now that non-axis geometry exists (shaped
+  blocks incl. ramps/domes/cones, mesh flora).
 
 ## Key files
 

@@ -8,7 +8,7 @@ chat/admin commands. This is a living document.
 > truth for player-facing operation. (Written in English per project doc policy; in-game text itself is
 > bilingual DE/EN.)
 
-Last updated: 2026-06-29.
+Last updated: 2026-07-04.
 
 ---
 
@@ -58,7 +58,7 @@ Last updated: 2026-06-29.
 | **Mouse wheel** | Cycle hotbar slot |
 | **1 – 9** | Select hotbar slot |
 | **F** | Attack the nearest creature / swing the held tool |
-| **R** | Repair the targeted wreck breach with the selected hotbar block (see §5 → Wrecks) |
+| **R** | Repair the targeted wreck breach with the selected hotbar block (see §5 → Wrecks); with a **shaped block** selected: rotate its placement orientation (see §5 → Craftable block shapes) |
 | **L** | Toggle the suit headlamp (requires a `suit_lamp`) |
 | **G** | Loot the nearest container |
 | **E** | Use a nearby ship/station tile (cockpit, workshop, cargo, medbay, …); **trade with a vendor** (opens the Market); **board your hover speeder**; **beam** from a teleporter pad you're standing on |
@@ -445,12 +445,17 @@ separate unlock; admins can still disable it through server world rules.
 
 ### Craftable block shapes
 - Any held **building material** can be re-formed into a non-cube **shape** — **slab, pyramid, dome (half-sphere),
-  sphere, ramp, stairs, cone, cylinder** — that still places, mines and stacks like a block (form and dye colour
-  combine freely). Shaped forms are **player-craft only**: world-gen, settlements, stations and ships stay plain cubes.
+  sphere, ramp, stairs, cone, cylinder, panel** (thin plate), **post** (slim pillar), **beam** (horizontal bar),
+  **low ramp** (gentle half-height wedge), **quarter cube** (small corner block) — that still places, mines and
+  stacks like a block (form and dye colour combine freely). Shaped forms are **player-craft only**: world-gen,
+  settlements, stations and ships stay plain cubes.
 - Do it in the **Crafting** menu under the **"Formen" / "Shape"** category: pick a building block, choose a form
   button (it's a free 1:1 reshape that keeps the block's colour), and **cube** reverts to a plain block.
-- When you place a ramp or stairs, its **orientation follows the way you're facing**. Mining returns the shaped
-  item, and the orientation is re-derived from your facing each time you place it again.
+- **Orientation:** by default a shape **auto-orients** — it follows the way you're facing, and building against a
+  wall or ceiling tilts it onto that surface. Press **R** while the shaped block is selected to override this:
+  it cycles **Auto → each of the six up-faces → Auto** (a HUD message shows the current pick), giving the full
+  set of 24 placements. Symmetric forms (sphere, dome, cylinder, …) ignore orientation. Mining returns the
+  shaped item; orientation is re-derived each time you place it again.
 
 ### Character & the pixel-face editor
 - The **Character** menu tab shows your avatar (colours/gear preview). It also hosts a **pixel-face editor**:
