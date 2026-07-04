@@ -34,6 +34,11 @@ AccountRecord? Caller(HttpContext ctx)
         : null;
 }
 
+// Strips CR/LF so a player-supplied string (name, reason) can never forge extra log lines. Account and
+// world names are charset-validated anyway; this covers free-text fields and satisfies defense in depth.
+static string LogSafe(string? value)
+    => (value ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty);
+
 // Uniform account-state gate for world actions: banned accounts and accounts that haven't accepted the
 // CURRENT rules version are refused (the join path re-checks inside the orchestrator as well — that is
 // the choke point native clients will use directly).
@@ -106,7 +111,9 @@ app.MapPost("/api/signup", (SignupRequest req) =>
         return Results.BadRequest(new { error });
     }
 
-    log.LogInformation("Account created: {Name} ({Id}).", req.Name, accountId);
+    // Deliberately no account id in the log: ids act as stable references in the registry and appearing
+    // in log files would let anyone with log access correlate them (CodeQL cs/cleartext-storage).
+    log.LogInformation("Account created: {Name}.", LogSafe(req.Name));
     return Results.Json(new { accountId, sessionToken = session });
 });
 
@@ -185,7 +192,7 @@ app.MapPost("/api/admin/ban", (HttpContext ctx, BanRequest req) =>
     }
 
     registry.SetBanned(req.AccountId, req.Banned, req.Reason ?? string.Empty);
-    log.LogInformation("Account {Id} {Action} ({Reason}).", req.AccountId, req.Banned ? "BANNED" : "unbanned", req.Reason);
+    log.LogInformation("Account {Id} {Action} ({Reason}).", LogSafe(req.AccountId), req.Banned ? "BANNED" : "unbanned", LogSafe(req.Reason));
     return Results.Ok();
 });
 
@@ -221,7 +228,7 @@ app.MapPost("/api/worlds", (HttpContext ctx, CreateWorldRequest req) =>
         return Results.BadRequest(new { error });
     }
 
-    log.LogInformation("World '{Name}' ({Id}) created by {Account}.", world!.DisplayName, world.Id, account.Name);
+    log.LogInformation("World '{Name}' ({Id}) created by {Account}.", LogSafe(world!.DisplayName), world.Id, LogSafe(account.Name));
     return Results.Json(new { id = world.Id, name = world.DisplayName, status = world.Status, subdomain = world.Subdomain });
 });
 
@@ -291,7 +298,7 @@ app.MapDelete("/api/worlds/{id}", (HttpContext ctx, string id) =>
     // is intentionally NOT removed — an operator can still recover/export it; automated retention is Phase 3.
     orchestrator.StopWorld(world);
     registry.DeleteWorld(world.Id);
-    log.LogInformation("World '{Name}' ({Id}) deleted by {Account} (saves directory retained).", world.DisplayName, world.Id, account.Name);
+    log.LogInformation("World '{Name}' ({Id}) deleted by {Account} (saves directory retained).", LogSafe(world.DisplayName), world.Id, LogSafe(account.Name));
     return Results.Ok();
 });
 
@@ -366,7 +373,7 @@ app.MapPost("/api/worlds/{id}/save", async (HttpContext ctx, string id) =>
         }
 
         File.Move(tmp, target, overwrite: true);
-        log.LogInformation("World '{Name}' ({Id}): save uploaded by {Account}.", world.DisplayName, world.Id, account.Name);
+        log.LogInformation("World '{Name}' ({Id}): save uploaded by {Account}.", LogSafe(world.DisplayName), world.Id, LogSafe(account.Name));
         return Results.Ok();
     }
     finally

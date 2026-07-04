@@ -1834,7 +1834,9 @@ public sealed partial class GameServer
         {
             state.Role = PlayerRole.WorldAdmin;
             _repo.SavePlayer(state); // persist immediately, like the name claim above
-            _log.Info($"Player '{name}' recognised as world owner (account '{hostedAccountId}') — granted WorldAdmin.");
+            // Deliberately no account id in the log line — ids are registry references and don't belong
+            // in log files (CodeQL cs/cleartext-storage); the name identifies the event well enough.
+            _log.Info($"Player '{name}' recognised as the world owner — granted WorldAdmin.");
         }
 
         // Return the player to the body they were last on (persisted per-player), not always the home world.
