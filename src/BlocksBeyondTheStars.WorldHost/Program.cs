@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
 using BlocksBeyondTheStars.WorldHost;
+using Microsoft.AspNetCore.HttpOverrides;
 
 // Hosted-worlds control plane ("WorldHost"): accounts, world registry, wake-on-demand allocation and
 // join-token issuing for a fleet of one-container-per-world dedicated servers. See
@@ -14,15 +15,42 @@ using BlocksBeyondTheStars.WorldHost;
 var config = WorldHostConfig.FromEnvironment();
 var registry = new HostRegistry(config);
 IInstanceLauncher launcher = new DockerCliLauncher(config);
-var orchestrator = new WorldOrchestrator(config, registry, launcher);
+var metrics = new WorldHostMetrics();
+var orchestrator = new WorldOrchestrator(config, registry, launcher, metrics: metrics);
+
+// Abuse limits (Phase 3). Signup/login key on the caller IP (real one via X-Forwarded-For — Caddy
+// fronts this service), uploads/reports on the account. See WorldHostConfig for the operator knobs.
+var signupLimit = new RateLimiter(config.SignupPerHourPerIp, TimeSpan.FromHours(1));
+var loginLimit = new RateLimiter(config.LoginPerMinutePerIp, TimeSpan.FromMinutes(1));
+var uploadLimit = new RateLimiter(config.UploadsPerHourPerAccount, TimeSpan.FromHours(1));
+var reportLimit = new RateLimiter(config.ReportsPerHourPerAccount, TimeSpan.FromHours(1));
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
 builder.Logging.AddConsole();
 builder.WebHost.UseUrls($"http://{config.BindAddress}:{config.Port}");
 
+// Honor X-Forwarded-* from the fronting Caddy so rate limits key on the real client IP, not the proxy.
+// The proxy is a trusted sibling container on an arbitrary IP, so clear the loopback-only allow-list.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
 var app = builder.Build();
+app.UseForwardedHeaders();
 var log = app.Logger;
+
+string CallerIp(HttpContext ctx) => ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+IResult RateLimited()
+{
+    metrics.RateLimited();
+    return Results.Json(new { error = "Too many requests — please wait a bit and try again." },
+        statusCode: StatusCodes.Status429TooManyRequests);
+}
 
 // Resolves the caller's account from the Authorization: Bearer <session> header; null = not signed in.
 AccountRecord? Caller(HttpContext ctx)
@@ -70,6 +98,10 @@ bool IsAdmin(HttpContext ctx)
 
 app.MapGet("/healthz", () => Results.Text("ok\n"));
 
+// Prometheus scrape (Phase 3). Reachable only on the loopback bind — Caddy deliberately does not
+// route /metrics, so fleet numbers never leak publicly.
+app.MapGet("/metrics", () => Results.Text(metrics.Render(registry), "text/plain; version=0.0.4; charset=utf-8"));
+
 // ---------------- Portal pages (server-rendered shells; the JS talks to /api with a Bearer session) ----------------
 
 app.MapGet("/", () => Results.Content(WorldHostPortalPages.Landing(config), "text/html; charset=utf-8"));
@@ -103,8 +135,13 @@ app.MapGet("/ask", (string? domain) =>
 
 // ---------------- Accounts ----------------
 
-app.MapPost("/api/signup", (SignupRequest req) =>
+app.MapPost("/api/signup", (HttpContext ctx, SignupRequest req) =>
 {
+    if (!signupLimit.TryPass(CallerIp(ctx)))
+    {
+        return RateLimited();
+    }
+
     var (ok, error, accountId, session) = registry.CreateAccount(req.Name, req.Password, req.ClaimCode, req.AcceptedTermsVersion);
     if (!ok)
     {
@@ -117,8 +154,13 @@ app.MapPost("/api/signup", (SignupRequest req) =>
     return Results.Json(new { accountId, sessionToken = session });
 });
 
-app.MapPost("/api/login", (SignupRequest req) =>
+app.MapPost("/api/login", (HttpContext ctx, SignupRequest req) =>
 {
+    if (!loginLimit.TryPass(CallerIp(ctx)))
+    {
+        return RateLimited();
+    }
+
     if (registry.Login(req.Name, req.Password) is not { } login)
     {
         return Results.Unauthorized();
@@ -152,6 +194,11 @@ app.MapPost("/api/reports", (HttpContext ctx, ReportRequest req) =>
     if (Caller(ctx) is not { } account)
     {
         return Results.Unauthorized();
+    }
+
+    if (!reportLimit.TryPass(account.Id))
+    {
+        return RateLimited();
     }
 
     // Banned players may still file reports (they can't play, but silencing them buys nothing);
@@ -326,6 +373,11 @@ app.MapPost("/api/worlds/{id}/save", async (HttpContext ctx, string id) =>
         return Results.Forbid();
     }
 
+    if (!uploadLimit.TryPass(account.Id))
+    {
+        return RateLimited();
+    }
+
     // Only while stopped: the instance owns the file when it runs, and a mid-write copy would corrupt.
     if (registry.GetWorld(id)!.Status != WorldStatus.Stopped || launcher.IsRunning(world.ContainerId))
     {
@@ -420,6 +472,7 @@ app.MapGet("/api/worlds/{id}/save", (HttpContext ctx, string id) =>
 var reaper = Task.Run(async () =>
 {
     using var timer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+    int ticks = 0;
     while (await timer.WaitForNextTickAsync())
     {
         try
@@ -428,6 +481,17 @@ var reaper = Task.Run(async () =>
             if (reaped > 0)
             {
                 log.LogInformation("Reaper: {Count} idle-stopped world(s) marked stopped.", reaped);
+            }
+
+            // Archive sweep once an hour (120 × 30 s): long-inactive stopped worlds move to the archive.
+            if (++ticks % 120 == 0)
+            {
+                int archived = orchestrator.ArchiveSweep(DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                if (archived > 0)
+                {
+                    log.LogInformation("Archive sweep: {Count} world(s) archived after {Months} months of inactivity.",
+                        archived, config.ArchiveAfterMonths);
+                }
             }
         }
         catch (Exception ex)

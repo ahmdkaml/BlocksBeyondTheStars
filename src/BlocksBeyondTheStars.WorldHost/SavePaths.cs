@@ -19,6 +19,38 @@ public static class SavePaths
     public static string WorldDbPath(WorldHostConfig config, string worldId)
         => Path.Combine(HostSavesDir(config, worldId), worldId, "world.db");
 
+    /// <summary>Where an archived world's saves rest (<c>_archive</c> can't collide with world ids —
+    /// they are pure hex). Same volume as the live dir, so archiving is a rename, not a copy.</summary>
+    public static string ArchivedSavesDir(WorldHostConfig config, string worldId)
+        => Path.GetFullPath(Path.Combine(config.WorldsDir, "_archive", worldId, "saves"));
+
+    /// <summary>Moves a world's saves into the archive. True when something was moved; false when there
+    /// was nothing to move (a world that was never started has no saves — archiving it is just the
+    /// status flip).</summary>
+    public static bool MoveToArchive(WorldHostConfig config, string worldId)
+        => MoveDir(HostSavesDir(config, worldId), ArchivedSavesDir(config, worldId));
+
+    /// <summary>Restores an archived world's saves so the instance can be started again.</summary>
+    public static bool RestoreFromArchive(WorldHostConfig config, string worldId)
+        => MoveDir(ArchivedSavesDir(config, worldId), HostSavesDir(config, worldId));
+
+    private static bool MoveDir(string from, string to)
+    {
+        if (!Directory.Exists(from))
+        {
+            return false;
+        }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+        if (Directory.Exists(to))
+        {
+            Directory.Delete(to, recursive: true); // stale leftover from an interrupted earlier move
+        }
+
+        Directory.Move(from, to);
+        return true;
+    }
+
     /// <summary>
     /// Validates an uploaded candidate file as a usable world save: real SQLite (magic header), passes
     /// <c>PRAGMA quick_check</c>, and carries the game's schema (the <c>world_meta</c> table — the anchor
