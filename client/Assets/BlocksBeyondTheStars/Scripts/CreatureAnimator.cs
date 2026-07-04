@@ -47,7 +47,7 @@ namespace BlocksBeyondTheStars.Client
             _hostile = hostile;
             _asleep = asleep;
             _aquatic = aquatic;
-            _phase = (GetInstanceID() & 0x3ff) * 0.1f; // stable pseudo-random offset
+            _phase = (GetEntityId().GetHashCode() & 0x3ff) * 0.1f; // stable pseudo-random offset
 
             // Map the species temperament to its resting idle gesture.
             string t = (temperament ?? string.Empty).ToLowerInvariant();

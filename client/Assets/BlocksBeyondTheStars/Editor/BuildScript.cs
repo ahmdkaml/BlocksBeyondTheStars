@@ -46,9 +46,6 @@ namespace BlocksBeyondTheStars.Client.EditorTools
             "BlocksBeyondTheStars/ParticleAlpha",
             "BlocksBeyondTheStars/Aurora",
             "BlocksBeyondTheStars/Cloud",
-            "BlocksBeyondTheStars/PostBloom",
-            "BlocksBeyondTheStars/PostComposite",
-            "BlocksBeyondTheStars/PostAO",
             "Unlit/Color",
         };
 

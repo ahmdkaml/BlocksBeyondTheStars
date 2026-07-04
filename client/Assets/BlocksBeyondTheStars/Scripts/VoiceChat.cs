@@ -6,8 +6,8 @@ using UnityEngine;
 using UnityEngine.UI;
 using BlocksBeyondTheStars.Networking.Messages;
 #if BBS_VOICE
+using Concentus;
 using Concentus.Enums;
-using Concentus.Structs;
 #endif
 
 namespace BlocksBeyondTheStars.Client
@@ -56,7 +56,7 @@ namespace BlocksBeyondTheStars.Client
         private bool _hudBuilt;
 
 #if BBS_VOICE
-        private OpusEncoder _encoder;
+        private IOpusEncoder _encoder;
         private string _micDevice;
         private AudioClip _micClip;
         private int _micReadPos;
@@ -66,7 +66,7 @@ namespace BlocksBeyondTheStars.Client
 
         private sealed class Speaker
         {
-            public OpusDecoder Decoder;
+            public IOpusDecoder Decoder;
             public AudioSource Source;
             public AudioClip Clip;
             public int WritePos;
@@ -247,12 +247,13 @@ namespace BlocksBeyondTheStars.Client
         {
 #if BBS_VOICE
             _micDevice = string.IsNullOrEmpty(Settings?.MicrophoneDevice) ? null : Settings.MicrophoneDevice;
-            _encoder ??= new OpusEncoder(SampleRate, 1, OpusApplication.OPUS_APPLICATION_VOIP)
+            if (_encoder == null)
             {
-                Bitrate = 20000,           // ~20 kbps voice
-                UseVBR = true,
-                UseDTX = true,             // skip near-silent frames
-            };
+                _encoder = OpusCodecFactory.CreateEncoder(SampleRate, 1, OpusApplication.OPUS_APPLICATION_VOIP);
+                _encoder.Bitrate = 20000;  // ~20 kbps voice
+                _encoder.UseVBR = true;
+                _encoder.UseDTX = true;    // skip near-silent frames
+            }
             _micClip = Microphone.Start(_micDevice, true, Mathf.CeilToInt(MicLoopSeconds), SampleRate);
             _micReadPos = 0;
 #endif
@@ -299,7 +300,7 @@ namespace BlocksBeyondTheStars.Client
                     _framePcm[i] = (short)Mathf.Clamp((int)(_frameFloat[i] * short.MaxValue), short.MinValue, short.MaxValue);
                 }
 
-                int bytes = _encoder.Encode(_framePcm, 0, FrameSamples, _encodeBuffer, 0, _encodeBuffer.Length);
+                int bytes = _encoder.Encode(_framePcm, FrameSamples, _encodeBuffer, _encodeBuffer.Length);
                 if (bytes > 0)
                 {
                     var opus = new byte[bytes];
@@ -354,7 +355,7 @@ namespace BlocksBeyondTheStars.Client
                 _speakers[frame.FromPlayerId] = sp;
             }
 
-            int decoded = sp.Decoder.Decode(frame.Opus, 0, frame.Opus.Length, _decodePcm, 0, FrameSamples, false);
+            int decoded = sp.Decoder.Decode(frame.Opus, _decodePcm, FrameSamples, false);
             if (decoded <= 0)
             {
                 return;
@@ -389,7 +390,7 @@ namespace BlocksBeyondTheStars.Client
 
             return new Speaker
             {
-                Decoder = new OpusDecoder(SampleRate, 1),
+                Decoder = OpusCodecFactory.CreateDecoder(SampleRate, 1),
                 Source = src,
                 Clip = src.clip,
             };

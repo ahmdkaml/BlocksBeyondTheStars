@@ -98,6 +98,24 @@ Per-item detail lives in the dated work log below.
 
 ---
 
+### ★ Unity client warning cleanup: 0 compiler warnings again (2026-07-04)
+Full warning sweep (analysis in local `plans/WARNINGS_ANALYSIS.md`): the .NET solution was already at
+0 warnings (analyzers on); the Unity client had 27 — now 0, verified via a fresh local Windows build
+(`client/build.log`: 0 CS warnings, 0 errors) and an in-game playtest.
+- **Deprecated Unity APIs (CS0618, 22 sites / 11 files):** `FindFirstObjectByType`/`FindObjectOfType` →
+  `FindAnyObjectByType`; `FindObjectsByType(FindObjectsSortMode.None)` → parameterless overload;
+  `GetInstanceID()` → `GetEntityId().GetHashCode()` (only ever used as a stable pseudo-random phase seed,
+  masked `& 0x3ff` as before); `Physics.BakeMesh` collider cook → the `EntityId` overload (GameBootstrap).
+- **VoiceChat Opus modernization:** Concentus `new OpusEncoder/OpusDecoder` → `OpusCodecFactory.Create…`
+  (`IOpusEncoder`/`IOpusDecoder`, can return native-backed codecs) and array `Encode`/`Decode` → the
+  Span overloads. Signatures verified against the bundled Concentus 2.2.2.
+- **CS1998 (ClientUpdater):** the existing `#pragma warning disable` sat *inside* the method body but the
+  warning is reported at the signature — moved above the method so it actually suppresses.
+- **Stale always-include shaders:** `BuildScript.RuntimeShaders` still listed `PostBloom`/`PostComposite`/
+  `PostAO` (post stack removed in #54) → 3 bogus "not found; skipping always-include" warnings per build; pruned.
+- Still open (cosmetic): a GLES3-only "gradient instruction in loop" shader warning from the water-SSR loop
+  in `BlockAtlasTransparent`; advisory ruff style findings in `tools/` generator scripts.
+
 ### ★ Marketing screenshots regenerated — desert linked, jungle/lava reshot, lava-safe capture placement (2026-07-03)
 Full re-capture of the DE+EN marketing set (26 PNGs) from the current build via `scripts/capture-screenshots.ps1`.
 - **README galleries:** `surface_desert.png` is now linked in the root README planet gallery (the fresh shot is

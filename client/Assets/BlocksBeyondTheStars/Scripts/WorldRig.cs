@@ -51,7 +51,7 @@ namespace BlocksBeyondTheStars.Client
             }
 
             // And only our listener should hear; mute any pre-existing scene/splash AudioListener.
-            foreach (var al in Object.FindObjectsByType<AudioListener>(FindObjectsSortMode.None))
+            foreach (var al in Object.FindObjectsByType<AudioListener>())
             {
                 al.enabled = false;
             }

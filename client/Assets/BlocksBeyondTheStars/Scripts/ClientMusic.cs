@@ -87,7 +87,7 @@ namespace BlocksBeyondTheStars.Client
 
             // Our own listener hears the shell screens (menu/loading). Silence any pre-existing scene
             // listener so there is exactly one active — WorldRig swaps to the world camera's in-game.
-            foreach (var al in Object.FindObjectsByType<AudioListener>(FindObjectsSortMode.None))
+            foreach (var al in Object.FindObjectsByType<AudioListener>())
             {
                 al.enabled = false;
             }
@@ -151,7 +151,7 @@ namespace BlocksBeyondTheStars.Client
             {
                 if (!inGame)
                 {
-                    foreach (var al in Object.FindObjectsByType<AudioListener>(FindObjectsSortMode.None))
+                    foreach (var al in Object.FindObjectsByType<AudioListener>())
                     {
                         al.enabled = false;
                     }

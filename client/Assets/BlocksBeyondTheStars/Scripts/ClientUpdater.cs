@@ -69,6 +69,7 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>Checks <paramref name="feedUrl"/> for a newer release; if found, downloads it and
         /// restarts into the new version. <paramref name="onChanged"/> is invoked on the Unity main thread
         /// each time <see cref="State"/>/<see cref="Busy"/> change, so the settings screen can refresh.</summary>
+#pragma warning disable CS1998 // the Editor/WebGL branch has no awaits by design (reported at the signature)
         public static async void CheckForUpdates(string feedUrl, Action onChanged)
         {
             if (Busy)
@@ -76,7 +77,6 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
-#pragma warning disable CS1998 // the Editor/WebGL branch has no awaits by design
 #if UNITY_EDITOR || UNITY_WEBGL
             // No Velopack in the Editor or the browser build — there is no installed app to update.
             State = UpdateState.NotInstalled;

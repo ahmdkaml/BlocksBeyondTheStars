@@ -55,7 +55,7 @@ namespace BlocksBeyondTheStars.Client
         public void Build(Color skin, Color torso, Color arms, Color legs)
         {
             EnsureTextures();
-            _phase = (GetInstanceID() & 0x3ff) * 0.11f;
+            _phase = (GetEntityId().GetHashCode() & 0x3ff) * 0.11f;
             _skinColor = skin;
             _skin = Lit(skin, _skinTex);
             _torso = Lit(torso, _suitTex);

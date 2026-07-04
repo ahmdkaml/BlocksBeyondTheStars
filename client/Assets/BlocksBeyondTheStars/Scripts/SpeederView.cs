@@ -49,7 +49,7 @@ namespace BlocksBeyondTheStars.Client
 
             if (_fx == null)
             {
-                _fx = Object.FindObjectOfType<WeaponFx>();
+                _fx = Object.FindAnyObjectByType<WeaponFx>();
             }
 
             Reconcile();

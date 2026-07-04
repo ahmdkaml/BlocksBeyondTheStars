@@ -255,7 +255,7 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
-            if (FindFirstObjectByType<AudioListener>() == null)
+            if (FindAnyObjectByType<AudioListener>() == null)
             {
                 gameObject.AddComponent<AudioListener>();
             }
@@ -277,7 +277,7 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
-            if (FindFirstObjectByType<AudioListener>() == null)
+            if (FindAnyObjectByType<AudioListener>() == null)
             {
                 gameObject.AddComponent<AudioListener>();
             }

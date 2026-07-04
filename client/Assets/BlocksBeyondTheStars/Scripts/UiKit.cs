@@ -212,7 +212,7 @@ namespace BlocksBeyondTheStars.Client
 
         public static Canvas CreateCanvas(string name, float refW = 1920f, float refH = 1080f)
         {
-            if (Object.FindFirstObjectByType<EventSystem>() == null)
+            if (Object.FindAnyObjectByType<EventSystem>() == null)
             {
                 var es = new GameObject("EventSystem");
                 var system = es.AddComponent<EventSystem>();

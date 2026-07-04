@@ -1828,7 +1828,7 @@ namespace BlocksBeyondTheStars.Client
                     mcol.sharedMesh = collider;
                 }
 #else
-                int meshId = collider.GetInstanceID();
+                var meshId = collider.GetEntityId();
                 var capturedCoord = coord;
                 var capturedCollider = collider;
                 int epoch = WorldEpoch;

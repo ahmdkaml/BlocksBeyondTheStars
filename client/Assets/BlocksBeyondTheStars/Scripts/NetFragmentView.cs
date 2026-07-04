@@ -49,13 +49,13 @@ namespace BlocksBeyondTheStars.Client
             foreach (var f in _frags.Values)
             {
                 var basePos = Game != null ? Game.ScenePos(f.World.x, f.World.y, f.World.z) : f.World;
-                f.Go.transform.position = basePos + Vector3.up * (0.4f + Mathf.Sin(t * 1.4f + f.Go.GetInstanceID()) * 0.12f);
+                f.Go.transform.position = basePos + Vector3.up * (0.4f + Mathf.Sin(t * 1.4f + (f.Go.GetEntityId().GetHashCode() & 0x3ff)) * 0.12f);
                 f.Spin.localRotation = Quaternion.Euler(20f, t * 35f, 12f);
 
                 if (f.GlowMat != null)
                 {
                     var col = CategoryColor(f.Category);
-                    float pulse = 0.55f + 0.45f * Mathf.Sin(t * 2.6f + f.Go.GetInstanceID());
+                    float pulse = 0.55f + 0.45f * Mathf.Sin(t * 2.6f + (f.Go.GetEntityId().GetHashCode() & 0x3ff));
                     f.GlowMat.SetColor(ColorId, ShaderColor.Srgb(new Color(col.r, col.g, col.b, 0.35f + 0.25f * pulse)));
                 }
             }

@@ -173,7 +173,7 @@ namespace BlocksBeyondTheStars.Client
         {
             audio?.At("enemy_attack", en.Root.transform.position, en.Pitch);
 
-            _weapons ??= FindObjectOfType<WeaponFx>();
+            _weapons ??= FindAnyObjectByType<WeaponFx>();
             if (_weapons == null || Game == null)
             {
                 return;

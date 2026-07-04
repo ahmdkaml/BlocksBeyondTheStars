@@ -123,7 +123,7 @@ namespace BlocksBeyondTheStars.Client
         {
             Screen.SetResolution(ShotWidth, ShotHeight, false);
 
-            var shell = FindFirstObjectByType<AppShell>();
+            var shell = FindAnyObjectByType<AppShell>();
             if (shell == null)
             {
                 Debug.LogError("[Capture] No AppShell in the scene.");
@@ -177,7 +177,7 @@ namespace BlocksBeyondTheStars.Client
 
             // 3b) In-game menu (the Tab menu) over the cockpit — open it exactly as Tab does, capture, close again
             //     so the following shots aren't covered by the menu. (The OS cursor isn't in a ScreenCapture RT.)
-            var menu = FindFirstObjectByType<GameMenu>();
+            var menu = FindAnyObjectByType<GameMenu>();
             if (menu != null)
             {
                 menu.SetMenuOpen(true);
@@ -195,7 +195,7 @@ namespace BlocksBeyondTheStars.Client
             yield return WaitUntil(() => boot.InSpace, 25f);
             yield return new WaitForSecondsRealtime(ChunkSettle);
 
-            var space = FindFirstObjectByType<SpaceView>();
+            var space = FindAnyObjectByType<SpaceView>();
             if (space != null)
             {
                 space.SetFlightYaw(FlightHeading);
@@ -213,7 +213,7 @@ namespace BlocksBeyondTheStars.Client
             yield return WaitUntil(() => boot.WorldReady, WorldLoadTimeout);
             yield return new WaitForSecondsRealtime(ChunkSettle);
 
-            var pc = FindFirstObjectByType<PlayerController>();
+            var pc = FindAnyObjectByType<PlayerController>();
             if (pc != null)
             {
                 var p = boot.PlayerPosition;
@@ -259,7 +259,7 @@ namespace BlocksBeyondTheStars.Client
             // fungal/skylands/ocean shots on the first run. Then we wait until the player has actually settled on
             // solid, DRY ground while ALIVE; if that never happens (tiny island / all-water world), we SKIP the
             // shot rather than write a broken frame.
-            var pc = FindFirstObjectByType<PlayerController>();
+            var pc = FindAnyObjectByType<PlayerController>();
             if (pc == null)
             {
                 Debug.LogWarning($"[Capture] {_planet}: no PlayerController — skipping shot.");
