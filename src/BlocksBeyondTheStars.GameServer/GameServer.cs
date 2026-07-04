@@ -852,6 +852,7 @@ public sealed partial class GameServer
         Guard("TickVegaBanter", TickVegaBanter); // push VEGA's LLM banter lines finished off-thread
 
         Guard("AccumulatePlaytime", deltaSeconds, AccumulatePlaytime);
+        Guard("HostedLifecycle", deltaSeconds, TickHostedLifecycle); // idle shutdown + /status snapshot (hosted worlds)
         Guard("CrashReportFlush", deltaSeconds, MaybeFlushCrashReports); // best-effort background upload of queued reports
 
         _sinceAutoSave += deltaSeconds;
@@ -1744,6 +1745,31 @@ public sealed partial class GameServer
             name = name.Substring(0, MaxPlayerNameLength); // cap a client-supplied name so it can't be a multi-KB blob (persisted + broadcast in presence)
         }
 
+        // Hosted-worlds gate: with a JoinTokenSecret configured, only joins the control plane vouched for
+        // (a valid HMAC token, bound to THIS world and THIS name) get in. Validated offline — no network
+        // dependency on the control plane. Local sessions (AddLocalPlayer) never pass through here, so the
+        // bundled singleplayer host is unaffected even if a secret were set.
+        bool de = NormalizeLocale(join.Locale) == "de";
+        string hostedAccountId = string.Empty;
+        if (!string.IsNullOrEmpty(_config.JoinTokenSecret))
+        {
+            long nowUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            if (!Shared.Security.HostedJoinToken.TryValidate(
+                    _config.JoinTokenSecret, _config.WorldName, join.HostedToken, nowUnix,
+                    out hostedAccountId, out string tokenName, out string tokenError)
+                || !string.Equals(tokenName, name, StringComparison.OrdinalIgnoreCase))
+            {
+                _log.Warn($"Join of '{name}' rejected: hosted token check failed ({(tokenError.Length > 0 ? tokenError : "name mismatch")}).");
+                SendTo(connectionId, new JoinRejected
+                {
+                    Reason = de
+                        ? "Dieser Server verlangt ein gültiges Join-Token. Bitte über das Weltenportal beitreten."
+                        : "This server requires a valid join token. Please join through the worlds portal.",
+                });
+                return;
+            }
+        }
+
         if (_config.WhitelistEnabled && !_config.Whitelist.Contains(name))
         {
             SendTo(connectionId, new JoinRejected { Reason = "You are not on the whitelist." });
@@ -1759,7 +1785,6 @@ public sealed partial class GameServer
 
         // Name reservation: one live session per name — PlayerId == name, so a second client under
         // the same name would alias (and corrupt) the same player state.
-        bool de = NormalizeLocale(join.Locale) == "de";
         if (_sessions.Values.Any(s => s.Joined && string.Equals(s.State.Name, name, StringComparison.OrdinalIgnoreCase)))
         {
             SendTo(connectionId, new JoinRejected
@@ -1798,6 +1823,18 @@ public sealed partial class GameServer
         if (state.Role != PlayerRole.WorldAdmin && _config.AdminPlayers.Contains(name))
         {
             state.Role = PlayerRole.Admin;
+        }
+
+        // Owner bootstrap (hosted worlds): the token-verified owner account is granted WorldAdmin even when
+        // someone else already holds that role — an uploaded singleplayer save carries its old first-joiner
+        // WorldAdmin, and without this the uploader could be locked out of administering their own world.
+        if (!string.IsNullOrEmpty(_config.WorldOwnerAccountId)
+            && hostedAccountId == _config.WorldOwnerAccountId
+            && state.Role != PlayerRole.WorldAdmin)
+        {
+            state.Role = PlayerRole.WorldAdmin;
+            _repo.SavePlayer(state); // persist immediately, like the name claim above
+            _log.Info($"Player '{name}' recognised as world owner (account '{hostedAccountId}') — granted WorldAdmin.");
         }
 
         // Return the player to the body they were last on (persisted per-player), not always the home world.

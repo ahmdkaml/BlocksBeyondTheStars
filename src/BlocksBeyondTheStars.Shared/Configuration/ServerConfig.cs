@@ -92,6 +92,26 @@ public sealed class ServerConfig
     /// never recorded. The bundled singleplayer/host launcher may turn this on for local co-op.</summary>
     public bool VoiceChatEnabled { get; set; }
 
+    // --- Hosted-worlds fleet support (operator-set, never player-facing). A control plane that spawns one
+    // server container per world uses these to make instances stop when unused, gate joins to players it
+    // vouched for, and hand the uploading owner their world back. All three default OFF, so singleplayer,
+    // LAN hosting and classic self-hosting behave exactly as before. ---
+
+    /// <summary>Shut the server down cleanly (drain + save, like Ctrl+C) after this many minutes with no
+    /// joined player — counted from startup too, so a woken instance nobody joins also stops. 0 (default)
+    /// = never; a container running this must NOT use an auto-restart policy or it defeats the idle stop.</summary>
+    public int IdleShutdownMinutes { get; set; }
+
+    /// <summary>When set, every network join must carry a valid HMAC join token issued for this world by the
+    /// control plane (see <c>HostedJoinToken</c>). Empty (default) = joins work as before. Local/singleplayer
+    /// sessions are exempt — the bundled host never sets this.</summary>
+    public string JoinTokenSecret { get; set; } = string.Empty;
+
+    /// <summary>Account id of the world's owner in the control plane. A token-verified join whose account id
+    /// matches is granted WorldAdmin regardless of the "first joiner becomes WorldAdmin" rule — required for
+    /// uploaded saves, where someone else may already hold that role. Empty (default) = no owner mapping.</summary>
+    public string WorldOwnerAccountId { get; set; } = string.Empty;
+
     // --- Filesystem locations (resolved relative to the server install dir) ---
 
     public string SavesRoot { get; set; } = "saves";
@@ -490,6 +510,9 @@ public sealed class ServerConfig
         if (Env("BBS_CRASH_REPORT_ENDPOINT") is { } crashUrl) { CrashReportEndpoint = crashUrl; applied.Add("BBS_CRASH_REPORT_ENDPOINT"); }
         if (Env("BBS_CRASH_REPORT_KEY") is { } crashKey) { CrashReportApiKey = crashKey; applied.Add("BBS_CRASH_REPORT_KEY"); }
         if (Env("BBS_VOICE") is { } voiceStr && bool.TryParse(voiceStr, out var voice)) { VoiceChatEnabled = voice; applied.Add("BBS_VOICE"); }
+        if (Env("BBS_IDLE_SHUTDOWN_MINUTES") is { } idleStr && int.TryParse(idleStr, out var idle)) { IdleShutdownMinutes = idle; applied.Add("BBS_IDLE_SHUTDOWN_MINUTES"); }
+        if (Env("BBS_JOIN_TOKEN_SECRET") is { } joinSecret) { JoinTokenSecret = joinSecret; applied.Add("BBS_JOIN_TOKEN_SECRET"); }
+        if (Env("BBS_WORLD_OWNER") is { } worldOwner) { WorldOwnerAccountId = worldOwner; applied.Add("BBS_WORLD_OWNER"); }
 
         return applied;
     }

@@ -5500,6 +5500,27 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-04): hosted-worlds server foundations — idle shutdown, /status, join tokens, owner bootstrap
+Groundwork for running MANY per-world server instances behind a control plane ("hosted worlds", Realms-style;
+plan: wildcard subdomains under `play.blocksbeyondthestars.de`). All four features are **inert by default** —
+singleplayer, LAN hosting and classic self-hosting behave exactly as before. Server-side only, no client changes.
+- **Idle shutdown.** `IdleShutdownMinutes` / `BBS_IDLE_SHUTDOWN_MINUTES` (default 0 = off): an empty server stops
+  itself cleanly (drain + save, the Ctrl+C path) after N minutes without a joined player — counted from startup
+  too, so a woken instance nobody joins goes back to sleep. Containers using it must not auto-restart.
+- **Live `/status` snapshot.** The WebSocket gateway answers `GET /status` with JSON (world, joined players, max,
+  uptime, idle state, versions) — built once a second on the tick thread, served thread-safely from the accept
+  loop. This is what a control plane polls; the admin API only sees persisted rows, not live sessions.
+- **HMAC join tokens.** New `Shared/Security/HostedJoinToken` (HMAC-SHA256, bound to world + name + account +
+  expiry, base64url fields, netstandard2.1-safe). With `JoinTokenSecret` / `BBS_JOIN_TOKEN_SECRET` set, network
+  joins require a valid control-plane token (rejections localized DE/EN); validation is offline — a control-plane
+  outage can never lock players out of a running world. `JoinRequest.HostedToken` is additive (both codecs are
+  contractless) → **no protocol bump**; local/singleplayer sessions bypass the gate by design.
+- **Owner bootstrap.** `WorldOwnerAccountId` / `BBS_WORLD_OWNER`: the token-verified owner account is granted
+  WorldAdmin even when an uploaded singleplayer save already carries someone else's first-joiner WorldAdmin —
+  otherwise an uploader could be locked out of administering their own hosted world.
+- Tests: `HostedWorldsFoundationTests` (18) — token roundtrip/tamper/expiry/wrong-world, idle fire/never-fires,
+  status content, join gate accept/reject paths, owner bootstrap on a foreign-founder save.
+
 ## ✅ Done (2026-07-03): browser-play polish — five bugs from the first local Docker browser test (#217–#221)
 Found by building the dedicated-server Docker image locally and playing at `/play`:
 - **Compose project name ([#217](https://github.com/marceld23/BlocksBeyondTheStars/issues/217)).** `docker compose`

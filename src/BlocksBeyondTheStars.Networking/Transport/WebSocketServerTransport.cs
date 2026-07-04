@@ -42,6 +42,12 @@ public sealed class WebSocketServerTransport : IServerTransport
     public event Action<int>? ClientDisconnected;
     public event Action<int, byte[]>? PayloadReceived;
 
+    /// <summary>When set, <c>GET /status</c> answers with this JSON (the game server's live snapshot: joined
+    /// players, uptime, idle state). This is what a hosted-worlds control plane polls for allocation and
+    /// idle decisions — the admin API only sees persisted state, not live sessions. Must be cheap and
+    /// thread-safe: it is invoked on the accept loop, not the tick thread.</summary>
+    public Func<string>? StatusJsonProvider { get; set; }
+
     /// <param name="bindHost">Host for the HTTP prefix; "localhost" for dev/LAN, "+" for all interfaces (may need elevation on Windows).</param>
     public WebSocketServerTransport(string bindHost = "localhost") => _bindHost = bindHost;
 
@@ -75,6 +81,17 @@ public sealed class WebSocketServerTransport : IServerTransport
                     byte[] body = System.Text.Encoding.UTF8.GetBytes("Blocks Beyond the Stars WebSocket gateway\n");
                     ctx.Response.StatusCode = 200;
                     ctx.Response.ContentType = "text/plain; charset=utf-8";
+                    ctx.Response.ContentLength64 = body.Length;
+                    await ctx.Response.OutputStream.WriteAsync(body, 0, body.Length).ConfigureAwait(false);
+                    ctx.Response.Close();
+                }
+                else if (ctx.Request.HttpMethod == "GET"
+                    && ctx.Request.Url?.AbsolutePath == "/status"
+                    && StatusJsonProvider is { } statusProvider)
+                {
+                    byte[] body = System.Text.Encoding.UTF8.GetBytes(statusProvider());
+                    ctx.Response.StatusCode = 200;
+                    ctx.Response.ContentType = "application/json; charset=utf-8";
                     ctx.Response.ContentLength64 = body.Length;
                     await ctx.Response.OutputStream.WriteAsync(body, 0, body.Length).ConfigureAwait(false);
                     ctx.Response.Close();
