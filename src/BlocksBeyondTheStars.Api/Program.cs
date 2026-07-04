@@ -92,7 +92,21 @@ app.MapGet("/play", (HttpContext ctx) =>
 
     if (File.Exists(Path.Combine(webglDir, "index.html")))
     {
-        return Results.File(Path.Combine(webglDir, "index.html"), "text/html; charset=utf-8");
+        // Unity emits STABLE build file names (WebGL.data.unityweb, …), so a browser cache can hold files
+        // from an older build under the same URLs — a mixed wasm/data pair crashes the engine with wild
+        // stack overflows. Stamp the page's buildStamp placeholder with the newest Build/ file timestamp:
+        // every build gets unique asset URLs (?v=…), which both busts stale caches (including clients
+        // poisoned by the earlier year-long immutable header) and lets stamped URLs cache aggressively.
+        string html = File.ReadAllText(Path.Combine(webglDir, "index.html"));
+        string buildDir = Path.Combine(webglDir, "Build");
+        if (Directory.Exists(buildDir))
+        {
+            long stamp = Directory.EnumerateFiles(buildDir).Max(f => File.GetLastWriteTimeUtc(f).Ticks);
+            html = html.Replace("var buildStamp = \"\";", $"var buildStamp = \"?v={stamp}\";");
+        }
+
+        ctx.Response.Headers[HeaderNames.CacheControl] = "no-cache"; // always revalidate the entry page
+        return Results.Content(html, "text/html; charset=utf-8");
     }
 
     return Results.Content(
@@ -139,11 +153,16 @@ app.UseStaticFiles(new StaticFileOptions
             headers[HeaderNames.ContentEncoding] = "gzip";
         }
 
-        // index.html references hash-named build files, so it must never be cached; everything else under
-        // the Build/ folder is content-addressed and safe to cache immutably.
-        headers[HeaderNames.CacheControl] = string.Equals(name, "index.html", StringComparison.OrdinalIgnoreCase)
-            ? "no-cache"
-            : "public, max-age=31536000, immutable";
+        // Unity's build file names are STABLE (WebGL.data.unityweb, …), NOT content-addressed — a blanket
+        // "immutable" here poisoned browser caches across rebuilds (mixed old/new wasm+data = engine stack
+        // overflow). Only requests carrying the per-build ?v= stamp (injected into index.html by the /play
+        // handler) get long-lived caching — their URL changes with every build. Everything else, including
+        // a directly fetched index.html, must revalidate (cheap 304s via ETag/Last-Modified).
+        headers[HeaderNames.CacheControl] =
+            !string.Equals(name, "index.html", StringComparison.OrdinalIgnoreCase)
+            && ctx.Context.Request.Query.ContainsKey("v")
+                ? "public, max-age=31536000, immutable"
+                : "no-cache";
     },
 });
 

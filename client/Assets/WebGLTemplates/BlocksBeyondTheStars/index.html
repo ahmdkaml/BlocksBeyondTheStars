@@ -77,17 +77,21 @@
       }
 
       var buildUrl = "Build";
-      var loaderUrl = buildUrl + "/{{{ LOADER_FILENAME }}}";
+      // Unity emits STABLE file names (WebGL.data.unityweb, …), so URLs alone can't distinguish builds.
+      // The server rewrites this stamp to "?v=<build timestamp>" when serving the page — every build gets
+      // unique asset URLs and browsers can never mix cached files from two different builds.
+      var buildStamp = "";
+      var loaderUrl = buildUrl + "/{{{ LOADER_FILENAME }}}" + buildStamp;
       var config = {
         arguments: [],
-        dataUrl: buildUrl + "/{{{ DATA_FILENAME }}}",
-        frameworkUrl: buildUrl + "/{{{ FRAMEWORK_FILENAME }}}",
-        codeUrl: buildUrl + "/{{{ CODE_FILENAME }}}",
+        dataUrl: buildUrl + "/{{{ DATA_FILENAME }}}" + buildStamp,
+        frameworkUrl: buildUrl + "/{{{ FRAMEWORK_FILENAME }}}" + buildStamp,
+        codeUrl: buildUrl + "/{{{ CODE_FILENAME }}}" + buildStamp,
 #if MEMORY_FILENAME
-        memoryUrl: buildUrl + "/{{{ MEMORY_FILENAME }}}",
+        memoryUrl: buildUrl + "/{{{ MEMORY_FILENAME }}}" + buildStamp,
 #endif
 #if SYMBOLS_FILENAME
-        symbolsUrl: buildUrl + "/{{{ SYMBOLS_FILENAME }}}",
+        symbolsUrl: buildUrl + "/{{{ SYMBOLS_FILENAME }}}" + buildStamp,
 #endif
         streamingAssetsUrl: "StreamingAssets",
         companyName: {{{ JSON.stringify(COMPANY_NAME) }}},

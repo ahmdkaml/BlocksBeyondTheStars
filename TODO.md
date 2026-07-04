@@ -5507,6 +5507,14 @@ Found by building the dedicated-server Docker image locally and playing at `/pla
   StreamingAssets, so the studio/title splashes build their texts before the localizer exists and `L()` falls back
   to the key (desktop loads synchronously → never affected). Both splashes now queue texts built without a localizer
   and re-localize them in `Update` once content arrives. Browser-verified (DE slogan/contributors/tagline/build badge).
+- **Follow-up: `/play` crashed with a wasm stack overflow after a rebuild (stale-cache mix).** The Api served
+  every `Build/` file with `Cache-Control: immutable` (1 year) on the assumption the names are content-addressed —
+  but Unity emits STABLE names (`WebGL.data.unityweb`, …), so after a rebuild browsers mixed old immutable-cached
+  wasm/data with the new page → `RangeError: Maximum call stack size exceeded`. Fix: the `/play` handler stamps the
+  template's `buildStamp` placeholder with the newest `Build/` file timestamp (`?v=…` on every asset URL, unique per
+  build — also rescues already-poisoned caches), stamped URLs keep long-lived caching, everything unstamped
+  (incl. index.html) is `no-cache` (revalidates via ETag/Last-Modified). Verified: headers + stamp live, fresh and
+  cached-profile browser loads boot cleanly.
 
 ## ✅ Done (2026-07-02): world-options overlay footer — no more overlapping buttons (#209)
 - **"Done" partially covered the "Advanced: planet types…" button ([#209](https://github.com/marceld23/BlocksBeyondTheStars/issues/209), PR [#210](https://github.com/marceld23/BlocksBeyondTheStars/pull/210)).**
