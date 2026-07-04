@@ -28,6 +28,7 @@
     <ProjectReference Include="..\..\src\BlocksBeyondTheStars.Networking\BlocksBeyondTheStars.Networking.csproj" />
     <ProjectReference Include="..\..\src\BlocksBeyondTheStars.GameServer\BlocksBeyondTheStars.GameServer.csproj" />
     <ProjectReference Include="..\..\src\BlocksBeyondTheStars.Api\BlocksBeyondTheStars.Api.csproj" />
+    <ProjectReference Include="..\..\src\BlocksBeyondTheStars.WorldHost\BlocksBeyondTheStars.WorldHost.csproj" />
   </ItemGroup>
 
 </Project>

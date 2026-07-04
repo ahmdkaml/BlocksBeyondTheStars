@@ -5500,6 +5500,31 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-04): hosted-worlds control plane MVP — WorldHost (accounts, registry, wake-on-demand)
+The Realms-style control plane over the Phase-0 server foundations. New project
+`src/BlocksBeyondTheStars.WorldHost` (in the solution; tests reference it); architecture doc
+[docs/developer/HOSTED_WORLDS.md](docs/developer/HOSTED_WORLDS.md) (routing/DNS/certs/lifecycle/security).
+- **Accounts + sessions (privacy-minimal).** Name + PBKDF2-SHA256(210k) password hash, NO email; bearer
+  sessions stored hashed; uniform login failures (no name oracle). Operator quotas via `BBS_WH_*` env —
+  never player-facing: 2 worlds/account, 12 players, idle 20 min.
+- **World registry (SQLite `worldhost/worldhost.db`).** World = 12-hex id (⇒ subdomain `w-<id>`), per-world
+  join secret, stable host port from a configured range (released on delete), status stopped/starting/running.
+- **Orchestrator: route-or-wake.** `POST /api/worlds/{id}/join` reuses the live instance or `docker run`s one
+  and polls its `/status` until healthy; returns a JoinGrant (wssUrl for browsers, host:port for native UDP,
+  120-s HMAC join token the instance verifies offline). Per-world locks serialize concurrent wakes; a 30-s
+  reaper marks idle-exited instances stopped. Docker CLI via `ArgumentList` (argv-level, no shell injection);
+  containers run `--restart=no` (an auto-restart policy would defeat idle sleep), volume `bbs-world-<id>-saves`,
+  caddy-docker-proxy labels for `w-<id>.<domain>` wss routing.
+- **Caddy on-demand TLS gate.** `GET /ask?domain=…` answers 200 only for the portal host + real worlds' subdomains
+  — required because DNS lives at Strato (no API ⇒ no DNS-challenge wildcard); wildcard A record + per-subdomain
+  HTTP-01 on first request instead. Fallback documented: delegate the `play` subzone to Cloudflare/Hetzner DNS.
+- **Client model fixed (Phase 2 requirement).** Native menu keeps self-hosting AND gains "Official worlds"
+  (login → list/create/join via WorldHost). The WEB client never gets a server picker: a self-hosted Docker's
+  `/play` stays bound to that installation; the official portal binds to the official fleet.
+- Tests: `WorldHostTests` (11) — password hashing, signup/login/sessions, quota + port allocation + name
+  validation, subdomain resolution, wake/reuse/reap/failed-start orchestration against a fake launcher.
+- Open next (Phase 2): portal "My Worlds" UI, save upload/export, native "Official worlds" menu, WebGL deep-links.
+
 ## ✅ Done (2026-07-04): hosted-worlds server foundations — idle shutdown, /status, join tokens, owner bootstrap
 Groundwork for running MANY per-world server instances behind a control plane ("hosted worlds", Realms-style;
 plan: wildcard subdomains under `play.blocksbeyondthestars.de`). All four features are **inert by default** —
