@@ -5519,6 +5519,26 @@ Multi-host placement stays deliberately deferred until one host stops being enou
 - Tests: `WorldHostPhase3Tests` (8) — limiter window/reset/disable, blocked names across all three surfaces,
   archive sweep + transparent restore round-trip, recently-active spared, sweep off, metrics rendering.
 
+## ✅ Done (2026-07-04): fleet CI/CD — WorldHost image, deploy/ infra-as-code, SSH deploy workflow
+The hosted-worlds VPS (`bbs-host-1`, prepared 2026-07-04: hardened Debian 13, Docker, ufw incl. UDP
+32000-32999, shared `bbs-hosted` network, caddy-docker-proxy live) is now wired into CI/CD:
+- **`Dockerfile.worldhost` + `worldhost-image.yml`**: builds `ghcr.io/marceld23/blocks-beyond-the-stars-worldhost`
+  (aspnet 8 + docker CLI for the host-socket launcher) on main pushes touching WorldHost/Shared —
+  `:latest` + immutable `:sha-<short>` for pinning, mirroring `reports-image.yml`.
+- **`deploy/`** = source of truth for `/opt/bbs/` on the VPS: compose files for caddy (proxy +
+  BaseCaddyfile with the on-demand-TLS `/ask` guard), worldhost (docker.sock, identical-path
+  `/opt/bbs/worldhost/worlds` bind mount — required because WorldHost passes host paths to `docker run -v`)
+  and reports (fleet variant behind Caddy; the repo-root sample stays for self-hosters). Plus
+  `.env.example` templates and `remote-deploy.sh` (tag pinning + health checks).
+- **`deploy.yml`**: manual dispatch (service: all|caddy|worldhost|reports, optional tag pins),
+  `production` environment with required-reviewer gate, pinned host key, rsync excludes `.env`.
+- **Secrets model**: GitHub holds ONE secret (`DEPLOY_SSH_KEY`, dedicated restricted ed25519 key for
+  `bbs`); all service secrets live only in `/opt/bbs/<service>/.env` (600, created on the host).
+- Verified: WorldHost image builds + `/healthz` smoke test green, all three compose files validate
+  against the real host `.env`s, deploy key + GitHub environment/secret configured live.
+- OPEN: first real deploy via Actions after merge (workflow_dispatch needs the file on main); Strato
+  DNS records (`play`, `*.play`, `reports`) still pending domain registration.
+
 ## ✅ Done (2026-07-04): bug-report inbox (ReportHost) — self-owned Docker service replacing the Wix dependency
 A standalone container (`src/BlocksBeyondTheStars.ReportHost/`) that receives the game's F1 feedback and
 automatic crash reports on the EXACT Wix wire contract (POST `/api/bugreport`, `x-bugreport-key`,

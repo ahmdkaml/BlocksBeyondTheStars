@@ -1,0 +1,36 @@
+# Reverse proxy for the hosted-worlds fleet (docs/developer/HOSTED_WORLDS.md).
+# caddy-docker-proxy: services announce themselves via docker labels (caddy=<domain>), so routing
+# appears/disappears with containers — no static proxy config to maintain.
+#
+# Source of truth is THIS file in the repo; deploy.yml syncs it to /opt/bbs/caddy/ on the VPS.
+services:
+  caddy:
+    image: lucaslorentz/caddy-docker-proxy:2.13-alpine
+    container_name: bbs-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    environment:
+      - CADDY_INGRESS_NETWORKS=bbs-hosted
+      - CADDY_DOCKER_CADDYFILE_PATH=/etc/caddy/BaseCaddyfile
+    networks:
+      - bbs-hosted
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - caddy-data:/data
+      - ./BaseCaddyfile:/etc/caddy/BaseCaddyfile:ro
+    labels:
+      # Plain-HTTP reachability probe (answers "BBS host up" on port 80). Harmless alongside the real
+      # sites — ACME HTTP-01 challenges are handled before routing — and useful to prove the host is
+      # reachable before DNS exists. Remove once the portal is public and monitored.
+      caddy: "http://:80"
+      caddy.respond: '"BBS host up" 200'
+
+volumes:
+  caddy-data:
+
+networks:
+  bbs-hosted:
+    external: true

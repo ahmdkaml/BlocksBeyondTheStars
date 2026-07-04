@@ -1,0 +1,79 @@
+# Deploys the hosted-worlds fleet services to the VPS (bbs-host-1, see docs/developer/HOSTED_WORLDS.md
+# and deploy/README.md). Manual-only by design: run it from the Actions tab, pick the service and
+# optionally pin image tags. The `production` environment adds a required-reviewer approval gate.
+#
+# Secrets model (deliberate):
+#   * GitHub holds ONE secret — DEPLOY_SSH_KEY, a dedicated ed25519 key for the `bbs` user that exists
+#     only for this workflow (not the operator's personal key). The host key below is pinned.
+#   * All service secrets (claim code, report keys, admin credentials) live ONLY in /opt/bbs/*/.env on
+#     the host. This workflow never reads, writes or logs them — remote-deploy.sh rewrites only the
+#     *_TAG line of those files.
+
+name: Deploy (VPS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      service:
+        description: "Which service to deploy."
+        type: choice
+        options: [all, caddy, worldhost, reports]
+        default: all
+      worldhost_tag:
+        description: "WorldHost image tag to pin (e.g. sha-abc1234). Empty = keep the currently pinned tag."
+        type: string
+        default: ""
+      reports_tag:
+        description: "ReportHost image tag to pin (e.g. sha-abc1234). Empty = keep the currently pinned tag."
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+# Never two deploys at once; a second run queues instead of cancelling a half-finished deploy.
+concurrency:
+  group: deploy-production
+
+jobs:
+  deploy:
+    name: Deploy to bbs-host-1
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate inputs
+        env:
+          WORLDHOST_TAG: ${{ inputs.worldhost_tag }}
+          REPORTS_TAG: ${{ inputs.reports_tag }}
+        run: |
+          for t in "$WORLDHOST_TAG" "$REPORTS_TAG"; do
+            if ! printf '%s' "$t" | grep -Eq '^[A-Za-z0-9._-]*$'; then
+              echo "invalid image tag: $t"; exit 1
+            fi
+          done
+
+      - name: Set up SSH (pinned host key)
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo '31.70.113.90 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICuF64bEL7WPCFjuC5jT91w0TOupsWe2VjMPUxFanFow' >> ~/.ssh/known_hosts
+
+      - name: Sync deploy files (never touches the host .env files)
+        run: |
+          rsync -rtv --exclude='.env' -e "ssh -i ~/.ssh/deploy_key" \
+            deploy/caddy deploy/worldhost deploy/reports \
+            bbs@31.70.113.90:/opt/bbs/
+
+      - name: Deploy + health check
+        env:
+          SERVICE: ${{ inputs.service }}
+          WORLDHOST_TAG: ${{ inputs.worldhost_tag }}
+          REPORTS_TAG: ${{ inputs.reports_tag }}
+        run: |
+          ssh -i ~/.ssh/deploy_key bbs@31.70.113.90 \
+            "bash -s -- '$SERVICE' '$WORLDHOST_TAG' '$REPORTS_TAG'" < deploy/remote-deploy.sh
