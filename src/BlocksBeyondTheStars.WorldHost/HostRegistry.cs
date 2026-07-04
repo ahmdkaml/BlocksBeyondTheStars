@@ -7,7 +7,7 @@ using Microsoft.Data.Sqlite;
 
 namespace BlocksBeyondTheStars.WorldHost;
 
-public sealed record AccountRecord(string Id, string Name);
+public sealed record AccountRecord(string Id, string Name, bool IsDeveloper = false);
 
 public sealed record WorldRecord(
     string Id,
@@ -68,6 +68,7 @@ public sealed class HostRegistry : IDisposable
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL COLLATE NOCASE UNIQUE,
                 password_hash TEXT NOT NULL,
+                is_developer INTEGER NOT NULL DEFAULT 0,
                 created_unix INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS session(
                 token_hash TEXT PRIMARY KEY,
@@ -84,15 +85,42 @@ public sealed class HostRegistry : IDisposable
                 created_unix INTEGER NOT NULL,
                 last_started_unix INTEGER NOT NULL DEFAULT 0);
             """);
+
+        // Tolerant upgrade for registries created before the developer flag existed (pre-deployment dev
+        // databases only); SQLite has no ADD COLUMN IF NOT EXISTS.
+        try
+        {
+            Exec("ALTER TABLE account ADD COLUMN is_developer INTEGER NOT NULL DEFAULT 0;");
+        }
+        catch (SqliteException)
+        {
+            // column already exists
+        }
     }
+
+    // ---------------- Reserved names ----------------
+
+    /// <summary>True when a name collides with a developer-reserved name. Both sides are normalized —
+    /// lowercased with spaces/'-'/'_' stripped — so padding or separator tricks ("ju ju", "J_ustus")
+    /// don't slip past the reservation.</summary>
+    public bool IsReservedName(string? name)
+    {
+        string normalized = NormalizeName(name);
+        return normalized.Length > 0 && _config.ReservedNames.Any(r => NormalizeName(r) == normalized);
+    }
+
+    private static string NormalizeName(string? name)
+        => new((name ?? string.Empty).ToLowerInvariant().Where(c => c is not (' ' or '-' or '_')).ToArray());
 
     public static bool IsValidWorldId(string id) => WorldIdRx.IsMatch(id);
 
     // ---------------- Accounts & sessions ----------------
 
-    /// <summary>Creates an account and returns a fresh session token. Fails on invalid/taken names or a
-    /// too-short password. The error string is safe to show to the player.</summary>
-    public (bool Ok, string Error, string AccountId, string SessionToken) CreateAccount(string name, string password)
+    /// <summary>Creates an account and returns a fresh session token. Fails on invalid/taken/reserved
+    /// names or a too-short password. A developer registering a reserved name presents the operator's
+    /// claim code, which permanently flags the account as a developer account. The error string is safe
+    /// to show to the player.</summary>
+    public (bool Ok, string Error, string AccountId, string SessionToken) CreateAccount(string name, string password, string? claimCode = null)
     {
         if (!AccountNameRx.IsMatch(name ?? string.Empty))
         {
@@ -102,6 +130,18 @@ public sealed class HostRegistry : IDisposable
         if ((password ?? string.Empty).Length < 8)
         {
             return (false, "Password must be at least 8 characters.", string.Empty, string.Empty);
+        }
+
+        bool isDeveloper = false;
+        if (IsReservedName(name))
+        {
+            // With no claim code configured, reserved names are simply unclaimable — the safe default.
+            if (string.IsNullOrEmpty(_config.ReservedClaimCode) || !FixedTimeEquals(claimCode ?? string.Empty, _config.ReservedClaimCode))
+            {
+                return (false, "This name is reserved.", string.Empty, string.Empty);
+            }
+
+            isDeveloper = true;
         }
 
         lock (_gate)
@@ -116,11 +156,12 @@ public sealed class HostRegistry : IDisposable
             }
 
             string id = "acc-" + RandomHex(12);
-            using (var ins = Cmd("INSERT INTO account(id, name, password_hash, created_unix) VALUES($i, $n, $p, $c)"))
+            using (var ins = Cmd("INSERT INTO account(id, name, password_hash, is_developer, created_unix) VALUES($i, $n, $p, $d, $c)"))
             {
                 ins.Parameters.AddWithValue("$i", id);
                 ins.Parameters.AddWithValue("$n", name);
                 ins.Parameters.AddWithValue("$p", PasswordHasher.Hash(password!));
+                ins.Parameters.AddWithValue("$d", isDeveloper ? 1 : 0);
                 ins.Parameters.AddWithValue("$c", NowUnix());
                 ins.ExecuteNonQuery();
             }
@@ -160,13 +201,13 @@ public sealed class HostRegistry : IDisposable
         lock (_gate)
         {
             using var cmd = Cmd("""
-                SELECT a.id, a.name FROM session s JOIN account a ON a.id = s.account_id
+                SELECT a.id, a.name, a.is_developer FROM session s JOIN account a ON a.id = s.account_id
                 WHERE s.token_hash = $t AND s.expires_unix >= $now
                 """);
             cmd.Parameters.AddWithValue("$t", Sha256Hex(token));
             cmd.Parameters.AddWithValue("$now", NowUnix());
             using var reader = cmd.ExecuteReader();
-            return reader.Read() ? new AccountRecord(reader.GetString(0), reader.GetString(1)) : null;
+            return reader.Read() ? new AccountRecord(reader.GetString(0), reader.GetString(1), reader.GetInt32(2) != 0) : null;
         }
     }
 
@@ -378,6 +419,13 @@ public sealed class HostRegistry : IDisposable
 
     private static string Sha256Hex(string value)
         => Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value)));
+
+    /// <summary>Constant-time string equality — used for the reserved-name claim code so a wrong code
+    /// can't be probed character by character through timing.</summary>
+    private static bool FixedTimeEquals(string a, string b)
+        => CryptographicOperations.FixedTimeEquals(
+            System.Text.Encoding.UTF8.GetBytes(a),
+            System.Text.Encoding.UTF8.GetBytes(b));
 
     public void Dispose() => _db.Dispose();
 }

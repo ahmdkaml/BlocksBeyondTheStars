@@ -5521,9 +5521,17 @@ The Realms-style control plane over the Phase-0 server foundations. New project
 - **Client model fixed (Phase 2 requirement).** Native menu keeps self-hosting AND gains "Official worlds"
   (login → list/create/join via WorldHost). The WEB client never gets a server picker: a self-hosted Docker's
   `/play` stays bound to that installation; the official portal binds to the official fleet.
-- Tests: `WorldHostTests` (11) — password hashing, signup/login/sessions, quota + port allocation + name
-  validation, subdomain resolution, wake/reuse/reap/failed-start orchestration against a fake launcher.
-- Open next (Phase 2): portal "My Worlds" UI, save upload/export, native "Official worlds" menu, WebGL deep-links.
+- **Reserved developer names.** Marcel, Justus, Verena, juju, JuMaVe Games, FlashMiner, JustusJulius, BloddyMary
+  (list via `BBS_WH_RESERVED_NAMES`) are blocked at signup AND as in-game names on hosted worlds; matching is
+  normalized (case + space/`-`/`_` stripped, so "ju ju"/"J_ustus" are caught). Developers claim theirs once via
+  `BBS_WH_RESERVED_CLAIM_CODE` at signup → permanent `is_developer` flag (unset code = unclaimable, safe default).
+- Tests: `WorldHostTests` (18) — password hashing, signup/login/sessions, quota + port allocation + name
+  validation, subdomain resolution, wake/reuse/reap/failed-start orchestration against a fake launcher,
+  reserved-name signup/claim/in-game gates.
+- Open next (Phase 2): portal "My Worlds" UI, save upload/export, native "Official worlds" menu, WebGL deep-links,
+  **rules/beta acceptance flow** (kid-friendly bilingual community rules + "beta: saves may break/vanish" notice at
+  signup, stored terms version, one-time in-game welcome, `banned` account flag; Impressum/Datenschutz pages) —
+  analysis in HOSTED_WORLDS.md.
 
 ## ✅ Done (2026-07-04): hosted-worlds server foundations — idle shutdown, /status, join tokens, owner bootstrap
 Groundwork for running MANY per-world server instances behind a control plane ("hosted worlds", Realms-style;

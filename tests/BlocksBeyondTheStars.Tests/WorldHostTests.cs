@@ -84,16 +84,16 @@ public sealed class WorldHostTests : IDisposable
     {
         var registry = NewRegistry();
 
-        var (ok, _, accountId, session) = registry.CreateAccount("Justus", "super-secret-1");
+        var (ok, _, accountId, session) = registry.CreateAccount("Pilot", "super-secret-1");
         Assert.True(ok);
-        Assert.Equal("Justus", registry.ResolveSession(session)!.Name);
+        Assert.Equal("Pilot", registry.ResolveSession(session)!.Name);
 
-        var login = registry.Login("Justus", "super-secret-1");
+        var login = registry.Login("Pilot", "super-secret-1");
         Assert.NotNull(login);
         Assert.Equal(accountId, login!.Value.AccountId);
         Assert.Equal(accountId, registry.ResolveSession(login.Value.SessionToken)!.Id);
 
-        Assert.Null(registry.Login("Justus", "wrong-password"));
+        Assert.Null(registry.Login("Pilot", "wrong-password"));
         Assert.Null(registry.Login("Nobody", "super-secret-1"));
         Assert.Null(registry.ResolveSession("not-a-token"));
         Assert.Null(registry.ResolveSession(null));
@@ -103,9 +103,9 @@ public sealed class WorldHostTests : IDisposable
     public void Signup_Rejects_TakenNames_CaseInsensitive_AndInvalidInput()
     {
         var registry = NewRegistry();
-        Assert.True(registry.CreateAccount("Justus", "super-secret-1").Ok);
+        Assert.True(registry.CreateAccount("Pilot", "super-secret-1").Ok);
 
-        Assert.False(registry.CreateAccount("justus", "super-secret-1").Ok);   // taken (NOCASE)
+        Assert.False(registry.CreateAccount("pilot", "super-secret-1").Ok);    // taken (NOCASE)
         Assert.False(registry.CreateAccount("ab", "super-secret-1").Ok);       // too short
         Assert.False(registry.CreateAccount("has space", "super-secret-1").Ok); // bad charset
         Assert.False(registry.CreateAccount("Fine", "short").Ok);              // weak password
@@ -166,6 +166,13 @@ public sealed class WorldHostTests : IDisposable
 
     // ---------------- Orchestrator: route-or-wake ----------------
 
+    private static (string AccountId, AccountRecord Account) NewAccount(HostRegistry registry, string name = "Owner")
+    {
+        var (ok, error, accountId, session) = registry.CreateAccount(name, "super-secret-1");
+        Assert.True(ok, error);
+        return (accountId, registry.ResolveSession(session)!);
+    }
+
     [Fact]
     public async Task Join_WakesAStoppedWorld_AndIssuesAValidToken()
     {
@@ -173,10 +180,10 @@ public sealed class WorldHostTests : IDisposable
         var registry = NewRegistry(config);
         var launcher = new FakeLauncher();
         var orchestrator = NewOrchestrator(registry, launcher, config);
-        var (_, _, accountId, _) = registry.CreateAccount("Owner", "super-secret-1");
+        var (accountId, account) = NewAccount(registry);
         var world = registry.CreateWorld(accountId, "My World").World!;
 
-        var (grant, error) = await orchestrator.JoinAsync(world.Id, accountId, "Justus");
+        var (grant, error) = await orchestrator.JoinAsync(world.Id, account, "Pilot");
 
         Assert.Equal(string.Empty, error);
         Assert.NotNull(grant);
@@ -189,7 +196,7 @@ public sealed class WorldHostTests : IDisposable
         Assert.True(HostedJoinToken.TryValidate(world.JoinSecret, world.Id, grant.JoinToken,
             DateTimeOffset.UtcNow.ToUnixTimeSeconds(), out var tokenAccount, out var tokenPlayer, out _));
         Assert.Equal(accountId, tokenAccount);
-        Assert.Equal("Justus", tokenPlayer);
+        Assert.Equal("Pilot", tokenPlayer);
     }
 
     [Fact]
@@ -199,11 +206,11 @@ public sealed class WorldHostTests : IDisposable
         var registry = NewRegistry(config);
         var launcher = new FakeLauncher();
         var orchestrator = NewOrchestrator(registry, launcher, config);
-        var (_, _, accountId, _) = registry.CreateAccount("Owner", "super-secret-1");
+        var (accountId, account) = NewAccount(registry);
         var world = registry.CreateWorld(accountId, "My World").World!;
 
-        Assert.NotNull((await orchestrator.JoinAsync(world.Id, accountId, "P1")).Grant);
-        Assert.NotNull((await orchestrator.JoinAsync(world.Id, accountId, "P2")).Grant);
+        Assert.NotNull((await orchestrator.JoinAsync(world.Id, account, "P1")).Grant);
+        Assert.NotNull((await orchestrator.JoinAsync(world.Id, account, "P2")).Grant);
 
         Assert.Equal(1, launcher.StartCount); // second join routed to the live instance, no second container
     }
@@ -215,10 +222,10 @@ public sealed class WorldHostTests : IDisposable
         var registry = NewRegistry(config);
         var launcher = new FakeLauncher();
         var orchestrator = NewOrchestrator(registry, launcher, config);
-        var (_, _, accountId, _) = registry.CreateAccount("Owner", "super-secret-1");
+        var (accountId, account) = NewAccount(registry);
         var world = registry.CreateWorld(accountId, "My World").World!;
 
-        await orchestrator.JoinAsync(world.Id, accountId, "P1");
+        await orchestrator.JoinAsync(world.Id, account, "P1");
         string containerId = registry.GetWorld(world.Id)!.ContainerId;
 
         // The instance idle-shuts-down (Phase 0) — its container exits on its own.
@@ -227,7 +234,7 @@ public sealed class WorldHostTests : IDisposable
         Assert.Equal(WorldStatus.Stopped, registry.GetWorld(world.Id)!.Status);
 
         // The next join wakes a fresh container.
-        Assert.NotNull((await orchestrator.JoinAsync(world.Id, accountId, "P1")).Grant);
+        Assert.NotNull((await orchestrator.JoinAsync(world.Id, account, "P1")).Grant);
         Assert.Equal(2, launcher.StartCount);
         Assert.Equal(WorldStatus.Running, registry.GetWorld(world.Id)!.Status);
     }
@@ -239,10 +246,10 @@ public sealed class WorldHostTests : IDisposable
         var registry = NewRegistry(config);
         var launcher = new FakeLauncher { FailStart = true };
         var orchestrator = NewOrchestrator(registry, launcher, config);
-        var (_, _, accountId, _) = registry.CreateAccount("Owner", "super-secret-1");
+        var (accountId, account) = NewAccount(registry);
         var world = registry.CreateWorld(accountId, "My World").World!;
 
-        var (grant, error) = await orchestrator.JoinAsync(world.Id, accountId, "P1");
+        var (grant, error) = await orchestrator.JoinAsync(world.Id, account, "P1");
 
         Assert.Null(grant);
         Assert.NotEqual(string.Empty, error);
@@ -256,12 +263,67 @@ public sealed class WorldHostTests : IDisposable
         var config = new WorldHostConfig { WakeTimeoutSeconds = 1 };
         var registry = NewRegistry(config);
         var orchestrator = NewOrchestrator(registry, new FakeLauncher(), config);
-        var (_, _, accountId, _) = registry.CreateAccount("Owner", "super-secret-1");
+        var (accountId, account) = NewAccount(registry);
         var world = registry.CreateWorld(accountId, "My World").World!;
 
-        Assert.Null((await orchestrator.JoinAsync("000000000000", accountId, "P1")).Grant);
-        Assert.Null((await orchestrator.JoinAsync(world.Id, accountId, "")).Grant);
-        Assert.Null((await orchestrator.JoinAsync(world.Id, accountId, new string('x', 25))).Grant);
+        Assert.Null((await orchestrator.JoinAsync("000000000000", account, "P1")).Grant);
+        Assert.Null((await orchestrator.JoinAsync(world.Id, account, "")).Grant);
+        Assert.Null((await orchestrator.JoinAsync(world.Id, account, new string('x', 25))).Grant);
+    }
+
+    // ---------------- Reserved developer names ----------------
+
+    [Theory]
+    [InlineData("Justus")]      // exact
+    [InlineData("justus")]      // case
+    [InlineData("Flash-Miner")] // separator trick vs "FlashMiner"
+    [InlineData("Ju_Ju")]       // separator trick vs "juju"
+    [InlineData("JuMaVeGames")] // "JuMaVe Games" (space is stripped in normalization)
+    public void Signup_RejectsReservedNames_WhenNoClaimCodeIsConfigured(string name)
+    {
+        var registry = NewRegistry(); // default config: claim code empty ⇒ reserved names unclaimable
+        var result = registry.CreateAccount(name, "super-secret-1");
+        Assert.False(result.Ok);
+        Assert.Contains("reserved", result.Error, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Signup_WithTheClaimCode_CreatesADeveloperAccount()
+    {
+        var config = new WorldHostConfig { ReservedClaimCode = "dev-code-123" };
+        var registry = NewRegistry(config);
+
+        Assert.False(registry.CreateAccount("Justus", "super-secret-1", "wrong-code").Ok);
+
+        var (ok, error, _, session) = registry.CreateAccount("Justus", "super-secret-1", "dev-code-123");
+        Assert.True(ok, error);
+        Assert.True(registry.ResolveSession(session)!.IsDeveloper);
+
+        // Ordinary names don't need (and don't get) developer status, code or not.
+        var (okPlain, _, _, plainSession) = registry.CreateAccount("Pilot", "super-secret-1");
+        Assert.True(okPlain);
+        Assert.False(registry.ResolveSession(plainSession)!.IsDeveloper);
+    }
+
+    [Fact]
+    public async Task Join_ReservedInGameName_OnlyForDeveloperAccounts()
+    {
+        var config = new WorldHostConfig { WakeTimeoutSeconds = 5, ReservedClaimCode = "dev-code-123" };
+        var registry = NewRegistry(config);
+        var orchestrator = NewOrchestrator(registry, new FakeLauncher(), config);
+
+        var (accountId, account) = NewAccount(registry, "Pilot");
+        var world = registry.CreateWorld(accountId, "My World").World!;
+
+        // A normal account cannot impersonate a developer in-game — on ANY hosted world.
+        var (grant, error) = await orchestrator.JoinAsync(world.Id, account, "Justus");
+        Assert.Null(grant);
+        Assert.Contains("reserved", error, StringComparison.OrdinalIgnoreCase);
+
+        // The claimed developer account may play under the reserved name.
+        var (_, _, _, devSession) = registry.CreateAccount("FlashMiner", "super-secret-1", "dev-code-123");
+        var dev = registry.ResolveSession(devSession)!;
+        Assert.NotNull((await orchestrator.JoinAsync(world.Id, dev, "Justus")).Grant);
     }
 
     public void Dispose()

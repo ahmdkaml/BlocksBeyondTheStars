@@ -53,6 +53,20 @@ public sealed class WorldHostConfig
 
     public int SessionDays { get; set; } = 30;
 
+    /// <summary>Names reserved for the developers — nobody else may register them as an account name or
+    /// use them as an in-game player name on hosted worlds. Matched normalized (case-insensitive, with
+    /// spaces/'-'/'_' stripped), so "ju ju" or "J_ustus" are caught too. Operator-extendable via
+    /// <c>BBS_WH_RESERVED_NAMES</c> (comma-separated, replaces the default list).</summary>
+    public List<string> ReservedNames { get; set; } = new()
+    {
+        "Marcel", "Justus", "Verena", "juju", "JuMaVe Games", "FlashMiner", "JustusJulius", "BloddyMary",
+    };
+
+    /// <summary>Claim code (BBS_WH_RESERVED_CLAIM_CODE) a developer presents once at signup to register a
+    /// reserved name; the account is then permanently flagged as a developer account (which also unlocks
+    /// reserved in-game names). Empty (default) = reserved names cannot be claimed at all.</summary>
+    public string ReservedClaimCode { get; set; } = string.Empty;
+
     /// <summary>Directory holding the registry database (worldhost.db).</summary>
     public string DataDir { get; set; } = "worldhost";
 
@@ -80,6 +94,12 @@ public sealed class WorldHostConfig
         if (Env("BBS_WH_IDLE_MINUTES") is { } idleStr && int.TryParse(idleStr, out var idle)) { c.IdleShutdownMinutes = idle; }
         if (Env("BBS_WH_WAKE_TIMEOUT_SECONDS") is { } wtStr && int.TryParse(wtStr, out var wt)) { c.WakeTimeoutSeconds = wt; }
         if (Env("BBS_WH_SESSION_DAYS") is { } sdStr && int.TryParse(sdStr, out var sd)) { c.SessionDays = sd; }
+        if (Env("BBS_WH_RESERVED_NAMES") is { } reserved)
+        {
+            c.ReservedNames = reserved.Split(',').Select(n => n.Trim()).Where(n => n.Length > 0).ToList();
+        }
+
+        if (Env("BBS_WH_RESERVED_CLAIM_CODE") is { } claimCode) { c.ReservedClaimCode = claimCode; }
         if (Env("BBS_WH_DATA_DIR") is { } dataDir) { c.DataDir = dataDir; }
 
         return c;

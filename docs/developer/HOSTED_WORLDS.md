@@ -91,6 +91,42 @@ through Caddy.
   via the portal deep-link parameters), and the official portal's pages point at the official
   hosted worlds. The WebGL menu never grows a server picker.
 
+## Reserved developer names
+
+`WorldHostConfig.ReservedNames` (override: `BBS_WH_RESERVED_NAMES`, comma-separated) protects the
+developers' identities — default list: Marcel, Justus, Verena, juju, JuMaVe Games, FlashMiner,
+JustusJulius, BloddyMary. Enforced at **two** layers:
+
+1. **Account signup** — a reserved name registers only with the operator's claim code
+   (`BBS_WH_RESERVED_CLAIM_CODE`, checked constant-time; unset ⇒ unclaimable). A successful claim
+   permanently flags the account `is_developer`.
+2. **In-game player name on hosted worlds** — the join grant refuses reserved names for
+   non-developer accounts, so nobody can *play as* "Justus" on any hosted world regardless of what
+   their account is called.
+
+Matching is normalized — lowercase, with spaces/`-`/`_` stripped — so "ju ju", "J_ustus" and
+"JuMaVeGames" are all caught. Self-hosted servers are out of scope (operators control their own
+worlds; the per-save name-token claim still applies there).
+
+## Welcome / rules / beta notice (planned — Phase 2, analysis 2026-07-04)
+
+The service needs a lightweight acceptance flow, not a legal EULA (the software is AGPL; this
+covers the hosted SERVICE). Standard shape for community game services, adapted kid-friendly:
+
+- **Community rules acceptance at signup** (required checkbox + stored `terms_version` + timestamp
+  per account): a SHORT, warm, bilingual (DE/EN) text — family & community project, be kind; no
+  hate, bullying, racism or harassment; violations can mean an immediate ban. Acceptance at the
+  ACCOUNT level is what makes bans enforceable and re-acceptance possible when the text changes.
+- **Beta notice in the same screen** (and repeated on world creation): this is a beta — hosted
+  worlds/saves can break or disappear at any time; export your world if you care about it.
+- **First-join welcome (MOTD)** in-game on hosted worlds: one short welcome + rules reminder +
+  beta notice, shown once per player per world (persisted flag), not a wall of text every join.
+- **Enforcement backend**: `banned` flag + reason on the account (join grants refused), per-world
+  kick/ban by the world owner; ties into the still-open kid-friendly Stage 3 items (profanity
+  filter, report button).
+- **German legal hygiene for the public portal**: Impressum + Datenschutzerklärung pages (DSGVO).
+  The privacy story is strong — name + password hash only, no email — and should be said out loud.
+
 ## Security notes
 
 - WorldHost owns the Docker socket ⇒ root-equivalent. Everything that reaches `docker run` is
@@ -122,9 +158,20 @@ Instances the control plane starts carry caddy-docker-proxy labels
 (`caddy=w-<id>.<domain>`, `caddy.reverse_proxy={{upstreams 31415}}`), so routing appears/disappears
 with the container — no proxy config to maintain.
 
+## Registry storage: SQLite now, Postgres when it earns it
+
+The registry is SQLite on purpose: one host, one writer process, a tiny write volume, backup = one
+file — and it matches the repo's SQLite-first philosophy. Note the distinction: **world saves** can
+already live in PostgreSQL today (`BBS_DATABASE_PROVIDER=postgresql`, one schema per world — the
+game supports it since PR #116); that is orthogonal to the registry. Move the REGISTRY to Postgres
+when one of these becomes true: a second control-plane node (HA), multi-host placement (Phase 3),
+or the wish to join registry + world data in one operational database. `HostRegistry` is a single
+class behind plain methods, so swapping the backend later is contained.
+
 ## Open (tracked in the plan)
 
 - Phase 2: portal "My Worlds" UI, save upload/import (size cap, `PRAGMA integrity_check`, schema
-  version gate) + world export, native-client "Official worlds" menu, WebGL join deep-links.
+  version gate) + world export, native-client "Official worlds" menu, WebGL join deep-links,
+  rules/beta acceptance flow + welcome MOTD + ban flag (see above), Impressum/Datenschutz pages.
 - Phase 3: archive-after-inactivity (6 months), rate limits, world-name profanity filter,
-  Prometheus metrics, multi-host placement.
+  Prometheus metrics, multi-host placement (registry → Postgres if needed).

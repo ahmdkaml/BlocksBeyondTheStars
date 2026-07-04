@@ -66,12 +66,20 @@ public sealed class WorldOrchestrator
 
     /// <summary>Ensures the world's instance is up (waking it if needed) and returns the join grant for
     /// this player, or a player-safe error.</summary>
-    public async Task<(JoinGrant? Grant, string Error)> JoinAsync(string worldId, string accountId, string playerName)
+    public async Task<(JoinGrant? Grant, string Error)> JoinAsync(string worldId, AccountRecord account, string playerName)
     {
         playerName = (playerName ?? string.Empty).Trim();
         if (playerName.Length is < 1 or > 24 || playerName.Any(char.IsControl))
         {
             return (null, "Player name must be 1-24 printable characters.");
+        }
+
+        // Developer-reserved names are protected as IN-GAME identities too, not only as account names —
+        // otherwise any account could impersonate "Justus" inside a world. Developer accounts (claimed
+        // with the operator's code at signup) may use them freely.
+        if (!account.IsDeveloper && _registry.IsReservedName(playerName))
+        {
+            return (null, "This player name is reserved.");
         }
 
         var (world, error) = await EnsureRunningAsync(worldId).ConfigureAwait(false);
@@ -81,7 +89,7 @@ public sealed class WorldOrchestrator
         }
 
         long expires = DateTimeOffset.UtcNow.ToUnixTimeSeconds() + JoinTokenTtlSeconds;
-        string token = HostedJoinToken.Create(world.JoinSecret, world.Id, accountId, playerName, expires);
+        string token = HostedJoinToken.Create(world.JoinSecret, world.Id, account.Id, playerName, expires);
         return (new JoinGrant(
             WorldId: world.Id,
             DisplayName: world.DisplayName,

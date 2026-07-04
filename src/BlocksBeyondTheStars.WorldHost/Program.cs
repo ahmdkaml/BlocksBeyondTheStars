@@ -65,7 +65,7 @@ app.MapGet("/ask", (string? domain) =>
 
 app.MapPost("/api/signup", (SignupRequest req) =>
 {
-    var (ok, error, accountId, session) = registry.CreateAccount(req.Name, req.Password);
+    var (ok, error, accountId, session) = registry.CreateAccount(req.Name, req.Password, req.ClaimCode);
     if (!ok)
     {
         return Results.BadRequest(new { error });
@@ -131,7 +131,7 @@ app.MapPost("/api/worlds/{id}/join", async (HttpContext ctx, string id, JoinRequ
     // Any signed-in account may request a join grant — access control happens at the game layer: the
     // instance only admits valid tokens, and invite/visibility rules come with Phase 2. The grant names
     // the caller's account, so the instance can attribute every admitted player.
-    var (grant, error) = await orchestrator.JoinAsync(id, account.Id, req.PlayerName);
+    var (grant, error) = await orchestrator.JoinAsync(id, account, req.PlayerName);
     if (grant is null)
     {
         return Results.Json(new { error }, statusCode: StatusCodes.Status503ServiceUnavailable);

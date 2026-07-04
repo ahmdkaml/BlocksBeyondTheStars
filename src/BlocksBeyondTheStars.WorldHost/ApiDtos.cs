@@ -5,7 +5,9 @@ namespace BlocksBeyondTheStars.WorldHost;
 
 // Request bodies of the WorldHost HTTP API (camelCase on the wire via the web JSON defaults).
 
-public sealed record SignupRequest(string Name, string Password);
+/// <summary>Signup body; <paramref name="ClaimCode"/> is only needed (and only checked) when registering
+/// a developer-reserved name.</summary>
+public sealed record SignupRequest(string Name, string Password, string? ClaimCode = null);
 
 public sealed record CreateWorldRequest(string Name);
 
