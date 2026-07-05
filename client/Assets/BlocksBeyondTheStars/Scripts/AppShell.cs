@@ -140,6 +140,16 @@ namespace BlocksBeyondTheStars.Client
             {
                 PlayerName = playerName.Trim();
             }
+
+            // Official-worlds deep-link (the portal's Play button): the join grant rides the page URL
+            // and is threaded through the same HostedToken path the native Official-Worlds menu uses —
+            // without it the hosted instance's token gate rejects the browser join.
+            string hostedToken = GlitchIntegration.AutoJoinHostedToken;
+            if (!string.IsNullOrWhiteSpace(hostedToken))
+            {
+                HostedToken = hostedToken.Trim();
+                HostedWorldId = (GlitchIntegration.AutoJoinHostedWorldId ?? "").Trim();
+            }
 #endif
         }
 

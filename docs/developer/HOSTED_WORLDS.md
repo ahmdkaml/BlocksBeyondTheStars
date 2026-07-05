@@ -49,7 +49,8 @@ The three hosting tiers, side by side:
 - **Join flow** — `POST /api/worlds/{id}/join {playerName}` (Bearer session) → orchestrator ensures
   the instance runs (fast-path route, or `docker run` + poll `/status` until healthy, default 90 s
   budget) → returns a `JoinGrant`: `wssUrl` (browser), `nativeHost`/`nativePort` (desktop UDP) and a
-  **2-minute HMAC join token** (`HostedJoinToken`, bound to world + account + player name). The
+  **10-minute HMAC join token** (`HostedJoinToken`, bound to world + account + player name — long
+  enough to survive the browser deep-link's first WebGL download). The
   instance verifies tokens offline — a control-plane outage never locks players out of a running world.
 - **Reaper** — every 30 s reconciles registry vs Docker: instances that exited themselves (idle
   shutdown is the normal path) are marked `stopped`, so lists stay truthful and the next join wakes them.
@@ -105,6 +106,15 @@ through Caddy.
   a self-hosted Docker's `/play` page points at that same installation's server (exactly as today,
   via the portal deep-link parameters), and the official portal's pages point at the official
   hosted worlds. The WebGL menu never grows a server picker.
+- **Browser play (implemented):** the portal serves ONE central WebGL build at `/play`
+  (`BBS_WH_WEBGL_DIR`, bind-mounted on the fleet — see deploy/README.md; mirrors the per-instance
+  Api's serving incl. cache-bust stamping and .br/.gz encodings, kept testable in `PlayPage`). The
+  My-Worlds **Play** button wakes the world, then deep-links
+  `/play/?auto_join=1&player_name=…&server_host=<wssUrl>&hosted_token=…&world_id=…` — the client
+  reads `hosted_token`/`world_id` from the page URL (`GlitchIntegration` → `AppShell.HostedToken`)
+  so the instance's token gate admits the browser join. The portal pages themselves are fully
+  localized (German default, `?lang=en` + DE/EN footer switcher, `bbs_lang` cookie) and carry the
+  game logo + website favicon.
 
 ## Reserved developer names
 
@@ -309,8 +319,6 @@ validated but never migrated silently); document per release in the changelog.
 
 ## Open (tracked in the plan)
 
-- Browser play for hosted worlds: a central `/play` on the portal that deep-links the WebGL client
-  at `w-<id>` subdomains (incl. passing the join token through the page URL).
 - **Impressum + Datenschutzerklärung** pages before public launch (operator-specific content).
 - End-to-end playtest against a real Docker fleet (everything below the HTTP layer is unit-tested;
   the docker CLI path and Caddy routing need one real run on the VPS).

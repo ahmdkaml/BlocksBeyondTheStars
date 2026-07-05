@@ -6,7 +6,7 @@ plans live under [docs/](docs/) (committed); this file is the high-level status.
 keep it current when controls/features change. Last consolidated 2026-06-04.
 
 **Build:** `scripts/build-client.ps1` (Windows) or `scripts/build-client.sh` (Linux) — publishes shared libs + bundled server + Unity player.
-**Test:** `./scripts/run-tests.sh` — currently **910 server + 113 client passing** (2026-07-05). Locale parity (en/de) is enforced by a test.
+**Test:** `./scripts/run-tests.sh` — currently **935 server + 113 client passing** (2026-07-05). Locale parity (en/de) is enforced by a test.
 CI runs two tiers: PRs skip the 31 tests marked `[Trait("Category", "Slow")]` (~6 min gate); pushes to `main` and the release workflow run the full suite.
 **Conventions:** English docs/comments; in-game text bilingual DE+EN; commit to `main` with the
 Claude `Co-Authored-By` trailer; OpenAI texture + ElevenLabs sound generation is blanket-approved
@@ -120,6 +120,22 @@ are free — they drive the client's error-triggered masked password prompt in t
 overlay). The manual-connect password field is finally masked too. DE/EN locale keys for everything;
 compose/.env.example updated. 18 new tests (countdown thresholds/cancel/late-join, admin-command gating,
 gateway token auth, password create/set/remove/verify/owner-bypass/cooldown/migration).
+
+### ★ Portal Play button actually plays: browser deep-link, localization, logo (#252/#253/#254, 2026-07-05)
+The portal's Play button looked like a no-op: `joinWorld()` rendered the join grant and THEN called
+`load()`, which rebuilds every world card with an empty grant div — wiping the info milliseconds after
+it appeared (and `#msg` sat below the fold, hiding progress/errors). Fixed the ordering (`await load()`
+first), moved `#msg` above the world list, and built the real thing on top: **browser play for hosted
+worlds** — WorldHost now serves the central WebGL build at `/play` (`BBS_WH_WEBGL_DIR`, testable policy
+helpers in `PlayPage`: slashless-redirect, cache-bust stamping, .br/.gz encodings), and Play deep-links
+`/play/?auto_join=1&player_name=…&server_host=<wssUrl>&hosted_token=…&world_id=…`; the client reads the
+new `hosted_token`/`world_id` page-URL params (`GlitchIntegration` → `AppShell.HostedToken`) so the
+instance's token gate admits browser joins; join-token TTL 2 → 10 min (must survive the first WebGL
+download). The portal is now **fully localized** (German default, `?lang=en` + DE/EN footer switcher,
+`bbs_lang` cookie, localized JS strings + error map — no more mixed `DE · EN` texts) and carries the
+**game logo** (inline-SVG header emblem + the website's favicon embedded at `/favicon.ico`). Fleet:
+`deploy/worldhost` mounts `/opt/bbs/worldhost/webgl` read-only (install steps in deploy/README.md).
+Rollout note: the deep-link needs a WebGL build that understands the new params (v0.8.0+ webgl zip).
 
 ### ★ Unity client warning cleanup: 0 compiler warnings again (2026-07-04)
 Full warning sweep (analysis in local `plans/WARNINGS_ANALYSIS.md`): the .NET solution was already at
