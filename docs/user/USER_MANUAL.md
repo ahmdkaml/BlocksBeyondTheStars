@@ -533,6 +533,16 @@ The **widest** radio you carry sets your reach. Without any radio you can't tran
   (under your save data) as before. Each report is a `bump_<world>_<timestamp>_<n>.json` with a matching
   `.jpg` screenshot beside it.
 
+### `/report` — report a player (official hosted worlds only)
+- **Syntax:** `/report <player> [what happened]`
+- Files a player report with the worlds portal, exactly like the report button in the ship UI's
+  Alliance tab — one command, no menu digging. The report automatically attaches the reported
+  player's **last 10 chat lines** as evidence and the **world id**, so the operators know what was
+  said and where. The outcome shows as a local-only chat line.
+- Only works while you are on an **official hosted world** (joined via the Official Worlds menu);
+  everywhere else the command explains that reporting is unavailable. Reports are **reviewed by
+  humans** — nobody is punished automatically.
+
 ### Admin cheats (world admin / admin only)
 Type these **in the chat box** (Enter to open). They are **server-authoritative** and gated twice: the
 player must be an **admin** (`IsAdmin` — the world creator, or a name in the server's admin list) **and**

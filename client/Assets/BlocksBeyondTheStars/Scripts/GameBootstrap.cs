@@ -39,6 +39,10 @@ namespace BlocksBeyondTheStars.Client
         public string PortalUrl = "";
         public string PortalSession = "";
 
+        /// <summary>The joined hosted world's id (12 hex chars), attached to player reports so the
+        /// operators know which world's logs to check. Empty outside official hosted worlds.</summary>
+        public string HostedWorldId = "";
+
         /// <summary>The player's chosen render distance in chunks, forwarded to the server in the JoinRequest so a
         /// remote/dedicated host streams terrain at this radius (not just the local fog). 0 = let the server decide.</summary>
         public int ViewDistanceChunks = 0;

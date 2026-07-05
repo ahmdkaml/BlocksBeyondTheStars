@@ -108,9 +108,9 @@ namespace BlocksBeyondTheStars.Client.Portal
             return ParseJoin(status, body);
         }
 
-        public PortalSimpleResult Report(string session, string reportedName, string category, string message)
+        public PortalSimpleResult Report(string session, string reportedName, string category, string message, string? worldId = null)
         {
-            var (status, body) = Post("/api/reports", new { reportedName, category, message }, session);
+            var (status, body) = Post("/api/reports", new { reportedName, category, message, worldId = worldId ?? string.Empty }, session);
             return ParseSimple(status, body);
         }
 

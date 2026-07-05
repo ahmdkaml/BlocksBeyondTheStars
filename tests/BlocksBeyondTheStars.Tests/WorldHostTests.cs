@@ -403,9 +403,22 @@ public sealed class WorldHostTests : IDisposable
         var report = Assert.Single(open);
         Assert.Equal("Meanie", report.ReportedName);
         Assert.Equal(500, report.Message.Length); // free text is length-capped server-side
+        Assert.Equal(string.Empty, report.WorldId); // "w1" is not a well-formed world id → stored empty, not rejected
 
         registry.CloseReport(report.Id, "reviewed");
         Assert.Empty(registry.ListOpenReports());
+    }
+
+    [Fact]
+    public void Reports_KeepAWellFormedWorldId()
+    {
+        var registry = NewRegistry();
+        var (accountId, _) = NewAccount(registry);
+
+        // A proper 12-hex world id (sent by the in-game /report command and the portal form) survives.
+        Assert.True(registry.CreateReport(accountId, "aabbccddee11", "Meanie", "chat", "insults in chat").Ok);
+        var report = Assert.Single(registry.ListOpenReports());
+        Assert.Equal("aabbccddee11", report.WorldId);
     }
 
     // ---------------- Save upload validation ----------------

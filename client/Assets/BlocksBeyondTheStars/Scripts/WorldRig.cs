@@ -33,6 +33,7 @@ namespace BlocksBeyondTheStars.Client
             boot.Password = shell.Password ?? "";
             boot.Token = shell.Settings.PlayerToken ?? "";
             boot.HostedToken = shell.HostedToken ?? ""; // official-worlds join grant (empty for SP/LAN/self-host)
+            boot.HostedWorldId = shell.HostedWorldId ?? ""; // which official world — attached to player reports
             boot.PortalUrl = shell.Settings.PortalUrl ?? "";
             boot.PortalSession = shell.Settings.PortalSessionToken ?? "";
             boot.HostInfo = shell.HostInfo ?? "";

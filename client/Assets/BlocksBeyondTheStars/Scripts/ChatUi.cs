@@ -140,10 +140,60 @@ namespace BlocksBeyondTheStars.Client
                 string desc = t.Length > 5 ? t.Substring(5).Trim() : string.Empty;
                 StartCoroutine(CaptureBumpAndSend(desc, t));
             }
+            else if (BlocksBeyondTheStars.Client.Portal.ReportChatCommand.TryParse(t, out string reportedName, out string reportNote))
+            {
+                SubmitPlayerReport(reportedName, reportNote);
+            }
             else if (t.Length > 0 && !TryAdminCommand(t))
             {
                 Game.Network.SendChat(t);
             }
+        }
+
+        /// <summary>
+        /// Files a player report typed as <c>/report &lt;player&gt; [note]</c> — official hosted worlds only
+        /// (same portal path as the alliance-tab report button, but with category "chat" and the reported
+        /// player's recent chat lines quoted as evidence). The outcome shows as a local-only chat line;
+        /// reports are reviewed by the operators and never auto-punish anyone.
+        /// </summary>
+        private async void SubmitPlayerReport(string reportedName, string note)
+        {
+            if (string.IsNullOrEmpty(Game.HostedToken) || string.IsNullOrEmpty(Game.PortalSession))
+            {
+                LocalLine(L("ui.chat.report_unavailable"));
+                return;
+            }
+
+            if (string.IsNullOrEmpty(reportedName))
+            {
+                LocalLine(L("ui.chat.report_usage"));
+                return;
+            }
+
+            // Snapshot the shared chat feed on the main thread; composing quotes the reported player.
+            var feed = Game.RecentChat;
+            var recent = new List<(string Sender, string Text)>(feed?.Count ?? 0);
+            if (feed != null)
+            {
+                foreach (var m in feed)
+                {
+                    recent.Add((m.Sender, m.Text));
+                }
+            }
+
+            string message = BlocksBeyondTheStars.Client.Portal.ReportChatCommand.ComposeMessage(note, recent, reportedName);
+            var portal = new BlocksBeyondTheStars.Client.Portal.PortalClient(Game.PortalUrl);
+            string session = Game.PortalSession;
+            string worldId = Game.HostedWorldId;
+            var result = await System.Threading.Tasks.Task.Run(() => portal.Report(session, reportedName, "chat", message, worldId));
+            if (_log == null)
+            {
+                return; // chat UI was torn down while the request ran
+            }
+
+            LocalLine(result.Ok
+                ? L("ui.chat.report_sent").Replace("{name}", reportedName)
+                : L("ui.chat.report_failed"));
         }
 
         /// <summary>Captures an in-game screenshot (downscaled JPG) at the end of the frame — with the chat
