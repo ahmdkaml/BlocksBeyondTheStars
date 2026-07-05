@@ -106,7 +106,7 @@ public sealed class WorldHostStatsTests
     // ---------------- CachedJson (the public-endpoint guard) ----------------
 
     [Fact]
-    public async Task CachedJson_ServesFromCacheWithinTtl()
+    public async Task CachedJson_ServesFromCacheWithinTtlAsync()
     {
         long now = 1000;
         int rebuilds = 0;
@@ -123,7 +123,7 @@ public sealed class WorldHostStatsTests
     }
 
     [Fact]
-    public async Task CachedJson_RebuildsAfterTtl()
+    public async Task CachedJson_RebuildsAfterTtlAsync()
     {
         long now = 1000;
         int rebuilds = 0;
@@ -140,19 +140,19 @@ public sealed class WorldHostStatsTests
     }
 
     [Fact]
-    public async Task CachedJson_ConcurrentFirstRequests_RebuildOnce()
+    public async Task CachedJson_ConcurrentFirstRequests_RebuildOnceAsync()
     {
         int rebuilds = 0;
-        var release = new TaskCompletionSource();
-        var cache = new CachedJson(TimeSpan.FromSeconds(30), async () =>
+        using var release = new SemaphoreSlim(0);
+        using var cache = new CachedJson(TimeSpan.FromSeconds(30), async () =>
         {
             Interlocked.Increment(ref rebuilds);
-            await release.Task;
+            await release.WaitAsync();
             return "snapshot";
         }, () => 1000);
 
         var calls = Enumerable.Range(0, 8).Select(_ => cache.GetAsync()).ToArray();
-        release.SetResult();
+        release.Release();
         var results = await Task.WhenAll(calls);
 
         Assert.All(results, r => Assert.Equal("snapshot", r));
@@ -160,17 +160,17 @@ public sealed class WorldHostStatsTests
     }
 
     [Fact]
-    public async Task CachedJson_StaleValueServedWhileRebuildInFlight()
+    public async Task CachedJson_StaleValueServedWhileRebuildInFlightAsync()
     {
         long now = 1000;
         int rebuilds = 0;
-        var release = new TaskCompletionSource();
-        var cache = new CachedJson(TimeSpan.FromSeconds(30), async () =>
+        using var release = new SemaphoreSlim(0);
+        using var cache = new CachedJson(TimeSpan.FromSeconds(30), async () =>
         {
             int n = Interlocked.Increment(ref rebuilds);
             if (n > 1)
             {
-                await release.Task; // second rebuild hangs — stale readers must not wait on it
+                await release.WaitAsync(); // second rebuild hangs — stale readers must not wait on it
             }
 
             return $"snapshot-{n}";
@@ -183,7 +183,7 @@ public sealed class WorldHostStatsTests
         // While the rebuild is in flight, other callers get the stale snapshot immediately.
         Assert.Equal("snapshot-1", await cache.GetAsync());
 
-        release.SetResult();
+        release.Release();
         Assert.Equal("snapshot-2", await slowRebuild);
     }
 }
