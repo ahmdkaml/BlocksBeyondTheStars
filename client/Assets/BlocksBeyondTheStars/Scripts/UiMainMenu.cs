@@ -192,7 +192,8 @@ namespace BlocksBeyondTheStars.Client
             UiKit.AddText(dlg, 30f, 240f, 540f, 22f, shell.L("ui.menu.connect_port"), 15, UiKit.TextCol, TextAnchor.MiddleLeft);
             UiKit.AddInput(dlg, 30f, 266f, 260f, 38f, port[0], v => port[0] = v);
             UiKit.AddText(dlg, 30f, 320f, 540f, 22f, shell.L("ui.menu.connect_password"), 15, UiKit.TextCol, TextAnchor.MiddleLeft);
-            UiKit.AddInput(dlg, 30f, 346f, 540f, 38f, pass[0], v => pass[0] = v);
+            var passInput = UiKit.AddInput(dlg, 30f, 346f, 540f, 38f, pass[0], v => pass[0] = v);
+            passInput.contentType = InputField.ContentType.Password; // mask it like the portal login field
             var dlgWarn = UiKit.AddText(dlg, 30f, 396f, 540f, 22f, "", 14,
                 new Color(1f, 0.55f, 0.4f), TextAnchor.MiddleLeft, FontStyle.Bold);
             UiKit.AddButton(dlg, 30f, 432f, 270f, 54f, shell.L("ui.menu.connect"), () =>
@@ -317,6 +318,51 @@ namespace BlocksBeyondTheStars.Client
                 DoRefresh();
             }
 
+            // Session-scoped world passwords (#250): entered once per protected world, reused on re-joins,
+            // never persisted. The prompt is error-driven — open worlds join without ever seeing it.
+            var joinPasswords = new Dictionary<string, string>();
+            GameObject passwordPrompt = null;
+
+            void PromptWorldPassword(string worldId, bool wrongBefore)
+            {
+                if (passwordPrompt != null)
+                {
+                    Object.Destroy(passwordPrompt);
+                }
+
+                var pwDim = UiKit.AddModalDim(official.transform, 0.75f);
+                passwordPrompt = pwDim.gameObject;
+                var pwDlg = UiKit.AddPanel(passwordPrompt.transform, 660f, 390f, 600f, 300f, UiKit.Panel).transform;
+                UiKit.AddText(pwDlg, 30f, 24f, 540f, 30f, shell.L("ui.portal.world_password"), 20, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
+                if (wrongBefore)
+                {
+                    UiKit.AddText(pwDlg, 30f, 62f, 540f, 24f, shell.L("ui.portal.err_wrong_password"), 14,
+                        new Color(1f, 0.55f, 0.4f), TextAnchor.MiddleCenter, FontStyle.Bold);
+                }
+
+                string[] pw = { "" };
+                var pwField = UiKit.AddInput(pwDlg, 30f, 100f, 540f, 38f, pw[0], v => pw[0] = v);
+                pwField.contentType = InputField.ContentType.Password;
+                UiKit.AddButton(pwDlg, 30f, 170f, 260f, 54f, shell.L("ui.portal.play"), () =>
+                {
+                    if (string.IsNullOrEmpty(pw[0]))
+                    {
+                        return;
+                    }
+
+                    joinPasswords[worldId] = pw[0];
+                    Object.Destroy(passwordPrompt);
+                    passwordPrompt = null;
+                    DoJoinWorld(worldId);
+                }, "btn_join");
+                UiKit.AddButton(pwDlg, 310f, 170f, 260f, 54f, shell.L("ui.menu.back"), () =>
+                {
+                    Object.Destroy(passwordPrompt);
+                    passwordPrompt = null;
+                    oStatus.text = "";
+                }, "btn_exit");
+            }
+
             async void DoJoinWorld(string worldId)
             {
                 if (!CommitName())
@@ -329,10 +375,19 @@ namespace BlocksBeyondTheStars.Client
                 var portal = new PortalClient(PortalBase());
                 string session = shell.Settings.PortalSessionToken;
                 string playerName = shell.PlayerName;
-                var r = await Task.Run(() => portal.JoinWorld(session, worldId, playerName));
+                joinPasswords.TryGetValue(worldId, out string worldPassword);
+                var r = await Task.Run(() => portal.JoinWorld(session, worldId, playerName, worldPassword));
                 if (official == null) { return; }
                 if (!r.Ok)
                 {
+                    if (r.Code == "password_required" || r.Code == "wrong_password")
+                    {
+                        joinPasswords.Remove(worldId); // a cached one that failed is stale
+                        oStatus.text = "";
+                        PromptWorldPassword(worldId, wrongBefore: r.Code == "wrong_password");
+                        return;
+                    }
+
                     oStatus.text = PortalErr(r.Code, r.Error);
                     return;
                 }

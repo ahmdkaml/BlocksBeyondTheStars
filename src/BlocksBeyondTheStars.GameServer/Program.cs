@@ -80,6 +80,15 @@ var server = new GameServer(config, content, transport, repo, logger);
 if (webSocket != null)
 {
     webSocket.StatusJsonProvider = () => server.StatusJson;
+
+    // POST /announce: the control plane pushes maintenance announcements ("restart in 10 min") into the
+    // running instance. Token-gated; without BBS_ANNOUNCE_TOKEN the route stays disabled.
+    if (!string.IsNullOrEmpty(config.AnnounceToken))
+    {
+        webSocket.AnnounceToken = config.AnnounceToken;
+        webSocket.AnnounceReceiver = server.EnqueueMaintenance;
+        logger.Info("Maintenance announce endpoint is ON (POST /announce, token-gated).");
+    }
 }
 
 if (config.IdleShutdownMinutes > 0)

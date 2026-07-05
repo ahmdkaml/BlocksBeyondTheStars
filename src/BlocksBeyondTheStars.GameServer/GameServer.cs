@@ -884,6 +884,7 @@ public sealed partial class GameServer
 
         Guard("AccumulatePlaytime", deltaSeconds, AccumulatePlaytime);
         Guard("HostedLifecycle", deltaSeconds, TickHostedLifecycle); // idle shutdown + /status snapshot (hosted worlds)
+        Guard("Maintenance", deltaSeconds, TickMaintenance); // announcement intake + restart countdown broadcasts
         Guard("CrashReportFlush", deltaSeconds, MaybeFlushCrashReports); // best-effort background upload of queued reports
 
         _sinceAutoSave += deltaSeconds;
@@ -1973,6 +1974,12 @@ public sealed partial class GameServer
             state.HostedWelcomeShown = true; // persists with the next save cycle
         }
 
+        // A restart countdown may already be running — the newcomer needs the banner too.
+        if (BuildActiveMaintenanceNotice() is { } maintenance)
+        {
+            Send(session, maintenance);
+        }
+
         _log.Info($"Player '{name}' joined (connection {connectionId}).");
     }
 
@@ -3057,6 +3064,40 @@ public sealed partial class GameServer
             var (ok, message) = TryGenerateAiMission(cmd.StringArg ?? string.Empty);
             Send(session, new ServerMessage { Text = message });
             CheatLog(p, ok ? $"generated an AI mission" : $"AI mission request: {message}");
+            return;
+        }
+
+        // Maintenance announcements (not cheats): the world admin may warn players before a restart even on
+        // servers that have cheats disabled.
+        if (string.Equals(cmd.Command, "announce", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!EnqueueMaintenance(MaintenanceNotice.KindInfo, cmd.StringArg, -1))
+            {
+                Reject(session, "admin", "Usage: /announce <message>");
+                return;
+            }
+
+            CheatLog(p, "posted a maintenance announcement");
+            return;
+        }
+
+        if (string.Equals(cmd.Command, "schedule_restart", StringComparison.OrdinalIgnoreCase))
+        {
+            int minutes = cmd.IntArg;
+            if (!EnqueueMaintenance(MaintenanceNotice.KindRestartCountdown, cmd.StringArg, minutes * 60))
+            {
+                Reject(session, "admin", $"Usage: /schedule_restart <minutes 1-{MaxMaintenanceRestartMinutes}> [message]");
+                return;
+            }
+
+            CheatLog(p, $"scheduled a restart in {minutes} min");
+            return;
+        }
+
+        if (string.Equals(cmd.Command, "cancel_restart", StringComparison.OrdinalIgnoreCase))
+        {
+            EnqueueMaintenance(MaintenanceNotice.KindCancelled, null, -1);
+            CheatLog(p, "cancelled the scheduled restart");
             return;
         }
 

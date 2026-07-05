@@ -69,6 +69,10 @@ static string? CodeFor(string error) => error switch
     "The world could not be started — please try again in a moment." => "world_start_failed",
     "The world did not come up in time — please try again." => "world_wake_failed",
     "Stop the world before uploading a save." or "Stop the world before downloading its save." => "stop_first",
+    "This world needs a password." => "password_required",
+    "Wrong world password." => "wrong_password",
+    "Too many password attempts — please wait a few minutes." => "too_many_attempts",
+    "World password must be 4-24 printable characters." => "world_password_invalid",
     "Empty upload." => "upload_empty",
     "This file is not a Blocks Beyond the Stars save (world.db)."
         or "The save file is damaged (integrity check failed)."
@@ -405,6 +409,27 @@ app.MapPost("/api/admin/ban", (HttpContext ctx, BanRequest req) =>
     return Results.Ok();
 });
 
+// Maintenance announcement (#249), scriptable twin of the /admin form below: pushes an info message or a
+// restart countdown into one world or the whole fleet. The message text is operator-authored free text —
+// never logged raw (LogSafe), sanitized again instance-side before broadcasting.
+app.MapPost("/api/admin/announce", async (HttpContext ctx, AnnounceRequest req) =>
+{
+    if (!IsAdmin(ctx))
+    {
+        return Results.Unauthorized();
+    }
+
+    if (req.WorldId is { } wid && !HostRegistry.IsValidWorldId(wid))
+    {
+        return ApiError("World not found.", StatusCodes.Status404NotFound);
+    }
+
+    var (reached, targets) = await orchestrator.AnnounceAsync(req.Kind, req.Text, req.Seconds, req.WorldId);
+    log.LogInformation("Admin API: announce kind {Kind} to {Target} — reached {Reached}/{Targets}.",
+        req.Kind, req.WorldId is null ? "fleet" : LogSafe(req.WorldId), reached, targets);
+    return Results.Json(new { reached, targets });
+});
+
 // ---------------- Operator admin UI (Basic Auth; the browser front-end to the API above) ----------------
 
 app.MapGet("/admin", async (HttpContext ctx) =>
@@ -508,6 +533,64 @@ app.MapPost("/admin/worlds/{id}/stop", (HttpContext ctx, string id) =>
     return Results.Redirect("/admin");
 });
 
+// The /admin "Announce" card (#249): info message, scheduled restart or cancel — per world or fleet-wide.
+app.MapPost("/admin/announce", async (HttpContext ctx) =>
+{
+    if (GuardAdminUi(ctx) is { } denied)
+    {
+        return denied;
+    }
+
+    var form = await ctx.Request.ReadFormAsync();
+    string message = form["message"].ToString().Trim();
+    string worldIdRaw = form["worldId"].ToString().Trim();
+    string? worldId = worldIdRaw.Length > 0 && HostRegistry.IsValidWorldId(worldIdRaw) ? worldIdRaw : null;
+    string action = form["action"].ToString();
+
+    byte kind;
+    int seconds = -1;
+    if (action == "cancel")
+    {
+        kind = 2;
+    }
+    else if (int.TryParse(form["minutes"].ToString(), out int minutes) && minutes > 0)
+    {
+        kind = 1;
+        seconds = minutes * 60;
+    }
+    else
+    {
+        kind = 0;
+        if (message.Length == 0)
+        {
+            return Results.Redirect("/admin"); // nothing to say — an info announce needs text
+        }
+    }
+
+    var (reached, targets) = await orchestrator.AnnounceAsync(kind, message, seconds, worldId);
+    log.LogInformation("Admin UI: announce kind {Kind} to {Target} — reached {Reached}/{Targets}.",
+        kind, worldId ?? "fleet", reached, targets);
+    return Results.Redirect("/admin");
+});
+
+// Graceful per-world restart (#249): warn the players (10-minute countdown banner), then the instance
+// stops itself through the same drain+save path — the humane sibling of the immediate Stop button.
+app.MapPost("/admin/worlds/{id}/restart", async (HttpContext ctx, string id) =>
+{
+    if (GuardAdminUi(ctx) is { } denied)
+    {
+        return denied;
+    }
+
+    if (HostRegistry.IsValidWorldId(id) && registry.GetWorld(id) is { } world)
+    {
+        bool reached = await orchestrator.AnnounceInstanceAsync(world, kind: 1, text: null, seconds: 600);
+        log.LogInformation("Admin UI: world {Id} graceful restart {Result}.", world.Id, reached ? "scheduled (10 min)" : "NOT reachable");
+    }
+
+    return Results.Redirect("/admin");
+});
+
 app.MapPost("/admin/worlds/{id}/wake", async (HttpContext ctx, string id) =>
 {
     if (GuardAdminUi(ctx) is { } denied)
@@ -533,7 +616,7 @@ app.MapGet("/api/worlds", (HttpContext ctx) =>
     }
 
     var worlds = registry.ListWorlds(account.Id)
-        .Select(w => new { id = w.Id, name = w.DisplayName, status = w.Status, subdomain = w.Subdomain });
+        .Select(w => new { id = w.Id, name = w.DisplayName, status = w.Status, subdomain = w.Subdomain, hasPassword = w.HasPassword });
     return Results.Json(new { worlds });
 });
 
@@ -549,14 +632,14 @@ app.MapPost("/api/worlds", (HttpContext ctx, CreateWorldRequest req) =>
         return blocked;
     }
 
-    var (ok, error, world) = registry.CreateWorld(account.Id, req.Name);
+    var (ok, error, world) = registry.CreateWorld(account.Id, req.Name, req.Password);
     if (!ok)
     {
         return ApiError(error);
     }
 
     log.LogInformation("World '{Name}' ({Id}) created by {Account}.", LogSafe(world!.DisplayName), world.Id, LogSafe(account.Name));
-    return Results.Json(new { id = world.Id, name = world.DisplayName, status = world.Status, subdomain = world.Subdomain });
+    return Results.Json(new { id = world.Id, name = world.DisplayName, status = world.Status, subdomain = world.Subdomain, hasPassword = world.HasPassword });
 });
 
 app.MapPost("/api/worlds/{id}/join", async (HttpContext ctx, string id, JoinRequestDto req) =>
@@ -571,16 +654,52 @@ app.MapPost("/api/worlds/{id}/join", async (HttpContext ctx, string id, JoinRequ
         return Results.NotFound();
     }
 
-    // Any signed-in account may request a join grant — access control happens at the game layer: the
-    // instance only admits valid tokens, and invite/visibility rules come with Phase 2. The grant names
-    // the caller's account, so the instance can attribute every admitted player.
-    var (grant, error) = await orchestrator.JoinAsync(id, account, req.PlayerName);
+    // The join grant is the access-control choke point: the orchestrator enforces ban/terms AND the
+    // creator-set world password (#250/#251) before minting a token; the instance only admits valid
+    // tokens. The grant names the caller's account, so the instance can attribute every admitted player.
+    var (grant, error) = await orchestrator.JoinAsync(id, account, req.PlayerName, req.Password);
     if (grant is null)
     {
-        return ApiError(error, StatusCodes.Status503ServiceUnavailable);
+        int status = CodeFor(error) switch
+        {
+            "password_required" or "wrong_password" => StatusCodes.Status403Forbidden,
+            "too_many_attempts" => StatusCodes.Status429TooManyRequests,
+            _ => StatusCodes.Status503ServiceUnavailable,
+        };
+        return ApiError(error, status);
     }
 
     return Results.Json(grant);
+});
+
+// Owner-only: set/change (4-24 chars) or remove (empty) the world's join password (#250). Applies to
+// the NEXT join grant immediately — no instance restart involved (the gate lives at token issuance).
+app.MapPost("/api/worlds/{id}/password", (HttpContext ctx, string id, WorldPasswordRequest req) =>
+{
+    if (Caller(ctx) is not { } account)
+    {
+        return Results.Unauthorized();
+    }
+
+    if (!HostRegistry.IsValidWorldId(id) || registry.GetWorld(id) is not { } world)
+    {
+        return Results.NotFound();
+    }
+
+    if (world.OwnerAccountId != account.Id)
+    {
+        return Results.Forbid();
+    }
+
+    var (ok, error) = registry.SetWorldPassword(world.Id, req.Password);
+    if (!ok)
+    {
+        return ApiError(error);
+    }
+
+    bool hasPassword = !string.IsNullOrEmpty(req.Password);
+    log.LogInformation("World {Id}: join password {Action} by its owner.", world.Id, hasPassword ? "set" : "removed");
+    return Results.Json(new { hasPassword });
 });
 
 app.MapPost("/api/worlds/{id}/stop", (HttpContext ctx, string id) =>

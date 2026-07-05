@@ -118,6 +118,11 @@ public sealed class ServerConfig
     /// uploaded saves, where someone else may already hold that role. Empty (default) = no owner mapping.</summary>
     public string WorldOwnerAccountId { get; set; } = string.Empty;
 
+    /// <summary>Shared secret the control plane must present (X-Announce-Token header) to push a maintenance
+    /// announcement via the WebSocket gateway's <c>POST /announce</c>. Empty (default) = endpoint disabled;
+    /// the bundled/self-hosted server never sets this (admins use the in-game /announce commands instead).</summary>
+    public string AnnounceToken { get; set; } = string.Empty;
+
     // --- Filesystem locations (resolved relative to the server install dir) ---
 
     public string SavesRoot { get; set; } = "saves";
@@ -520,6 +525,7 @@ public sealed class ServerConfig
         if (Env("BBS_IDLE_SHUTDOWN_MINUTES") is { } idleStr && int.TryParse(idleStr, out var idle)) { IdleShutdownMinutes = idle; applied.Add("BBS_IDLE_SHUTDOWN_MINUTES"); }
         if (Env("BBS_JOIN_TOKEN_SECRET") is { } joinSecret) { JoinTokenSecret = joinSecret; applied.Add("BBS_JOIN_TOKEN_SECRET"); }
         if (Env("BBS_WORLD_OWNER") is { } worldOwner) { WorldOwnerAccountId = worldOwner; applied.Add("BBS_WORLD_OWNER"); }
+        if (Env("BBS_ANNOUNCE_TOKEN") is { } announceToken) { AnnounceToken = announceToken; applied.Add("BBS_ANNOUNCE_TOKEN"); }
 
         return applied;
     }

@@ -33,6 +33,12 @@ namespace BlocksBeyondTheStars.Client
         public event Action<CraftResult>? CraftCompleted;
         public event Action<ActionRejected>? ActionRejected;
         public event Action<ServerMessage>? ServerMessageReceived;
+        public event Action<MaintenanceNotice>? MaintenanceNoticeReceived; // restart countdown / operator banner
+
+        /// <summary>The transport dropped AFTER a successful connect (server stopped, network died). The join
+        /// flow only watches JoinRejected; without this a mid-game server stop left the client frozen with no
+        /// feedback — the disconnect screen subscribes here.</summary>
+        public event Action? Disconnected;
 
         // Ship docking (M18) and free space flight / combat (M19). Rendering is added later;
         // these hooks let the client react to the authoritative state the server reports.
@@ -137,7 +143,15 @@ namespace BlocksBeyondTheStars.Client
         {
             _transport = transport ?? new LiteNetLibClientTransport();
             _transport.Connected += () => Connected = true;
-            _transport.Disconnected += () => Connected = false;
+            _transport.Disconnected += () =>
+            {
+                bool wasConnected = Connected;
+                Connected = false;
+                if (wasConnected)
+                {
+                    Disconnected?.Invoke();
+                }
+            };
             _transport.PayloadReceived += OnPayload;
         }
 
@@ -470,6 +484,7 @@ namespace BlocksBeyondTheStars.Client
                 case CraftResult m: CraftCompleted?.Invoke(m); break;
                 case ActionRejected m: ActionRejected?.Invoke(m); break;
                 case ServerMessage m: ServerMessageReceived?.Invoke(m); break;
+                case MaintenanceNotice m: MaintenanceNoticeReceived?.Invoke(m); break;
                 case DockRequestNotice m: DockRequested?.Invoke(m); break;
                 case DockStatus m: DockStatusChanged?.Invoke(m); break;
                 case ShipCombatStatus m: ShipCombatStatusChanged?.Invoke(m); break;

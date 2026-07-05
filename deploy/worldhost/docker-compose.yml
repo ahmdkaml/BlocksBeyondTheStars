@@ -32,6 +32,9 @@ services:
       BBS_WH_SERVER_IMAGE: ${BBS_WH_SERVER_IMAGE:?set in /opt/bbs/worldhost/.env}
       BBS_WH_RESERVED_CLAIM_CODE: ${BBS_WH_RESERVED_CLAIM_CODE:-}   # empty = reserved names unclaimable
       BBS_WH_ADMIN_TOKEN: ${BBS_WH_ADMIN_TOKEN:-}                   # empty = admin API off
+      # Maintenance announcements (#249): shared secret forwarded to each world as BBS_ANNOUNCE_TOKEN;
+      # worlds only pick it up on their next wake. Empty = announcements off.
+      BBS_WH_ANNOUNCE_TOKEN: ${BBS_WH_ANNOUNCE_TOKEN:-}
       # Legal pages (Impressum/Datenschutz); empty = "not configured" notice on those pages.
       BBS_WH_LEGAL_NAME: ${BBS_WH_LEGAL_NAME:-}
       BBS_WH_LEGAL_ADDRESS: ${BBS_WH_LEGAL_ADDRESS:-}

@@ -149,6 +149,11 @@ public sealed class WorldHostConfig
     /// flavour text but no auto-published AI missions — the right fleet default.</summary>
     public string AiLevel { get; set; } = "TextOnly";
 
+    /// <summary>Shared secret for pushing maintenance announcements into running world instances
+    /// (BBS_WH_ANNOUNCE_TOKEN). Forwarded to every world container as BBS_ANNOUNCE_TOKEN, presented back
+    /// on POST /announce. Empty (default) = announcements off (both sides keep the endpoint disabled).</summary>
+    public string AnnounceToken { get; set; } = string.Empty;
+
     // --- Per-instance resource limits. One runaway world must never take down the host: each world
     // container gets a hard memory cap (which .NET's cgroup-aware GC also uses to apply pressure
     // BEFORE the OOM kill), a CPU ceiling and a pids cap. The capacity gate bounds the SUM. ---
@@ -232,6 +237,7 @@ public sealed class WorldHostConfig
         if (Env("BBS_WH_LEGAL_NAME") is { } legalName) { c.LegalName = legalName; }
         if (Env("BBS_WH_LEGAL_ADDRESS") is { } legalAddress) { c.LegalAddress = legalAddress; }
         if (Env("BBS_WH_LEGAL_EMAIL") is { } legalEmail) { c.LegalEmail = legalEmail; }
+        if (Env("BBS_WH_ANNOUNCE_TOKEN") is { } announceToken) { c.AnnounceToken = announceToken; }
         if (Env("BBS_WH_AI_BACKEND_URL") is { } aiUrl) { c.AiBackendUrl = aiUrl; }
         if (Env("BBS_WH_AI_LEVEL") is { } aiLevel) { c.AiLevel = aiLevel; }
         if (Env("BBS_WH_INSTANCE_MEMORY") is { } mem) { c.InstanceMemory = mem == "none" ? string.Empty : mem; }

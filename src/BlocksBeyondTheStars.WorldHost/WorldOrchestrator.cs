@@ -30,11 +30,16 @@ public sealed class WorldOrchestrator
     /// all within seconds. A short life keeps a leaked token near-useless.</summary>
     private const int JoinTokenTtlSeconds = 120;
 
+    /// <summary>Wrong-password budget per account+world before the cooldown answer: generous enough for a
+    /// family fumbling a shared password, tight enough to make guessing pointless (the window is 15 min).</summary>
+    private const int PasswordAttemptsPerWindow = 10;
+
     private readonly WorldHostConfig _config;
     private readonly HostRegistry _registry;
     private readonly IInstanceLauncher _launcher;
     private readonly Func<WorldRecord, Task<bool>> _healthProbe;
     private readonly WorldHostMetrics _metrics;
+    private readonly RateLimiter _passwordAttempts;
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _wakeLocks = new();
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(3) };
 
@@ -43,13 +48,15 @@ public sealed class WorldOrchestrator
         HostRegistry registry,
         IInstanceLauncher launcher,
         Func<WorldRecord, Task<bool>>? healthProbe = null,
-        WorldHostMetrics? metrics = null)
+        WorldHostMetrics? metrics = null,
+        RateLimiter? passwordAttempts = null)
     {
         _config = config;
         _registry = registry;
         _launcher = launcher;
         _healthProbe = healthProbe ?? DefaultProbeAsync;
         _metrics = metrics ?? new WorldHostMetrics();
+        _passwordAttempts = passwordAttempts ?? new RateLimiter(PasswordAttemptsPerWindow, TimeSpan.FromMinutes(15));
     }
 
     /// <summary>Default probe: the instance's WS gateway answers /status once the server is up. Two
@@ -92,7 +99,7 @@ public sealed class WorldOrchestrator
 
     /// <summary>Ensures the world's instance is up (waking it if needed) and returns the join grant for
     /// this player, or a player-safe error.</summary>
-    public async Task<(JoinGrant? Grant, string Error)> JoinAsync(string worldId, AccountRecord account, string playerName)
+    public async Task<(JoinGrant? Grant, string Error)> JoinAsync(string worldId, AccountRecord account, string playerName, string? password = null)
     {
         playerName = (playerName ?? string.Empty).Trim();
         if (playerName.Length is < 1 or > 24 || playerName.Any(char.IsControl))
@@ -126,6 +133,33 @@ public sealed class WorldOrchestrator
         if (account.AcceptedTermsVersion < _config.TermsVersion)
         {
             return (null, "The community rules have changed — please accept them on the portal first.");
+        }
+
+        // World password gate (#250/#251) — enforced BEFORE the wake, at token issuance (the one choke
+        // point every hosted join passes), so an unauthorized join can neither enter nor wake the world.
+        // The owner always bypasses their own world's password.
+        if (_registry.GetWorld(worldId) is { } gated
+            && !string.IsNullOrEmpty(gated.PasswordHash)
+            && gated.OwnerAccountId != account.Id)
+        {
+            string attemptKey = account.Id + "|" + gated.Id;
+            if (_passwordAttempts.IsExhausted(attemptKey))
+            {
+                return (null, "Too many password attempts — please wait a few minutes.");
+            }
+
+            if (string.IsNullOrEmpty(password))
+            {
+                // The normal first contact with a protected world — the client shows the prompt on this
+                // answer, so an empty try costs no attempt budget.
+                return (null, "This world needs a password.");
+            }
+
+            if (!PasswordHasher.Verify(password, gated.PasswordHash))
+            {
+                _passwordAttempts.TryPass(attemptKey); // burn budget on WRONG guesses only
+                return (null, "Wrong world password.");
+            }
         }
 
         var (world, error) = await EnsureRunningAsync(worldId).ConfigureAwait(false);
@@ -249,6 +283,53 @@ public sealed class WorldOrchestrator
     {
         _launcher.Stop(world.ContainerId);
         _registry.SetWorldStatus(world.Id, WorldStatus.Stopped, string.Empty);
+    }
+
+    /// <summary>Pushes a maintenance announcement (#249) into one running instance via its token-gated
+    /// POST /announce. Kind: 0 = info, 1 = restart countdown of <paramref name="seconds"/>, 2 = cancel.
+    /// False when announcements are unconfigured or the instance did not accept.</summary>
+    public async Task<bool> AnnounceInstanceAsync(WorldRecord world, byte kind, string? text, int seconds)
+    {
+        if (string.IsNullOrEmpty(_config.AnnounceToken))
+        {
+            return false;
+        }
+
+        string url = _config.ProbeViaDockerNetwork
+            ? $"http://bbs-world-{world.Id}:31415/announce"
+            : $"http://127.0.0.1:{world.HostPort}/announce";
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, url);
+            request.Headers.Add("X-Announce-Token", _config.AnnounceToken);
+            request.Content = new StringContent(
+                System.Text.Json.JsonSerializer.Serialize(new { kind, text = text ?? string.Empty, seconds }),
+                System.Text.Encoding.UTF8, "application/json");
+            using var response = await Http.SendAsync(request).ConfigureAwait(false);
+            return response.IsSuccessStatusCode;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Fans a maintenance announcement out to one world or the whole fleet (every active
+    /// instance), in parallel with the shared 3 s HTTP timeout so one dead instance can't stall the
+    /// operation. Returns (reached, targeted) for the operator's feedback line.</summary>
+    public async Task<(int Reached, int Targets)> AnnounceAsync(byte kind, string? text, int seconds, string? worldId = null)
+    {
+        var targets = worldId is null
+            ? _registry.ListActiveWorlds()
+            : _registry.GetWorld(worldId) is { } single ? new List<WorldRecord> { single } : new List<WorldRecord>();
+
+        if (targets.Count == 0)
+        {
+            return (0, 0);
+        }
+
+        var results = await Task.WhenAll(targets.Select(w => AnnounceInstanceAsync(w, kind, text, seconds))).ConfigureAwait(false);
+        return (results.Count(ok => ok), targets.Count);
     }
 
     /// <summary>Reconciles registry state with reality: a world marked active whose container has exited

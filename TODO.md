@@ -6,7 +6,7 @@ plans live under [docs/](docs/) (committed); this file is the high-level status.
 keep it current when controls/features change. Last consolidated 2026-06-04.
 
 **Build:** `scripts/build-client.ps1` (Windows) or `scripts/build-client.sh` (Linux) — publishes shared libs + bundled server + Unity player.
-**Test:** `./scripts/run-tests.sh` — currently **796 server + 96 client passing** (2026-07-02). Locale parity (en/de) is enforced by a test.
+**Test:** `./scripts/run-tests.sh` — currently **910 server + 113 client passing** (2026-07-05). Locale parity (en/de) is enforced by a test.
 CI runs two tiers: PRs skip the 31 tests marked `[Trait("Category", "Slow")]` (~6 min gate); pushes to `main` and the release workflow run the full suite.
 **Conventions:** English docs/comments; in-game text bilingual DE+EN; commit to `main` with the
 Claude `Co-Authored-By` trailer; OpenAI texture + ElevenLabs sound generation is blanket-approved
@@ -97,6 +97,29 @@ Per-item detail lives in the dated work log below.
   single-source-of-truth working end-to-end (validated: published the initial Windows zip).
 
 ---
+
+### ★ Maintenance announcements + creator-set world passwords (2026-07-05) — issues #249, #250, bug #251
+Two features in one PR (deploy rides the next release anyway). **Maintenance announcements (#249):** new
+`MaintenanceNotice` wire message (tag 174) rendered by a new `MaintenanceUi` — a persistent full-width
+countdown banner (sortingOrder 110, above the touch controls) with a live mm:ss timer and NO dismiss
+path, or a delayed-ack info modal (OK unlocks after 3 s). The countdown lives in the hosted-lifecycle
+tick, re-broadcasts at 10/5/2/1 min + 30/10 s, sends the final notice and then drains through the same
+graceful `RequestStop()` as the idle shutdown; mid-countdown joiners get the active notice. Triggers:
+in-game admin commands `/announce`, `/restart <min>`, `/cancelrestart` (work with cheats OFF; self-hosted
+path) and a token-gated `POST /announce` on the instance gateway that WorldHost fans out to (new
+`/api/admin/announce` + an Announce card and a per-world "restart in 10 min" button on `/admin`; token
+plumbing `BBS_WH_ANNOUNCE_TOKEN` → `BBS_ANNOUNCE_TOKEN`). Plus the long-missing **disconnect screen**:
+a server going away mid-game now shows "Verbindung verloren" (or the maintenance variant "Server wird
+neu gestartet") instead of silently freezing. **World join passwords (#250, closes the open-join gap
+#251):** hosted worlds had NO access control — any signed-in account could join any world by id. Now the
+creator can set an optional password (4-24 chars, PBKDF2-hashed in a new `password_hash` column with a
+tolerant migration): create form with confirmation field, owner set/change/remove on My Worlds, enforced
+at the join-grant choke point in `WorldOrchestrator.JoinAsync` BEFORE the world even wakes (owner always
+bypasses; wrong guesses burn a 10-per-15-min budget ending in a localized cooldown answer; empty probes
+are free — they drive the client's error-triggered masked password prompt in the official-worlds
+overlay). The manual-connect password field is finally masked too. DE/EN locale keys for everything;
+compose/.env.example updated. 18 new tests (countdown thresholds/cancel/late-join, admin-command gating,
+gateway token auth, password create/set/remove/verify/owner-bypass/cooldown/migration).
 
 ### ★ Unity client warning cleanup: 0 compiler warnings again (2026-07-04)
 Full warning sweep (analysis in local `plans/WARNINGS_ANALYSIS.md`): the .NET solution was already at

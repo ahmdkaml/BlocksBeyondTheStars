@@ -31,6 +31,27 @@ public sealed class RateLimiter
         _nowUnix = nowUnix ?? (() => DateTimeOffset.UtcNow.ToUnixTimeSeconds());
     }
 
+    /// <summary>True when the key's window budget is already spent — checked WITHOUT consuming an attempt.
+    /// Lets callers meter only FAILED tries (register via <see cref="TryPass"/>) while still answering
+    /// "are you in cooldown?" up front. A non-positive limit disables the limiter (always false).</summary>
+    public bool IsExhausted(string key)
+    {
+        if (_maxPerWindow <= 0)
+        {
+            return false;
+        }
+
+        if (!_windows.TryGetValue(key ?? string.Empty, out var window))
+        {
+            return false;
+        }
+
+        lock (window)
+        {
+            return _nowUnix() - window.StartUnix < _windowSeconds && window.Count >= _maxPerWindow;
+        }
+    }
+
     /// <summary>True when the caller may proceed; false when the key exhausted its window budget.
     /// A non-positive limit disables the limiter (always true).</summary>
     public bool TryPass(string key)

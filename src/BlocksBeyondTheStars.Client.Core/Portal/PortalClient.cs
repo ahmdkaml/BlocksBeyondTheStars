@@ -29,6 +29,9 @@ namespace BlocksBeyondTheStars.Client.Portal
         public string Id { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
         public string Status { get; set; } = string.Empty;
+
+        /// <summary>The creator protected this world with a join password (#250) — the UI shows a lock.</summary>
+        public bool HasPassword { get; set; }
     }
 
     public sealed class PortalWorldsResult
@@ -102,9 +105,11 @@ namespace BlocksBeyondTheStars.Client.Portal
             return ParseWorlds(status, body);
         }
 
-        public PortalJoinResult JoinWorld(string session, string worldId, string playerName)
+        /// <summary>Requests a join grant; <paramref name="password"/> is the world's join password when
+        /// the world is protected (#250) — null first, retried after a password_required/wrong_password code.</summary>
+        public PortalJoinResult JoinWorld(string session, string worldId, string playerName, string? password = null)
         {
-            var (status, body) = Post($"/api/worlds/{worldId}/join", new { playerName }, session);
+            var (status, body) = Post($"/api/worlds/{worldId}/join", new { playerName, password }, session);
             return ParseJoin(status, body);
         }
 
@@ -159,6 +164,7 @@ namespace BlocksBeyondTheStars.Client.Portal
                             Id = GetString(w, "id"),
                             Name = GetString(w, "name"),
                             Status = GetString(w, "status"),
+                            HasPassword = w.TryGetProperty("hasPassword", out var hp) && hp.ValueKind == JsonValueKind.True,
                         });
                     }
                 }

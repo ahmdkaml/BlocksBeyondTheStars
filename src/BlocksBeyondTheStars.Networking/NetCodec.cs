@@ -315,6 +315,11 @@ public static class NetCodec
         // the moving machines and opens the roster-filtered production UI at the terminal.
         Register(172, typeof(FactoryList));              // Server -> Client (factories to render on this world)
         Register(173, typeof(ClaimStructureIntent));     // Client -> Server (claim a factory with an access code)
+
+        // Maintenance announcements: operator/admin messages ("server restarts in 10 minutes") rendered as a
+        // prominent banner/modal instead of the low-key ServerMessage toast. Restart countdowns re-broadcast at
+        // shrinking thresholds so late joiners and drifted clients stay in sync.
+        Register(174, typeof(MaintenanceNotice));        // Server -> Client
     }
 
     private static void Register(byte tag, Type type)

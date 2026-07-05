@@ -66,7 +66,8 @@ public static class WorldHostAdminPages
                     ? (row.JoinedPlayers is { } n ? $"{n}/{config.MaxPlayersPerWorld}" : "?")
                     : "—";
                 string action = w.Status is WorldStatus.Running or WorldStatus.Starting
-                    ? $"<form method='post' action='/admin/worlds/{w.Id}/stop'><button>stop</button></form>"
+                    ? $"<form method='post' action='/admin/worlds/{w.Id}/restart' style='display:inline'><button title='warn players, then stop after a 10-minute countdown'>restart in 10 min</button></form> " +
+                      $"<form method='post' action='/admin/worlds/{w.Id}/stop' style='display:inline'><button class='danger' title='stop immediately, players get no warning'>stop</button></form>"
                     : $"<form method='post' action='/admin/worlds/{w.Id}/wake'><button>wake</button></form>";
                 sb.Append($"<tr><td><b>{E(w.DisplayName)}</b><br><code>{w.Id}</code></td><td>{E(row.OwnerName)}</td>" +
                           $"<td><span class='st {E(w.Status)}'>{E(w.Status)}</span></td><td>{players}</td>" +
@@ -74,6 +75,33 @@ public static class WorldHostAdminPages
             }
 
             sb.Append("</table>");
+        }
+
+        sb.Append("</div>");
+
+        // ---- Maintenance announcements (#249): banner/countdown pushed into running instances ----
+        sb.Append("<div class='card'><h2>Announce</h2>");
+        if (string.IsNullOrEmpty(config.AnnounceToken))
+        {
+            sb.Append("<p class='hint'>Announcements are off — set BBS_WH_ANNOUNCE_TOKEN (worlds pick it up on their next wake).</p>");
+        }
+        else
+        {
+            sb.Append("<form method='post' action='/admin/announce'>" +
+                      "<input name='message' placeholder='message shown to players (optional for restarts)' maxlength='200' size='48'> " +
+                      "<input name='minutes' placeholder='restart in min (empty = info only)' size='22'> " +
+                      "<select name='worldId'><option value=''>whole fleet</option>");
+            foreach (var row in worlds.Where(r => r.World.Status is WorldStatus.Running or WorldStatus.Starting))
+            {
+                sb.Append($"<option value='{row.World.Id}'>{E(row.World.DisplayName)}</option>");
+            }
+
+            sb.Append("</select> " +
+                      "<button>announce</button> " +
+                      "<button name='action' value='cancel' title='clears a scheduled restart countdown'>cancel restart</button>" +
+                      "</form>" +
+                      "<p class='hint'>With minutes: players see a countdown banner and the instance stops itself gracefully at zero. " +
+                      "Without: a one-off message every player must acknowledge. Only awake instances are reachable.</p>");
         }
 
         sb.Append("</div>");
