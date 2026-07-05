@@ -40,6 +40,23 @@ with the previous sha. Rolling the game-server fleet = edit `BBS_WH_SERVER_IMAGE
 `/opt/bbs/worldhost/.env` and redeploy `worldhost` — running worlds keep their image until their
 idle shutdown, new wakes use the new pin.
 
+## Browser client at /play (WebGL build)
+
+The portal serves the Unity WebGL browser client at `https://<portal>/play` — the My-Worlds Play
+button deep-links into it with the world's wss URL + join token, so browser players land in their
+world with one click. The build is injected out-of-band (the worldhost image cannot build Unity):
+
+```sh
+# on the VPS, once per client release that ships a webgl*.zip asset:
+cd /opt/bbs/worldhost && rm -rf webgl && mkdir webgl
+curl -fL -o /tmp/webgl.zip "https://github.com/marceld23/BlocksBeyondTheStars/releases/latest/download/webgl-<version>.zip"
+unzip -q /tmp/webgl.zip -d webgl && rm /tmp/webgl.zip
+```
+
+The folder is bind-mounted read-only at `/app/webgl` (`BBS_WH_WEBGL_DIR`). Empty folder = a friendly
+"not installed" page. The deep-link needs a build that understands the `hosted_token`/`world_id`
+query parameters (v0.8.0+).
+
 ## One-time host prerequisites (already done on bbs-host-1, 2026-07-04)
 
 Deploy user `bbs` (docker group), ufw (22, 80, 443/tcp+udp, 32000-32999/udp), Docker Engine +

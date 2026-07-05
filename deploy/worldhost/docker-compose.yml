@@ -22,9 +22,14 @@ services:
       # passes <worlds>/<id>/saves to `docker run -v`, and the host daemon resolves that path on the
       # HOST filesystem (SavePaths.HostSavesDir).
       - /opt/bbs/worldhost/worlds:/opt/bbs/worldhost/worlds
+      # Unity WebGL browser build served at /play (the portal's Play button deep-links into it).
+      # Filled out-of-band: unzip a release webgl*.zip here (see deploy/README.md). Empty folder =
+      # a friendly "not installed" page, never an error.
+      - /opt/bbs/worldhost/webgl:/app/webgl:ro
     environment:
       BBS_WH_BIND: 0.0.0.0
       BBS_WH_DATA_DIR: /data
+      BBS_WH_WEBGL_DIR: /app/webgl
       BBS_WH_WORLDS_DIR: /opt/bbs/worldhost/worlds
       BBS_WH_DOCKER_NETWORK: bbs-hosted
       BBS_WH_BASE_DOMAIN: ${BBS_WH_BASE_DOMAIN:?set in /opt/bbs/worldhost/.env}

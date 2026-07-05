@@ -247,11 +247,88 @@ app.MapGet("/api/stats", async (HttpContext ctx) =>
 
 // ---------------- Portal pages (server-rendered shells; the JS talks to /api with a Bearer session) ----------------
 
-app.MapGet("/", () => Results.Content(WorldHostPortalPages.Landing(config), "text/html; charset=utf-8"));
-app.MapGet("/worlds", () => Results.Content(WorldHostPortalPages.Worlds(config), "text/html; charset=utf-8"));
-app.MapGet("/rules", () => Results.Content(WorldHostPortalPages.Rules(config), "text/html; charset=utf-8"));
-app.MapGet("/impressum", () => Results.Content(WorldHostPortalPages.Impressum(config), "text/html; charset=utf-8"));
-app.MapGet("/datenschutz", () => Results.Content(WorldHostPortalPages.Privacy(config), "text/html; charset=utf-8"));
+// Page language: explicit ?lang= wins (and is remembered in a cookie so plain links keep the choice);
+// otherwise the cookie; otherwise German — the portal's primary audience. Only "en"/"de" are honored.
+string PageLang(HttpContext ctx)
+{
+    string? q = ctx.Request.Query["lang"];
+    if (q is "en" or "de")
+    {
+        ctx.Response.Cookies.Append("bbs_lang", q, new CookieOptions
+        {
+            Path = "/",
+            MaxAge = TimeSpan.FromDays(365),
+            SameSite = SameSiteMode.Lax,
+        });
+        return q;
+    }
+
+    return WorldHostPortalPages.NormalizeLang(ctx.Request.Cookies["bbs_lang"]);
+}
+
+app.MapGet("/", (HttpContext ctx) => Results.Content(WorldHostPortalPages.Landing(config, PageLang(ctx)), "text/html; charset=utf-8"));
+app.MapGet("/worlds", (HttpContext ctx) => Results.Content(WorldHostPortalPages.Worlds(config, PageLang(ctx)), "text/html; charset=utf-8"));
+app.MapGet("/rules", (HttpContext ctx) => Results.Content(WorldHostPortalPages.Rules(config, PageLang(ctx)), "text/html; charset=utf-8"));
+app.MapGet("/impressum", (HttpContext ctx) => Results.Content(WorldHostPortalPages.Impressum(config, PageLang(ctx)), "text/html; charset=utf-8"));
+app.MapGet("/datenschutz", (HttpContext ctx) => Results.Content(WorldHostPortalPages.Privacy(config, PageLang(ctx)), "text/html; charset=utf-8"));
+
+// The official game favicon, embedded in the binary (the portal ships no asset files). Safe to cache
+// long: it changes at most with a deployment.
+app.MapGet("/favicon.ico", (HttpContext ctx) =>
+{
+    ctx.Response.Headers.CacheControl = "public, max-age=86400";
+    return Results.File(PortalFavicon.Bytes, "image/x-icon");
+});
+
+// ---------------- Browser play (/play): the Unity WebGL client, deep-linked by the Play button ----------------
+// The build itself is injected out-of-band (fleet: a bind-mounted host folder — see deploy/worldhost);
+// the page connects to the world's wss URL from the deep-link query, so ONE central build serves every
+// world. Public like the portal pages: joining still requires the short-lived HMAC join token.
+
+string webglDir = Path.GetFullPath(config.WebGlDir);
+Directory.CreateDirectory(webglDir);
+
+app.MapGet("/play", (HttpContext ctx) =>
+{
+    // The Unity index.html references its assets RELATIVELY (TemplateData/…, Build/…). Served at the
+    // slashless "/play" those resolve against "/" and 404 (#218) — canonicalize to "/play/" and keep
+    // the query string (the WebGL client reads server_host/hosted_token/… from the page URL).
+    if (!ctx.Request.Path.Value!.EndsWith('/'))
+    {
+        return Results.Redirect("/play/" + ctx.Request.QueryString);
+    }
+
+    if (PlayPage.StampIndexHtml(webglDir) is { } html)
+    {
+        ctx.Response.Headers.CacheControl = "no-cache"; // always revalidate the entry page
+        return Results.Content(html, "text/html; charset=utf-8");
+    }
+
+    return Results.Content(PlayPage.NotInstalledHtml(PageLang(ctx)), "text/html; charset=utf-8");
+});
+
+app.UseStaticFiles(new StaticFileOptions
+{
+    FileProvider = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(webglDir),
+    RequestPath = "/play",
+    ServeUnknownFileTypes = true, // Unity emits .data/.wasm/.symbols.json without standard MIME types
+    OnPrepareResponse = ctx =>
+    {
+        var headers = ctx.Context.Response.Headers;
+        var (encoding, contentType) = PlayPage.EncodingFor(ctx.File.Name);
+        if (encoding != null)
+        {
+            headers.ContentEncoding = encoding;
+        }
+
+        if (contentType != null)
+        {
+            headers.ContentType = contentType;
+        }
+
+        headers.CacheControl = PlayPage.CacheControlFor(ctx.File.Name, ctx.Context.Request.Query.ContainsKey("v"));
+    },
+});
 
 // Caddy on-demand TLS gate: before issuing a certificate for a requested hostname, Caddy asks this
 // endpoint. 200 only for the portal host itself and subdomains of real worlds — so nobody can make us

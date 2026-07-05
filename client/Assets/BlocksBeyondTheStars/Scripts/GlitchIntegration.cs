@@ -46,6 +46,21 @@ namespace BlocksBeyondTheStars.Client
                 ReadQueryValue(Application.absoluteURL, "bbs_player_name"),
                 GetEnv("BBS_PLAYER_NAME"));
 
+        // Hosted-worlds deep-link (the WorldHost portal's Play button): the join grant's HMAC token +
+        // world id ride the /play page URL so the browser client can pass the instance's token gate —
+        // WebGL has no portal sign-in of its own (HOSTED_WORLDS.md: the browser never picks servers).
+        public static string AutoJoinHostedToken
+            => FirstNonEmpty(
+                ReadQueryValue(Application.absoluteURL, "hosted_token"),
+                ReadQueryValue(Application.absoluteURL, "bbs_hosted_token"),
+                GetEnv("BBS_HOSTED_TOKEN"));
+
+        public static string AutoJoinHostedWorldId
+            => FirstNonEmpty(
+                ReadQueryValue(Application.absoluteURL, "world_id"),
+                ReadQueryValue(Application.absoluteURL, "bbs_world_id"),
+                GetEnv("BBS_HOSTED_WORLD_ID"));
+
         public static bool TryGetConfiguredServer(out string host, out string port, out string password)
         {
             host = FirstNonEmpty(

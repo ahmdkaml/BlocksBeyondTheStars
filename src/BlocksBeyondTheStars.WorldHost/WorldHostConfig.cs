@@ -187,6 +187,12 @@ public sealed class WorldHostConfig
     /// <summary>Admin UI password (BBS_WH_ADMIN_PASSWORD).</summary>
     public string AdminPassword { get; set; } = string.Empty;
 
+    /// <summary>Directory holding the Unity WebGL browser build served at <c>/play</c>
+    /// (BBS_WH_WEBGL_DIR; the fleet bind-mounts a host folder here). The portal's Play button
+    /// deep-links into this page with the world's wss URL + join token; without a build the page
+    /// shows a friendly "not installed" notice.</summary>
+    public string WebGlDir { get; set; } = "webgl";
+
     /// <summary>Loads config from BBS_WH_* environment variables over the defaults.</summary>
     public static WorldHostConfig FromEnvironment()
     {
@@ -246,6 +252,7 @@ public sealed class WorldHostConfig
         if (Env("BBS_WH_PROBE_VIA_NETWORK") is { } pvnStr && bool.TryParse(pvnStr, out var pvn)) { c.ProbeViaDockerNetwork = pvn; }
         if (Env("BBS_WH_ADMIN_USER") is { } adminUser) { c.AdminUser = adminUser; }
         if (Env("BBS_WH_ADMIN_PASSWORD") is { } adminPassword) { c.AdminPassword = adminPassword; }
+        if (Env("BBS_WH_WEBGL_DIR") is { } webglDir) { c.WebGlDir = webglDir; }
 
         return c;
     }

@@ -26,9 +26,11 @@ public sealed record JoinGrant(
 /// </summary>
 public sealed class WorldOrchestrator
 {
-    /// <summary>Join tokens are one-shot handshake material: issued, passed to the game server, verified —
-    /// all within seconds. A short life keeps a leaked token near-useless.</summary>
-    private const int JoinTokenTtlSeconds = 120;
+    /// <summary>Join tokens are one-shot handshake material, so a short life keeps a leaked token
+    /// near-useless — but the browser deep-link must survive the FIRST WebGL download (tens of MB on a
+    /// slow line): the token is minted before the page loads and verified only once the engine joins.
+    /// 10 minutes covers that cold path; native joins still use it within seconds.</summary>
+    private const int JoinTokenTtlSeconds = 600;
 
     /// <summary>Wrong-password budget per account+world before the cooldown answer: generous enough for a
     /// family fumbling a shared password, tight enough to make guessing pointless (the window is 15 min).</summary>

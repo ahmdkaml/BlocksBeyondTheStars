@@ -202,6 +202,11 @@ public sealed class WorldHostTests : IDisposable
             DateTimeOffset.UtcNow.ToUnixTimeSeconds(), out var tokenAccount, out var tokenPlayer, out _));
         Assert.Equal(accountId, tokenAccount);
         Assert.Equal("Pilot", tokenPlayer);
+
+        // The token must survive the browser deep-link's cold path — the FIRST WebGL download can take
+        // minutes, and the token is only verified once the engine joins (10-minute TTL, was 2).
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        Assert.InRange(grant.TokenExpiresUnix, now + 540, now + 660);
     }
 
     [Fact]
