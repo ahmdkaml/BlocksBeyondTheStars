@@ -555,7 +555,7 @@ public sealed partial class GameServer
             return string.Empty;
         }
 
-        var trimmed = raw.Replace('\n', ' ').Replace('\r', ' ').Trim();
+        var trimmed = StripControlChars(raw);
         return trimmed.Length > BaseNameMaxLength ? trimmed.Substring(0, BaseNameMaxLength) : trimmed;
     }
 

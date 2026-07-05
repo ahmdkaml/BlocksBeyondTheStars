@@ -5500,6 +5500,26 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-05): legal pages, full DE/EN localization, account deletion + game-input hardening
+Public-launch readiness for hosted worlds (details: [HOSTED_WORLDS.md](docs/developer/HOSTED_WORLDS.md)).
+- **Impressum (§5 DDG) + Datenschutz (DSGVO)** portal pages, footer-linked everywhere; operator data is
+  config-driven (`BBS_WH_LEGAL_NAME/_ADDRESS/_EMAIL`) so a self-hosted WorldHost shows ITS operator, never
+  ours; unset → "not configured" notice. Privacy page states the data-minimal reality (name + PBKDF2 hash,
+  no email, no tracking, no third-party embeds). Official operator: Marcel Dütscher, info@blocksbeyondthestars.de.
+- **Localized errors via codes**: every WorldHost error carries a stable `code`; client maps it to
+  `ui.portal.err_*` (DE+EN), portal via a JS dict on browser language; `banned` keeps the operator reason.
+  No more raw English API text for German kids. Client "Official Worlds" menu gained the beta banner, a
+  rules one-liner and a "View rules" button.
+- **Account self-deletion (DSGVO Art. 17)**: `DELETE /api/account` + double-confirm portal button —
+  removes the account, sessions, its reports and ALL its worlds incl. live + archived saves on disk.
+- **Game-input hardening** (audit-driven): native (MessagePack/LiteNetLib) packet size cap = the WebSocket
+  1 MB cap (native clients were unbounded); per-connection token-bucket message-rate gate in OnPayload;
+  FacePixels validated (exact 256 hex + 2 s throttle before persist/broadcast); voice frame-rate cap
+  (60/s) before audience fan-out; chat/mission/label free text control-char-stripped (no CR/LF injection
+  into other players' UIs or logs); /bump description length-capped + control-char-stripped (log-forging).
+- Tests: `WorldHostLegalTests` (5: delete cascade, save-data erase, legal config + page render, unconfigured
+  notice) + `InputHardeningTests` (3: native size cap accept/reject, parity). Locale parity (EN+DE) enforced.
+
 ## ✅ Done (2026-07-04): hosted-worlds Phase 3 — archiving, rate limits, name hygiene, metrics
 Hardening of the WorldHost control plane (details: [HOSTED_WORLDS.md](docs/developer/HOSTED_WORLDS.md)).
 Multi-host placement stays deliberately deferred until one host stops being enough.

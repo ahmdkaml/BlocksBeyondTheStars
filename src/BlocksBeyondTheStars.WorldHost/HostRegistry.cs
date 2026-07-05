@@ -365,6 +365,27 @@ public sealed class HostRegistry : IDisposable
         }
     }
 
+    /// <summary>Account self-deletion (DSGVO Art. 17): removes the account row, its sessions and the
+    /// reports it filed. The caller deletes the account's WORLDS (registry rows + on-disk saves) first —
+    /// they need the orchestrator to stop live instances.</summary>
+    public void DeleteAccount(string accountId)
+    {
+        lock (_gate)
+        {
+            foreach (var sql in new[]
+            {
+                "DELETE FROM session WHERE account_id = $i",
+                "DELETE FROM report WHERE reporter_account_id = $i",
+                "DELETE FROM account WHERE id = $i",
+            })
+            {
+                using var cmd = Cmd(sql);
+                cmd.Parameters.AddWithValue("$i", accountId);
+                cmd.ExecuteNonQuery();
+            }
+        }
+    }
+
     public IReadOnlyList<ReportRecord> ListOpenReports()
     {
         lock (_gate)

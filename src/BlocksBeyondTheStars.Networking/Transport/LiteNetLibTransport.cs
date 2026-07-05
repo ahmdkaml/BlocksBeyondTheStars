@@ -66,6 +66,16 @@ public sealed class LiteNetLibServerTransport : IServerTransport
 
         _listener.NetworkReceiveEvent += (peer, reader, _, _) =>
         {
+            // Drop oversized native packets before they reach the decoder. LiteNetLib reliable
+            // fragmentation can assemble buffers far above MTU; without this ceiling a malicious client
+            // could push a multi-MB payload (mirrors the WebSocket path's frame cap). No real intent
+            // is anywhere near this size.
+            int available = reader.AvailableBytes;
+            if (available <= 0 || available > NetCodec.MaxPacketBytes)
+            {
+                return;
+            }
+
             var bytes = reader.GetRemainingBytes();
             PayloadReceived?.Invoke(peer.Id, bytes);
         };

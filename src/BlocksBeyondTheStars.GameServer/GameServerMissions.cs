@@ -258,8 +258,13 @@ public sealed partial class GameServer
     public void TryThreadMissionForTest(string nameKey)
         => TryThreadMission(new BlocksBeyondTheStars.Shared.Missions.MissionDefinition { Id = nameKey, NameKey = nameKey });
 
+    // Player mission titles/descriptions are broadcast verbatim to other players, so strip control
+    // characters (CR/LF/ANSI) before truncating — same treatment as chat and labels (audit 2026-07-05).
     private static string Truncate(string? s, int max)
-        => string.IsNullOrEmpty(s) ? string.Empty : (s!.Length <= max ? s : s.Substring(0, max));
+    {
+        string clean = StripControlChars(s);
+        return clean.Length <= max ? clean : clean.Substring(0, max);
+    }
 
     private const int MaxPlayerMissions = 10;     // active player-created missions per creator
     private const int MaxMissionParts = 8;         // objectives / rewards a single mission may carry

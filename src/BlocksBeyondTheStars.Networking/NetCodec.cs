@@ -18,6 +18,12 @@ public static class NetCodec
 {
     private const byte JsonEnvelopeTag = 255;
     public const int MaxJsonPayloadBytes = 1024 * 1024;
+
+    /// <summary>Hard cap on a single decoded packet (native MessagePack path). The WebSocket path is already
+    /// bounded by <see cref="MaxJsonPayloadBytes"/>; native (LiteNetLib) reliable fragmentation can assemble
+    /// far larger buffers, so an equivalent ceiling is enforced here before deserialization. No legitimate
+    /// client intent is anywhere near 1 MB.</summary>
+    public const int MaxPacketBytes = 1024 * 1024;
     private const int MaxJsonDepth = 64;
 
     private static readonly MessagePackSerializerOptions Options =
@@ -381,7 +387,7 @@ public static class NetCodec
             return DecodeJson(payload);
         }
 
-        if (payload.Length == 0 || !TagToType.TryGetValue(payload[0], out var type))
+        if (payload.Length == 0 || payload.Length > MaxPacketBytes || !TagToType.TryGetValue(payload[0], out var type))
         {
             return null;
         }

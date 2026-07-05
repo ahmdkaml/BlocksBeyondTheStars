@@ -38,6 +38,14 @@ public sealed class PlayerSession
     /// <summary>Environment.TickCount of the last accepted chat line (rate limiting).</summary>
     public int LastChatTick { get; set; }
 
+    /// <summary>Server uptime (seconds) before which the next face change / voice frame is throttled.</summary>
+    public double NextFaceChangeAt { get; set; }
+    public double NextVoiceFrameAt { get; set; }
+
+    /// <summary>Token bucket for the per-connection message-rate gate (anti-flood). Refilled by wall clock.</summary>
+    public double MsgBudget { get; set; } = 60.0;
+    public int LastMsgRefillTick { get; set; }
+
     /// <summary>Chunks already streamed to this client, to avoid resending.</summary>
     public HashSet<ChunkCoord> SentChunks { get; } = new();
 

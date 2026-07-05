@@ -226,17 +226,41 @@ namespace BlocksBeyondTheStars.Client
             official = odim.gameObject;
             var odlg = UiKit.AddPanel(official.transform, 610f, 180f, 700f, 720f, UiKit.Panel).transform;
             UiKit.AddText(odlg, 30f, 24f, 640f, 30f, shell.L("ui.portal.title"), 22, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
+
+            // The same notices the portal shows (client parity): the beta warning, the one-line rules
+            // summary, and a button opening the full rules page in the browser.
+            UiKit.AddText(odlg, 30f, 58f, 640f, 40f, shell.L("ui.portal.beta"), 13,
+                new Color(1f, 0.72f, 0.35f), TextAnchor.UpperLeft);
+            UiKit.AddText(odlg, 30f, 100f, 470f, 44f, shell.L("ui.portal.rules_line"), 13, UiKit.CyanDim, TextAnchor.UpperLeft);
+            UiKit.AddButton(odlg, 510f, 100f, 160f, 40f, shell.L("ui.portal.view_rules"),
+                () => Application.OpenURL(PortalBase() + "/rules"), "btn_credits");
+
             var oStatus = UiKit.AddText(odlg, 30f, 592f, 640f, 48f, "", 14,
                 new Color(1f, 0.55f, 0.4f), TextAnchor.UpperLeft, FontStyle.Bold);
             UiKit.AddButton(odlg, 400f, 648f, 270f, 54f, shell.L("ui.menu.back"), () => official.SetActive(false), "btn_exit");
 
             // Content area rebuilt on every state change (signed out ↔ signed in ↔ fresh world list).
-            var oContent = UiKit.AddPanel(odlg, 0f, 60f, 700f, 530f, new Color(0f, 0f, 0f, 0f)).transform;
+            var oContent = UiKit.AddPanel(odlg, 0f, 150f, 700f, 440f, new Color(0f, 0f, 0f, 0f)).transform;
             var oWorlds = new List<PortalWorldInfo>();
 
             string PortalBase() => string.IsNullOrWhiteSpace(shell.Settings.PortalUrl)
                 ? PortalClient.DefaultPortalUrl
                 : shell.Settings.PortalUrl;
+
+            // WorldHost errors carry a stable machine code → show the player's language when we have a
+            // translation ('ui.portal.err_<code>'); otherwise fall back to the API's English text. Ban
+            // reasons are operator-written free text, so 'banned' keeps the original message.
+            string PortalErr(string code, string error)
+            {
+                if (string.IsNullOrEmpty(code) || code == "banned")
+                {
+                    return error;
+                }
+
+                string key = "ui.portal.err_" + code;
+                string localized = shell.L(key);
+                return localized == key ? error : localized;
+            }
 
             bool SignedIn() => !string.IsNullOrEmpty(shell.Settings.PortalSessionToken);
 
@@ -258,8 +282,8 @@ namespace BlocksBeyondTheStars.Client
                 if (official == null) { return; } // menu was torn down while the request ran
                 if (!r.Ok)
                 {
-                    if (r.Error == "unauthorized") { SignOut(); return; } // session expired → back to sign-in
-                    oStatus.text = r.Error;
+                    if (r.Code == "unauthorized" || r.Error == "unauthorized") { SignOut(); return; } // session expired → back to sign-in
+                    oStatus.text = PortalErr(r.Code, r.Error);
                     return;
                 }
 
@@ -277,7 +301,9 @@ namespace BlocksBeyondTheStars.Client
                 if (official == null) { return; }
                 if (!r.Ok)
                 {
-                    oStatus.text = shell.L("ui.portal.login_failed") + (r.Error.Length > 0 ? " (" + r.Error + ")" : "");
+                    oStatus.text = r.Code.Length > 0
+                        ? PortalErr(r.Code, r.Error)
+                        : shell.L("ui.portal.login_failed") + (r.Error.Length > 0 ? " (" + r.Error + ")" : "");
                     return;
                 }
 
@@ -305,7 +331,7 @@ namespace BlocksBeyondTheStars.Client
                 if (official == null) { return; }
                 if (!r.Ok)
                 {
-                    oStatus.text = r.Error;
+                    oStatus.text = PortalErr(r.Code, r.Error);
                     return;
                 }
 
@@ -358,7 +384,7 @@ namespace BlocksBeyondTheStars.Client
                     UiKit.AddText(oContent, 414f, ry + 10f, 110f, 26f, world.Status, 13, UiKit.CyanDim, TextAnchor.MiddleLeft);
                     UiKit.AddButton(oContent, 530f, ry, 140f, 46f, shell.L("ui.portal.play"), () => DoJoinWorld(id), "btn_join");
                     ry += 56f;
-                    if (ry > 470f) { break; } // quota keeps this short; guard against overflow anyway
+                    if (ry > 380f) { break; } // quota keeps this short; guard against overflow anyway
                 }
             }
 

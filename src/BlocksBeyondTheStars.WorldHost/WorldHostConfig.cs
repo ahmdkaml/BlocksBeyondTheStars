@@ -114,6 +114,19 @@ public sealed class WorldHostConfig
 
     public int ReportsPerHourPerAccount { get; set; } = 10;
 
+    // --- Legal pages (§5 DDG Impressum + DSGVO privacy). Operator-set on purpose: a SELF-HOSTED
+    // WorldHost must carry ITS operator's data, never the project authors' — empty values make the
+    // pages render a clear "not configured" notice instead of wrong legal information. ---
+
+    /// <summary>Legal operator name shown on /impressum and /datenschutz (BBS_WH_LEGAL_NAME).</summary>
+    public string LegalName { get; set; } = string.Empty;
+
+    /// <summary>Postal address, comma-separated lines (BBS_WH_LEGAL_ADDRESS).</summary>
+    public string LegalAddress { get; set; } = string.Empty;
+
+    /// <summary>Contact email — §5 DDG requires one (BBS_WH_LEGAL_EMAIL).</summary>
+    public string LegalEmail { get; set; } = string.Empty;
+
     /// <summary>Loads config from BBS_WH_* environment variables over the defaults.</summary>
     public static WorldHostConfig FromEnvironment()
     {
@@ -159,6 +172,9 @@ public sealed class WorldHostConfig
         if (Env("BBS_WH_LOGINS_PER_MINUTE") is { } liStr && int.TryParse(liStr, out var li)) { c.LoginPerMinutePerIp = li; }
         if (Env("BBS_WH_UPLOADS_PER_HOUR") is { } ulStr && int.TryParse(ulStr, out var ul)) { c.UploadsPerHourPerAccount = ul; }
         if (Env("BBS_WH_REPORTS_PER_HOUR") is { } rpStr && int.TryParse(rpStr, out var rp)) { c.ReportsPerHourPerAccount = rp; }
+        if (Env("BBS_WH_LEGAL_NAME") is { } legalName) { c.LegalName = legalName; }
+        if (Env("BBS_WH_LEGAL_ADDRESS") is { } legalAddress) { c.LegalAddress = legalAddress; }
+        if (Env("BBS_WH_LEGAL_EMAIL") is { } legalEmail) { c.LegalEmail = legalEmail; }
 
         return c;
     }

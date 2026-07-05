@@ -45,14 +45,57 @@ public sealed partial class GameServer
     /// <summary>Stores a player's custom pixel face (persisted, since it follows the player to any server they
     /// set it on) and relays it to the other players on the same world. Out of band from the 10 Hz presence
     /// stream — the bitmap is heavier and changes rarely.</summary>
+    // The custom face is a 16×16 grid of palette indices, one hex char per pixel = exactly 256 chars
+    // (client FacePalette). The server treats it as opaque, but MUST bound and charset-check it: it is
+    // persisted to disk and rebroadcast to every player, so an unvalidated blob is a memory/disk/bandwidth
+    // vector (audit 2026-07-05). An empty string is allowed and means "no custom face".
+    private const int FacePixelCount = 256;
+
+    private static bool IsValidFace(string face)
+    {
+        if (face.Length == 0)
+        {
+            return true;
+        }
+
+        if (face.Length != FacePixelCount)
+        {
+            return false;
+        }
+
+        foreach (char c in face)
+        {
+            bool hex = c is (>= '0' and <= '9') or (>= 'a' and <= 'f') or (>= 'A' and <= 'F');
+            if (!hex)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private void HandleSetFace(PlayerSession session, SetFaceIntent intent)
     {
         var pixels = intent.Pixels ?? string.Empty;
+        if (!IsValidFace(pixels))
+        {
+            return; // malformed (wrong length or non-hex) — drop it, never persist or relay
+        }
+
         if (pixels == session.State.FacePixels)
         {
             return; // unchanged (e.g. the redundant on-join send) — no save, no broadcast
         }
 
+        // Simple anti-spam: a face changes rarely, so one accepted change per 2 s per player is generous.
+        // Without it, alternating two valid faces would force repeated disk saves + world-wide rebroadcast.
+        if (_uptime < session.NextFaceChangeAt)
+        {
+            return;
+        }
+
+        session.NextFaceChangeAt = _uptime + 2.0;
         session.State.FacePixels = pixels;
         _repo.SavePlayer(session.State);
         BroadcastFace(session);
