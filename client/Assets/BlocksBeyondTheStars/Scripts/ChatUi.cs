@@ -352,6 +352,35 @@ namespace BlocksBeyondTheStars.Client
                     net.SendAdminCommand("ai_mission", stringArg: t.Substring(p[0].Length).Trim());
                     return true;
 
+                // ---- Maintenance announcements (#249; allowed even when cheats are off) ----
+                case "/announce":
+                    {
+                        string msg = t.Substring(p[0].Length).Trim();
+                        if (msg.Length == 0) { LocalLine("usage: /announce <message>"); return true; }
+                        net.SendAdminCommand("announce", stringArg: msg);
+                        return true;
+                    }
+
+                case "/restart":
+                case "/schedule_restart":
+                    {
+                        if (p.Length < 2 || !int.TryParse(p[1], out var minutes))
+                        {
+                            LocalLine("usage: /restart <minutes> [message]");
+                            return true;
+                        }
+
+                        string msg = t.Substring(p[0].Length).Trim();
+                        msg = msg.Substring(p[1].Length).Trim(); // drop the minutes token, keep the rest
+                        net.SendAdminCommand("schedule_restart", stringArg: msg, intArg: minutes);
+                        return true;
+                    }
+
+                case "/cancelrestart":
+                case "/cancel_restart":
+                    net.SendAdminCommand("cancel_restart");
+                    return true;
+
                 default:
                     return false; // not an admin command (e.g. /bump) → send as normal chat
             }

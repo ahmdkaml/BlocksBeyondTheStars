@@ -48,6 +48,17 @@ public sealed class WebSocketServerTransport : IServerTransport
     /// thread-safe: it is invoked on the accept loop, not the tick thread.</summary>
     public Func<string>? StatusJsonProvider { get; set; }
 
+    /// <summary>When set together with <see cref="AnnounceToken"/>, <c>POST /announce</c> accepts a
+    /// maintenance announcement (JSON <c>{"kind":0|1|2,"text":"...","seconds":600}</c>) from the control
+    /// plane and forwards it to the game server (kind, text, seconds → accepted). Invoked on the accept
+    /// loop — the game server queues it for the tick thread. Requests must carry the token in the
+    /// <c>X-Announce-Token</c> header; without a configured token the route stays a 400 like any other
+    /// unknown path, so self-hosted gateways expose nothing new.</summary>
+    public Func<byte, string?, int, bool>? AnnounceReceiver { get; set; }
+
+    /// <summary>Shared secret required by <c>POST /announce</c>; empty disables the endpoint.</summary>
+    public string AnnounceToken { get; set; } = string.Empty;
+
     /// <param name="bindHost">Host for the HTTP prefix; "localhost" for dev/LAN, "+" for all interfaces (may need elevation on Windows).</param>
     public WebSocketServerTransport(string bindHost = "localhost") => _bindHost = bindHost;
 
@@ -96,6 +107,14 @@ public sealed class WebSocketServerTransport : IServerTransport
                     await ctx.Response.OutputStream.WriteAsync(body, 0, body.Length).ConfigureAwait(false);
                     ctx.Response.Close();
                 }
+                else if (ctx.Request.HttpMethod == "POST"
+                    && ctx.Request.Url?.AbsolutePath == "/announce"
+                    && AnnounceReceiver is { } announceReceiver
+                    && !string.IsNullOrEmpty(AnnounceToken))
+                {
+                    ctx.Response.StatusCode = await HandleAnnounceAsync(ctx, announceReceiver).ConfigureAwait(false);
+                    ctx.Response.Close();
+                }
                 else
                 {
                     ctx.Response.StatusCode = 400;
@@ -107,6 +126,56 @@ public sealed class WebSocketServerTransport : IServerTransport
 
             _ = HandleClientAsync(ctx);
         }
+    }
+
+    /// <summary>Authenticates and parses a <c>POST /announce</c> request; returns the HTTP status code.</summary>
+    private async Task<int> HandleAnnounceAsync(HttpListenerContext ctx, Func<byte, string?, int, bool> receiver)
+    {
+        if (!FixedTimeEquals(ctx.Request.Headers["X-Announce-Token"], AnnounceToken))
+        {
+            return 401;
+        }
+
+        const int MaxBodyBytes = 4096;
+        if (ctx.Request.ContentLength64 is < 0 or > MaxBodyBytes)
+        {
+            return 400;
+        }
+
+        try
+        {
+            using var reader = new System.IO.StreamReader(ctx.Request.InputStream, System.Text.Encoding.UTF8);
+            char[] buffer = new char[MaxBodyBytes];
+            int read = await reader.ReadBlockAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
+            using var doc = System.Text.Json.JsonDocument.Parse(new string(buffer, 0, read));
+            var root = doc.RootElement;
+            byte kind = root.TryGetProperty("kind", out var k) ? (byte)k.GetInt32() : (byte)0;
+            string? text = root.TryGetProperty("text", out var t) ? t.GetString() : null;
+            int seconds = root.TryGetProperty("seconds", out var s) ? s.GetInt32() : -1;
+            return receiver(kind, text, seconds) ? 200 : 400;
+        }
+        catch
+        {
+            return 400; // malformed JSON / aborted body — never let a bad request kill the accept loop
+        }
+    }
+
+    /// <summary>Constant-time string compare (hand-rolled like HostedJoinToken's — netstandard2.1/Unity
+    /// compatibility rules out CryptographicOperations here).</summary>
+    private static bool FixedTimeEquals(string? candidate, string expected)
+    {
+        if (candidate is null || candidate.Length != expected.Length)
+        {
+            return false;
+        }
+
+        int diff = 0;
+        for (int i = 0; i < expected.Length; i++)
+        {
+            diff |= candidate[i] ^ expected[i];
+        }
+
+        return diff == 0;
     }
 
     private async Task HandleClientAsync(HttpListenerContext ctx)

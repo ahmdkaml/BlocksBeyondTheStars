@@ -698,6 +698,32 @@ public sealed class ServerMessage
 }
 
 /// <summary>
+/// Operator/admin maintenance announcement ("new version releasing, server restarts in 10 minutes").
+/// Unlike <see cref="ServerMessage"/> (a transient HUD toast) the client renders this as a prominent
+/// banner/modal that cannot be dismissed accidentally. Restart countdowns are re-broadcast at shrinking
+/// thresholds; each broadcast carries the authoritative remaining seconds so clients re-sync their timers.
+/// </summary>
+public sealed class MaintenanceNotice
+{
+    public const byte KindInfo = 0;
+    public const byte KindRestartCountdown = 1;
+    public const byte KindCancelled = 2;
+
+    public byte Kind { get; set; }
+
+    /// <summary>Optional locale key for a standard message (e.g. "ui.maint.restart_in") so the client
+    /// renders it in the player's language. Empty when only <see cref="Text"/> is set.</summary>
+    public string MessageKey { get; set; } = string.Empty;
+
+    /// <summary>Operator free text, shown verbatim (already sanitized server-side). May be empty.</summary>
+    public string Text { get; set; } = string.Empty;
+
+    /// <summary>Seconds until the restart for <see cref="KindRestartCountdown"/> (0 = restarting now);
+    /// -1 for notices without a countdown.</summary>
+    public int SecondsRemaining { get; set; } = -1;
+}
+
+/// <summary>
 /// The active world rule set, sent to a client right after it joins so it can show the
 /// server's mode/rules and explain when an action is blocked by them.
 /// </summary>

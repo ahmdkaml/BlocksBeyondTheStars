@@ -10,9 +10,21 @@ namespace BlocksBeyondTheStars.WorldHost;
 /// (the signup UI sends it with its required checkbox) or the signup is refused.</summary>
 public sealed record SignupRequest(string Name, string Password, string? ClaimCode = null, int AcceptedTermsVersion = 0);
 
-public sealed record CreateWorldRequest(string Name);
+/// <summary>World creation; <paramref name="Password"/> (optional, #250) protects the world with a join
+/// password (4-24 chars, PBKDF2-hashed at rest). Empty/null = open world.</summary>
+public sealed record CreateWorldRequest(string Name, string? Password = null);
 
-public sealed record JoinRequestDto(string PlayerName);
+/// <summary>Join grant request; <paramref name="Password"/> is the world's join password when the world
+/// is protected (#250) — omitted on the first try, supplied after the password_required answer.</summary>
+public sealed record JoinRequestDto(string PlayerName, string? Password = null);
+
+/// <summary>Owner-only: set/change (4-24 chars) or remove (empty) a world's join password (#250).</summary>
+public sealed record WorldPasswordRequest(string? Password);
+
+/// <summary>Operator maintenance announcement (#249). Kind: 0 = info message, 1 = restart countdown of
+/// <paramref name="Seconds"/>, 2 = cancel a scheduled restart. <paramref name="WorldId"/> targets one
+/// world; null = the whole fleet.</summary>
+public sealed record AnnounceRequest(byte Kind, string? Text = null, int Seconds = -1, string? WorldId = null);
 
 /// <summary>Player report ("Spieler melden"): who misbehaved (in-game name), where, why. Categories:
 /// chat, name, griefing, other.</summary>

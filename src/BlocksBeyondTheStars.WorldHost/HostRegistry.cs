@@ -24,10 +24,14 @@ public sealed record WorldRecord(
     string Status,
     string ContainerId,
     long CreatedUnix,
-    long LastStartedUnix)
+    long LastStartedUnix,
+    string PasswordHash = "")
 {
     /// <summary>The public routing label: <c>w-&lt;id&gt;.&lt;BaseDomain&gt;</c> resolves to this world's instance.</summary>
     public string Subdomain => "w-" + Id;
+
+    /// <summary>True when the creator protected this world with a join password (#250).</summary>
+    public bool HasPassword => PasswordHash.Length > 0;
 }
 
 /// <summary>A filed player report awaiting (or after) operator review.</summary>
@@ -115,7 +119,8 @@ public sealed class HostRegistry : IDisposable
                 container_id TEXT NOT NULL DEFAULT '',
                 created_unix INTEGER NOT NULL,
                 last_started_unix INTEGER NOT NULL DEFAULT 0,
-                last_active_unix INTEGER NOT NULL DEFAULT 0);
+                last_active_unix INTEGER NOT NULL DEFAULT 0,
+                password_hash TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS report(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 world_id TEXT NOT NULL,
@@ -137,6 +142,7 @@ public sealed class HostRegistry : IDisposable
             "ALTER TABLE account ADD COLUMN terms_version INTEGER NOT NULL DEFAULT 0;",
             "ALTER TABLE account ADD COLUMN terms_accepted_unix INTEGER NOT NULL DEFAULT 0;",
             "ALTER TABLE world ADD COLUMN last_active_unix INTEGER NOT NULL DEFAULT 0;",
+            "ALTER TABLE world ADD COLUMN password_hash TEXT NOT NULL DEFAULT '';", // #250: creator-set join password
         })
         {
             try
@@ -509,9 +515,28 @@ public sealed class HostRegistry : IDisposable
 
     // ---------------- Worlds ----------------
 
+    /// <summary>Validates a creator-set world join password (#250). Empty/null is fine — it means "open
+    /// world". 4 chars is deliberate: this protects a family world from strangers, it is not an account
+    /// credential (PBKDF2-hashed at rest all the same).</summary>
+    public static (bool Ok, string Error) ValidateWorldPassword(string? password)
+    {
+        if (string.IsNullOrEmpty(password))
+        {
+            return (true, string.Empty);
+        }
+
+        if (password.Length is < 4 or > 24 || password.Any(char.IsControl))
+        {
+            return (false, "World password must be 4-24 printable characters.");
+        }
+
+        return (true, string.Empty);
+    }
+
     /// <summary>Creates a world for an account: enforces the per-account quota, allocates the world id,
-    /// per-world join secret and a stable host port from the configured range.</summary>
-    public (bool Ok, string Error, WorldRecord? World) CreateWorld(string ownerAccountId, string displayName)
+    /// per-world join secret and a stable host port from the configured range. An optional join password
+    /// (#250) is stored PBKDF2-hashed; empty = open world.</summary>
+    public (bool Ok, string Error, WorldRecord? World) CreateWorld(string ownerAccountId, string displayName, string? password = null)
     {
         displayName = (displayName ?? string.Empty).Trim();
         if (displayName.Length is < 1 or > 40 || displayName.Any(char.IsControl))
@@ -522,6 +547,11 @@ public sealed class HostRegistry : IDisposable
         if (IsBlockedName(displayName))
         {
             return (false, "Please choose a different world name.", null);
+        }
+
+        if (ValidateWorldPassword(password) is (false, var passwordError))
+        {
+            return (false, passwordError, null);
         }
 
         lock (_gate)
@@ -550,11 +580,12 @@ public sealed class HostRegistry : IDisposable
                 Status: WorldStatus.Stopped,
                 ContainerId: string.Empty,
                 CreatedUnix: NowUnix(),
-                LastStartedUnix: 0);
+                LastStartedUnix: 0,
+                PasswordHash: string.IsNullOrEmpty(password) ? string.Empty : PasswordHasher.Hash(password));
 
             using var ins = Cmd("""
-                INSERT INTO world(id, owner_account_id, display_name, join_secret, host_port, status, container_id, created_unix, last_started_unix)
-                VALUES($i, $o, $d, $s, $p, $st, '', $c, 0)
+                INSERT INTO world(id, owner_account_id, display_name, join_secret, host_port, status, container_id, created_unix, last_started_unix, password_hash)
+                VALUES($i, $o, $d, $s, $p, $st, '', $c, 0, $ph)
                 """);
             ins.Parameters.AddWithValue("$i", world.Id);
             ins.Parameters.AddWithValue("$o", world.OwnerAccountId);
@@ -563,9 +594,28 @@ public sealed class HostRegistry : IDisposable
             ins.Parameters.AddWithValue("$p", world.HostPort);
             ins.Parameters.AddWithValue("$st", world.Status);
             ins.Parameters.AddWithValue("$c", world.CreatedUnix);
+            ins.Parameters.AddWithValue("$ph", world.PasswordHash);
             ins.ExecuteNonQuery();
 
             return (true, string.Empty, world);
+        }
+    }
+
+    /// <summary>Sets, changes or removes (empty password) a world's join password (#250). The caller has
+    /// already verified ownership; validation happens here so every write path shares it.</summary>
+    public (bool Ok, string Error) SetWorldPassword(string worldId, string? password)
+    {
+        if (ValidateWorldPassword(password) is (false, var error))
+        {
+            return (false, error);
+        }
+
+        lock (_gate)
+        {
+            using var cmd = Cmd("UPDATE world SET password_hash = $ph WHERE id = $i");
+            cmd.Parameters.AddWithValue("$ph", string.IsNullOrEmpty(password) ? string.Empty : PasswordHasher.Hash(password));
+            cmd.Parameters.AddWithValue("$i", worldId ?? string.Empty);
+            return cmd.ExecuteNonQuery() == 1 ? (true, string.Empty) : (false, "World not found.");
         }
     }
 
@@ -724,11 +774,11 @@ public sealed class HostRegistry : IDisposable
     // ---------------- Internals ----------------
 
     private const string SelectWorld =
-        "SELECT id, owner_account_id, display_name, join_secret, host_port, status, container_id, created_unix, last_started_unix FROM world";
+        "SELECT id, owner_account_id, display_name, join_secret, host_port, status, container_id, created_unix, last_started_unix, password_hash FROM world";
 
     private static WorldRecord ReadWorld(SqliteDataReader r) => new(
         r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3), r.GetInt32(4),
-        r.GetString(5), r.GetString(6), r.GetInt64(7), r.GetInt64(8));
+        r.GetString(5), r.GetString(6), r.GetInt64(7), r.GetInt64(8), r.GetString(9));
 
     /// <summary>Smallest unused port in the configured range. Ports stay allocated for a world's lifetime
     /// (they are its stable native-UDP endpoint), so a deleted world's port returns to the pool.</summary>

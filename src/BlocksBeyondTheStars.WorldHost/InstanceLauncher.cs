@@ -105,6 +105,13 @@ public sealed class DockerCliLauncher : IInstanceLauncher
 
         args.AddRange(new[] { "--pids-limit", "256" });
 
+        // Maintenance announcements (#249): the shared secret the control plane presents on the instance's
+        // POST /announce. Without it neither side enables the endpoint.
+        if (!string.IsNullOrEmpty(config.AnnounceToken))
+        {
+            args.AddRange(new[] { "-e", $"BBS_ANNOUNCE_TOKEN={config.AnnounceToken}" });
+        }
+
         // Optional fleet AI: the instance reaches the internal-only ai container by name on the shared
         // network. Level TextOnly = NPC lines + board flavour, no auto-published AI missions.
         if (!string.IsNullOrEmpty(config.AiBackendUrl))

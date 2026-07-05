@@ -620,6 +620,11 @@ namespace BlocksBeyondTheStars.Client
         /// so the player/ship only re-appears once they confirm. Set/cleared by <see cref="RespawnPrompt"/>.</summary>
         public bool AwaitingRespawnConfirm;
 
+        /// <summary>True while a server maintenance-restart countdown is running (set/cleared by
+        /// <see cref="MaintenanceUi"/>). The disconnect screen reads it to tell a planned restart
+        /// ("reconnect shortly") apart from an unexpected connection loss.</summary>
+        public bool MaintenanceRestartPending;
+
         // Latest authoritative inventory (personal + ship cargo) for the UI.
         public NetItemStack[] Personal { get; private set; } = System.Array.Empty<NetItemStack>();
         public NetItemStack[] Cargo { get; private set; } = System.Array.Empty<NetItemStack>();

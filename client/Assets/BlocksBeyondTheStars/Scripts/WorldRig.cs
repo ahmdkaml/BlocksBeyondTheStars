@@ -239,6 +239,15 @@ namespace BlocksBeyondTheStars.Client
             var respawnPrompt = root.AddComponent<RespawnPrompt>();
             respawnPrompt.Game = boot;
 
+            // Maintenance announcements (#249): persistent restart-countdown banner + delayed-ack info modal.
+            var maintenance = root.AddComponent<MaintenanceUi>();
+            maintenance.Game = boot;
+
+            // "Connection lost" gate (#249): surfaces a mid-game server stop instead of silently freezing.
+            var disconnect = root.AddComponent<DisconnectScreen>();
+            disconnect.Game = boot;
+            disconnect.Shell = shell;
+
             // Player-to-player docking + trade UI (M24).
             var interactions = root.AddComponent<PlayerInteractions>();
             interactions.Game = boot;

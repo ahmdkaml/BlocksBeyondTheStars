@@ -78,7 +78,10 @@ function v(id){{return document.getElementById(id).value.trim();}}
 <div class='card'>
  <h2>Neue Welt · <i>New world</i></h2>
  <input id='w-name' placeholder='Weltname · World name' maxlength='40'>
+ <input id='w-pass' type='password' placeholder='Passwort (optional, min. 4) · Password (optional)' maxlength='24' autocomplete='new-password'>
+ <input id='w-pass2' type='password' placeholder='Passwort wiederholen · Repeat password' maxlength='24' autocomplete='new-password'>
  <button onclick='createWorld()'>Erstellen · Create</button>
+ <p class='hint'>Mit Passwort können nur Spieler beitreten, die es kennen. · <i>With a password, only players who know it can join.</i></p>
 </div>
 <div id='list'></div>
 <div class='card'>
@@ -115,12 +118,18 @@ async function load(){
   const el = document.getElementById('list'); el.innerHTML='';
   for(const w of j.worlds){
     const d = document.createElement('div'); d.className='card world';
-    d.innerHTML = `<h2>${esc(w.name)} <span class='st ${w.status}'>${stName(w.status)}</span></h2>
+    d.innerHTML = `<h2>${esc(w.name)} ${w.hasPassword?""<span title='Passwort geschützt · password protected'>🔒</span> "":''}<span class='st ${w.status}'>${stName(w.status)}</span></h2>
       <button onclick=""joinWorld('${w.id}')"">Spielen · Play</button>
       <button onclick=""stopWorld('${w.id}')"">Stoppen · Stop</button>
       <button onclick=""dlSave('${w.id}')"">Sicherung laden · Download save</button>
       <label class='up'>Save hochladen · Upload<input type='file' style='display:none' onchange=""upSave('${w.id}', this.files[0])""></label>
       <button class='danger' onclick=""delWorld('${w.id}', '${esc(w.name)}')"">Löschen · Delete</button>
+      <details><summary>Passwort · Password ${w.hasPassword?'🔒':'(aus · off)'}</summary>
+        <input id='p1-${w.id}' type='password' placeholder='Neues Passwort (min. 4) · New password' maxlength='24' autocomplete='new-password'>
+        <input id='p2-${w.id}' type='password' placeholder='Wiederholen · Repeat' maxlength='24' autocomplete='new-password'>
+        <button onclick=""setWorldPassword('${w.id}')"">Setzen · Set</button>
+        ${w.hasPassword?`<button onclick=""removeWorldPassword('${w.id}')"">Entfernen · Remove</button>`:''}
+      </details>
       <div class='grant' id='g-${w.id}'></div>`;
     el.appendChild(d);
   }
@@ -131,19 +140,48 @@ async function load(){
   rw.value = keep && [...rw.options].some(o=>o.value===keep) ? keep : '';
 }
 async function createWorld(){
-  const j = await api('POST','/api/worlds',{name: document.getElementById('w-name').value.trim()});
-  if(j){ document.getElementById('w-name').value=''; say(''); load(); }
+  const pw = document.getElementById('w-pass').value, pw2 = document.getElementById('w-pass2').value;
+  if(pw !== pw2){ say('Die Passwörter stimmen nicht überein. · The passwords do not match.'); return; }
+  const j = await api('POST','/api/worlds',{name: document.getElementById('w-name').value.trim(), password: pw||null});
+  if(j){ for(const f of ['w-name','w-pass','w-pass2']) document.getElementById(f).value=''; say(''); load(); }
 }
-async function joinWorld(id){
+async function setWorldPassword(id){
+  const pw = document.getElementById('p1-'+id).value, pw2 = document.getElementById('p2-'+id).value;
+  if(!pw){ say('Bitte ein Passwort eingeben (min. 4 Zeichen). · Please enter a password (min. 4 chars).'); return; }
+  if(pw !== pw2){ say('Die Passwörter stimmen nicht überein. · The passwords do not match.'); return; }
+  if(await api('POST',`/api/worlds/${id}/password`,{password: pw})){ say('Passwort gesetzt. · Password set.'); load(); }
+}
+async function removeWorldPassword(id){
+  if(!confirm('Passwort entfernen — dann kann jeder beitreten? · Remove the password — anyone can join then?')) return;
+  if(await api('POST',`/api/worlds/${id}/password`,{password: ''})){ say('Passwort entfernt. · Password removed.'); load(); }
+}
+async function joinWorld(id, pw){
   const name = prompt('Dein Spielername? · Your player name?'); if(!name) return;
-  say('Welt wird gestartet… · Waking the world…');
-  const j = await api('POST',`/api/worlds/${id}/join`,{playerName:name}); if(!j) return;
-  say('');
-  document.getElementById('g-'+id).innerHTML =
-    `<p><b>Im Spiel beitreten · Join in game:</b> Host <code>${esc(j.nativeHost)}</code> Port <code>${j.nativePort}</code><br>
-     Browser: <code>${esc(j.wssUrl)}</code><br>
-     <span class='hint'>Token (2 min gültig · valid): <code>${esc(j.joinToken)}</code></span></p>`;
-  load();
+  for(;;){
+    say('Welt wird gestartet… · Waking the world…');
+    const r = await fetch(`/api/worlds/${id}/join`, {method:'POST', headers:H, body: JSON.stringify({playerName:name, password: pw||null})});
+    if(r.status===401){ location.href='/'; return; }
+    let j=null; try{ j=await r.json(); }catch{}
+    if(r.ok){
+      say('');
+      document.getElementById('g-'+id).innerHTML =
+        `<p><b>Im Spiel beitreten · Join in game:</b> Host <code>${esc(j.nativeHost)}</code> Port <code>${j.nativePort}</code><br>
+         Browser: <code>${esc(j.wssUrl)}</code><br>
+         <span class='hint'>Token (2 min gültig · valid): <code>${esc(j.joinToken)}</code></span></p>`;
+      load();
+      return;
+    }
+    if(j && (j.code==='password_required' || j.code==='wrong_password')){
+      say(j.code==='wrong_password' ? bbsErr(j,'') : '');
+      pw = prompt(j.code==='wrong_password'
+        ? 'Falsches Passwort — nochmal versuchen: · Wrong password — try again:'
+        : 'Diese Welt braucht ein Passwort: · This world needs a password:');
+      if(!pw){ say(''); return; }
+      continue;
+    }
+    say(bbsErr(j, 'Fehler · Error'));
+    return;
+  }
 }
 async function stopWorld(id){ if(await api('POST',`/api/worlds/${id}/stop`)) load(); }
 async function delWorld(id,name){
@@ -411,6 +449,10 @@ window.bbsErr = function(j, fallback) {{
     save_invalid: ['Diese Datei ist kein gültiger Blocks-Beyond-the-Stars-Spielstand.', 'This file is not a valid Blocks Beyond the Stars save.'],
     save_missing: ['Diese Welt hat noch keinen Spielstand (nie gestartet).', 'This world has no save yet (never started).'],
     rate_limited: ['Zu viele Anfragen — bitte warte kurz und versuche es dann nochmal.', 'Too many requests — please wait a bit and try again.'],
+    password_required: ['Diese Welt braucht ein Passwort.', 'This world needs a password.'],
+    wrong_password: ['Falsches Welt-Passwort.', 'Wrong world password.'],
+    too_many_attempts: ['Zu viele Passwort-Versuche — bitte warte ein paar Minuten.', 'Too many password attempts — please wait a few minutes.'],
+    world_password_invalid: ['Welt-Passwort: 4-24 druckbare Zeichen.', 'World password must be 4-24 printable characters.'],
   }};
   if (j && j.code === 'banned') {{ return j.error || fallback; }}
   var hit = j && j.code && M[j.code];
