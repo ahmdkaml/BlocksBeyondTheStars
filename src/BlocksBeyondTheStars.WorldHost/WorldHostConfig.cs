@@ -127,6 +127,51 @@ public sealed class WorldHostConfig
     /// <summary>Contact email — §5 DDG requires one (BBS_WH_LEGAL_EMAIL).</summary>
     public string LegalEmail { get; set; } = string.Empty;
 
+    // --- Fleet AI texts (optional). When AiBackendUrl is set, every world instance receives it as
+    // BBS_AI_BACKEND_URL + BBS_AI_LEVEL, enabling LLM-authored NPC lines/mission flavour. The game
+    // degrades gracefully either way (instant static line, async LLM upgrade), so this is pure opt-in. ---
+
+    /// <summary>AI-backend URL passed to world instances (BBS_WH_AI_BACKEND_URL) — on the fleet the
+    /// internal-only sibling container, e.g. <c>http://ai:8077</c>. Empty (default) = AI off.</summary>
+    public string AiBackendUrl { get; set; } = string.Empty;
+
+    /// <summary>AI level passed to world instances (BBS_WH_AI_LEVEL). TextOnly = NPC lines + board
+    /// flavour text but no auto-published AI missions — the right fleet default.</summary>
+    public string AiLevel { get; set; } = "TextOnly";
+
+    // --- Per-instance resource limits. One runaway world must never take down the host: each world
+    // container gets a hard memory cap (which .NET's cgroup-aware GC also uses to apply pressure
+    // BEFORE the OOM kill), a CPU ceiling and a pids cap. The capacity gate bounds the SUM. ---
+
+    /// <summary>Hard memory cap per world container, docker syntax (BBS_WH_INSTANCE_MEMORY). The same
+    /// value is set as --memory-swap, so a capped instance cannot push the host into swap thrash.
+    /// Empty = no limit (dev). An OOM-killed world is simply marked stopped by the reaper; the next
+    /// join wakes it fresh.</summary>
+    public string InstanceMemory { get; set; } = "768m";
+
+    /// <summary>CPU ceiling per world container (BBS_WH_INSTANCE_CPUS, docker --cpus syntax). Empty = no limit.</summary>
+    public string InstanceCpus { get; set; } = "2";
+
+    /// <summary>Maximum world instances awake at the same time (BBS_WH_MAX_ACTIVE); wake requests beyond
+    /// it get the friendly no-capacity error. Sized so MaxActive × InstanceMemory fits the host
+    /// (default: 10 × 768m ≈ 7.5 GB on the 8 GB VPS). 0 = unlimited.</summary>
+    public int MaxActiveInstances { get; set; } = 10;
+
+    /// <summary>How the orchestrator probes an instance's /status: false (default, dev) = host loopback
+    /// (127.0.0.1:hostPort); true (BBS_WH_PROBE_VIA_NETWORK, REQUIRED when WorldHost itself runs in a
+    /// container) = the world container's name on the shared docker network — a containerized WorldHost's
+    /// loopback can never reach host-published ports.</summary>
+    public bool ProbeViaDockerNetwork { get; set; }
+
+    // --- Admin web UI (Basic Auth, /admin). Separate from AdminToken (the script/API credential):
+    // browsers can't send custom headers. Empty user or password (default) = admin UI off. ---
+
+    /// <summary>Admin UI user (BBS_WH_ADMIN_USER).</summary>
+    public string AdminUser { get; set; } = string.Empty;
+
+    /// <summary>Admin UI password (BBS_WH_ADMIN_PASSWORD).</summary>
+    public string AdminPassword { get; set; } = string.Empty;
+
     /// <summary>Loads config from BBS_WH_* environment variables over the defaults.</summary>
     public static WorldHostConfig FromEnvironment()
     {
@@ -175,6 +220,14 @@ public sealed class WorldHostConfig
         if (Env("BBS_WH_LEGAL_NAME") is { } legalName) { c.LegalName = legalName; }
         if (Env("BBS_WH_LEGAL_ADDRESS") is { } legalAddress) { c.LegalAddress = legalAddress; }
         if (Env("BBS_WH_LEGAL_EMAIL") is { } legalEmail) { c.LegalEmail = legalEmail; }
+        if (Env("BBS_WH_AI_BACKEND_URL") is { } aiUrl) { c.AiBackendUrl = aiUrl; }
+        if (Env("BBS_WH_AI_LEVEL") is { } aiLevel) { c.AiLevel = aiLevel; }
+        if (Env("BBS_WH_INSTANCE_MEMORY") is { } mem) { c.InstanceMemory = mem == "none" ? string.Empty : mem; }
+        if (Env("BBS_WH_INSTANCE_CPUS") is { } cpus) { c.InstanceCpus = cpus == "none" ? string.Empty : cpus; }
+        if (Env("BBS_WH_MAX_ACTIVE") is { } maStr && int.TryParse(maStr, out var ma)) { c.MaxActiveInstances = ma; }
+        if (Env("BBS_WH_PROBE_VIA_NETWORK") is { } pvnStr && bool.TryParse(pvnStr, out var pvn)) { c.ProbeViaDockerNetwork = pvn; }
+        if (Env("BBS_WH_ADMIN_USER") is { } adminUser) { c.AdminUser = adminUser; }
+        if (Env("BBS_WH_ADMIN_PASSWORD") is { } adminPassword) { c.AdminPassword = adminPassword; }
 
         return c;
     }

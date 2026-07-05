@@ -47,36 +47,73 @@ public sealed class DockerCliLauncher : IInstanceLauncher
         string savesDir = SavePaths.HostSavesDir(_config, world.Id);
         Directory.CreateDirectory(savesDir);
 
-        var args = new List<string>
-        {
-            "run", "-d",
-            "--name", $"bbs-world-{world.Id}",
-            "--restart=no",
-            "--stop-timeout", "60", // match the compose stop_grace_period: drain + save needs time
-            "--network", _config.DockerNetwork,
-            "-p", $"{world.HostPort}:31415/udp",
-            "-p", $"127.0.0.1:{world.HostPort}:31415/tcp", // tcp side only for the local /status probe; public wss goes through Caddy
-            "-v", $"{savesDir}:/app/saves",
-            "-e", $"BBS_WORLD={world.Id}",
-            "-e", $"BBS_SERVER_NAME={world.DisplayName}",
-            "-e", $"BBS_MAX_PLAYERS={_config.MaxPlayersPerWorld}",
-            "-e", $"BBS_IDLE_SHUTDOWN_MINUTES={_config.IdleShutdownMinutes}",
-            "-e", $"BBS_JOIN_TOKEN_SECRET={world.JoinSecret}",
-            "-e", $"BBS_WORLD_OWNER={world.OwnerAccountId}",
-            "-e", "BBS_ENABLE_WEBSOCKET=true",
-            "-e", "BBS_WEBSOCKET_BIND=+",
-            "-l", $"caddy=w-{world.Id}.{_config.BaseDomain}",
-            "-l", "caddy.reverse_proxy={{upstreams 31415}}",
-            _config.ServerImage,
-        };
-
-        var (exitCode, stdout, stderr) = Run(args);
+        var (exitCode, stdout, stderr) = Run(BuildRunArgs(_config, world, savesDir));
         if (exitCode != 0)
         {
             throw new InvalidOperationException($"docker run failed for world {world.Id}: {stderr.Trim()}");
         }
 
         return stdout.Trim(); // container id
+    }
+
+    /// <summary>Assembles the full <c>docker run</c> argv for one world instance. Static + pure (and
+    /// public) so the container shape (limits, env passthrough, labels) is unit-testable without Docker.</summary>
+    public static List<string> BuildRunArgs(WorldHostConfig config, WorldRecord world, string savesDir)
+    {
+        var args = new List<string>
+        {
+            "run", "-d",
+            "--name", $"bbs-world-{world.Id}",
+            "--restart=no",
+            "--stop-timeout", "60", // match the compose stop_grace_period: drain + save needs time
+            "--network", config.DockerNetwork,
+            "-p", $"{world.HostPort}:31415/udp",
+            "-p", $"127.0.0.1:{world.HostPort}:31415/tcp", // tcp side only for the local /status probe; public wss goes through Caddy
+            "-v", $"{savesDir}:/app/saves",
+            "-e", $"BBS_WORLD={world.Id}",
+            "-e", $"BBS_SERVER_NAME={world.DisplayName}",
+            "-e", $"BBS_MAX_PLAYERS={config.MaxPlayersPerWorld}",
+            "-e", $"BBS_IDLE_SHUTDOWN_MINUTES={config.IdleShutdownMinutes}",
+            "-e", $"BBS_JOIN_TOKEN_SECRET={world.JoinSecret}",
+            "-e", $"BBS_WORLD_OWNER={world.OwnerAccountId}",
+            "-e", "BBS_ENABLE_WEBSOCKET=true",
+            "-e", "BBS_WEBSOCKET_BIND=+",
+        };
+
+        // Resource fences: a hard memory cap (same value as --memory-swap, so a capped world can't push
+        // the host into swap thrash; .NET's cgroup-aware GC applies pressure before the OOM kill), a CPU
+        // ceiling and a pids cap. An OOM-killed world is just a stopped world — the next join re-wakes it.
+        if (!string.IsNullOrEmpty(config.InstanceMemory))
+        {
+            args.AddRange(new[] { "--memory", config.InstanceMemory, "--memory-swap", config.InstanceMemory });
+        }
+
+        if (!string.IsNullOrEmpty(config.InstanceCpus))
+        {
+            args.AddRange(new[] { "--cpus", config.InstanceCpus });
+        }
+
+        args.AddRange(new[] { "--pids-limit", "256" });
+
+        // Optional fleet AI: the instance reaches the internal-only ai container by name on the shared
+        // network. Level TextOnly = NPC lines + board flavour, no auto-published AI missions.
+        if (!string.IsNullOrEmpty(config.AiBackendUrl))
+        {
+            args.AddRange(new[]
+            {
+                "-e", $"BBS_AI_BACKEND_URL={config.AiBackendUrl}",
+                "-e", $"BBS_AI_LEVEL={config.AiLevel}",
+            });
+        }
+
+        args.AddRange(new[]
+        {
+            "-l", $"caddy=w-{world.Id}.{config.BaseDomain}",
+            "-l", "caddy.reverse_proxy={{upstreams 31415}}",
+            config.ServerImage,
+        });
+
+        return args;
     }
 
     public void Stop(string containerId)

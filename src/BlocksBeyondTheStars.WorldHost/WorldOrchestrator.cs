@@ -52,18 +52,41 @@ public sealed class WorldOrchestrator
         _metrics = metrics ?? new WorldHostMetrics();
     }
 
-    /// <summary>Default probe: the instance's WS gateway answers /status on the world's (loopback-bound)
-    /// tcp host port once the server is up and accepting players.</summary>
-    private static async Task<bool> DefaultProbeAsync(WorldRecord world)
+    /// <summary>Default probe: the instance's WS gateway answers /status once the server is up. Two
+    /// routes to it: host loopback via the world's published tcp port (WorldHost running ON the host,
+    /// dev), or the container's name on the shared docker network (WorldHost running IN a container —
+    /// its loopback can never reach host-published ports, so BBS_WH_PROBE_VIA_NETWORK is required there).</summary>
+    private async Task<bool> DefaultProbeAsync(WorldRecord world)
     {
+        string url = _config.ProbeViaDockerNetwork
+            ? $"http://bbs-world-{world.Id}:31415/status"
+            : $"http://127.0.0.1:{world.HostPort}/status";
         try
         {
-            using var response = await Http.GetAsync($"http://127.0.0.1:{world.HostPort}/status").ConfigureAwait(false);
+            using var response = await Http.GetAsync(url).ConfigureAwait(false);
             return response.IsSuccessStatusCode;
         }
         catch
         {
             return false;
+        }
+    }
+
+    /// <summary>Reads an instance's live /status JSON (joined players etc.) for the admin UI; null when
+    /// the instance is unreachable. Same routing rule as the health probe.</summary>
+    public async Task<string?> ReadInstanceStatusAsync(WorldRecord world)
+    {
+        string url = _config.ProbeViaDockerNetwork
+            ? $"http://bbs-world-{world.Id}:31415/status"
+            : $"http://127.0.0.1:{world.HostPort}/status";
+        try
+        {
+            using var response = await Http.GetAsync(url).ConfigureAwait(false);
+            return response.IsSuccessStatusCode ? await response.Content.ReadAsStringAsync().ConfigureAwait(false) : null;
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -164,6 +187,14 @@ public sealed class WorldOrchestrator
             if (world.Status != WorldStatus.Stopped && world.Status != WorldStatus.Archived)
             {
                 _registry.SetWorldStatus(world.Id, WorldStatus.Stopped, string.Empty);
+            }
+
+            // Capacity gate: per-instance memory caps bound ONE world, this bounds the SUM — MaxActive ×
+            // InstanceMemory is sized to fit the host, so overload becomes a friendly "try again" instead
+            // of an OOM lottery. Already-running worlds are unaffected (they returned above).
+            if (_config.MaxActiveInstances > 0 && _registry.ListActiveWorlds().Count >= _config.MaxActiveInstances)
+            {
+                return (null, "No capacity available right now — please try again later.");
             }
 
             string containerId;
