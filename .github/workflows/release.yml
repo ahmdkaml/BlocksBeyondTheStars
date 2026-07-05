@@ -69,6 +69,51 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           echo "Resolved build version: $v"
 
+  # SINGLE WRITER for the GitHub Release: creates it exactly once, as soon as the test gate passes, so
+  # the per-platform publish steps below only ever ATTACH assets to an existing release. Without this,
+  # the first two package jobs to finish raced to create the release (softprops creates one whenever its
+  # tag lookup comes back empty) — the loser ended up with an orphaned duplicate draft holding its assets
+  # and a failed "already_exists" finalize (seen on v0.7.0, where the Linux AppImage landed on the draft).
+  # The body set here is PREPENDED to the auto-generated changelog (GitHub API: a supplied body is kept
+  # and the generated notes are appended after it), so the Docker pull lines show at the top. The image
+  # itself is pushed to GHCR by the `docker` job — it is NOT a release asset, so this is how it surfaces
+  # on the release page. On a manual workflow_dispatch run (no tag) the step is skipped and the job is a
+  # cheap no-op success, so the package jobs' `needs` chains stay intact.
+  create-release:
+    name: Create GitHub release
+    needs: [version, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create the release for this tag (idempotent)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $tag already exists — nothing to create."
+            exit 0
+          fi
+          body=$(cat <<'EOF'
+          ### 🐳 Docker (dedicated server)
+
+          Run the dedicated server (game server + admin/portal/download UI, optional AI backend) on any OS with Docker:
+
+          ```bash
+          docker pull ghcr.io/marceld23/blocks-beyond-the-stars-server:${{ needs.version.outputs.version }}
+          # or the rolling tag:
+          docker pull ghcr.io/marceld23/blocks-beyond-the-stars-server:latest
+          ```
+
+          Setup & configuration: [SELF_HOSTING.md §10](https://github.com/marceld23/BlocksBeyondTheStars/blob/main/docs/developer/SELF_HOSTING.md#10-running-in-docker).
+          EOF
+          )
+          # The heredoc lines above share the script's own indentation, which the YAML block scalar strips —
+          # so the terminator is recognized and the markdown reaches GitHub column-0 clean.
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --title "$tag" \
+            --verify-tag --generate-notes --notes "$body"
+
   # RELEASE TEST GATE: the FULL headless test suite on the exact tagged commit. ci.yml's PR check runs
   # only the fast tier (Category!=Slow), and nothing ties a tag to a green CI run on main — this job
   # closes that gap: every package/publish job (installers, itch.io, Docker image) `needs` it, so no
@@ -509,7 +554,7 @@ jobs:
   # full suite passed on this commit.
   package-linux:
     name: Package + release (Linux)
-    needs: [version, build-player-linux, test]
+    needs: [version, build-player-linux, test, create-release]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -577,7 +622,7 @@ jobs:
   # execute bits (artifacts strip them).
   package-mac:
     name: Package + release (macOS)
-    needs: [version, build-player-mac, test]
+    needs: [version, build-player-mac, test, create-release]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -627,7 +672,7 @@ jobs:
   # image's entrypoint fetches this `webgl*.zip` (BBS_FETCH_WEBGL=1) and serves it at /play (issue #121).
   package-webgl:
     name: Package + release (WebGL)
-    needs: [version, build-player-webgl, test]
+    needs: [version, build-player-webgl, test, create-release]
     runs-on: ubuntu-latest
     steps:
       - name: Download WebGL player artifact
@@ -680,7 +725,7 @@ jobs:
 
   package:
     name: Package + release (Windows)
-    needs: [version, build-player, test]
+    needs: [version, build-player, test, create-release]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -725,33 +770,19 @@ jobs:
         shell: pwsh
         run: ./scripts/publish-client-installer.ps1 -Version ${{ needs.version.outputs.version }} -Msi
 
-      # Only a tag push can create a Release. A manual workflow_dispatch run still builds the installers
-      # (verifiable from the run logs) but skips publishing.
-      - name: Publish GitHub Release
+      # Only a tag push publishes. A manual workflow_dispatch run still builds the installers
+      # (verifiable from the run logs) but skips publishing. The release itself (body: Docker pull
+      # lines + generated changelog) is created by the `create-release` job — this step, like every
+      # per-platform publish step, only attaches assets to it.
+      - name: Publish GitHub Release (Windows assets)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
-          # `body` is PREPENDED to the auto-generated notes (GitHub API: generate_release_notes keeps a
-          # supplied body and appends the changelog after it). So the Docker pull lines show at the top,
-          # the generated changelog below. The image itself is pushed to GHCR by the `docker` job — it is
-          # NOT a release asset, so this is how it surfaces on the release page.
-          body: |
-            ### 🐳 Docker (dedicated server)
-
-            Run the dedicated server (game server + admin/portal/download UI, optional AI backend) on any OS with Docker:
-
-            ```bash
-            docker pull ghcr.io/marceld23/blocks-beyond-the-stars-server:${{ needs.version.outputs.version }}
-            # or the rolling tag:
-            docker pull ghcr.io/marceld23/blocks-beyond-the-stars-server:latest
-            ```
-
-            Setup & configuration: [SELF_HOSTING.md §10](https://github.com/marceld23/BlocksBeyondTheStars/blob/main/docs/developer/SELF_HOSTING.md#10-running-in-docker).
           files: |
             artifacts/installer/*Setup.exe
             artifacts/installer/*.msi
             artifacts/installer/*Portable.zip
-          generate_release_notes: true
+          generate_release_notes: false
 
       # Mirror the same three installers to itch.io (jumavegames/blocks-beyond-the-stars) via butler — each
       # artifact to its own channel (windows-setup / windows-msi / windows-portable), stamped with the release
