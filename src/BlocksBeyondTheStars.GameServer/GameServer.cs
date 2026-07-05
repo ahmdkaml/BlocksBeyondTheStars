@@ -164,6 +164,10 @@ public sealed partial class GameServer
     // sub-second remainder lives here between ticks. Only advanced while a player is joined.
     private double _playtimeCarry;
     private volatile bool _running;
+    // Latches a stop request permanently, unlike _running which Run() re-arms on entry. Needed because the
+    // SIGINT handler is registered BEFORE Start() (issue #243): a stop requested while startup worldgen is
+    // still running must survive until Run() begins, which then drains + saves immediately instead of looping.
+    private volatile bool _stopRequested;
     // True while the Run() loop owns the tick thread. Lets Stop() (possibly called from another thread, e.g. a
     // Ctrl-C handler) hand the save off to the run loop instead of saving concurrently with a live Tick().
     private volatile bool _runLoopActive;
@@ -733,7 +737,7 @@ public sealed partial class GameServer
     /// <summary>Blocking loop; runs until <see cref="Stop"/> is called.</summary>
     public void Run()
     {
-        _running = true;
+        _running = !_stopRequested; // a stop requested before the loop started (SIGINT during startup worldgen) skips straight to the drain+save below
         _runLoopActive = true;
         _stopped.Reset();
         double tickSeconds = 1.0 / System.Math.Max(1, _config.TickRate);
@@ -781,8 +785,14 @@ public sealed partial class GameServer
     }
 
     /// <summary>Signals the <see cref="Run"/> loop to stop after the current tick. Safe to call from any
-    /// thread (e.g. a Ctrl-C handler): it does NOT save — the run loop drains + saves on the tick thread.</summary>
-    public void RequestStop() => _running = false;
+    /// thread (e.g. a Ctrl-C handler) and at any time — even BEFORE <see cref="Run"/> starts (a stop during
+    /// startup worldgen is latched and honored on loop entry). It does NOT save — the run loop drains +
+    /// saves on the tick thread.</summary>
+    public void RequestStop()
+    {
+        _stopRequested = true;
+        _running = false;
+    }
 
     public void Stop()
     {

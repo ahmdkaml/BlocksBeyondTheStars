@@ -22,7 +22,7 @@ services:
       dockerfile: Dockerfile
     image: blocks-beyond-the-stars-server:local
     restart: unless-stopped
-    stop_grace_period: 60s        # give the world time to drain + save on SIGTERM
+    stop_grace_period: 180s       # give the world time to drain + save on SIGTERM — incl. a stop during initial worldgen (#243)
     ports:
       - "31415:31415/udp"          # native UDP clients connect directly; Caddy only fronts the TCP/web/WS
     environment:

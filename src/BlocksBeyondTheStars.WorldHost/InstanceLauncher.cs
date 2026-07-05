@@ -75,7 +75,7 @@ public sealed class DockerCliLauncher : IInstanceLauncher
             "run", "-d",
             "--name", $"bbs-world-{world.Id}",
             "--restart=no",
-            "--stop-timeout", "60", // match the compose stop_grace_period: drain + save needs time
+            "--stop-timeout", "180", // match the compose stop_grace_period: drain + save needs time — a stop during initial worldgen (#243) must outlast generation on the CPU fence
             "--network", config.DockerNetwork,
             "-p", $"{world.HostPort}:31415/udp",
             "-p", $"127.0.0.1:{world.HostPort}:31415/tcp", // tcp side only for the local /status probe; public wss goes through Caddy
