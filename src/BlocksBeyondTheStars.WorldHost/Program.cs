@@ -502,7 +502,7 @@ app.MapPost("/admin/worlds/{id}/stop", (HttpContext ctx, string id) =>
     if (HostRegistry.IsValidWorldId(id) && registry.GetWorld(id) is { } world)
     {
         orchestrator.StopWorld(world);
-        log.LogInformation("Admin UI: world {Id} stopped.", id);
+        log.LogInformation("Admin UI: world {Id} stopped.", world.Id);
     }
 
     return Results.Redirect("/admin");
