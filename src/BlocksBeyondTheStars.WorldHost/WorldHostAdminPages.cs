@@ -18,6 +18,11 @@ public static class WorldHostAdminPages
 {
     private static string E(string? value) => System.Net.WebUtility.HtmlEncode(value ?? string.Empty);
 
+    /// <summary>The reviewed/dismiss close-form pair every report and feedback row ends with.</summary>
+    private static string CloseButtons(long reportId) =>
+        $"<form method='post' action='/admin/reports/{reportId}/close' style='display:inline'><input type='hidden' name='status' value='reviewed'><button>reviewed</button></form>" +
+        $"<form method='post' action='/admin/reports/{reportId}/close' style='display:inline'><input type='hidden' name='status' value='dismissed'><button>dismiss</button></form>";
+
     private static string Ago(long unix)
     {
         if (unix <= 0)
@@ -40,11 +45,13 @@ public static class WorldHostAdminPages
         string? lookupQuery)
     {
         int active = worlds.Count(w => w.World.Status is WorldStatus.Running or WorldStatus.Starting);
+        var playerReports = openReports.Where(r => r.Category != "feedback").ToList();
+        var feedback = openReports.Where(r => r.Category == "feedback").ToList();
         var sb = new StringBuilder();
 
         sb.Append($"<h1>Fleet <span class='o'>admin</span> <span class='sub'>· {E(config.BaseDomain)}</span></h1>");
         sb.Append($"<p class='hint'>{worlds.Count} worlds · <b>{active}</b>/{(config.MaxActiveInstances > 0 ? config.MaxActiveInstances.ToString() : "∞")} instances awake · " +
-                  $"{openReports.Count} open report(s) · {banned.Count} banned account(s)</p>");
+                  $"{playerReports.Count} open report(s) · {feedback.Count} open feedback · {banned.Count} banned account(s)</p>");
 
         // ---- Server health (filled by JS from /admin/stats.json AFTER the page renders — the
         // docker-stats sample behind it takes ~1-2 s and must not stall the page) ----
@@ -106,22 +113,21 @@ public static class WorldHostAdminPages
 
         sb.Append("</div>");
 
-        // ---- Open player reports ----
+        // ---- Open player reports (game feedback lives in its own card below) ----
         sb.Append("<div class='card'><h2>Open player reports</h2>");
-        if (openReports.Count == 0)
+        if (playerReports.Count == 0)
         {
             sb.Append("<p class='hint'>Nothing to review. 🎉</p>");
         }
         else
         {
             sb.Append("<table><tr><th>#</th><th>Filed</th><th>World</th><th>Reported name</th><th>Category</th><th>Message</th><th></th></tr>");
-            foreach (var r in openReports)
+            foreach (var r in playerReports)
             {
                 sb.Append($"<tr><td>{r.Id}</td><td>{Ago(r.CreatedUnix)}</td><td><code>{E(r.WorldId)}</code></td>" +
                           $"<td><a href='/admin?acct={Uri.EscapeDataString(r.ReportedName)}'>{E(r.ReportedName)}</a></td>" +
                           $"<td>{E(r.Category)}</td><td>{E(r.Message)}</td><td>" +
-                          $"<form method='post' action='/admin/reports/{r.Id}/close' style='display:inline'><input type='hidden' name='status' value='reviewed'><button>reviewed</button></form>" +
-                          $"<form method='post' action='/admin/reports/{r.Id}/close' style='display:inline'><input type='hidden' name='status' value='dismissed'><button>dismiss</button></form>" +
+                          CloseButtons(r.Id) +
                           "</td></tr>");
             }
 
@@ -129,6 +135,27 @@ public static class WorldHostAdminPages
         }
 
         sb.Append("<p class='hint'>The reported name links to the account lookup below (names match only when the player used their account name in-game).</p></div>");
+
+        // ---- Game feedback & ideas (same report table, category 'feedback' — no reported player) ----
+        sb.Append("<div class='card'><h2>Feedback &amp; ideas</h2>");
+        if (feedback.Count == 0)
+        {
+            sb.Append("<p class='hint'>No open feedback.</p>");
+        }
+        else
+        {
+            sb.Append("<table><tr><th>#</th><th>Filed</th><th>Message</th><th></th></tr>");
+            foreach (var r in feedback)
+            {
+                sb.Append($"<tr><td>{r.Id}</td><td>{Ago(r.CreatedUnix)}</td><td>{E(r.Message)}</td><td>" +
+                          CloseButtons(r.Id) +
+                          "</td></tr>");
+            }
+
+            sb.Append("</table>");
+        }
+
+        sb.Append("</div>");
 
         // ---- Ban management ----
         sb.Append("<div class='card'><h2>Accounts &amp; bans</h2>");

@@ -404,24 +404,32 @@ public sealed class HostRegistry : IDisposable
 
     // ---------------- Player reports ----------------
 
-    /// <summary>Files a player report ("Spieler melden"): who (in-game name) misbehaved on which world,
-    /// a category and an optional free-text message. Length-capped server-side; review is manual via the
-    /// operator admin endpoints (an open report never auto-punishes anyone).</summary>
+    /// <summary>Files a player report ("Spieler melden") or a game-feedback entry ("Feedback &amp; Ideen"):
+    /// who (in-game name) misbehaved on which world, a category and an optional free-text message. The
+    /// <c>feedback</c> category carries ideas/suggestions instead of a complaint, so it is the only one
+    /// that allows an empty reported name (and requires a message instead). Length-capped server-side;
+    /// review is manual via the operator admin endpoints (an open report never auto-punishes anyone).</summary>
     public (bool Ok, string Error) CreateReport(string reporterAccountId, string worldId, string reportedName, string category, string message)
     {
-        reportedName = (reportedName ?? string.Empty).Trim();
-        if (reportedName.Length is < 1 or > 24)
-        {
-            return (false, "Reported player name must be 1-24 characters.");
-        }
-
         category = (category ?? string.Empty).Trim().ToLowerInvariant();
-        if (category is not ("chat" or "name" or "griefing" or "other"))
+        if (category is not ("chat" or "name" or "griefing" or "other" or "feedback"))
         {
             return (false, "Unknown report category.");
         }
 
+        reportedName = (reportedName ?? string.Empty).Trim();
+        int minNameLength = category == "feedback" ? 0 : 1;
+        if (reportedName.Length < minNameLength || reportedName.Length > 24)
+        {
+            return (false, "Reported player name must be 1-24 characters.");
+        }
+
         message = (message ?? string.Empty).Trim();
+        if (category == "feedback" && message.Length == 0)
+        {
+            return (false, "Feedback needs a message.");
+        }
+
         if (message.Length > 500)
         {
             message = message.Substring(0, 500);

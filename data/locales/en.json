@@ -162,6 +162,8 @@
   "blueprint.galaxy_radio.desc": "Upgrades the radio to galaxy-wide range.",
   "ui.chat.hint": "Enter: chat",
   "ui.chat.send_hint": "Enter to send · Esc to cancel",
+  "ui.chat.report_tip": "Tip: someone being mean? Type /report <name> in chat or use the report button in the player list (ship → alliance).",
+  "ui.chat.help_player": "For everyone: /report <player> [what happened] — report a player (official worlds) · /bump <note> — send a bug report to the devs",
   "ui.chat.report_usage": "Usage: /report <player> [what happened]",
   "ui.chat.report_unavailable": "Reporting players works only on official worlds.",
   "ui.chat.report_sent": "Thanks — {name} was reported. The operators will take a look.",

@@ -34,11 +34,26 @@ public static class WorldHostPortalPages
         string body = $@"
 <h1>Blocks Beyond the Stars — <span class='o'>{T("Welten", "Worlds")}</span></h1>
 <p class='sub'>{T("Eigene Multiplayer-Welt erstellen und mit Freunden spielen.", "Create your own multiplayer world and play with friends.")}</p>
+<div class='kids'>🧒 {T(
+        "Frag bitte zuerst deine Eltern, ob es okay ist, dieses Spiel zu spielen.",
+        "Please ask your parents first if it is okay for you to play this game.")}</div>
 <div class='beta'>⚠ <b>Beta:</b> {T(
-        "Gehostete Welten können jederzeit kaputtgehen oder verloren gehen — lade regelmäßig eine Sicherung herunter!",
-        "Hosted worlds can break or disappear at any time — download a backup regularly!")}</div>
+        "Das Spiel wird noch gebaut — Welten können kaputtgehen oder verloren gehen. Lade regelmäßig eine Sicherung herunter!",
+        "The game is still being built — worlds can break or disappear. Download a backup regularly!")}</div>
 <div id='msg'></div>
 <div class='cols'>
+ <div class='card'>
+  <h2>{T("Konto erstellen", "Create account")}</h2>
+  <input id='su-name' placeholder='{T("Erfinde einen Namen (Buchstaben, Zahlen, - und _)", "Invent a name (letters, digits, - and _)")}' maxlength='24'>
+  <input id='su-pass' type='password' placeholder='{T("Passwort (min. 8 Zeichen)", "Password (min. 8 characters)")}'>
+  <p class='hint'>{T(
+        "Keine E-Mail nötig. <b>Schreib dir dein Passwort auf!</b> Wenn du es vergisst, kann es niemand wiederherstellen.",
+        "No email needed. <b>Write your password down!</b> If you forget it, nobody can recover it.")}</p>
+  <label><input type='checkbox' id='su-accept'> {T(
+        "Ich akzeptiere die <a href='/rules?lang=de'>Community-Regeln</a> und den Beta-Hinweis",
+        "I accept the <a href='/rules?lang=en'>community rules</a> and the beta notice")}</label>
+  <button onclick='signup()'>{T("Konto erstellen", "Create account")}</button>
+ </div>
  <div class='card'>
   <h2>{T("Anmelden", "Sign in")}</h2>
   <input id='li-name' placeholder='Name' maxlength='24'>
@@ -51,18 +66,6 @@ public static class WorldHostPortalPages
         "I accept the <a href='/rules?lang=en'>rules</a>")}</label>
     <button onclick='reaccept()'>{T("Weiter", "Continue")}</button>
   </div>
- </div>
- <div class='card'>
-  <h2>{T("Konto erstellen", "Create account")}</h2>
-  <input id='su-name' placeholder='Name (3-24: A-Z 0-9 - _)' maxlength='24'>
-  <input id='su-pass' type='password' placeholder='{T("Passwort (min. 8 Zeichen)", "Password (min. 8 characters)")}'>
-  <p class='hint'>{T(
-        "Keine E-Mail nötig. Merke dir dein Passwort gut — ohne E-Mail gibt es keine Wiederherstellung!",
-        "No email needed. Remember your password — without an email there is no recovery!")}</p>
-  <label><input type='checkbox' id='su-accept'> {T(
-        "Ich akzeptiere die <a href='/rules?lang=de'>Community-Regeln</a> und den Beta-Hinweis",
-        "I accept the <a href='/rules?lang=en'>community rules</a> and the beta notice")}</label>
-  <button onclick='signup()'>{T("Konto erstellen", "Create account")}</button>
  </div>
 </div>" + LandingScript
             .Replace("__TERMS__", config.TermsVersion.ToString())
@@ -125,29 +128,43 @@ function v(id){return document.getElementById(id).value.trim();}
 <div class='card'>
  <h2>{T("Neue Welt", "New world")}</h2>
  <input id='w-name' placeholder='{T("Weltname", "World name")}' maxlength='40'>
- <input id='w-pass' type='password' placeholder='{T("Passwort (optional, min. 4 Zeichen)", "Password (optional, min. 4 characters)")}' maxlength='24' autocomplete='new-password'>
- <input id='w-pass2' type='password' placeholder='{T("Passwort wiederholen", "Repeat password")}' maxlength='24' autocomplete='new-password'>
+ <details>
+  <summary>{T("Mit Passwort schützen (optional)", "Protect with a password (optional)")}</summary>
+  <input id='w-pass' type='password' placeholder='{T("Passwort (min. 4 Zeichen)", "Password (min. 4 characters)")}' maxlength='24' autocomplete='new-password'>
+  <input id='w-pass2' type='password' placeholder='{T("Passwort wiederholen", "Repeat password")}' maxlength='24' autocomplete='new-password'>
+  <p class='hint'>{T("Mit Passwort können nur Spieler beitreten, die es kennen.", "With a password, only players who know it can join.")}</p>
+ </details>
  <button onclick='createWorld()'>{T("Erstellen", "Create")}</button>
- <p class='hint'>{T("Mit Passwort können nur Spieler beitreten, die es kennen.", "With a password, only players who know it can join.")}</p>
 </div>
 <div id='list'></div>
 <div class='card'>
- <h2>{T("Spieler melden", "Report a player")}</h2>
+ <h2>{T("Feedback & Ideen", "Feedback & ideas")}</h2>
  <p class='hint'>{T(
-        "Jemand war gemein oder macht Mist? Sag uns Bescheid — wir schauen es uns an.",
-        "Someone was mean or misbehaving? Tell us — we will look into it.")}</p>
- <input id='r-name' placeholder='{T("Spielername", "Player name")}' maxlength='24'>
- <select id='r-cat'><option value='chat'>Chat</option><option value='name'>Name</option><option value='griefing'>{T("Zerstören (Griefing)", "Griefing")}</option><option value='other'>{T("Anderes", "Other")}</option></select>
- <select id='r-world'><option value=''>{T("Welche Welt? (optional)", "Which world? (optional)")}</option></select>
- <input id='r-msg' placeholder='{T("Was ist passiert?", "What happened?")}' maxlength='500'>
- <button onclick='report()'>{T("Melden", "Report")}</button>
+        "Was wünschst du dir für das Spiel? Was können wir besser machen? Schreib es uns!",
+        "What do you wish for the game? What could we do better? Tell us!")}</p>
+ <input id='f-msg' placeholder='{T("Deine Idee oder dein Wunsch", "Your idea or wish")}' maxlength='500'>
+ <button onclick='sendFeedback()'>{T("Abschicken", "Send")}</button>
+ <details>
+  <summary>{T("Etwas Schlimmes passiert? → Spieler melden", "Something bad happened? → Report a player")}</summary>
+  <p class='hint'>{T(
+        "Am einfachsten geht es direkt im Spiel: Tippe <code>/report &lt;Name&gt;</code> in den Chat oder nutze den Melden-Knopf in der Spielerliste (Schiff → Allianz). Hier geht es auch:",
+        "The easiest way is right in the game: type <code>/report &lt;name&gt;</code> in chat or use the report button in the player list (ship → alliance). It also works here:")}</p>
+  <input id='r-name' placeholder='{T("Spielername", "Player name")}' maxlength='24'>
+  <select id='r-cat'><option value='chat'>Chat</option><option value='name'>Name</option><option value='griefing'>{T("Zerstören (Griefing)", "Griefing")}</option><option value='other'>{T("Anderes", "Other")}</option></select>
+  <select id='r-world'><option value=''>{T("Welche Welt? (optional)", "Which world? (optional)")}</option></select>
+  <input id='r-msg' placeholder='{T("Was ist passiert?", "What happened?")}' maxlength='500'>
+  <button onclick='report()'>{T("Melden", "Report")}</button>
+  <p class='hint'>{T("Wir schauen uns jede Meldung an — niemand wird automatisch bestraft.", "We review every report — nobody is punished automatically.")}</p>
+ </details>
 </div>
 <div class='card'>
- <h2>{T("Konto löschen", "Delete account")}</h2>
- <p class='hint'>{T(
+ <details>
+  <summary>{T("Konto löschen", "Delete account")}</summary>
+  <p class='hint'>{T(
         "Löscht dein Konto endgültig — mitsamt allen deinen Welten und Spielständen. Das kann niemand rückgängig machen!",
         "Permanently deletes your account — including all your worlds and saves. Nobody can undo this!")}</p>
- <button class='danger' onclick='deleteAccount()'>{T("Konto endgültig löschen", "Delete account permanently")}</button>
+  <button class='danger' onclick='deleteAccount()'>{T("Konto endgültig löschen", "Delete account permanently")}</button>
+ </details>
 </div>
 <p><a href='/rules{(lang == "en" ? "?lang=en" : "")}'>{T("Regeln", "Rules")}</a> · <a href='#' onclick=""localStorage.removeItem('bbs_session');location.href='/'"">{T("Abmelden", "Sign out")}</a></p>" + WorldsScript
             .Replace("__L__", System.Text.Json.JsonSerializer.Serialize(new
@@ -168,6 +185,8 @@ function v(id){return document.getElementById(id).value.trim();}
                 uploading = T("Upload läuft…", "Uploading…"),
                 upDone = T("Save übernommen!", "Save imported!"),
                 reported = T("Danke für deine Meldung!", "Thanks for your report!"),
+                feedbackThanks = T("Danke für deine Idee! 🚀", "Thanks for your idea! 🚀"),
+                feedbackEmpty = T("Bitte schreib zuerst deine Idee auf.", "Please write your idea first."),
                 delAcc1 = T("Konto und ALLE Welten endgültig löschen?", "Permanently delete the account and ALL worlds?"),
                 delAcc2 = T("Wirklich sicher? Es gibt kein Zurück!", "Really sure? There is no way back!"),
                 pw = T("Passwort", "Password"),
@@ -202,7 +221,11 @@ const S = localStorage.getItem('bbs_session');
 if(!S) location.href='/';
 const H = {'Authorization':'Bearer '+S, 'Content-Type':'application/json'};
 const L = __L__;
-function say(t){document.getElementById('msg').textContent = t||'';}
+function say(t){
+  const m = document.getElementById('msg'); m.textContent = t||'';
+  // The message line lives at the top — surface it when an action further down reports something.
+  if(t) m.scrollIntoView({behavior:'smooth', block:'nearest'});
+}
 async function api(method, url, body){
   const r = await fetch(url, {method, headers:H, body: body?JSON.stringify(body):undefined});
   if(r.status===401){ location.href='/'; return null; }
@@ -253,13 +276,15 @@ async function removeWorldPassword(id){
   if(await api('POST',`/api/worlds/${id}/password`,{password: ''})){ say(L.pwRemovedDone); load(); }
 }
 async function joinWorld(id, pw){
-  const name = prompt(L.namePrompt); if(!name) return;
+  // Prefill with the last used player name — kids should not have to re-invent it on every join.
+  const name = prompt(L.namePrompt, localStorage.getItem('bbs_player_name')||''); if(!name) return;
   for(;;){
     say(L.waking);
     const r = await fetch(`/api/worlds/${id}/join`, {method:'POST', headers:H, body: JSON.stringify({playerName:name, password: pw||null})});
     if(r.status===401){ location.href='/'; return; }
     let j=null; try{ j=await r.json(); }catch{}
     if(r.ok){
+      localStorage.setItem('bbs_player_name', name);
       // Refresh the list FIRST (the world just woke, its status chip changed) — load() rebuilds every
       // card with an empty grant div, so rendering the grant before awaiting it made Play look like a
       // no-op (#252).
@@ -306,6 +331,13 @@ async function report(){
   const j = await api('POST','/api/reports',{reportedName:v('r-name'), category:document.getElementById('r-cat').value, message:v('r-msg'), worldId:document.getElementById('r-world').value});
   if(j){ say(L.reported); document.getElementById('r-name').value=''; document.getElementById('r-msg').value=''; }
 }
+async function sendFeedback(){
+  const msg = v('f-msg');
+  if(!msg){ say(L.feedbackEmpty); return; }
+  // Game feedback rides the reports pipe with its own category and no reported player.
+  const j = await api('POST','/api/reports',{reportedName:'', category:'feedback', message:msg, worldId:''});
+  if(j){ say(L.feedbackThanks); document.getElementById('f-msg').value=''; }
+}
 async function deleteAccount(){
   if(!confirm(L.delAcc1)) return;
   if(!confirm(L.delAcc2)) return;
@@ -327,12 +359,15 @@ load();
  <p><b>Blocks Beyond the Stars is a family and community project.</b> Kids and grown-ups play here
  together — be kind to each other!</p>
  <ul>
+  <li>🧒 Please ask your parents first if it is okay for you to play this game.</li>
   <li>Be friendly and help other players.</li>
   <li>Build, explore and invent — don't destroy on purpose what others have built.</li>
   <li><b>No hate speech, no bullying, no racism, no insults</b> — not in chat, names or builds. Such
    violations lead to an <b>immediate ban</b>, no warning.</li>
   <li>Never share personal data (real name, address, school …) and don't ask others for theirs.</li>
-  <li>Saw something bad? Use <b>“Report player”</b> — we review every report.</li>
+  <li>Saw something bad? Report it right in the game: type <b><code>/report &lt;name&gt;</code></b> in
+   chat or use the report button in the player list (ship → alliance) — or the form on the worlds
+   page. We review every report.</li>
  </ul>
  <p class='beta'>⚠ <b>Beta notice:</b> the game and its hosted worlds are a beta. Worlds and saves can
  break or disappear at any time. Download a backup of your world regularly if it matters to you!</p>
@@ -342,12 +377,15 @@ load();
  <p><b>Blocks Beyond the Stars ist ein Familien- und Community-Projekt.</b> Hier spielen Kinder und
  Erwachsene zusammen — seid nett zueinander!</p>
  <ul>
+  <li>🧒 Frag bitte zuerst deine Eltern, ob es okay ist, dieses Spiel zu spielen.</li>
   <li>Sei freundlich und hilf anderen Spielern.</li>
   <li>Baue, entdecke und erfinde — zerstöre nicht absichtlich, was andere gebaut haben.</li>
   <li><b>Keine Hetze, kein Mobbing, kein Rassismus, keine Beleidigungen</b> — weder im Chat noch in Namen
    oder Bauwerken. Solche Verstöße führen zum <b>sofortigen Bann</b>, ohne Vorwarnung.</li>
   <li>Gib keine persönlichen Daten weiter (echter Name, Adresse, Schule …) und frage andere nicht danach.</li>
-  <li>Etwas Schlimmes gesehen? Nutze <b>„Spieler melden“</b> — wir schauen uns jede Meldung an.</li>
+  <li>Etwas Schlimmes gesehen? Melde es direkt im Spiel: Tippe <b><code>/report &lt;Name&gt;</code></b>
+   in den Chat oder nutze den Melden-Knopf in der Spielerliste (Schiff → Allianz) — oder das Formular
+   auf der Welten-Seite. Wir schauen uns jede Meldung an.</li>
  </ul>
  <p class='beta'>⚠ <b>Beta-Hinweis:</b> Das Spiel und die gehosteten Welten sind eine Beta. Welten und
  Spielstände können jederzeit kaputtgehen oder verloren gehen. Lade dir regelmäßig eine Sicherung deiner
@@ -431,8 +469,8 @@ load();
 <div class='card'>
  <h2>🇬🇧 English summary</h2>
  <p>This service is deliberately data-minimal: a self-chosen account name, a password hash (never the
- password), your worlds and your reports — <b>no email, no real name, no ads, no tracking, no third-party
- embeds</b>. IPs are held transiently for rate limiting and in routine server logs only. Hosting is in
+ password), your worlds and your reports/feedback — <b>no email, no real name, no ads, no tracking, no
+ third-party embeds</b>. IPs are held transiently for rate limiting and in routine server logs only. Hosting is in
  Germany; nothing is shared or sold. Short in-game NPC texts are generated by an LLM at OVHcloud (EU) —
  only the moment's game context (e.g. your in-world player name, the NPC and the situation) is sent, never
  account data or IPs, and built-in fallback texts take over if it is unavailable. Deleting your account
@@ -458,7 +496,8 @@ load();
   <li><b>Konto:</b> selbst gewählter Kontoname, Passwort-Hash (PBKDF2 — das Passwort selbst wird nie
    gespeichert), Zeitpunkt der Regel-Zustimmung. Keine E-Mail-Adresse, kein Klarname.</li>
   <li><b>Welten &amp; Spielstände:</b> die von dir erstellten oder hochgeladenen Welten (Spieldaten).</li>
-  <li><b>Meldungen:</b> von dir abgesendete „Spieler melden“-Einträge (gemeldeter Name, Kategorie, Text).</li>
+  <li><b>Meldungen &amp; Feedback:</b> von dir abgesendete „Spieler melden“-Einträge (gemeldeter Name,
+   Kategorie, Text) sowie dein Spiel-Feedback („Feedback &amp; Ideen“, nur der Text).</li>
   <li><b>Sitzung:</b> ein zufälliges Sitzungs-Token im localStorage deines Browsers (kein Cookie,
    kein seitenübergreifendes Tracking). Wählst du eine Sprache, merkt sich ein einzelnes Cookie
    (<code>bbs_lang</code>) nur diese Einstellung.</li>
@@ -552,6 +591,8 @@ h1{{font-weight:700;letter-spacing:.5px}} .o{{color:var(--orange)}} a{{color:var
 .cols{{display:flex;gap:16px;flex-wrap:wrap}} .cols .card{{flex:1 1 300px}}
 .card{{background:#0d1526cc;border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:12px 0}}
 .beta{{background:#3a260a;border:1px solid #7a5218;border-radius:10px;padding:10px 14px;margin:12px 0}}
+.kids{{background:#0d2a38;border:1px solid #2e6f8a;border-radius:10px;padding:10px 14px;margin:12px 0}}
+details{{margin:8px 0}} details summary{{cursor:pointer;color:var(--cyan)}}
 input,select{{display:block;width:100%;margin:8px 0;padding:9px 10px;border-radius:8px;border:1px solid var(--line);
  background:#0a101d;color:#dfe9f7;font:inherit}}
 button{{margin:6px 6px 0 0;padding:9px 16px;border-radius:8px;border:1px solid var(--cyan);background:#12335005;
