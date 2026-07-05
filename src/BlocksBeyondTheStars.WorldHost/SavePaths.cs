@@ -34,6 +34,30 @@ public static class SavePaths
     public static bool RestoreFromArchive(WorldHostConfig config, string worldId)
         => MoveDir(ArchivedSavesDir(config, worldId), HostSavesDir(config, worldId));
 
+    /// <summary>Erases ALL on-disk data of a world — live saves and archive alike. Used by account
+    /// self-deletion (DSGVO): unlike a plain world delete, nothing is retained.</summary>
+    public static void DeleteWorldData(WorldHostConfig config, string worldId)
+    {
+        foreach (var dir in new[]
+        {
+            Path.GetFullPath(Path.Combine(config.WorldsDir, worldId)),
+            Path.GetFullPath(Path.Combine(config.WorldsDir, "_archive", worldId)),
+        })
+        {
+            try
+            {
+                if (Directory.Exists(dir))
+                {
+                    Directory.Delete(dir, recursive: true);
+                }
+            }
+            catch (IOException)
+            {
+                // best effort — a straggling file handle must not block the account deletion itself
+            }
+        }
+    }
+
     private static bool MoveDir(string from, string to)
     {
         if (!Directory.Exists(from))

@@ -168,7 +168,7 @@ public sealed partial class GameServer
             return string.Empty; // the client shows a localized default for an empty label
         }
 
-        var trimmed = raw.Replace('\n', ' ').Replace('\r', ' ').Trim();
+        var trimmed = StripControlChars(raw);
         return trimmed.Length > BeaconLabelMaxLength ? trimmed.Substring(0, BeaconLabelMaxLength) : trimmed;
     }
 }

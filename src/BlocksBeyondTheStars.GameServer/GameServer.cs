@@ -43,6 +43,25 @@ public sealed partial class GameServer
     /// <summary>True when a client-supplied block Y is inside the legal vertical build band (see MinBuildY).</summary>
     private static bool WithinBuildHeight(int y) => y >= MinBuildY && y <= MaxBuildY;
 
+    /// <summary>Replaces every control character (CR/LF/tab/ANSI/NUL) in a client-supplied string with a
+    /// space. Used before any free text is broadcast to other players or written to a log/file — control
+    /// chars would otherwise corrupt chat UIs, forge log lines or break persisted JSON.</summary>
+    internal static string StripControlChars(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        var sb = new System.Text.StringBuilder(text.Length);
+        foreach (char c in text)
+        {
+            sb.Append(char.IsControl(c) ? ' ' : c);
+        }
+
+        return sb.ToString().Trim();
+    }
+
     private readonly ServerConfig _config;
     private readonly GameContent _content;
     private readonly IServerTransport _transport;
@@ -1591,6 +1610,16 @@ public sealed partial class GameServer
             return; // ignore gameplay intents before joining
         }
 
+        // Per-connection flood gate: a token bucket refilled at MsgRatePerSecond, capped at MsgBurst.
+        // Every joined intent costs one token; when the bucket is empty the packet is dropped. This bounds
+        // the single-threaded tick against a client that spams cheap-to-send intents (Move/Mine/Place/
+        // SetFace/star-map requests) far faster than a human ever could (audit 2026-07-05). Generous enough
+        // that legitimate bursts (movement + block edits) never notice.
+        if (!AllowMessage(session))
+        {
+            return;
+        }
+
         // Operate on the sender's world + ship: block edits, broadcasts, ship state and lookups in the
         // handlers below all go through the Active world cursor + the ship cursor.
         SetActiveWorld(session.CurrentLocationId);
@@ -1606,6 +1635,33 @@ public sealed partial class GameServer
         {
             _log.Error($"Handler for {message.GetType().Name} from connection {connectionId} threw: {ex}");
         }
+    }
+
+    // Token-bucket flood gate constants: a human client peaks well under 100 intents/s; 200/s sustained
+    // with a 400-token burst never throttles real play but caps a scripted flood cheaply.
+    private const double MsgRatePerSecond = 200.0;
+    private const double MsgBurst = 400.0;
+
+    /// <summary>Refills the session's token bucket by elapsed wall time and consumes one token. Returns
+    /// false when the bucket is empty (drop the message).</summary>
+    private static bool AllowMessage(PlayerSession session)
+    {
+        int now = Environment.TickCount;
+        int elapsedMs = unchecked(now - session.LastMsgRefillTick);
+        if (elapsedMs is < 0 or > 60_000)
+        {
+            elapsedMs = 0; // clock wrap or a long gap — just don't over-refill
+        }
+
+        session.LastMsgRefillTick = now;
+        session.MsgBudget = System.Math.Min(MsgBurst, session.MsgBudget + (elapsedMs / 1000.0 * MsgRatePerSecond));
+        if (session.MsgBudget < 1.0)
+        {
+            return false;
+        }
+
+        session.MsgBudget -= 1.0;
+        return true;
     }
 
     private void Dispatch(PlayerSession session, object message)
@@ -3377,6 +3433,14 @@ public sealed partial class GameServer
             text = text.Substring(0, 200);
         }
 
+        // Strip control characters (CR/LF/tab/ANSI/NUL) before the line is broadcast verbatim to other
+        // players — otherwise a client could inject newlines/escape sequences into everyone's chat UI.
+        text = StripControlChars(text);
+        if (text.Length == 0)
+        {
+            return;
+        }
+
         if (!HasAnyRadio(session))
         {
             Reject(session, "chat", "You need a comm radio to use comms.");
@@ -3414,6 +3478,15 @@ public sealed partial class GameServer
             return;
         }
 
+        // Per-speaker frame-rate cap before the 1→N audience fan-out. Real voice is ~50 frames/s (20 ms
+        // each); 60/s is generous. Without it a client could flood frames as fast as the socket allows,
+        // each amplified to the whole radio audience (audit 2026-07-05).
+        if (_uptime < session.NextVoiceFrameAt)
+        {
+            return;
+        }
+
+        session.NextVoiceFrameAt = _uptime + (1.0 / 60.0);
         frame.FromPlayerId = session.State.PlayerId; // authoritative sender id (don't trust the client's field)
         SendToRadioAudienceExcept(session, frame, DeliveryMode.Unreliable);
     }

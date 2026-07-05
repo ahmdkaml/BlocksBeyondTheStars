@@ -13,6 +13,9 @@ namespace BlocksBeyondTheStars.Client.Portal
     {
         public bool Ok { get; set; }
         public string Error { get; set; } = string.Empty;
+
+        /// <summary>Stable machine code of the error (empty on success/unknown) — the UI localizes it.</summary>
+        public string Code { get; set; } = string.Empty;
         public string AccountId { get; set; } = string.Empty;
         public string SessionToken { get; set; } = string.Empty;
 
@@ -32,6 +35,9 @@ namespace BlocksBeyondTheStars.Client.Portal
     {
         public bool Ok { get; set; }
         public string Error { get; set; } = string.Empty;
+
+        /// <summary>Stable machine code of the error (empty on success/unknown) — the UI localizes it.</summary>
+        public string Code { get; set; } = string.Empty;
         public List<PortalWorldInfo> Worlds { get; set; } = new List<PortalWorldInfo>();
     }
 
@@ -39,6 +45,9 @@ namespace BlocksBeyondTheStars.Client.Portal
     {
         public bool Ok { get; set; }
         public string Error { get; set; } = string.Empty;
+
+        /// <summary>Stable machine code of the error (empty on success/unknown) — the UI localizes it.</summary>
+        public string Code { get; set; } = string.Empty;
         public string NativeHost { get; set; } = string.Empty;
         public int NativePort { get; set; }
         public string WssUrl { get; set; } = string.Empty;
@@ -49,6 +58,9 @@ namespace BlocksBeyondTheStars.Client.Portal
     {
         public bool Ok { get; set; }
         public string Error { get; set; } = string.Empty;
+
+        /// <summary>Stable machine code of the error (empty on success/unknown) — the UI localizes it.</summary>
+        public string Code { get; set; } = string.Empty;
     }
 
     /// <summary>
@@ -107,9 +119,10 @@ namespace BlocksBeyondTheStars.Client.Portal
         public static PortalLoginResult ParseLogin(int status, string body)
         {
             var result = new PortalLoginResult();
-            if (!Succeeded(status, body, out string error, out JsonDocument? doc))
+            if (!Succeeded(status, body, out string error, out string code, out JsonDocument? doc))
             {
                 result.Error = error;
+                result.Code = code;
                 return result;
             }
 
@@ -127,9 +140,10 @@ namespace BlocksBeyondTheStars.Client.Portal
         public static PortalWorldsResult ParseWorlds(int status, string body)
         {
             var result = new PortalWorldsResult();
-            if (!Succeeded(status, body, out string error, out JsonDocument? doc))
+            if (!Succeeded(status, body, out string error, out string code, out JsonDocument? doc))
             {
                 result.Error = error;
+                result.Code = code;
                 return result;
             }
 
@@ -156,9 +170,10 @@ namespace BlocksBeyondTheStars.Client.Portal
         public static PortalJoinResult ParseJoin(int status, string body)
         {
             var result = new PortalJoinResult();
-            if (!Succeeded(status, body, out string error, out JsonDocument? doc))
+            if (!Succeeded(status, body, out string error, out string code, out JsonDocument? doc))
             {
                 result.Error = error;
+                result.Code = code;
                 return result;
             }
 
@@ -180,9 +195,10 @@ namespace BlocksBeyondTheStars.Client.Portal
         public static PortalSimpleResult ParseSimple(int status, string body)
         {
             var result = new PortalSimpleResult();
-            if (!Succeeded(status, body, out string error, out JsonDocument? doc))
+            if (!Succeeded(status, body, out string error, out string code, out JsonDocument? doc))
             {
                 result.Error = error;
+                result.Code = code;
                 return result;
             }
 
@@ -193,9 +209,10 @@ namespace BlocksBeyondTheStars.Client.Portal
 
         /// <summary>Shared success/error shape: 2xx = ok (body parsed into <paramref name="doc"/>); anything
         /// else surfaces the server's player-safe <c>{"error": …}</c> text, or a status code fallback.</summary>
-        private static bool Succeeded(int status, string body, out string error, out JsonDocument? doc)
+        private static bool Succeeded(int status, string body, out string error, out string code, out JsonDocument? doc)
         {
             doc = null;
+            code = string.Empty;
             try
             {
                 doc = string.IsNullOrWhiteSpace(body) ? null : JsonDocument.Parse(body);
@@ -212,9 +229,11 @@ namespace BlocksBeyondTheStars.Client.Portal
             }
 
             error = doc != null ? GetString(doc, "error") : string.Empty;
+            code = doc != null ? GetString(doc, "code") : string.Empty;
             if (error.Length == 0)
             {
                 error = status == 401 ? "unauthorized" : status == 0 ? "offline" : $"http_{status}";
+                code = status == 401 ? "unauthorized" : status == 0 ? "offline" : code;
             }
 
             doc?.Dispose();

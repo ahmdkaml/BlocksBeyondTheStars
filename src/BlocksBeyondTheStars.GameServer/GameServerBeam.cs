@@ -256,7 +256,7 @@ public sealed partial class GameServer
             return string.Empty; // the client shows a localized default for an empty name
         }
 
-        var trimmed = raw.Replace('\n', ' ').Replace('\r', ' ').Trim();
+        var trimmed = StripControlChars(raw);
         return trimmed.Length > BeamNameMaxLength ? trimmed.Substring(0, BeamNameMaxLength) : trimmed;
     }
 }

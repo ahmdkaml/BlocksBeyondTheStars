@@ -45,10 +45,45 @@ var log = app.Logger;
 
 string CallerIp(HttpContext ctx) => ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
+// Every error response carries a stable machine `code` alongside the (English) `error` text, so the
+// game client and the portal can show properly localized messages (DE/EN) instead of raw API English.
+// The mapping lives here — the single place all player-safe error TEXTS of this assembly pass through.
+static string? CodeFor(string error) => error switch
+{
+    _ when error.StartsWith("This account is banned", StringComparison.Ordinal) => "banned",
+    _ when error.StartsWith("World limit reached", StringComparison.Ordinal) => "world_limit",
+    _ when error.StartsWith("Save exceeds", StringComparison.Ordinal) => "upload_too_large",
+    "Please accept the community rules to create an account." => "accept_rules",
+    "Name must be 3-24 characters: letters, digits, '-' or '_'." => "name_invalid",
+    "Password must be at least 8 characters." => "password_short",
+    "This name is already taken." => "name_taken",
+    "This name is reserved." or "This player name is reserved." => "name_reserved",
+    "Please choose a different name." or "Please choose a different world name." or "Please choose a different player name." => "name_blocked",
+    "World name must be 1-40 printable characters." => "world_name_invalid",
+    "No capacity available right now — please try again later." => "no_capacity",
+    "Player name must be 1-24 printable characters." => "player_name_invalid",
+    "The community rules have changed — please accept them on the portal first."
+        or "The community rules have changed — please accept them first." => "terms_outdated",
+    "World not found." => "world_not_found",
+    "The world could not be started — please try again in a moment." => "world_start_failed",
+    "The world did not come up in time — please try again." => "world_wake_failed",
+    "Stop the world before uploading a save." or "Stop the world before downloading its save." => "stop_first",
+    "Empty upload." => "upload_empty",
+    "This file is not a Blocks Beyond the Stars save (world.db)."
+        or "The save file is damaged (integrity check failed)."
+        or "This database is not a Blocks Beyond the Stars world save."
+        or "The save file could not be read." => "save_invalid",
+    "This world has no save yet (it was never started)." => "save_missing",
+    _ => null,
+};
+
+IResult ApiError(string error, int status = StatusCodes.Status400BadRequest)
+    => Results.Json(new { error, code = CodeFor(error) }, statusCode: status);
+
 IResult RateLimited()
 {
     metrics.RateLimited();
-    return Results.Json(new { error = "Too many requests — please wait a bit and try again." },
+    return Results.Json(new { error = "Too many requests — please wait a bit and try again.", code = "rate_limited" },
         statusCode: StatusCodes.Status429TooManyRequests);
 }
 
@@ -77,6 +112,7 @@ IResult? GuardAccount(AccountRecord account)
         return Results.Json(new
         {
             error = string.IsNullOrEmpty(account.BanReason) ? "This account is banned." : $"This account is banned: {account.BanReason}",
+            code = "banned",
         }, statusCode: StatusCodes.Status403Forbidden);
     }
 
@@ -85,6 +121,7 @@ IResult? GuardAccount(AccountRecord account)
         return Results.Json(new
         {
             error = "The community rules have changed — please accept them first.",
+            code = "terms_outdated",
             termsOutdated = true,
         }, statusCode: StatusCodes.Status403Forbidden);
     }
@@ -107,6 +144,8 @@ app.MapGet("/metrics", () => Results.Text(metrics.Render(registry), "text/plain;
 app.MapGet("/", () => Results.Content(WorldHostPortalPages.Landing(config), "text/html; charset=utf-8"));
 app.MapGet("/worlds", () => Results.Content(WorldHostPortalPages.Worlds(config), "text/html; charset=utf-8"));
 app.MapGet("/rules", () => Results.Content(WorldHostPortalPages.Rules(config), "text/html; charset=utf-8"));
+app.MapGet("/impressum", () => Results.Content(WorldHostPortalPages.Impressum(config), "text/html; charset=utf-8"));
+app.MapGet("/datenschutz", () => Results.Content(WorldHostPortalPages.Privacy(config), "text/html; charset=utf-8"));
 
 // Caddy on-demand TLS gate: before issuing a certificate for a requested hostname, Caddy asks this
 // endpoint. 200 only for the portal host itself and subdomains of real worlds — so nobody can make us
@@ -145,7 +184,7 @@ app.MapPost("/api/signup", (HttpContext ctx, SignupRequest req) =>
     var (ok, error, accountId, session) = registry.CreateAccount(req.Name, req.Password, req.ClaimCode, req.AcceptedTermsVersion);
     if (!ok)
     {
-        return Results.BadRequest(new { error });
+        return ApiError(error);
     }
 
     // Deliberately no account id in the log: ids act as stable references in the registry and appearing
@@ -187,6 +226,27 @@ app.MapPost("/api/accept-terms", (HttpContext ctx) =>
     return Results.Ok();
 });
 
+// Account self-deletion (DSGVO Art. 17): erases the account, its sessions, its reports AND all of its
+// worlds including their saves on disk (live + archive). Deliberately available to banned accounts too.
+app.MapDelete("/api/account", (HttpContext ctx) =>
+{
+    if (Caller(ctx) is not { } account)
+    {
+        return Results.Unauthorized();
+    }
+
+    foreach (var world in registry.ListWorlds(account.Id))
+    {
+        orchestrator.StopWorld(world);
+        SavePaths.DeleteWorldData(config, world.Id);
+        registry.DeleteWorld(world.Id);
+    }
+
+    registry.DeleteAccount(account.Id);
+    log.LogInformation("Account '{Name}' deleted on request (worlds + saves removed).", LogSafe(account.Name));
+    return Results.Ok();
+});
+
 // ---------------- Player reports ("Spieler melden") ----------------
 
 app.MapPost("/api/reports", (HttpContext ctx, ReportRequest req) =>
@@ -204,7 +264,7 @@ app.MapPost("/api/reports", (HttpContext ctx, ReportRequest req) =>
     // Banned players may still file reports (they can't play, but silencing them buys nothing);
     // reports are length-capped and reviewed manually — nobody is auto-punished by a report.
     var (ok, error) = registry.CreateReport(account.Id, req.WorldId ?? string.Empty, req.ReportedName, req.Category, req.Message ?? string.Empty);
-    return ok ? Results.Ok() : Results.BadRequest(new { error });
+    return ok ? Results.Ok() : ApiError(error);
 });
 
 // ---------------- Operator admin (X-Admin-Token; disabled when no token is configured) ----------------
@@ -272,7 +332,7 @@ app.MapPost("/api/worlds", (HttpContext ctx, CreateWorldRequest req) =>
     var (ok, error, world) = registry.CreateWorld(account.Id, req.Name);
     if (!ok)
     {
-        return Results.BadRequest(new { error });
+        return ApiError(error);
     }
 
     log.LogInformation("World '{Name}' ({Id}) created by {Account}.", LogSafe(world!.DisplayName), world.Id, LogSafe(account.Name));
@@ -297,7 +357,7 @@ app.MapPost("/api/worlds/{id}/join", async (HttpContext ctx, string id, JoinRequ
     var (grant, error) = await orchestrator.JoinAsync(id, account, req.PlayerName);
     if (grant is null)
     {
-        return Results.Json(new { error }, statusCode: StatusCodes.Status503ServiceUnavailable);
+        return ApiError(error, StatusCodes.Status503ServiceUnavailable);
     }
 
     return Results.Json(grant);
@@ -381,7 +441,7 @@ app.MapPost("/api/worlds/{id}/save", async (HttpContext ctx, string id) =>
     // Only while stopped: the instance owns the file when it runs, and a mid-write copy would corrupt.
     if (registry.GetWorld(id)!.Status != WorldStatus.Stopped || launcher.IsRunning(world.ContainerId))
     {
-        return Results.BadRequest(new { error = "Stop the world before uploading a save." });
+        return ApiError("Stop the world before uploading a save.");
     }
 
     // Stream to a temp file with a hard size cap, then validate BEFORE it replaces anything.
@@ -398,7 +458,7 @@ app.MapPost("/api/worlds/{id}/save", async (HttpContext ctx, string id) =>
                 total += read;
                 if (total > config.UploadMaxBytes)
                 {
-                    return Results.BadRequest(new { error = $"Save exceeds the {config.UploadMaxBytes / (1024 * 1024)} MB upload limit." });
+                    return ApiError($"Save exceeds the {config.UploadMaxBytes / (1024 * 1024)} MB upload limit.");
                 }
 
                 await file.WriteAsync(buffer.AsMemory(0, read));
@@ -406,14 +466,14 @@ app.MapPost("/api/worlds/{id}/save", async (HttpContext ctx, string id) =>
 
             if (total == 0)
             {
-                return Results.BadRequest(new { error = "Empty upload." });
+                return ApiError("Empty upload.");
             }
         }
 
         var (ok, error) = SavePaths.ValidateUploadedSave(tmp);
         if (!ok)
         {
-            return Results.BadRequest(new { error });
+            return ApiError(error);
         }
 
         // Keep exactly one previous generation as a manual-recovery net, then move the upload into place.
@@ -453,13 +513,13 @@ app.MapGet("/api/worlds/{id}/save", (HttpContext ctx, string id) =>
 
     if (registry.GetWorld(id)!.Status != WorldStatus.Stopped || launcher.IsRunning(world.ContainerId))
     {
-        return Results.BadRequest(new { error = "Stop the world before downloading its save." });
+        return ApiError("Stop the world before downloading its save.");
     }
 
     string path = SavePaths.WorldDbPath(config, world.Id);
     if (!File.Exists(path))
     {
-        return Results.BadRequest(new { error = "This world has no save yet (it was never started)." });
+        return ApiError("This world has no save yet (it was never started).");
     }
 
     return Results.File(path, "application/octet-stream", $"{world.Id}-world.db");

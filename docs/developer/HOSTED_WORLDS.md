@@ -222,6 +222,25 @@ class behind plain methods, so swapping the backend later is contained.
   (`bbs_accounts_total`, `bbs_worlds{status=…}`, `bbs_reports_open`) + counters (joins granted,
   wakes, reaped, archived, rate-limited).
 
+## Legal pages, localization & account deletion (implemented 2026-07-05)
+
+- **Localized errors via codes.** Every WorldHost error response carries a stable machine `code`
+  (`banned`, `terms_outdated`, `name_reserved`, `name_blocked`, `world_wake_failed`, `rate_limited`,
+  `world_limit`, `upload_too_large`, `save_invalid`, …) next to the English `error` text. The game
+  client maps `code` → `ui.portal.err_<code>` locale keys (DE+EN); the portal maps it via a JS dict
+  keyed on the browser language. `banned` keeps the operator's free-text reason. Unknown code → raw
+  English fallback. (`PortalClient` exposes `Code`; `Program.CodeFor` is the single mapping point.)
+- **Client parity.** The native "Official Worlds" menu now shows the beta warning, a one-line rules
+  summary and a "View rules" button opening `/rules` in the browser — matching the portal.
+- **`/impressum` (§5 DDG) + `/datenschutz` (DSGVO)**, footer-linked from every portal page. Operator
+  data is config-driven (`BBS_WH_LEGAL_NAME` / `_ADDRESS` / `_EMAIL`) so a SELF-HOSTED WorldHost
+  serves ITS operator's details, never the project authors'; unset → an explicit "not configured"
+  notice, never wrong data. The privacy page states the data-minimal reality (name + PBKDF2 hash, no
+  email, no tracking, no third-party embeds/fonts; transient IPs for rate limits/logs only).
+- **Account self-deletion (DSGVO Art. 17).** `DELETE /api/account` + a double-confirm portal button:
+  stops + deletes all the account's worlds (registry rows + live and archived saves on disk), deletes
+  the reports it filed and its sessions, then the account. Available to banned accounts too.
+
 ## Version policy (fleet)
 
 The fleet pins one image tag (`BBS_WH_SERVER_IMAGE`) — all instances run the same server version.

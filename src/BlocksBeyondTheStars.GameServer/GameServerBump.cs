@@ -98,7 +98,29 @@ public sealed partial class GameServer
             image = null;
         }
 
-        HandleBump(session, report.Description ?? string.Empty, image);
+        HandleBump(session, SanitizeBumpDescription(report.Description), image);
+    }
+
+    /// <summary>Bounds + cleans a client-supplied bump description before it is written to the log and a
+    /// JSON snapshot: cap the length (a runaway paste can't bloat the file) and strip control characters
+    /// including CR/LF, which would otherwise forge extra log lines (audit 2026-07-05).</summary>
+    private static string SanitizeBumpDescription(string? description)
+    {
+        if (string.IsNullOrEmpty(description))
+        {
+            return string.Empty;
+        }
+
+        const int MaxDescriptionLength = 2000;
+        string trimmed = description.Length > MaxDescriptionLength ? description.Substring(0, MaxDescriptionLength) : description;
+        var sb = new System.Text.StringBuilder(trimmed.Length);
+        foreach (char c in trimmed)
+        {
+            // Keep normal printable text + spaces; drop control chars (CR/LF/tab/ANSI/NUL).
+            sb.Append(char.IsControl(c) ? ' ' : c);
+        }
+
+        return sb.ToString().Trim();
     }
 
     private void HandleBump(PlayerSession session, string description, byte[]? image = null)

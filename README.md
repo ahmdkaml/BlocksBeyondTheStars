@@ -41,7 +41,7 @@ Design your ship block by block, fly real system-scale routes, dock at space sta
 *   **Deep Crafting:** Mine, smelt, unlock blueprints, and craft everything from hover speeders to space stations.
 *   **Explore & Claim:** Discover rare factories with their own production terminals, salvage fallen ruins and treasure chests — and claim a factory as your own base with a rare access code.
 *   **In-Game Editors:** Design your own ships, stations, and cities block by block.
-*   **Rich Multiplayer:** Form alliances, share bases, and communicate via global radio.
+*   **Rich Multiplayer:** Form alliances, share bases, and communicate via global radio — play solo, host a server for friends on your LAN, or (coming soon) create your own **hosted world** online.
 *   **The VEGA Protocol:** An optional story campaign narrated by your ship's AI companion.
 *   **Windows & Linux:** Native desktop clients — no Wine/Proton needed (an experimental macOS build exists too).
 *   **Keyboard, mouse & controller:** Play with keyboard + mouse or an Xbox/XInput gamepad — both work at once, and menus are pad-navigable (controller support is experimental).
@@ -334,6 +334,19 @@ release) and enable `BBS_ENABLE_WEBSOCKET=true`. localhost and LAN work over pla
 deployment needs TLS for `wss://`, for which a ready-made Caddy setup ships (`docker-compose.tls.yml`).
 SQLite stays the default; an optional `postgres` profile is available for larger realms. See
 [docs/developer/SELF_HOSTING.md](docs/developer/SELF_HOSTING.md) §9–§10.
+
+### Hosted worlds (Official Worlds) — in development
+
+Three ways to play together, side by side: **singleplayer** (unchanged), **self-hosting** (LAN/Docker,
+above), and **hosted worlds** — a Minecraft-Realms-style option where a player creates a persistent
+multiplayer world online (optionally from a singleplayer save) that runs as one dedicated-server
+container per world behind a control plane ("WorldHost"). The desktop client's **"Official Worlds"**
+menu signs in, lists your worlds and joins with one click; a free web portal manages worlds, community
+rules, reports and account deletion. Privacy is deliberately minimal — a chosen name and a password
+hash, **no email, no tracking**. This is a **beta in active development** (the public service isn't live
+yet); the architecture, routing and operations are documented in
+[docs/developer/HOSTED_WORLDS.md](docs/developer/HOSTED_WORLDS.md). The web client never picks servers —
+it is always bound to whoever serves its page.
 
 ## Adding content (data-driven)
 
