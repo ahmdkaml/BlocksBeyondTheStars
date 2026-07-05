@@ -40,7 +40,10 @@ public static class ReportHostPages
             sb.Append($"<option value='{c}'{(c == category ? " selected" : "")}>{c}</option>");
         }
 
-        sb.Append("</select> <button>Filter</button></form>");
+        sb.Append("</select> <button>Filter</button> ");
+        // Same filters, exported as one JSON download (all matching, not just the page's 200).
+        string exportQuery = $"status={Uri.EscapeDataString(status ?? string.Empty)}&category={Uri.EscapeDataString(category ?? string.Empty)}";
+        sb.Append($"<a href='/admin/export?{exportQuery}'><button type='button'>Download JSON</button></a></form>");
 
         if (items.Count == 0)
         {
