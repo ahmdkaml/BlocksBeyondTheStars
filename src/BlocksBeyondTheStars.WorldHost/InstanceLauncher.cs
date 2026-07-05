@@ -19,6 +19,11 @@ public interface IInstanceLauncher
 
     /// <summary>Whether the container is still running — false once an idle shutdown has exited it.</summary>
     bool IsRunning(string containerId);
+
+    /// <summary>CPU/memory snapshot of every container on the host (admin server-health card). Empty
+    /// when docker is unavailable — the card degrades, nothing fails. NOTE: <c>docker stats</c> samples
+    /// for ~1-2 s, so callers must keep this off the page-render path.</summary>
+    IReadOnlyList<ContainerStat> ContainerStats();
 }
 
 /// <summary>
@@ -140,6 +145,12 @@ public sealed class DockerCliLauncher : IInstanceLauncher
 
         var (exitCode, stdout, _) = Run(new List<string> { "inspect", "--format", "{{.State.Running}}", containerId });
         return exitCode == 0 && stdout.Trim() == "true";
+    }
+
+    public IReadOnlyList<ContainerStat> ContainerStats()
+    {
+        var (exitCode, stdout, _) = Run(new List<string> { "stats", "--no-stream", "--format", "{{json .}}" });
+        return exitCode == 0 ? HostStats.ParseDockerStats(stdout) : Array.Empty<ContainerStat>();
     }
 
     private static (int ExitCode, string Stdout, string Stderr) Run(List<string> args)

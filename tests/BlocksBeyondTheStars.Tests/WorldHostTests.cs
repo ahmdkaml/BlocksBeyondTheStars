@@ -60,6 +60,8 @@ public sealed class WorldHostTests : IDisposable
         public void Stop(string containerId) => Running.Remove(containerId);
 
         public bool IsRunning(string containerId) => containerId != null && Running.Contains(containerId);
+
+        public IReadOnlyList<ContainerStat> ContainerStats() => Array.Empty<ContainerStat>();
     }
 
     /// <summary>Orchestrator whose "instance is healthy" probe is simply "its fake container runs".</summary>

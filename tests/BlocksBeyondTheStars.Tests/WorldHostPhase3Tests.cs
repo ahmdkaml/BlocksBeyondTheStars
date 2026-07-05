@@ -47,6 +47,8 @@ public sealed class WorldHostPhase3Tests : IDisposable
         public void Stop(string containerId) => Running.Remove(containerId);
 
         public bool IsRunning(string containerId) => containerId != null && Running.Contains(containerId);
+
+        public IReadOnlyList<ContainerStat> ContainerStats() => Array.Empty<ContainerStat>();
     }
 
     private static WorldOrchestrator NewOrchestrator(HostRegistry registry, FakeLauncher launcher, WorldHostConfig config, WorldHostMetrics? metrics = null)

@@ -342,8 +342,9 @@ above), and **hosted worlds** — a Minecraft-Realms-style option where a player
 multiplayer world online (optionally from a singleplayer save) that runs as one dedicated-server
 container per world behind a control plane ("WorldHost"). The desktop client's **"Official Worlds"**
 menu signs in, lists your worlds and joins with one click; a free web portal manages worlds, community
-rules, reports and account deletion. Privacy is deliberately minimal — a chosen name and a password
-hash, **no email, no tracking**. This is a **beta in active development** (the public service isn't live
+rules, reports and account deletion. Operators get an `/admin` dashboard (fleet overview, reports,
+bans, live server health) and a public `GET /api/stats` with aggregate player/world counts. Privacy is
+deliberately minimal — a chosen name and a password hash, **no email, no tracking**. This is a **beta in active development** (the public service isn't live
 yet); the architecture, routing and operations are documented in
 [docs/developer/HOSTED_WORLDS.md](docs/developer/HOSTED_WORLDS.md). The web client never picks servers —
 it is always bound to whoever serves its page.
@@ -374,7 +375,7 @@ the VEGA ship-AI onboarding/advisor companion, world-creation options, and an op
 for dynamic dialogue/mission text. Self-hostable dedicated server. **Native Windows and Linux**
 clients (no Wine/Proton; an experimental macOS build exists), and **opt-in automatic crash reporting**
 so problems get fixed faster.
-Currently **875 xUnit tests pass** (779 server/shared + 96 headless client<->server).
+Currently **988 xUnit tests pass** (887 server/shared + 101 headless client<->server).
 
 See [TODO.md](TODO.md) for the current Done/Open status, the
 [user manual](docs/user/USER_MANUAL.md) for controls/mechanics/commands, and [AGENTS.md](AGENTS.md)
