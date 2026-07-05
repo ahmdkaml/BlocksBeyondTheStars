@@ -47,6 +47,11 @@ public sealed class DockerCliLauncher : IInstanceLauncher
         string savesDir = SavePaths.HostSavesDir(_config, world.Id);
         Directory.CreateDirectory(savesDir);
 
+        // Instances exit on idle but their container OBJECT remains (we run without --rm so logs stay
+        // inspectable while a world sleeps) — remove any stale one first or the re-wake's `docker run
+        // --name bbs-world-<id>` fails with a name conflict. Best effort: "no such container" is fine.
+        Run(new List<string> { "rm", "-f", $"bbs-world-{world.Id}" });
+
         var (exitCode, stdout, stderr) = Run(BuildRunArgs(_config, world, savesDir));
         if (exitCode != 0)
         {
