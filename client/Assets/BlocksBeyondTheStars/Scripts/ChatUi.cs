@@ -21,7 +21,7 @@ namespace BlocksBeyondTheStars.Client
         private Text _log;
         private RectTransform _inputRow;
         private InputField _input;
-        private bool _typing, _subscribed, _built, _hostAnnounced;
+        private bool _typing, _subscribed, _built, _hostAnnounced, _reportTipShown;
         private int _openFrame = -1;
         private const int MaxLog = 40;
 
@@ -49,6 +49,15 @@ namespace BlocksBeyondTheStars.Client
                 _lines.Add($"<color=#80E5D2>{line}</color>");
                 RefreshLog();
                 Game.ShowMessage(line);
+            }
+
+            // Official hosted world: point players at the report paths once — the report button hides
+            // in the alliance tab and /report is invisible otherwise, so kids would never find them.
+            if (!_reportTipShown && !string.IsNullOrEmpty(Game.HostedToken) && !string.IsNullOrEmpty(Game.PortalSession) && Game.Localizer != null)
+            {
+                _reportTipShown = true;
+                _lines.Add($"<color=#80E5D2>{Game.Localizer.Get("ui.chat.report_tip")}</color>");
+                RefreshLog();
             }
 
             // Open the input with Enter (when no other panel is open).
@@ -295,6 +304,7 @@ namespace BlocksBeyondTheStars.Client
             {
                 case "/help":
                 case "/admin":
+                    LocalLine(L("ui.chat.help_player"));
                     LocalLine(L("ui.admin.help"));
                     return true;
 

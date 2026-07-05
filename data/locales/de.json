@@ -162,6 +162,8 @@
   "blueprint.galaxy_radio.desc": "Rüstet das Funkgerät auf galaxieweite Reichweite auf.",
   "ui.chat.hint": "Enter: Chat",
   "ui.chat.send_hint": "Enter zum Senden · Esc zum Abbrechen",
+  "ui.chat.report_tip": "Tipp: Jemand ist gemein? Tippe /report <Name> in den Chat oder nutze den Melden-Knopf in der Spielerliste (Schiff → Allianz).",
+  "ui.chat.help_player": "Für alle: /report <Spieler> [was passiert ist] — Spieler melden (offizielle Welten) · /bump <Notiz> — Fehler an die Entwickler melden",
   "ui.chat.report_usage": "Benutzung: /report <Spieler> [was ist passiert]",
   "ui.chat.report_unavailable": "Spieler melden geht nur auf offiziellen Welten.",
   "ui.chat.report_sent": "Danke — {name} wurde gemeldet. Die Betreiber schauen es sich an.",

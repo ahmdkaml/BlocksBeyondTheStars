@@ -6,7 +6,7 @@ plans live under [docs/](docs/) (committed); this file is the high-level status.
 keep it current when controls/features change. Last consolidated 2026-06-04.
 
 **Build:** `scripts/build-client.ps1` (Windows) or `scripts/build-client.sh` (Linux) — publishes shared libs + bundled server + Unity player.
-**Test:** `./scripts/run-tests.sh` — currently **935 server + 113 client passing** (2026-07-05). Locale parity (en/de) is enforced by a test.
+**Test:** `./scripts/run-tests.sh` — currently **943 server + 113 client passing** (2026-07-06). Locale parity (en/de) is enforced by a test.
 CI runs two tiers: PRs skip the 31 tests marked `[Trait("Category", "Slow")]` (~6 min gate); pushes to `main` and the release workflow run the full suite.
 **Conventions:** English docs/comments; in-game text bilingual DE+EN; commit to `main` with the
 Claude `Co-Authored-By` trailer; OpenAI texture + ElevenLabs sound generation is blanket-approved
@@ -97,6 +97,25 @@ Per-item detail lives in the dated work log below.
   single-source-of-truth working end-to-end (validated: published the initial Windows zip).
 
 ---
+
+### ★ Kid-friendly worlds portal: feedback & ideas, parental notice, discoverable reporting (#257, 2026-07-06)
+The portal's "Report a player" card was its centerpiece while the better in-game report paths were
+invisible, and there was no way to send game ideas at all. The worlds page now leads with a
+**"Feedback & Ideen" card** — one field, kid-friendly copy — that rides the existing reports pipe as a
+new `feedback` category (`CreateReport` allows an empty reported name for feedback only and requires a
+message instead; own "Feedback & ideas" card on `/admin`, separated from the player-report queue). The
+player-report form moved into a collapsed `<details>` inside it, headed by "the easiest way is in the
+game: `/report <name>` or the report button in the player list"; the scary always-visible **Delete
+account** card is collapsed the same way. New **parental notice** ("🧒 Frag bitte zuerst deine Eltern,
+ob es okay ist, dieses Spiel zu spielen.") on the landing page and as the first community rule; the
+rules' report bullet now names the in-game paths first. Kid-UX polish: create-account card comes before
+sign-in, name rules in plain words instead of `(3-24: A-Z 0-9 - _)`, "write your password down!"
+warning, world-password fields collapsed behind "protect with a password (optional)", beta box in kid
+wording, the join prompt remembers the last player name (`bbs_player_name`), and `say()` scrolls the
+top message line into view. In-game discoverability: `/help` now prints a for-everyone line (`/report`
++ `/bump`) before the admin commands, and joining an official hosted world shows a one-time local chat
+tip pointing at both report paths (new `ui.chat.report_tip` / `ui.chat.help_player` DE+EN). 9 new tests
+(feedback category rules, admin separation, parental notice, collapsed details, prefill, card order).
 
 ### ★ Maintenance announcements + creator-set world passwords (2026-07-05) — issues #249, #250, bug #251
 Two features in one PR (deploy rides the next release anyway). **Maintenance announcements (#249):** new

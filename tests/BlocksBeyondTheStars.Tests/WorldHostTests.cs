@@ -426,6 +426,29 @@ public sealed class WorldHostTests : IDisposable
         Assert.Equal("aabbccddee11", report.WorldId);
     }
 
+    [Fact]
+    public void Reports_FeedbackCategoryNeedsNoNameButAMessage()
+    {
+        var registry = NewRegistry();
+        var (accountId, _) = NewAccount(registry);
+
+        // Game feedback ("Feedback & Ideen") is the only category without a reported player — but an
+        // empty idea is worthless, so the message becomes mandatory instead.
+        Assert.False(registry.CreateReport(accountId, "", "", "feedback", "   ").Ok);
+        Assert.True(registry.CreateReport(accountId, "", "", "feedback", "please add space whales!").Ok);
+
+        var open = Assert.Single(registry.ListOpenReports());
+        Assert.Equal("feedback", open.Category);
+        Assert.Equal(string.Empty, open.ReportedName);
+        Assert.Equal("please add space whales!", open.Message);
+
+        // All other categories still require the reported player's name.
+        Assert.False(registry.CreateReport(accountId, "", "", "chat", "some message").Ok);
+
+        registry.CloseReport(open.Id, "reviewed");
+        Assert.Empty(registry.ListOpenReports());
+    }
+
     // ---------------- Save upload validation ----------------
 
     [Fact]

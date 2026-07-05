@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
 using System;
+using System.Collections.Generic;
 using System.IO;
 using BlocksBeyondTheStars.WorldHost;
 using Xunit;
@@ -104,6 +105,96 @@ public sealed class WorldHostPortalPagesTests
         string de = WorldHostPortalPages.Privacy(Config);
         Assert.True(de.IndexOf("Verantwortlicher", StringComparison.Ordinal)
             < de.IndexOf("English summary", StringComparison.Ordinal));
+    }
+
+    // ---------------- Kid-friendly rework: feedback card + parental notice (#257) ----------------
+
+    [Fact]
+    public void Landing_CarriesTheParentalNotice_InBothLanguages()
+    {
+        Assert.Contains("Frag bitte zuerst deine Eltern", WorldHostPortalPages.Landing(Config));
+        Assert.Contains("Please ask your parents first", WorldHostPortalPages.Landing(Config, "en"));
+    }
+
+    [Fact]
+    public void Rules_OpenWithTheParentalNotice_AndPointToTheInGameReportPaths()
+    {
+        string de = WorldHostPortalPages.Rules(Config);
+        Assert.Contains("Frag bitte zuerst deine Eltern", de);
+        Assert.Contains("/report", de); // reporting is explained via the in-game paths first
+
+        string en = WorldHostPortalPages.Rules(Config, "en");
+        Assert.Contains("Please ask your parents first", en);
+        Assert.Contains("/report", en);
+    }
+
+    [Fact]
+    public void Worlds_OffersFeedback_AndPostsItAsTheFeedbackCategory()
+    {
+        string de = WorldHostPortalPages.Worlds(Config);
+        Assert.Contains("Feedback & Ideen", de);
+        Assert.Contains("category:'feedback'", de); // sendFeedback() rides the reports pipe
+
+        string en = WorldHostPortalPages.Worlds(Config, "en");
+        Assert.Contains("Feedback & ideas", en);
+        Assert.Contains("category:'feedback'", en);
+    }
+
+    [Fact]
+    public void Worlds_DemotesReportAndDeleteAccount_IntoCollapsedDetails()
+    {
+        string html = WorldHostPortalPages.Worlds(Config);
+
+        // The report form and the account-deletion button live inside <details> now — reachable, but
+        // no longer the page's centerpiece (kids first see feedback, not complaint machinery).
+        int reportField = html.IndexOf("id='r-name'", StringComparison.Ordinal);
+        int deleteButton = html.IndexOf("deleteAccount()", StringComparison.Ordinal);
+        Assert.True(reportField >= 0 && deleteButton >= 0);
+        Assert.True(html.LastIndexOf("<details>", reportField, StringComparison.Ordinal) >= 0,
+            "the report form must sit inside a collapsed <details>");
+        Assert.True(html.LastIndexOf("<details>", deleteButton, StringComparison.Ordinal)
+            > html.LastIndexOf("</details>", reportField, StringComparison.Ordinal),
+            "the delete-account button must sit inside its own collapsed <details>");
+    }
+
+    [Fact]
+    public void Worlds_JoinPrompt_RemembersTheLastPlayerName()
+    {
+        string html = WorldHostPortalPages.Worlds(Config);
+        Assert.Contains("localStorage.getItem('bbs_player_name')", html); // prefill on the next join
+        Assert.Contains("localStorage.setItem('bbs_player_name'", html);  // remembered on success
+    }
+
+    [Fact]
+    public void Landing_PutsCreateAccountFirst()
+    {
+        // New (young) visitors should meet "create account" before "sign in".
+        string html = WorldHostPortalPages.Landing(Config);
+        Assert.True(html.IndexOf("id='su-name'", StringComparison.Ordinal)
+            < html.IndexOf("id='li-name'", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AdminPage_SeparatesFeedbackFromPlayerReports()
+    {
+        var reports = new List<ReportRecord>
+        {
+            new(1, "aabbccddee11", "acct1", "Meanie", "chat", "insults", "open", 0),
+            new(2, "", "acct2", "", "feedback", "please add space whales!", "open", 0),
+        };
+
+        string html = WorldHostAdminPages.Index(
+            Config, Array.Empty<AdminWorldRow>(), reports, Array.Empty<AccountRecord>(), null, null);
+        Assert.Contains("Feedback &amp; ideas", html);
+        Assert.Contains("please add space whales!", html);
+        Assert.Contains("1 open report(s)", html);
+        Assert.Contains("1 open feedback", html);
+
+        // The feedback row must not sit in the player-report table (no reported-name lookup link).
+        int reportsCard = html.IndexOf("Open player reports", StringComparison.Ordinal);
+        int feedbackCard = html.IndexOf("Feedback &amp; ideas", StringComparison.Ordinal);
+        int feedbackRow = html.IndexOf("please add space whales!", StringComparison.Ordinal);
+        Assert.True(reportsCard < feedbackCard && feedbackCard < feedbackRow);
     }
 
     // ---------------- Play button: deep-link + grant rendering order (#252) ----------------
