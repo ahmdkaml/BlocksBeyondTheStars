@@ -5500,6 +5500,33 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-05): fleet AI texts, per-world resource fences, operator admin UIs
+The LLM backend joins the fleet and the host gets guard rails (details: HOSTED_WORLDS.md).
+- **AI backend containerized** (`Dockerfile.ai`, uv-locked; `ai-image.yml` publishes
+  `ghcr.io/marceld23/blocks-beyond-the-stars-ai`) and deployed **internal-only** (`deploy/ai/`: no
+  published port, no Caddy route — the provider API key never leaves `/opt/bbs/ai/.env`). Official
+  fleet model: **Mistral Small on OVHcloud AI Endpoints** (EU, ~0.5 s/line, ~$0.00003/NPC line;
+  Qwen3.5 measured unusable there — forced reasoning, no think-off switch).
+- **Wait/fallback behavior confirmed + timeouts aligned & generous**: players always get an instant
+  static line, the LLM line upgrades asynchronously; new env knobs `BBTS_AI_TIMEOUT` (backend, 30 s)
+  &lt; `BBS_AI_TIMEOUT_SECONDS` (server, 35 s — was hardcoded 8 s) so template fallbacks always land.
+- **WorldHost passes AI env into world instances** (`BBS_WH_AI_BACKEND_URL` + `BBS_WH_AI_LEVEL`,
+  fleet default TextOnly = NPC lines + board flavour, no auto-published AI missions).
+- **Per-world resource fences**: `--memory`+`--memory-swap` (default 768m, .NET cgroup-aware GC),
+  `--cpus` (2), `--pids-limit 256`; plus the fleet-wide `BBS_WH_MAX_ACTIVE` awake cap (10) → overload
+  degrades to the localized `no_capacity` error instead of an OOM'd host. Service containers got
+  `mem_limit`s too. Sizes are conservative — re-tune after `docker stats` on real worlds.
+- **Containerized-WorldHost probe fix**: `/status` probes can't use host loopback from inside a
+  container — `BBS_WH_PROBE_VIA_NETWORK=true` routes them to `bbs-world-<id>:31415` on the shared
+  network (would have made every wake time out on the VPS).
+- **Operator admin UIs**: WorldHost `/admin` (Basic Auth, `BBS_WH_ADMIN_USER/_PASSWORD`) with fleet
+  instance overview (live player counts, stop/wake), open player-report queue and ban/unban;
+  ReportHost admin got a filtered **JSON bulk export** button. Privacy page now covers the
+  OVHcloud LLM processing (DE + EN).
+- 6 new tests (run-args fences/AI, capacity gate, admin lookups, BasicAuth, export shape).
+- OPEN: VPS rollout (create `/opt/bbs/ai/.env` + new worldhost .env lines, deploy `all`), rotate the
+  OVH key after setup, re-tune 768m/10 after measuring, e2e NPC-text playtest.
+
 ## ✅ Done (2026-07-05): legal pages, full DE/EN localization, account deletion + game-input hardening
 Public-launch readiness for hosted worlds (details: [HOSTED_WORLDS.md](docs/developer/HOSTED_WORLDS.md)).
 - **Impressum (§5 DDG) + Datenschutz (DSGVO)** portal pages, footer-linked everywhere; operator data is

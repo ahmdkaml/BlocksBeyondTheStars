@@ -323,6 +323,79 @@ public sealed class HostRegistry : IDisposable
         }
     }
 
+    /// <summary>Case-insensitive account lookup by name — the admin UI's bridge from a reported in-game
+    /// name to the account behind it (when they match; players can of course play under other names).</summary>
+    public AccountRecord? FindAccountByName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return null;
+        }
+
+        lock (_gate)
+        {
+            using var cmd = Cmd("""
+                SELECT id, name, is_developer, banned, ban_reason, terms_version
+                FROM account WHERE lower(name) = lower($n)
+                """);
+            cmd.Parameters.AddWithValue("$n", name.Trim());
+            using var reader = cmd.ExecuteReader();
+            return reader.Read()
+                ? new AccountRecord(reader.GetString(0), reader.GetString(1), reader.GetInt32(2) != 0,
+                    reader.GetInt32(3) != 0, reader.GetString(4), reader.GetInt32(5))
+                : null;
+        }
+    }
+
+    /// <summary>All currently banned accounts, for the admin UI's ban list.</summary>
+    public IReadOnlyList<AccountRecord> ListBannedAccounts()
+    {
+        lock (_gate)
+        {
+            using var cmd = Cmd("""
+                SELECT id, name, is_developer, banned, ban_reason, terms_version
+                FROM account WHERE banned = 1 ORDER BY name
+                """);
+            using var reader = cmd.ExecuteReader();
+            var list = new List<AccountRecord>();
+            while (reader.Read())
+            {
+                list.Add(new AccountRecord(reader.GetString(0), reader.GetString(1), reader.GetInt32(2) != 0,
+                    reader.GetInt32(3) != 0, reader.GetString(4), reader.GetInt32(5)));
+            }
+
+            return list;
+        }
+    }
+
+    /// <summary>Every world with its owner's account name — the admin UI's fleet overview (active first,
+    /// then by recent activity). The fleet is small by design (per-account quota), so no paging.</summary>
+    public IReadOnlyList<(WorldRecord World, string OwnerName)> ListAllWorldsAdmin(int limit = 500)
+    {
+        lock (_gate)
+        {
+            using var cmd = Cmd("""
+                SELECT w.id, w.owner_account_id, w.display_name, w.join_secret, w.host_port, w.status,
+                       w.container_id, w.created_unix, w.last_started_unix, a.name
+                FROM world w LEFT JOIN account a ON a.id = w.owner_account_id
+                ORDER BY CASE w.status WHEN 'running' THEN 0 WHEN 'starting' THEN 1 WHEN 'stopped' THEN 2 ELSE 3 END,
+                         w.last_started_unix DESC
+                LIMIT $l
+                """);
+            cmd.Parameters.AddWithValue("$l", limit);
+            using var reader = cmd.ExecuteReader();
+            var list = new List<(WorldRecord, string)>();
+            while (reader.Read())
+            {
+                list.Add((new WorldRecord(reader.GetString(0), reader.GetString(1), reader.GetString(2),
+                    reader.GetString(3), reader.GetInt32(4), reader.GetString(5), reader.GetString(6),
+                    reader.GetInt64(7), reader.GetInt64(8)), reader.IsDBNull(9) ? "(deleted)" : reader.GetString(9)));
+            }
+
+            return list;
+        }
+    }
+
     // ---------------- Player reports ----------------
 
     /// <summary>Files a player report ("Spieler melden"): who (in-game name) misbehaved on which world,

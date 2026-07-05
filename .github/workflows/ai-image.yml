@@ -1,0 +1,95 @@
+# AI-backend Docker image — the optional LLM service (NPC lines / mission flavour; see Dockerfile.ai).
+# Deliberately its own small workflow (NOT part of release.yml), mirroring reports/worldhost-image.yml:
+# the service is deployed independently of game releases and only needs rebuilding when it changes.
+#
+# Two entry points:
+#   * push to main touching ai-backend files — builds AND publishes to GHCR as :latest + :sha-<short>,
+#     so a VPS deploy can pin an immutable tag (deploy.yml) or pull the current state of main.
+#   * workflow_dispatch — build it by hand from the Actions tab (build-validate by default; set `push`
+#     to publish, with a tag of your choice).
+
+name: AI image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ai-backend/app/**"
+      - "ai-backend/pyproject.toml"
+      - "ai-backend/uv.lock"
+      - "Dockerfile.ai"
+      - ".github/workflows/ai-image.yml"
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Push the image to GHCR (ghcr.io). Leave off to only build/validate."
+        type: boolean
+        default: false
+      tag:
+        description: "Image tag to apply (e.g. dev, 0.1.0)."
+        type: string
+        default: dev
+      latest:
+        description: "Also tag the pushed image as :latest."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ai-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    name: Build AI-backend image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Build the image tag list. The owner is lowercased — GHCR repository names must be lowercase, but
+      # github.repository_owner can contain uppercase letters. A main push always publishes :latest plus
+      # an immutable :sha-<short> (for pinning/rollback); a manual run uses the dispatch inputs.
+      - name: Compute image name + tags
+        id: img
+        run: |
+          name="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/blocks-beyond-the-stars-ai"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            push=true
+            tags="${name}:latest
+          ${name}:sha-${GITHUB_SHA::7}"
+          else
+            push="${{ inputs.push }}"
+            tags="${name}:${{ inputs.tag }}"
+            if [ "${{ inputs.latest }}" = "true" ]; then tags="${tags}
+          ${name}:latest"; fi
+          fi
+          {
+            echo "push=${push}"
+            echo "tags<<EOF"
+            echo "${tags}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+
+      - name: Log in to GHCR
+        if: ${{ steps.img.outputs.push == 'true' }}
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (and optionally push)
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
+        with:
+          context: .
+          file: ./Dockerfile.ai
+          platforms: linux/amd64
+          push: ${{ steps.img.outputs.push == 'true' }}
+          tags: ${{ steps.img.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

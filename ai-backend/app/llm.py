@@ -39,6 +39,11 @@ _BASE_URL = os.getenv("BBTS_AI_BASE_URL", "").strip()
 _API_KEY = os.getenv("BBTS_AI_API_KEY", "").strip()
 _MODEL = os.getenv("BBTS_AI_MODEL", "").strip()
 _TEMPERATURE = float(os.getenv("BBTS_AI_TEMPERATURE", "0.8"))
+# Per-call LLM timeout in seconds. Generous on purpose: the game server never blocks on us (players get
+# an instant static line; the LLM line upgrades it asynchronously), so a slow provider still beats no
+# line. Keep this BELOW the game server's own HTTP timeout (BBS_AI_TIMEOUT_SECONDS, default 35) so our
+# template fallback always reaches it in time.
+_TIMEOUT = float(os.getenv("BBTS_AI_TIMEOUT", "30"))
 
 
 def _language_name(code: str) -> str:
@@ -69,7 +74,7 @@ def _make_llm(max_tokens: int):
             api_key=_API_KEY or "not-needed",  # LM Studio ignores the key
             temperature=_TEMPERATURE,
             max_tokens=max_tokens,
-            timeout=20,
+            timeout=_TIMEOUT,
         )
     except Exception:
         return None

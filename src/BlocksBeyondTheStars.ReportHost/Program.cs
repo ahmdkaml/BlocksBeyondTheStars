@@ -284,6 +284,26 @@ app.MapGet("/admin", (HttpContext ctx) =>
     return Results.Content(ReportHostPages.List(items, store.CountByStatus(), status, category), "text/html; charset=utf-8");
 });
 
+// One-click bulk export of everything matching the current filters, as a JSON file download — the
+// browser-friendly sibling of the keyed read API (GET /api/reports) that pull scripts use.
+app.MapGet("/admin/export", (HttpContext ctx) =>
+{
+    if (GuardAdmin(ctx) is { } denied)
+    {
+        return denied;
+    }
+
+    static string? Opt(string v) => string.IsNullOrEmpty(v) ? null : v;
+    string? status = Opt(ctx.Request.Query["status"].ToString());
+    string? category = Opt(ctx.Request.Query["category"].ToString());
+    var items = store.Latest(status, category, 100_000);
+    byte[] json = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
+        new { exportedUtc = DateTimeOffset.UtcNow, status, category, count = items.Count, reports = items },
+        new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    string stamp = DateTime.UtcNow.ToString("yyyyMMdd-HHmm");
+    return Results.File(json, "application/json", $"bbs-reports-{stamp}.json");
+});
+
 app.MapGet("/admin/report/{id}", (HttpContext ctx, string id) =>
 {
     if (GuardAdmin(ctx) is { } denied)

@@ -17,7 +17,7 @@ on:
       service:
         description: "Which service to deploy."
         type: choice
-        options: [all, caddy, worldhost, reports]
+        options: [all, caddy, worldhost, reports, ai]
         default: all
       worldhost_tag:
         description: "WorldHost image tag to pin (e.g. sha-abc1234). Empty = keep the currently pinned tag."
@@ -25,6 +25,10 @@ on:
         default: ""
       reports_tag:
         description: "ReportHost image tag to pin (e.g. sha-abc1234). Empty = keep the currently pinned tag."
+        type: string
+        default: ""
+      ai_tag:
+        description: "AI-backend image tag to pin (e.g. sha-abc1234). Empty = keep the currently pinned tag."
         type: string
         default: ""
 
@@ -47,9 +51,10 @@ jobs:
         env:
           WORLDHOST_TAG: ${{ inputs.worldhost_tag }}
           REPORTS_TAG: ${{ inputs.reports_tag }}
+          AI_TAG: ${{ inputs.ai_tag }}
         run: |
           # Empty = keep the currently pinned tag; grep sees no line on empty input, so skip explicitly.
-          for t in "$WORLDHOST_TAG" "$REPORTS_TAG"; do
+          for t in "$WORLDHOST_TAG" "$REPORTS_TAG" "$AI_TAG"; do
             [ -z "$t" ] && continue
             if ! printf '%s' "$t" | grep -Eq '^[A-Za-z0-9._-]+$'; then
               echo "invalid image tag: $t"; exit 1
@@ -68,7 +73,7 @@ jobs:
       - name: Sync deploy files (never touches the host .env files)
         run: |
           rsync -rtv --exclude='.env' -e "ssh -i ~/.ssh/deploy_key" \
-            deploy/caddy deploy/worldhost deploy/reports \
+            deploy/caddy deploy/worldhost deploy/reports deploy/ai \
             bbs@31.70.113.90:/opt/bbs/
 
       - name: Deploy + health check
@@ -76,6 +81,7 @@ jobs:
           SERVICE: ${{ inputs.service }}
           WORLDHOST_TAG: ${{ inputs.worldhost_tag }}
           REPORTS_TAG: ${{ inputs.reports_tag }}
+          AI_TAG: ${{ inputs.ai_tag }}
         run: |
           ssh -i ~/.ssh/deploy_key bbs@31.70.113.90 \
-            "bash -s -- '$SERVICE' '$WORLDHOST_TAG' '$REPORTS_TAG'" < deploy/remote-deploy.sh
+            "bash -s -- '$SERVICE' '$WORLDHOST_TAG' '$REPORTS_TAG' '$AI_TAG'" < deploy/remote-deploy.sh

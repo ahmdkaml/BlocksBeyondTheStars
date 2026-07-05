@@ -11,10 +11,18 @@ bug-report inbox: `docs/developer/REPORT_HOST.md`.
 | `caddy/` | caddy-docker-proxy (TLS + routing) | `lucaslorentz/caddy-docker-proxy` | rarely (config change) |
 | `worldhost/` | hosted-worlds control plane | `ghcr.io/marceld23/blocks-beyond-the-stars-worldhost` (`worldhost-image.yml`) | on service change |
 | `reports/` | bug-report inbox | `ghcr.io/marceld23/blocks-beyond-the-stars-reports` (`reports-image.yml`) | on service change |
+| `ai/` | LLM texts (NPC lines/missions) | `ghcr.io/marceld23/blocks-beyond-the-stars-ai` (`ai-image.yml`) | on service change |
 
 Per-world game containers are NOT deployed from here — WorldHost starts them on demand from the
 dedicated-server image pinned in `/opt/bbs/worldhost/.env` (`BBS_WH_SERVER_IMAGE`; that image is
-built by `docker.yml` on release tags).
+built by `docker.yml` on release tags). Each world container runs with hard resource fences
+(`BBS_WH_INSTANCE_MEMORY`/`_CPUS`, pids cap) and the fleet keeps at most `BBS_WH_MAX_ACTIVE`
+instances awake — overload degrades to a friendly "no capacity" error, never an OOM'd host.
+
+The `ai/` service is **internal-only**: no published port, no Caddy labels — world containers reach
+it as `http://ai:8077` on the shared network, and the LLM provider's API key never leaves
+`/opt/bbs/ai/.env`. The operator admin UI lives at `https://<portal>/admin`
+(`BBS_WH_ADMIN_USER`/`_PASSWORD`) and at `https://<reports>/admin` for the bug-report inbox.
 
 ## Secrets model
 

@@ -192,6 +192,38 @@ Instances the control plane starts carry caddy-docker-proxy labels
 (`caddy=w-<id>.<domain>`, `caddy.reverse_proxy={{upstreams 31415}}`), so routing appears/disappears
 with the container — no proxy config to maintain.
 
+**Containerized WorldHost gotcha:** the orchestrator's `/status` probes cannot use host loopback
+from inside a container — set `BBS_WH_PROBE_VIA_NETWORK=true` (the fleet compose does) so probes go
+to `bbs-world-<id>:31415` on the shared docker network instead.
+
+## Resource fences & capacity
+
+Every world container runs with a hard memory cap (`BBS_WH_INSTANCE_MEMORY`, default 768m, also set
+as `--memory-swap` so a capped world cannot swap-thrash the host; .NET's cgroup-aware GC applies
+pressure before the OOM kill), a CPU ceiling (`BBS_WH_INSTANCE_CPUS`, default 2) and a pids cap. An
+OOM-killed world is just a stopped world — the reaper reconciles it and the next join wakes it fresh.
+`BBS_WH_MAX_ACTIVE` (default 10) bounds how many instances are awake at once, sized so the sum fits
+the host; wake requests beyond it get the friendly `no_capacity` error the clients already localize.
+
+## Fleet AI texts (optional)
+
+`deploy/ai/` runs the Python ai-backend as an **internal-only** container (no published port, no
+Caddy route — the provider API key never leaves `/opt/bbs/ai/.env`). When `BBS_WH_AI_BACKEND_URL`
+is set (fleet: `http://ai:8077`), WorldHost passes it with `BBS_WH_AI_LEVEL` (default TextOnly) into
+every world instance, enabling LLM NPC lines + board flavour. The game never blocks on AI: players
+get an instant static line and the LLM line upgrades it asynchronously; timeouts are generous and
+aligned (`BBTS_AI_TIMEOUT` 30 s < `BBS_AI_TIMEOUT_SECONDS` 35 s) so the backend's template fallback
+always beats the server's deadline. Official fleet model: Mistral Small on OVHcloud AI Endpoints
+(EU; ~0.5 s per line — Qwen3.5 was measured unusable there: forced reasoning, no think-off switch).
+
+## Operator admin UI
+
+`/admin` on the portal domain (Basic Auth via `BBS_WH_ADMIN_USER`/`_PASSWORD`; off when unset — the
+`X-Admin-Token` API for scripts is separate and unchanged): fleet instance overview (status, owner,
+live player counts via `/status`, stop/wake), the open player-report queue (close as
+reviewed/dismissed, reported names link to account lookup) and ban/unban with reason. The
+bug-report inbox has its own `/admin` (ReportHost) including a filtered JSON bulk export.
+
 ## Registry storage: SQLite now, Postgres when it earns it
 
 The registry is SQLite on purpose: one host, one writer process, a tiny write volume, backup = one

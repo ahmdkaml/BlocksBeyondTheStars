@@ -8,6 +8,8 @@ services:
     image: lucaslorentz/caddy-docker-proxy:2.13-alpine
     container_name: bbs-caddy
     restart: unless-stopped
+    mem_limit: 256m
+    cpus: 1
     ports:
       - "80:80"
       - "443:443"

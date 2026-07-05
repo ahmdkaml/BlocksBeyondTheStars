@@ -443,6 +443,120 @@ public sealed class WorldHostTests : IDisposable
         Assert.True(result.Ok, result.Error);
     }
 
+    // ---------------- Instance resource fences + AI passthrough (docker run argv) ----------------
+
+    [Fact]
+    public void BuildRunArgs_AppliesResourceFences_AndAiPassthrough()
+    {
+        var config = new WorldHostConfig
+        {
+            AiBackendUrl = "http://ai:8077",
+            AiLevel = "TextOnly",
+            InstanceMemory = "768m",
+            InstanceCpus = "2",
+        };
+        var world = new WorldRecord("abc123abc123", "acct", "My World", "secret", 32001, WorldStatus.Stopped, "", 0, 0);
+
+        var args = DockerCliLauncher.BuildRunArgs(config, world, "/opt/bbs/worldhost/worlds/abc123abc123/saves");
+
+        string joined = string.Join(" ", args);
+        Assert.Contains("--memory 768m", joined);
+        Assert.Contains("--memory-swap 768m", joined); // same value: a capped world must not swap-thrash the host
+        Assert.Contains("--cpus 2", joined);
+        Assert.Contains("--pids-limit 256", joined);
+        Assert.Contains("BBS_AI_BACKEND_URL=http://ai:8077", joined);
+        Assert.Contains("BBS_AI_LEVEL=TextOnly", joined);
+        Assert.Equal(config.ServerImage, args[^1]); // image stays the last argv entry
+    }
+
+    [Fact]
+    public void BuildRunArgs_OmitsFencesAndAi_WhenUnconfigured()
+    {
+        var config = new WorldHostConfig { AiBackendUrl = "", InstanceMemory = "", InstanceCpus = "" };
+        var world = new WorldRecord("abc123abc123", "acct", "My World", "secret", 32001, WorldStatus.Stopped, "", 0, 0);
+
+        var args = DockerCliLauncher.BuildRunArgs(config, world, "/tmp/saves");
+
+        string joined = string.Join(" ", args);
+        Assert.DoesNotContain("--memory", joined);
+        Assert.DoesNotContain("--cpus", joined);
+        Assert.DoesNotContain("BBS_AI_BACKEND_URL", joined);
+        Assert.Contains("--pids-limit 256", joined); // the pids fence is unconditional
+    }
+
+    // ---------------- Fleet capacity gate ----------------
+
+    [Fact]
+    public async Task Wake_RefusesBeyondMaxActiveInstances_AndRunningWorldsAreUnaffectedAsync()
+    {
+        var config = new WorldHostConfig { MaxActiveInstances = 1 };
+        var registry = NewRegistry(config);
+        var launcher = new FakeLauncher();
+        var orchestrator = NewOrchestrator(registry, launcher, config);
+
+        var (_, _, accountId, session) = registry.CreateAccount("Pilot", "super-secret-1", acceptedTermsVersion: Terms);
+        var account = registry.ResolveSession(session)!;
+        var w1 = registry.CreateWorld(accountId, "First").World!;
+        var w2 = registry.CreateWorld(accountId, "Second").World!;
+
+        Assert.NotNull((await orchestrator.JoinAsync(w1.Id, account, "Pilot")).Grant);
+
+        // Fleet is full: waking the second world is refused with the localizable no-capacity error…
+        var (grant, error) = await orchestrator.JoinAsync(w2.Id, account, "Pilot");
+        Assert.Null(grant);
+        Assert.StartsWith("No capacity", error);
+
+        // …but joining the ALREADY-RUNNING world still works (routing, not waking).
+        Assert.NotNull((await orchestrator.JoinAsync(w1.Id, account, "Pilot")).Grant);
+
+        // Once the first world stops, the second may wake.
+        orchestrator.StopWorld(registry.GetWorld(w1.Id)!);
+        Assert.NotNull((await orchestrator.JoinAsync(w2.Id, account, "Pilot")).Grant);
+    }
+
+    // ---------------- Admin lookups + Basic Auth ----------------
+
+    [Fact]
+    public void AdminLookups_FindByName_BannedList_AndFleetOverview()
+    {
+        var registry = NewRegistry();
+        var (_, _, accountId, _) = registry.CreateAccount("Pilot", "super-secret-1", acceptedTermsVersion: Terms);
+        registry.CreateWorld(accountId, "My World");
+
+        Assert.Equal(accountId, registry.FindAccountByName("pilot")!.Id); // case-insensitive
+        Assert.Null(registry.FindAccountByName("nobody"));
+        Assert.Null(registry.FindAccountByName("  "));
+
+        Assert.Empty(registry.ListBannedAccounts());
+        registry.SetBanned(accountId, banned: true, reason: "be kind");
+        var banned = Assert.Single(registry.ListBannedAccounts());
+        Assert.Equal("Pilot", banned.Name);
+        Assert.Equal("be kind", banned.BanReason);
+
+        var rows = registry.ListAllWorldsAdmin();
+        var row = Assert.Single(rows);
+        Assert.Equal("My World", row.World.DisplayName);
+        Assert.Equal("Pilot", row.OwnerName);
+    }
+
+    [Fact]
+    public void AdminUiBasicAuth_FailsClosed_AndAcceptsOnlyExactCredentials()
+    {
+        static string Header(string user, string pass)
+            => "Basic " + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(user + ":" + pass));
+
+        // Unconfigured credentials = admin UI off, no header ever matches.
+        Assert.False(BasicAuth.IsAuthorized(Header("admin", "pw"), "", ""));
+        Assert.False(BasicAuth.IsAuthorized(Header("admin", "pw"), "admin", ""));
+
+        Assert.True(BasicAuth.IsAuthorized(Header("admin", "pw"), "admin", "pw"));
+        Assert.False(BasicAuth.IsAuthorized(Header("admin", "wrong"), "admin", "pw"));
+        Assert.False(BasicAuth.IsAuthorized(Header("other", "pw"), "admin", "pw"));
+        Assert.False(BasicAuth.IsAuthorized(null, "admin", "pw"));
+        Assert.False(BasicAuth.IsAuthorized("Bearer xyz", "admin", "pw"));
+        Assert.False(BasicAuth.IsAuthorized("Basic not-base64!", "admin", "pw"));
+    }
+
     public void Dispose()
     {
         try

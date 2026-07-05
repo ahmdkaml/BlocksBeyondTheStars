@@ -1,0 +1,48 @@
+// Blocks Beyond the Stars — Copyright (c) 2026 Justus Dütscher & Marcel Dütscher (JuMaVe Games)
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
+using System.Security.Cryptography;
+using System.Text;
+
+namespace BlocksBeyondTheStars.WorldHost;
+
+/// <summary>
+/// Checks an HTTP <c>Authorization: Basic …</c> header against the configured admin credentials — the
+/// same app-level pattern as ReportHost's admin UI (browsers can't send the X-Admin-Token header the
+/// script API uses). Comparison is fixed-time, and empty configured credentials never match — the admin
+/// UI is OFF until the operator sets both user and password.
+/// </summary>
+public static class BasicAuth
+{
+    public static bool IsAuthorized(string? authorizationHeader, string user, string password)
+    {
+        if (string.IsNullOrEmpty(user) || string.IsNullOrEmpty(password))
+        {
+            return false; // admin UI disabled by config
+        }
+
+        const string prefix = "Basic ";
+        if (authorizationHeader == null || !authorizationHeader.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        string decoded;
+        try
+        {
+            decoded = Encoding.UTF8.GetString(Convert.FromBase64String(authorizationHeader.Substring(prefix.Length).Trim()));
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+
+        byte[] presented = Encoding.UTF8.GetBytes(decoded);
+        byte[] expected = Encoding.UTF8.GetBytes(user + ":" + password);
+
+        // Fixed-time even on length mismatch: compare against self when lengths differ, then fail.
+        bool sameLength = presented.Length == expected.Length;
+        bool equal = CryptographicOperations.FixedTimeEquals(presented, sameLength ? expected : presented);
+        return sameLength && equal;
+    }
+}

@@ -133,6 +133,54 @@ bool IsAdmin(HttpContext ctx)
     => !string.IsNullOrEmpty(config.AdminToken)
        && string.Equals(ctx.Request.Headers["X-Admin-Token"].ToString(), config.AdminToken, StringComparison.Ordinal);
 
+// Browser admin UI gate (Basic Auth — browsers can't send X-Admin-Token). Returns the 401 challenge
+// to send, or null when authorized. Off until BBS_WH_ADMIN_USER + _PASSWORD are configured.
+IResult? GuardAdminUi(HttpContext ctx)
+{
+    if (BasicAuth.IsAuthorized(ctx.Request.Headers.Authorization.ToString(), config.AdminUser, config.AdminPassword))
+    {
+        return null;
+    }
+
+    ctx.Response.Headers.WWWAuthenticate = "Basic realm=\"BBS fleet admin\", charset=\"UTF-8\"";
+    return Results.Text("Unauthorized.", statusCode: StatusCodes.Status401Unauthorized);
+}
+
+// Gathers everything the admin page shows; live joined counts are probed in parallel for running
+// instances only (3 s HTTP cap keeps a dead instance from stalling the page).
+async Task<IResult> RenderAdminAsync(HttpContext ctx)
+{
+    string? lookupQuery = ctx.Request.Query["acct"].ToString() is { Length: > 0 } q ? q : null;
+    var all = registry.ListAllWorldsAdmin();
+    var rows = await Task.WhenAll(all.Select(async entry =>
+    {
+        int? joined = null;
+        if (entry.World.Status == WorldStatus.Running
+            && await orchestrator.ReadInstanceStatusAsync(entry.World) is { } json)
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                if (doc.RootElement.TryGetProperty("joinedPlayers", out var jp))
+                {
+                    joined = jp.GetInt32();
+                }
+            }
+            catch
+            {
+                // unreadable status — show "?" rather than fail the page
+            }
+        }
+
+        return new AdminWorldRow(entry.World, entry.OwnerName, joined);
+    }));
+
+    return Results.Content(WorldHostAdminPages.Index(
+        config, rows, registry.ListOpenReports(), registry.ListBannedAccounts(),
+        lookupQuery is null ? null : registry.FindAccountByName(lookupQuery), lookupQuery),
+        "text/html; charset=utf-8");
+}
+
 app.MapGet("/healthz", () => Results.Text("ok\n"));
 
 // Prometheus scrape (Phase 3). Reachable only on the loopback bind — Caddy deliberately does not
@@ -301,6 +349,81 @@ app.MapPost("/api/admin/ban", (HttpContext ctx, BanRequest req) =>
     registry.SetBanned(req.AccountId, req.Banned, req.Reason ?? string.Empty);
     log.LogInformation("Account {Id} {Action} ({Reason}).", LogSafe(req.AccountId), req.Banned ? "BANNED" : "unbanned", LogSafe(req.Reason));
     return Results.Ok();
+});
+
+// ---------------- Operator admin UI (Basic Auth; the browser front-end to the API above) ----------------
+
+app.MapGet("/admin", async (HttpContext ctx) =>
+{
+    if (GuardAdminUi(ctx) is { } denied)
+    {
+        return denied;
+    }
+
+    return await RenderAdminAsync(ctx);
+});
+
+app.MapPost("/admin/reports/{id:long}/close", async (HttpContext ctx, long id) =>
+{
+    if (GuardAdminUi(ctx) is { } denied)
+    {
+        return denied;
+    }
+
+    var form = await ctx.Request.ReadFormAsync();
+    registry.CloseReport(id, form["status"].ToString() is "dismissed" ? "dismissed" : "reviewed");
+    return Results.Redirect("/admin");
+});
+
+app.MapPost("/admin/ban", async (HttpContext ctx) =>
+{
+    if (GuardAdminUi(ctx) is { } denied)
+    {
+        return denied;
+    }
+
+    var form = await ctx.Request.ReadFormAsync();
+    string accountId = form["accountId"].ToString();
+    bool banned = form["banned"].ToString() == "true";
+    string reason = form["reason"].ToString();
+    if (accountId.Length > 0)
+    {
+        registry.SetBanned(accountId, banned, reason);
+        log.LogInformation("Admin UI: account {Action} ({Reason}).", banned ? "BANNED" : "unbanned", LogSafe(reason));
+    }
+
+    return Results.Redirect("/admin");
+});
+
+app.MapPost("/admin/worlds/{id}/stop", (HttpContext ctx, string id) =>
+{
+    if (GuardAdminUi(ctx) is { } denied)
+    {
+        return denied;
+    }
+
+    if (HostRegistry.IsValidWorldId(id) && registry.GetWorld(id) is { } world)
+    {
+        orchestrator.StopWorld(world);
+        log.LogInformation("Admin UI: world {Id} stopped.", id);
+    }
+
+    return Results.Redirect("/admin");
+});
+
+app.MapPost("/admin/worlds/{id}/wake", async (HttpContext ctx, string id) =>
+{
+    if (GuardAdminUi(ctx) is { } denied)
+    {
+        return denied;
+    }
+
+    if (HostRegistry.IsValidWorldId(id))
+    {
+        await orchestrator.EnsureRunningAsync(id); // errors surface as status on the page
+    }
+
+    return Results.Redirect("/admin");
 });
 
 // ---------------- Worlds ----------------

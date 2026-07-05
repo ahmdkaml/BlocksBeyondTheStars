@@ -9,6 +9,8 @@ services:
     image: ghcr.io/marceld23/blocks-beyond-the-stars-worldhost:${WORLDHOST_TAG:-latest}
     container_name: bbs-worldhost
     restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1
     networks:
       - bbs-hosted
     volumes:
@@ -34,6 +36,19 @@ services:
       BBS_WH_LEGAL_NAME: ${BBS_WH_LEGAL_NAME:-}
       BBS_WH_LEGAL_ADDRESS: ${BBS_WH_LEGAL_ADDRESS:-}
       BBS_WH_LEGAL_EMAIL: ${BBS_WH_LEGAL_EMAIL:-}
+      # Admin web UI (/admin) — Basic Auth; empty = off.
+      BBS_WH_ADMIN_USER: ${BBS_WH_ADMIN_USER:-}
+      BBS_WH_ADMIN_PASSWORD: ${BBS_WH_ADMIN_PASSWORD:-}
+      # WorldHost runs IN a container here: its loopback can never reach host-published ports, so
+      # /status probes must go to the world containers by name on the shared docker network. REQUIRED.
+      BBS_WH_PROBE_VIA_NETWORK: "true"
+      # Fleet AI texts (optional): world instances call the internal-only ai container by name.
+      BBS_WH_AI_BACKEND_URL: ${BBS_WH_AI_BACKEND_URL:-}   # empty = AI off; fleet: http://ai:8077
+      BBS_WH_AI_LEVEL: ${BBS_WH_AI_LEVEL:-TextOnly}
+      # Per-world resource fences + the fleet-wide awake cap (see WorldHostConfig for semantics).
+      BBS_WH_INSTANCE_MEMORY: ${BBS_WH_INSTANCE_MEMORY:-768m}
+      BBS_WH_INSTANCE_CPUS: ${BBS_WH_INSTANCE_CPUS:-2}
+      BBS_WH_MAX_ACTIVE: ${BBS_WH_MAX_ACTIVE:-10}
     labels:
       # Portal + API domain. Worlds announce their own w-<id> subdomains via labels WorldHost puts on
       # each instance container.
