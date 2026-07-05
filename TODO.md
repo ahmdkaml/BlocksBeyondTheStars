@@ -5500,6 +5500,20 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-05): clean stop during initial worldgen — no more exit 137 (#243)
+Stopping a freshly created world while it was still generating ended in docker's SIGKILL after the
+60 s grace, risking the initial save. Two-part fix:
+- **SIGINT is honored from the very start**: the CancelKeyPress handler is now registered BEFORE
+  `server.Start()` (which runs the initial worldgen), and `RequestStop()` latches into a new
+  `_stopRequested` flag that `Run()` checks on entry — previously `Run()` re-armed `_running = true`
+  and silently discarded a stop requested during startup. A stop during worldgen now finishes
+  generation, then drains + saves immediately instead of entering the loop.
+- **Stop grace 60 s → 180 s** everywhere (`DockerCliLauncher --stop-timeout`, both compose files'
+  `stop_grace_period`, SELF_HOSTING.md): generation on the 2-CPU fleet fence plus the save must fit
+  inside the grace, otherwise docker still SIGKILLs at the end.
+- 2 new tests (`ServerShutdownTests`): pre-latched stop → Run() returns immediately; stop during a
+  live loop still drains.
+
 ## ✅ Done (2026-07-05): server observability — admin health card + public stats API (#244, #245)
 Two observability surfaces on WorldHost (details: HOSTED_WORLDS.md).
 - **Server health card on `/admin`**: host load/RAM/disk (from `/proc/meminfo` + `/proc/loadavg` —

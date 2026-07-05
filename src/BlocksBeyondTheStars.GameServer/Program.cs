@@ -128,6 +128,19 @@ TaskScheduler.UnobservedTaskException += (_, e) =>
     }
 };
 
+// Registered BEFORE Start() on purpose (issue #243): Start() runs the initial world generation, which
+// can take a while on a freshly created world — a stop arriving in that window (docker stop → SIGINT)
+// must not hit the runtime's default SIGINT handling (immediate exit, no save). RequestStop() latches
+// the request; Run() notices it on entry and goes straight to the drain + save.
+Console.CancelKeyPress += (_, e) =>
+{
+    // Only REQUEST the stop here (this runs on the SIGINT handler thread). The run loop notices the flag,
+    // drains + saves on the tick thread, then returns from Run() — so the save never races a live Tick().
+    e.Cancel = true;
+    logger.Info("Shutdown requested...");
+    server.RequestStop();
+};
+
 server.Start();
 
 // Automatic crash upload — opt-in. When config supplies an endpoint + key, the server sends queued reports
@@ -163,15 +176,6 @@ else if (pendingCrashes > 0)
     logger.Warn($"{pendingCrashes} unsent crash report(s) in {server.CrashWriter.DirectoryPath}. " +
                 "Attach them to a bug report, or set CrashReportEndpoint + CrashReportApiKey to upload them automatically.");
 }
-
-Console.CancelKeyPress += (_, e) =>
-{
-    // Only REQUEST the stop here (this runs on the SIGINT handler thread). The run loop notices the flag,
-    // drains + saves on the tick thread, then returns from Run() — so the save never races a live Tick().
-    e.Cancel = true;
-    logger.Info("Shutdown requested...");
-    server.RequestStop();
-};
 
 logger.Info("Press Ctrl+C to stop the server.");
 server.Run(); // returns once the shutdown request has been drained + saved on the tick thread

@@ -363,7 +363,8 @@ onto the .NET 8 ASP.NET runtime image and runs them through
 
 `docker stop` sends `SIGTERM`; the entrypoint translates that into the `SIGINT` the server's clean
 drain-and-save path listens for, so the world is always saved on shutdown (give it time with a
-`stop_grace_period`/`--stop-timeout` of ~60 s).
+`stop_grace_period`/`--stop-timeout` of ~180 s — generous enough that even a stop during the initial
+world generation of a brand-new world still ends in a clean save instead of a SIGKILL).
 
 ### Try it locally (Docker Desktop)
 
