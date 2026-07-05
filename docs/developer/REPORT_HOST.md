@@ -27,6 +27,7 @@ game server (crash flush) ──┘    (x-bugreport-key)    + files    └──
 | `PATCH /api/reports/{id}` `{"status":"new\|triaged\|done"}` | admin Basic Auth | Triage from scripts/CI |
 | `DELETE /api/reports/{id}` | admin Basic Auth | Permanent delete (incl. screenshot) |
 | `GET /admin`, `/admin/report/{id}` | admin Basic Auth | Server-rendered admin UI: list, filters, detail, screenshot, status buttons, delete |
+| `GET /admin/export?status=&category=` | admin Basic Auth | One-click JSON file download of everything matching the filters (the UI's "Download JSON" button) |
 | `GET /healthz` | none | Liveness |
 
 List items are camelCase (`id`, `title`, `description`, `email`, `gameVersion`, …, `status`,

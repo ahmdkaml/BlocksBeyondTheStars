@@ -1,15 +1,16 @@
 #!/bin/bash
 # Runs ON the VPS as the `bbs` user — deploy.yml pipes this script through ssh after syncing the
-# deploy/ folders to /opt/bbs/. Args: <service: all|caddy|worldhost|reports> [worldhost_tag] [reports_tag]
+# deploy/ folders to /opt/bbs/. Args: <service: all|caddy|worldhost|reports|ai> [worldhost_tag] [reports_tag] [ai_tag]
 #
 # Tags pin immutable image versions (sha-<short> from the image workflows). An empty tag keeps
 # whatever is currently pinned in the service's .env — the .env files themselves (which also hold the
 # operator secrets) are never replaced, only their *_TAG line is rewritten.
 set -euo pipefail
 
-SERVICE="${1:?usage: remote-deploy.sh <all|caddy|worldhost|reports> [worldhost_tag] [reports_tag]}"
+SERVICE="${1:?usage: remote-deploy.sh <all|caddy|worldhost|reports|ai> [worldhost_tag] [reports_tag] [ai_tag]}"
 WORLDHOST_TAG="${2:-}"
 REPORTS_TAG="${3:-}"
+AI_TAG="${4:-}"
 
 pin_tag() { # <env-file> <key> <value> — rewrite one KEY= line, leave the rest (secrets!) untouched
   local file="$1" key="$2" value="$3"
@@ -68,11 +69,21 @@ deploy_reports() {
   wait_healthy bbs-reports
 }
 
+deploy_ai() {
+  require_env /opt/bbs/ai
+  cd /opt/bbs/ai
+  pin_tag .env AI_TAG "$AI_TAG"
+  docker compose pull -q
+  docker compose up -d
+  wait_healthy bbs-ai
+}
+
 case "$SERVICE" in
   caddy)     deploy_caddy ;;
   worldhost) deploy_worldhost ;;
   reports)   deploy_reports ;;
-  all)       deploy_caddy; deploy_worldhost; deploy_reports ;;
+  ai)        deploy_ai ;;
+  all)       deploy_caddy; deploy_ai; deploy_worldhost; deploy_reports ;;
   *)         echo "unknown service: $SERVICE"; exit 2 ;;
 esac
 
