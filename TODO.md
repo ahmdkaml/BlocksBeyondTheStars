@@ -5500,6 +5500,20 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-05): server observability — admin health card + public stats API (#244, #245)
+Two observability surfaces on WorldHost (details: HOSTED_WORLDS.md).
+- **Server health card on `/admin`**: host load/RAM/disk (from `/proc/meminfo` + `/proc/loadavg` —
+  host-wide inside the container — and `DriveInfo` on the worlds bind mount) plus per-container
+  CPU/memory via `docker stats` (new `IInstanceLauncher.ContainerStats()`); filled asynchronously
+  from `GET /admin/stats.json` (Basic-Auth) so the ~1-2 s docker sample never stalls the page.
+  Green/amber/red thresholds mirror the ops alert levels; degrades to "n/a" without `/proc`/docker.
+- **Public `GET /api/stats`**: worlds created/active + players registered/online as aggregates only
+  (no names/ids). Doubly guarded: TTL cache with single-flight rebuild (`BBS_WH_STATS_CACHE_SECONDS`,
+  30 s — instance `/status` probes never run per-request) + per-IP rate limit
+  (`BBS_WH_STATS_PER_MINUTE`, 30). CORS-open so the marketing website can show live numbers.
+- 11 new tests (`WorldHostStatsTests`): /proc + docker-stats parsers, size units, cache TTL/expiry,
+  single-flight concurrency, stale-serve during rebuild.
+
 ## ✅ Done (2026-07-05): fleet AI texts, per-world resource fences, operator admin UIs
 The LLM backend joins the fleet and the host gets guard rails (details: HOSTED_WORLDS.md).
 - **AI backend containerized** (`Dockerfile.ai`, uv-locked; `ai-image.yml` publishes

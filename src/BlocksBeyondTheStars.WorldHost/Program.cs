@@ -24,6 +24,7 @@ var signupLimit = new RateLimiter(config.SignupPerHourPerIp, TimeSpan.FromHours(
 var loginLimit = new RateLimiter(config.LoginPerMinutePerIp, TimeSpan.FromMinutes(1));
 var uploadLimit = new RateLimiter(config.UploadsPerHourPerAccount, TimeSpan.FromHours(1));
 var reportLimit = new RateLimiter(config.ReportsPerHourPerAccount, TimeSpan.FromHours(1));
+var statsLimit = new RateLimiter(config.StatsPerMinutePerIp, TimeSpan.FromMinutes(1));
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Logging.ClearProviders();
@@ -146,6 +147,49 @@ IResult? GuardAdminUi(HttpContext ctx)
     return Results.Text("Unauthorized.", statusCode: StatusCodes.Status401Unauthorized);
 }
 
+// Extracts joinedPlayers from an instance's /status JSON; null when unreadable — callers show "?"
+// (admin page) or count 0 (aggregates) rather than fail.
+static int? ParseJoinedPlayers(string statusJson)
+{
+    try
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(statusJson);
+        return doc.RootElement.TryGetProperty("joinedPlayers", out var jp) ? jp.GetInt32() : null;
+    }
+    catch
+    {
+        return null;
+    }
+}
+
+// Sum of players currently on running instances, probed in parallel. Callers are throttled (the
+// admin page and the CACHED public snapshot) — never wire this to an uncached public path.
+async Task<int> CountPlayersOnlineAsync()
+{
+    var running = registry.ListAllWorldsAdmin().Where(e => e.World.Status == WorldStatus.Running);
+    var counts = await Task.WhenAll(running.Select(async e =>
+        await orchestrator.ReadInstanceStatusAsync(e.World) is { } json ? ParseJoinedPlayers(json) ?? 0 : 0));
+    return counts.Sum();
+}
+
+// Public aggregate snapshot (/api/stats): rebuilt at most once per TTL no matter the request rate —
+// the instance probes behind `online` are the expensive part this cache exists to protect.
+using var publicStats = new CachedJson(TimeSpan.FromSeconds(Math.Max(1, config.StatsCacheSeconds)), async () =>
+{
+    var counts = registry.CountForMetrics();
+    long created = counts.WorldsByStatus.Sum(s => s.Count);
+    long active = counts.WorldsByStatus
+        .Where(s => s.Status is WorldStatus.Running or WorldStatus.Starting)
+        .Sum(s => s.Count);
+    int online = await CountPlayersOnlineAsync();
+    return System.Text.Json.JsonSerializer.Serialize(new
+    {
+        worlds = new { created, active },
+        players = new { registered = counts.Accounts, online },
+        updatedUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+    });
+});
+
 // Gathers everything the admin page shows; live joined counts are probed in parallel for running
 // instances only (3 s HTTP cap keeps a dead instance from stalling the page).
 async Task<IResult> RenderAdminAsync(HttpContext ctx)
@@ -154,24 +198,10 @@ async Task<IResult> RenderAdminAsync(HttpContext ctx)
     var all = registry.ListAllWorldsAdmin();
     var rows = await Task.WhenAll(all.Select(async entry =>
     {
-        int? joined = null;
-        if (entry.World.Status == WorldStatus.Running
-            && await orchestrator.ReadInstanceStatusAsync(entry.World) is { } json)
-        {
-            try
-            {
-                using var doc = System.Text.Json.JsonDocument.Parse(json);
-                if (doc.RootElement.TryGetProperty("joinedPlayers", out var jp))
-                {
-                    joined = jp.GetInt32();
-                }
-            }
-            catch
-            {
-                // unreadable status — show "?" rather than fail the page
-            }
-        }
-
+        int? joined = entry.World.Status == WorldStatus.Running
+            && await orchestrator.ReadInstanceStatusAsync(entry.World) is { } json
+            ? ParseJoinedPlayers(json)
+            : null;
         return new AdminWorldRow(entry.World, entry.OwnerName, joined);
     }));
 
@@ -186,6 +216,30 @@ app.MapGet("/healthz", () => Results.Text("ok\n"));
 // Prometheus scrape (Phase 3). Reachable only on the loopback bind — Caddy deliberately does not
 // route /metrics, so fleet numbers never leak publicly.
 app.MapGet("/metrics", () => Results.Text(metrics.Render(registry), "text/plain; version=0.0.4; charset=utf-8"));
+
+// Public aggregate stats (closes #245): four numbers for the website/client — no names, no ids, so
+// nothing personal leaves the service. Doubly guarded because it is unauthenticated: the cached
+// single-flight snapshot bounds the work, the per-IP limit bounds the traffic. CORS-open on purpose
+// so the marketing site can fetch it client-side.
+app.MapGet("/api/stats", async (HttpContext ctx) =>
+{
+    if (!statsLimit.TryPass(CallerIp(ctx)))
+    {
+        return RateLimited();
+    }
+
+    ctx.Response.Headers.AccessControlAllowOrigin = "*";
+    ctx.Response.Headers.CacheControl = $"public, max-age={Math.Max(1, config.StatsCacheSeconds)}";
+    try
+    {
+        return Results.Text(await publicStats.GetAsync(), "application/json; charset=utf-8");
+    }
+    catch (Exception ex)
+    {
+        log.LogWarning(ex, "Public stats snapshot failed.");
+        return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+    }
+});
 
 // ---------------- Portal pages (server-rendered shells; the JS talks to /api with a Bearer session) ----------------
 
@@ -361,6 +415,49 @@ app.MapGet("/admin", async (HttpContext ctx) =>
     }
 
     return await RenderAdminAsync(ctx);
+});
+
+// Server-health JSON behind the admin page's "Server health" card (closes #244). Fetched by the card
+// AFTER the page renders, because `docker stats` samples for ~1-2 s and must not stall the page.
+app.MapGet("/admin/stats.json", async (HttpContext ctx) =>
+{
+    if (GuardAdminUi(ctx) is { } denied)
+    {
+        return denied;
+    }
+
+    var host = HostStats.Read(config.WorldsDir);
+    var containers = await Task.Run(() => launcher.ContainerStats());
+    var counts = registry.CountForMetrics();
+    int online = await CountPlayersOnlineAsync();
+    return Results.Json(new
+    {
+        host = new
+        {
+            load1 = host.Load1,
+            load5 = host.Load5,
+            load15 = host.Load15,
+            cores = host.Cores,
+            memTotalKb = host.MemTotalKb,
+            memAvailableKb = host.MemAvailableKb,
+            diskTotalBytes = host.DiskTotalBytes,
+            diskFreeBytes = host.DiskFreeBytes,
+        },
+        containers = containers.Select(c => new
+        {
+            name = c.Name,
+            cpuPercent = c.CpuPercent,
+            memUsedBytes = c.MemUsedBytes,
+            memLimitBytes = c.MemLimitBytes,
+        }),
+        fleet = new
+        {
+            accounts = counts.Accounts,
+            reportsOpen = counts.OpenReports,
+            playersOnline = online,
+            worlds = counts.WorldsByStatus.Select(s => new { status = s.Status, count = s.Count }),
+        },
+    });
 });
 
 app.MapPost("/admin/reports/{id:long}/close", async (HttpContext ctx, long id) =>

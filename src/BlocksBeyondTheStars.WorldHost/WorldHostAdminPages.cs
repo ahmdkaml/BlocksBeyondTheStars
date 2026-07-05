@@ -46,6 +46,10 @@ public static class WorldHostAdminPages
         sb.Append($"<p class='hint'>{worlds.Count} worlds · <b>{active}</b>/{(config.MaxActiveInstances > 0 ? config.MaxActiveInstances.ToString() : "∞")} instances awake · " +
                   $"{openReports.Count} open report(s) · {banned.Count} banned account(s)</p>");
 
+        // ---- Server health (filled by JS from /admin/stats.json AFTER the page renders — the
+        // docker-stats sample behind it takes ~1-2 s and must not stall the page) ----
+        sb.Append("<div class='card'><h2>Server health</h2><div id='sh' class='hint'>loading…</div></div>");
+
         // ---- Instances ----
         sb.Append("<div class='card'><h2>Instances</h2>");
         if (worlds.Count == 0)
@@ -136,6 +140,46 @@ public static class WorldHostAdminPages
         sb.Append("</div>");
         sb.Append("<p><a href='/'>← Portal</a></p>");
         sb.Append("<style>table{width:100%;border-collapse:collapse} th,td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top} form{margin:0}</style>");
+
+        // Server-health card renderer. Thresholds mirror the ops alerting levels (<70 % green,
+        // <85 % amber, else red). Values interpolated into innerHTML are numbers plus docker container
+        // names, whose charset docker itself restricts — nothing player-controlled reaches this card.
+        sb.Append(@"<script>
+(function () {
+  var el = document.getElementById('sh');
+  function bar(label, frac, text) {
+    var pct = Math.max(0, Math.min(100, Math.round(frac * 100)));
+    var color = pct < 70 ? '#7dff9e' : pct < 85 ? '#ff8c26' : '#e05c5c';
+    return ""<div style='margin:6px 0'>"" + label + "" <span class='sub'>"" + text + ""</span>"" +
+      ""<div style='height:8px;border:1px solid var(--line);border-radius:4px;overflow:hidden'>"" +
+      ""<div style='height:100%;width:"" + pct + ""%;background:"" + color + ""'></div></div></div>"";
+  }
+  fetch('/admin/stats.json').then(function (r) { return r.json(); }).then(function (s) {
+    var h = s.host || {}, html = '';
+    if (h.load1 != null) { html += bar('CPU load', h.cores ? h.load1 / h.cores : 0, h.load1.toFixed(2) + ' (1 min) / ' + h.cores + ' cores'); }
+    if (h.memTotalKb) {
+      var usedKb = h.memTotalKb - (h.memAvailableKb || 0);
+      html += bar('RAM', usedKb / h.memTotalKb, (usedKb / 1048576).toFixed(1) + ' / ' + (h.memTotalKb / 1048576).toFixed(1) + ' GB');
+    }
+    if (h.diskTotalBytes) {
+      var usedB = h.diskTotalBytes - (h.diskFreeBytes || 0);
+      html += bar('Disk (worlds)', usedB / h.diskTotalBytes, (usedB / 1073741824).toFixed(1) + ' / ' + (h.diskTotalBytes / 1073741824).toFixed(1) + ' GB');
+    }
+    if (!html) { html = ""<p class='hint'>No host metrics on this platform.</p>""; }
+    if (s.containers && s.containers.length) {
+      html += ""<table><tr><th>Container</th><th>CPU</th><th>Memory</th></tr>"";
+      s.containers.forEach(function (c) {
+        html += ""<tr><td><code>"" + c.name + ""</code></td><td>"" + c.cpuPercent.toFixed(1) + "" %</td><td>"" +
+          (c.memUsedBytes / 1048576).toFixed(0) + "" / "" + (c.memLimitBytes / 1048576).toFixed(0) + "" MB</td></tr>"";
+      });
+      html += ""</table>"";
+    }
+    html += ""<p class='hint'>"" + s.fleet.playersOnline + "" player(s) online · "" + s.fleet.accounts +
+      "" account(s) · "" + s.fleet.reportsOpen + "" open report(s)</p>"";
+    el.innerHTML = html;
+  }).catch(function () { el.textContent = 'stats unavailable'; });
+})();
+</script>");
 
         return WorldHostPortalPages.Shell("Fleet admin — Blocks Beyond the Stars", sb.ToString());
     }

@@ -114,6 +114,16 @@ public sealed class WorldHostConfig
 
     public int ReportsPerHourPerAccount { get; set; } = 10;
 
+    // --- Public aggregate stats (GET /api/stats): four numbers for the website/client. Public and
+    // unauthenticated, therefore doubly guarded: a cached single-flight snapshot plus a per-IP limit. ---
+
+    /// <summary>Per-IP request limit for /api/stats (BBS_WH_STATS_PER_MINUTE); non-positive disables the limiter.</summary>
+    public int StatsPerMinutePerIp { get; set; } = 30;
+
+    /// <summary>Seconds the /api/stats snapshot is served from cache (BBS_WH_STATS_CACHE_SECONDS) —
+    /// the instance /status probes behind the online-player count never run more often than this.</summary>
+    public int StatsCacheSeconds { get; set; } = 30;
+
     // --- Legal pages (§5 DDG Impressum + DSGVO privacy). Operator-set on purpose: a SELF-HOSTED
     // WorldHost must carry ITS operator's data, never the project authors' — empty values make the
     // pages render a clear "not configured" notice instead of wrong legal information. ---
@@ -217,6 +227,8 @@ public sealed class WorldHostConfig
         if (Env("BBS_WH_LOGINS_PER_MINUTE") is { } liStr && int.TryParse(liStr, out var li)) { c.LoginPerMinutePerIp = li; }
         if (Env("BBS_WH_UPLOADS_PER_HOUR") is { } ulStr && int.TryParse(ulStr, out var ul)) { c.UploadsPerHourPerAccount = ul; }
         if (Env("BBS_WH_REPORTS_PER_HOUR") is { } rpStr && int.TryParse(rpStr, out var rp)) { c.ReportsPerHourPerAccount = rp; }
+        if (Env("BBS_WH_STATS_PER_MINUTE") is { } spStr && int.TryParse(spStr, out var sp)) { c.StatsPerMinutePerIp = sp; }
+        if (Env("BBS_WH_STATS_CACHE_SECONDS") is { } scStr && int.TryParse(scStr, out var sc)) { c.StatsCacheSeconds = sc; }
         if (Env("BBS_WH_LEGAL_NAME") is { } legalName) { c.LegalName = legalName; }
         if (Env("BBS_WH_LEGAL_ADDRESS") is { } legalAddress) { c.LegalAddress = legalAddress; }
         if (Env("BBS_WH_LEGAL_EMAIL") is { } legalEmail) { c.LegalEmail = legalEmail; }

@@ -224,6 +224,27 @@ live player counts via `/status`, stop/wake), the open player-report queue (clos
 reviewed/dismissed, reported names link to account lookup) and ban/unban with reason. The
 bug-report inbox has its own `/admin` (ReportHost) including a filtered JSON bulk export.
 
+**Server health card** (top of `/admin`): host load/RAM/disk plus per-container CPU/memory and the
+fleet aggregates, filled asynchronously from `GET /admin/stats.json` (same Basic-Auth gate) because
+the `docker stats` sample behind it takes ~1-2 s. Host numbers come from `/proc/meminfo` +
+`/proc/loadavg` (host-wide inside a container) and `DriveInfo` resolved against the worlds bind
+mount; on platforms without `/proc` (Windows dev) the fields are null and the card degrades.
+
+## Public stats API
+
+`GET /api/stats` (portal domain, no auth) returns exactly four aggregate numbers for the marketing
+site / client — never names or ids:
+
+```json
+{ "worlds": { "created": 12, "active": 3 }, "players": { "registered": 45, "online": 7 }, "updatedUnix": 1783300000 }
+```
+
+Being public it is doubly guarded: the JSON snapshot is cached with single-flight rebuild
+(`BBS_WH_STATS_CACHE_SECONDS`, default 30 — the per-instance `/status` probes behind `online` never
+run per-request) and requests are rate limited per IP (`BBS_WH_STATS_PER_MINUTE`, default 30).
+Responses carry `Access-Control-Allow-Origin: *` (so the website can fetch it client-side) and a
+matching `Cache-Control`.
+
 ## Registry storage: SQLite now, Postgres when it earns it
 
 The registry is SQLite on purpose: one host, one writer process, a tiny write volume, backup = one
