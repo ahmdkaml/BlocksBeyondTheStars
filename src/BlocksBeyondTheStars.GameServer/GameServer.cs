@@ -185,7 +185,9 @@ public sealed partial class GameServer
         _repo = repo;
         _log = logger ?? new NullGameLogger();
         _ai = aiProvider
-              ?? (config.AiLevel != AiLevel.Off ? new HttpAiMissionProvider(config.AiBackendUrl) : new NullAiMissionProvider());
+              ?? (config.AiLevel != AiLevel.Off
+                  ? new HttpAiMissionProvider(config.AiBackendUrl, timeoutSeconds: config.AiTimeoutSeconds)
+                  : new NullAiMissionProvider());
     }
 
     private GameRules Rules => _config.Rules;

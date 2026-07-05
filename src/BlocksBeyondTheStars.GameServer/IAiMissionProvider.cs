@@ -118,13 +118,16 @@ public sealed class HttpAiMissionProvider : IAiMissionProvider
 
     private readonly string _missionTextUrl;
 
-    public HttpAiMissionProvider(string baseUrl, HttpClient? http = null)
+    public HttpAiMissionProvider(string baseUrl, HttpClient? http = null, int timeoutSeconds = 35)
     {
         _baseUrl = baseUrl.TrimEnd('/');
         _missionUrl = _baseUrl + "/mission-plan";
         _npcLineUrl = _baseUrl + "/npc-line";
         _missionTextUrl = _baseUrl + "/mission-text";
-        _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+
+        // Generous by design (ServerConfig.AiTimeoutSeconds): callers never block gameplay on this —
+        // NPC lines upgrade asynchronously — so the timeout only bounds how late a line may still land.
+        _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Max(1, timeoutSeconds)) };
     }
 
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD002:Avoid problematic synchronous waits",

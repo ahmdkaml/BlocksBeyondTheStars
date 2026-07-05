@@ -77,6 +77,12 @@ public sealed class ServerConfig
     /// <summary>Base URL of the optional Python AI backend (used when <see cref="AiLevel"/> is not Off).</summary>
     public string AiBackendUrl { get; set; } = "http://127.0.0.1:8077";
 
+    /// <summary>HTTP timeout (seconds) for AI-backend calls. Generous by design: players never wait on
+    /// AI (they always get an instant static/template line; the LLM line upgrades it asynchronously), so
+    /// this only bounds how late an upgrade may still arrive. Keep it ABOVE the backend's own LLM timeout
+    /// (BBTS_AI_TIMEOUT, default 30 s) so the backend's template fallback beats this deadline.</summary>
+    public int AiTimeoutSeconds { get; set; } = 35;
+
     /// <summary>Endpoint the server POSTs automatic crash reports to — the website's bug-report function, shared
     /// with player feedback + client crashes (server reports are shaped to the same contract). Uploading stays
     /// OFF until <see cref="CrashReportApiKey"/> is also set, so a self-hosted server never phones home unless
@@ -507,6 +513,7 @@ public sealed class ServerConfig
         if (Env("BBS_SPACE_NPCS") is { } snStr && Enum.TryParse<AlienActivity>(snStr, ignoreCase: true, out var sn)) { Rules.SpaceNpcEnemies = sn; applied.Add("BBS_SPACE_NPCS"); }
         if (Env("BBS_AI_LEVEL") is { } aiStr && Enum.TryParse<AiLevel>(aiStr, ignoreCase: true, out var ai)) { AiLevel = ai; applied.Add("BBS_AI_LEVEL"); }
         if (Env("BBS_AI_BACKEND_URL") is { } aiUrl) { AiBackendUrl = aiUrl; applied.Add("BBS_AI_BACKEND_URL"); }
+        if (Env("BBS_AI_TIMEOUT_SECONDS") is { } aiToStr && int.TryParse(aiToStr, out var aiTo) && aiTo > 0) { AiTimeoutSeconds = aiTo; applied.Add("BBS_AI_TIMEOUT_SECONDS"); }
         if (Env("BBS_CRASH_REPORT_ENDPOINT") is { } crashUrl) { CrashReportEndpoint = crashUrl; applied.Add("BBS_CRASH_REPORT_ENDPOINT"); }
         if (Env("BBS_CRASH_REPORT_KEY") is { } crashKey) { CrashReportApiKey = crashKey; applied.Add("BBS_CRASH_REPORT_KEY"); }
         if (Env("BBS_VOICE") is { } voiceStr && bool.TryParse(voiceStr, out var voice)) { VoiceChatEnabled = voice; applied.Add("BBS_VOICE"); }
