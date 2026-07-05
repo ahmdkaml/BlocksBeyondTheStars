@@ -1,0 +1,31 @@
+# syntax=docker/dockerfile:1
+#
+# Blocks Beyond the Stars — optional AI backend (NPC lines, mission flavour text, mission plans; see
+# ai-backend/README.md and docs/developer/HOSTED_WORLDS.md). One small Python service that talks to ANY
+# OpenAI-compatible endpoint (OVHcloud AI Endpoints, LM Studio, OpenAI, …) selected purely by env vars —
+# and degrades to deterministic bilingual templates when no model is configured or a call fails.
+# NOT part of the self-hosting server image; self-hosters run it separately if they want AI at all.
+# Build context = repo root:
+#
+#   docker build -f Dockerfile.ai -t blocks-beyond-the-stars-ai:local .
+
+FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS runtime
+WORKDIR /app
+
+# Locked, reproducible dependency set (uv.lock) — no dev deps, bytecode-compiled for faster cold start.
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+COPY ai-backend/pyproject.toml ai-backend/uv.lock ./
+RUN uv sync --frozen --no-dev
+
+COPY ai-backend/app ./app
+ENV PATH="/app/.venv/bin:$PATH"
+
+# In a container the service must bind all interfaces; reachability is controlled by the docker network
+# (the fleet compose publishes NO port — only siblings on bbs-hosted can reach it).
+EXPOSE 8077/tcp
+
+# The slim image has no curl — probe /health with the stdlib instead.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8077/health', timeout=4)" || exit 1
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8077"]

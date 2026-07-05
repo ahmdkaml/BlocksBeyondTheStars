@@ -1,0 +1,24 @@
+# AI backend — LLM texts for the hosted-worlds fleet (NPC lines, mission flavour; Dockerfile.ai).
+# INTERNAL-ONLY by design: no published port, no caddy labels — only siblings on the bbs-hosted network
+# (the per-world game servers) can reach it as http://ai:8077, and the provider API key never leaves
+# /opt/bbs/ai/.env on the host. The only outbound traffic is the HTTPS call to the configured
+# OpenAI-compatible endpoint (OVHcloud AI Endpoints for the official fleet).
+services:
+  ai:
+    image: ghcr.io/marceld23/blocks-beyond-the-stars-ai:${AI_TAG:-latest}
+    container_name: bbs-ai
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 1
+    networks:
+      - bbs-hosted
+    environment:
+      BBTS_AI_BASE_URL: ${BBTS_AI_BASE_URL:?set in /opt/bbs/ai/.env}
+      BBTS_AI_API_KEY: ${BBTS_AI_API_KEY:-}
+      BBTS_AI_MODEL: ${BBTS_AI_MODEL:?set in /opt/bbs/ai/.env}
+      BBTS_AI_TEMPERATURE: ${BBTS_AI_TEMPERATURE:-0.8}
+      BBTS_AI_TIMEOUT: ${BBTS_AI_TIMEOUT:-30}
+
+networks:
+  bbs-hosted:
+    external: true
