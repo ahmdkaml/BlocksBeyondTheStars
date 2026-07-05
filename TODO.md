@@ -5540,6 +5540,11 @@ Two observability surfaces on WorldHost (details: HOSTED_WORLDS.md).
   (`BBS_WH_STATS_PER_MINUTE`, 30). CORS-open so the marketing website can show live numbers.
 - 11 new tests (`WorldHostStatsTests`): /proc + docker-stats parsers, size units, cache TTL/expiry,
   single-flight concurrency, stale-serve during rebuild.
+- **Fix (2026-07-05)**: core count now read host-wide from `/proc/cpuinfo` (fallback
+  `Environment.ProcessorCount`). The load bar compared host-wide loadavg against
+  `Environment.ProcessorCount`, which honors the container's cgroup CPU quota — WorldHost's
+  `cpus: 1.0` fence made it report "1 cores" on a 6-core host, so any host load >1 showed a
+  false red bar. 2 new tests (suite 1005).
 
 ## ✅ Done (2026-07-05): fleet AI texts, per-world resource fences, operator admin UIs
 The LLM backend joins the fleet and the host gets guard rails (details: HOSTED_WORLDS.md).

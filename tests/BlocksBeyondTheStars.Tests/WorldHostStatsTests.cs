@@ -48,6 +48,27 @@ public sealed class WorldHostStatsTests
     }
 
     [Fact]
+    public void ParseCpuinfoCores_CountsProcessorEntries()
+    {
+        // x86 layout: one "processor : N" block per logical CPU, plus lines that merely start
+        // with "processor"-unrelated keys ("model name" contains "processor" mid-line — ignored).
+        const string sample =
+            "processor\t: 0\nvendor_id\t: GenuineIntel\nmodel name\t: Some Xeon processor\n\n" +
+            "processor\t: 1\nvendor_id\t: GenuineIntel\n\n" +
+            "processor\t: 2\n\nprocessor\t: 3\n\nprocessor\t: 4\n\nprocessor\t: 5\n";
+        Assert.Equal(6, HostStats.ParseCpuinfoCores(sample));
+    }
+
+    [Fact]
+    public void ParseCpuinfoCores_NullWhenNoEntries()
+    {
+        Assert.Null(HostStats.ParseCpuinfoCores(string.Empty));
+        Assert.Null(HostStats.ParseCpuinfoCores("model name : whatever\n"));
+        // "processor" as a key prefix without the colon separator must not count.
+        Assert.Null(HostStats.ParseCpuinfoCores("processors total 4\n"));
+    }
+
+    [Fact]
     public void DiskFor_CurrentDirectory_ReportsPositiveSizes()
     {
         var disk = HostStats.DiskFor(Environment.CurrentDirectory);

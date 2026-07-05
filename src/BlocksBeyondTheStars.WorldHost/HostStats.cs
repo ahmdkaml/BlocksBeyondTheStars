@@ -30,10 +30,33 @@ public static class HostStats
         var load = TryRead("/proc/loadavg") is { } loadText ? ParseLoadavg(loadText) : null;
         var mem = TryRead("/proc/meminfo") is { } memText ? ParseMeminfo(memText) : null;
         var disk = DiskFor(worldsDir);
+        // Core count must be host-wide like the load averages it is compared against.
+        // Environment.ProcessorCount honors the container's cgroup CPU quota (1 for a "cpus: 1.0"
+        // fence), which made the admin page flag any host load >1 as red on a 6-core machine.
+        int cores = (TryRead("/proc/cpuinfo") is { } cpuText ? ParseCpuinfoCores(cpuText) : null)
+                    ?? Environment.ProcessorCount;
         return new HostUtilization(
-            load?.Load1, load?.Load5, load?.Load15, Environment.ProcessorCount,
+            load?.Load1, load?.Load5, load?.Load15, cores,
             mem?.TotalKb, mem?.AvailableKb,
             disk?.TotalBytes, disk?.FreeBytes);
+    }
+
+    /// <summary>Host CPU count = number of "processor" entries in <c>/proc/cpuinfo</c> (cpuinfo is
+    /// not masked by cgroups, so inside a CPU-fenced container it still lists all host cores).
+    /// Null when no entry is found (e.g. exotic arch formats) so callers can fall back.</summary>
+    public static int? ParseCpuinfoCores(string text)
+    {
+        int count = 0;
+        foreach (var line in text.Split('\n'))
+        {
+            if (line.StartsWith("processor", StringComparison.Ordinal)
+                && line.AsSpan("processor".Length).TrimStart().StartsWith(":"))
+            {
+                count++;
+            }
+        }
+
+        return count > 0 ? count : null;
     }
 
     /// <summary>MemTotal/MemAvailable from <c>/proc/meminfo</c> content; null when either is missing.</summary>
