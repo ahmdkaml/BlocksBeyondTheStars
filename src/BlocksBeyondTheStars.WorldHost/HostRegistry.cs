@@ -421,6 +421,11 @@ public sealed class HostRegistry : IDisposable
             message = message.Substring(0, 500);
         }
 
+        // The world id is optional context (which world's logs to check) — anything that is not a
+        // well-formed id is stored as empty rather than rejected, so a stale client never loses a report.
+        worldId = (worldId ?? string.Empty).Trim();
+        worldId = IsValidWorldId(worldId) ? worldId : string.Empty;
+
         lock (_gate)
         {
             using var cmd = Cmd("""

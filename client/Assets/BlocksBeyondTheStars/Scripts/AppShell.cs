@@ -49,6 +49,10 @@ namespace BlocksBeyondTheStars.Client
         /// StartJoin; short-lived). Must stay empty for singleplayer/LAN/self-host joins.</summary>
         public string HostedToken = "";
 
+        /// <summary>Id of the joined OFFICIAL hosted world (set together with <see cref="HostedToken"/>);
+        /// attached to in-game player reports. Must stay empty for singleplayer/LAN/self-host joins.</summary>
+        public string HostedWorldId = "";
+
         /// <summary>One-shot notice shown on the main menu (e.g. why the last join was refused).</summary>
         public string MenuNotice = "";
 

@@ -1819,8 +1819,9 @@ namespace BlocksBeyondTheStars.Client
         {
             string portalUrl = Game.PortalUrl;
             string session = Game.PortalSession;
+            string worldId = Game.HostedWorldId;
             var portal = new PortalClient(portalUrl);
-            var result = await Task.Run(() => portal.Report(session, playerName, "other", "in-game report"));
+            var result = await Task.Run(() => portal.Report(session, playerName, "other", "in-game report", worldId));
             if (button == null)
             {
                 return; // menu closed while the request ran

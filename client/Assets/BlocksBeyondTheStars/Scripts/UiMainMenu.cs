@@ -130,6 +130,7 @@ namespace BlocksBeyondTheStars.Client
                 shell.Settings.PlayerName = shell.PlayerName; // remember the identity across sessions
                 shell.Settings.Save();
                 shell.HostedToken = ""; // never let an official-worlds grant leak into SP/LAN/manual joins
+                shell.HostedWorldId = "";
                 return true;
             }
 
@@ -213,6 +214,7 @@ namespace BlocksBeyondTheStars.Client
                 shell.Port = string.IsNullOrWhiteSpace(port[0]) ? shell.Port : port[0].Trim();
                 shell.Password = pass[0] ?? "";
                 shell.HostedToken = ""; // manual join: no official-worlds grant
+                shell.HostedWorldId = "";
                 shell.StartJoin();
             }, "btn_join");
             UiKit.AddButton(dlg, 310f, 432f, 260f, 54f, shell.L("ui.menu.back"), () => connect.SetActive(false), "btn_exit");
@@ -339,6 +341,7 @@ namespace BlocksBeyondTheStars.Client
                 shell.Port = r.NativePort.ToString();
                 shell.Password = "";
                 shell.HostedToken = r.JoinToken; // the grant the server-side token gate verifies
+                shell.HostedWorldId = worldId; // attached to in-game player reports
                 shell.StartJoin();
             }
 

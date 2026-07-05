@@ -92,6 +92,12 @@ through Caddy.
 - **In-game report button:** on hosted worlds (portal session + hosted join present) every player row
   in the Alliances → find-players list carries a "Report" button — one tap files a report via
   `POST /api/reports`, the button becomes the confirmation. Absent everywhere else.
+- **`/report <player> [note]` chat command:** the same gate and endpoint, but from the chat box —
+  files a category-`chat` report quoting the reported player's last 10 chat lines as evidence
+  (`Client.Core/Portal/ReportChatCommand` holds the pure parse/compose logic, unit-tested headless).
+  All report paths (button, command, portal web form) attach the world id — the Official-Worlds join
+  threads it as `AppShell.HostedWorldId` → `GameBootstrap.HostedWorldId`, cleared alongside the
+  hosted token on SP/LAN/manual joins; `CreateReport` blanks anything that is not a 12-hex id.
 - **One-time welcome (MOTD):** on a hosted world's FIRST join of a player, the server sends one
   bilingual system line (be kind + rules + beta notice) — `PlayerState.HostedWelcomeShown` persists
   so it never repeats. Keyed on the join-token gate, so self-hosted servers are unaffected.

@@ -86,6 +86,7 @@ function v(id){{return document.getElementById(id).value.trim();}}
  <p class='hint'>Jemand war gemein oder macht Mist? Sag uns Bescheid — wir schauen es uns an. · <i>Someone was mean or misbehaving? Tell us — we will look into it.</i></p>
  <input id='r-name' placeholder='Spielername · Player name' maxlength='24'>
  <select id='r-cat'><option value='chat'>Chat</option><option value='name'>Name</option><option value='griefing'>Zerstören · Griefing</option><option value='other'>Anderes · Other</option></select>
+ <select id='r-world'><option value=''>Welt? · Which world? (optional)</option></select>
  <input id='r-msg' placeholder='Was ist passiert? · What happened?' maxlength='500'>
  <button onclick='report()'>Melden · Report</button>
 </div>
@@ -124,6 +125,10 @@ async function load(){
     el.appendChild(d);
   }
   if(!j.worlds.length) el.innerHTML = ""<p class='hint'>Noch keine Welt — erstelle deine erste! · No world yet — create your first!</p>"";
+  const rw = document.getElementById('r-world'); const keep = rw.value;
+  rw.length = 1; // keep the '(optional)' placeholder, rebuild the rest from the fresh list
+  for(const w of j.worlds){ const o=document.createElement('option'); o.value=w.id; o.textContent=w.name; rw.appendChild(o); }
+  rw.value = keep && [...rw.options].some(o=>o.value===keep) ? keep : '';
 }
 async function createWorld(){
   const j = await api('POST','/api/worlds',{name: document.getElementById('w-name').value.trim()});
@@ -159,7 +164,7 @@ async function upSave(id, file){
   say(r.ok ? 'Save übernommen! · Save imported!' : bbsErr(j, 'Fehler · Error'));
 }
 async function report(){
-  const j = await api('POST','/api/reports',{reportedName:v('r-name'), category:document.getElementById('r-cat').value, message:v('r-msg')});
+  const j = await api('POST','/api/reports',{reportedName:v('r-name'), category:document.getElementById('r-cat').value, message:v('r-msg'), worldId:document.getElementById('r-world').value});
   if(j){ say('Danke für deine Meldung! · Thanks for your report!'); document.getElementById('r-name').value=''; document.getElementById('r-msg').value=''; }
 }
 async function deleteAccount(){

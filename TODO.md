@@ -5500,6 +5500,19 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-05): /report chat command + world id on player reports
+Player reporting now works from inside the game chat, and every report says which world it came from.
+- **`/report <player> [note]` chat command** (official hosted worlds only, same gate as the alliance-tab
+  report button): files a category-`chat` report and quotes the reported player's last 10 chat lines
+  from the shared feed as evidence (`ReportChatCommand` in Client.Core — parse + compose are pure and
+  unit-tested). Outcome shows as a local-only chat line; DE+EN locale keys `ui.chat.report_*`.
+- **World id on all reports**: the Official-Worlds join now threads the joined world's id through
+  `AppShell → WorldRig → GameBootstrap` (`HostedWorldId`, cleared on SP/LAN/manual joins like the
+  join grant); the in-game button, the /report command and the portal web form (new optional world
+  dropdown) all send it, so operators know which world's logs to check. `CreateReport` keeps only
+  well-formed 12-hex ids (junk → stored empty, never rejected).
+- 13 new tests (12 ReportChatCommand + 1 registry world-id round-trip) → suite 890 + 113 = 1003.
+
 ## ✅ Done (2026-07-05): clean stop during initial worldgen — no more exit 137 (#243)
 Stopping a freshly created world while it was still generating ended in docker's SIGKILL after the
 60 s grace, risking the initial save. Two-part fix:
