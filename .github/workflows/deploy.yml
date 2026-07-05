@@ -48,8 +48,10 @@ jobs:
           WORLDHOST_TAG: ${{ inputs.worldhost_tag }}
           REPORTS_TAG: ${{ inputs.reports_tag }}
         run: |
+          # Empty = keep the currently pinned tag; grep sees no line on empty input, so skip explicitly.
           for t in "$WORLDHOST_TAG" "$REPORTS_TAG"; do
-            if ! printf '%s' "$t" | grep -Eq '^[A-Za-z0-9._-]*$'; then
+            [ -z "$t" ] && continue
+            if ! printf '%s' "$t" | grep -Eq '^[A-Za-z0-9._-]+$'; then
               echo "invalid image tag: $t"; exit 1
             fi
           done
