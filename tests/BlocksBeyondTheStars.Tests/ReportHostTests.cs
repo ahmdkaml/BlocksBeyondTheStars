@@ -185,6 +185,26 @@ public sealed class ReportHostTests : IDisposable
     }
 
     [Fact]
+    public void Export_LatestWithBigLimit_ReturnsAllMatching_AndSerializes()
+    {
+        // Backs the admin UI's "Download JSON" button: Latest with the export-sized limit must return
+        // every matching report (not the page's 200) and the records must serialize as one JSON blob.
+        var store = NewStore();
+        store.Add(ReportIngest.Parse(FeedbackPayload(), new ReportHostConfig(), out _)!, nowUnix: 1000);
+        store.Add(ReportIngest.Parse(CrashPayload(), new ReportHostConfig(), out _)!, nowUnix: 2000);
+
+        var all = store.Latest(status: null, category: null, limit: 100_000);
+        Assert.Equal(2, all.Count);
+
+        var onlyCrash = store.Latest(status: null, category: "crash", limit: 100_000);
+        Assert.Single(onlyCrash);
+
+        byte[] json = JsonSerializer.SerializeToUtf8Bytes(new { count = all.Count, reports = all });
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(2, doc.RootElement.GetProperty("reports").GetArrayLength());
+    }
+
+    [Fact]
     public void Query_PaginatesWithKeysetCursor_AndFilters()
     {
         var store = NewStore();
