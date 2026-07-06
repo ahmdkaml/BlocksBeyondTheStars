@@ -7,7 +7,7 @@ asset here **with its licence** before bundling it.
 
 ## Bundled assets (textures, models, audio, fonts)
 
-**Sound effects:** `client/Assets/Resources/audio/*.mp3` (125 files, incl. the splash intro, the
+**Sound effects:** `client/Assets/Resources/audio/*.mp3` (163 files, incl. the splash intro, the
 `terrain_scan` prospecting pulse (Feature 40), the
 `jumave_sting` studio-splash whoosh-tada, the door SFX `door_slide_open`/`door_slide_close`/`door_hinge`
 the death cues `space_death`/`player_death`, the per-species creature calls `creature_call_*`, the
@@ -15,8 +15,9 @@ item-21 world ambiences `amb_ocean`/`amb_ashen`/`amb_fungal`/`amb_corrupted`/`am
 `geyser_erupt` eruption, the planet-enemy vocals `enemy_growl`/`enemy_attack`/`enemy_hurt`/`enemy_die`,
 the ship-AI radio chirp `ai_blip` (VEGA companion), the water-body ambient loops
 `water_surf`/`water_brook` (coastal surf + flowing brook), the beam-block teleporter cues
-`beam_teleport` (jump whoosh) + `beam_idle` (pad idle hum loop), and the algae-tank craft cue
-`algae_tank_craft` (bubbling harvest blub, via `tools/ai-assets/gen_sound.py`))
+`beam_teleport` (jump whoosh) + `beam_idle` (pad idle hum loop), the algae-tank craft cue
+`algae_tank_craft` (bubbling harvest blub, via `tools/ai-assets/gen_sound.py`), and the energy-fence
+ambience `energy_fence_hum` (soft force-field hum loop, same `gen_sound.py`))
 are **AI-generated** with the
 **ElevenLabs** text-to-sound-effects API by the project owner — see `tools/ai-assets/gen_batch.py`
 for the exact prompts and `docs/developer/SOUND_DESIGN.md` for the catalogue. They are AI-synthesised audio
@@ -46,7 +47,7 @@ and the algae-tank food `item_algae_ration`) are
 (`gpt-image-1-mini`, full-colour transparent object icons — see `tools/ai-assets/gen_item_icons.py`);
 same OpenAI usage terms. Block-backed materials reuse their in-game block atlas tile instead.
 
-**Block textures:** `client/Assets/Resources/textures/*.bytes` (raw 64x64 RGBA32 tiles, incl. the full flora set — every `flora_*` block, kelp + lily included — wood-log/tree-leaves, the Task-5 metal/rare-earth ores + alloy blocks, the item-21 `geyser_vent`, the `base_core` planet-base cornerstone, the `beam_block` teleporter pad, the material-variety set (`detoxifier`, `diamond_ore`, `insulated_wall`, the 13 metal storage blocks `iron_block`…`titanium_block`), the `algae_tank` food machine, and the planet-enemy
+**Block textures:** `client/Assets/Resources/textures/*.bytes` (raw 64x64 RGBA32 tiles, incl. the full flora set — every `flora_*` block, kelp + lily included — wood-log/tree-leaves, the Task-5 metal/rare-earth ores + alloy blocks, the item-21 `geyser_vent`, the `base_core` planet-base cornerstone, the `beam_block` teleporter pad, the material-variety set (`detoxifier`, `diamond_ore`, `insulated_wall`, the 13 metal storage blocks `iron_block`…`titanium_block`), the `algae_tank` food machine, the `energy_fence`/`energy_gate` creature-pen pair, and the planet-enemy
 `enemy_hide` chitin tile) are
 **AI-generated** with the same **OpenAI** image API (`gpt-image-1-mini`, 64px pixel-art tiles — see
 `tools/ai-assets/gen_textures.py`, bundled as raw bytes by `bundle_textures.py`), loaded into the

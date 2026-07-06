@@ -181,6 +181,11 @@
   { "key": "algae_tank",   "station": "workshop",  "inputs": [ { "item": "metal_panel", "count": 2 }, { "item": "glass", "count": 3 } ], "outputs": [ { "item": "algae_tank", "count": 1 } ] },
   { "key": "algae_ration", "station": "algaetank", "inputs": [ { "item": "water", "count": 1 } ],                                        "outputs": [ { "item": "algae_ration", "count": 2 } ] },
 
+  // Energy fence: contains creatures, companions and planet enemies; the gate membrane lets
+  // players and NPCs walk through but still reads as a fence to fauna. No blueprint gate.
+  { "key": "energy_fence", "station": "workshop", "inputs": [ { "item": "metal_panel", "count": 2 }, { "item": "cable", "count": 2 } ], "outputs": [ { "item": "energy_fence", "count": 4 } ] },
+  { "key": "energy_gate",  "station": "workshop", "inputs": [ { "item": "metal_panel", "count": 2 }, { "item": "energy_cell_1", "count": 1 }, { "item": "circuit_board", "count": 1 } ], "outputs": [ { "item": "energy_gate", "count": 1 } ] },
+
   { "key": "diamond",        "station": "refinery", "inputs": [ { "item": "diamond_ore", "count": 2 } ], "outputs": [ { "item": "diamond", "count": 1 } ] },
   { "key": "diamond_drill",  "station": "workshop", "requiredBlueprint": "diamond_drill", "inputs": [ { "item": "titanium_plate", "count": 6 }, { "item": "diamond", "count": 2 }, { "item": "cable", "count": 6 }, { "item": "carbide", "count": 1 } ], "outputs": [ { "item": "diamond_drill", "count": 1 } ] },
 

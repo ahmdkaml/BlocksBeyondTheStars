@@ -85,6 +85,7 @@ public sealed partial class GameServer
         _creatureSpawnRotor = 0;
         _creatureWaterId = _content.GetBlock("water")?.NumericId.Value ?? 0;
         _creatureLavaId = _content.GetBlock("lava")?.NumericId.Value ?? 0;
+        InitFences();
     }
 
     // --- Day/night activity (ties into the World-systems clock) ---
@@ -605,8 +606,17 @@ public sealed partial class GameServer
             // swoop, swimmers porpoise through the water column — driven by the per-creature vertical wave.
             var next = AdjustHabitatHeight(sp, res.Position, res.VertWave, profile);
 
-            // Creatures don't walk into the player's ship — hold position at the hull.
-            creature.Position = EntityBlockedByShip(next) ? creature.Position : next;
+            // Creatures don't walk into the player's ship — hold position at the hull. Energy fences
+            // pen them in the same way: the step is discarded and a fresh heading is rolled next tick,
+            // so a fenced creature keeps milling about inside instead of grinding against the wire.
+            if (EntityBlockedByShip(next) || BlockedByEnergyFence(creature.Position, next))
+            {
+                creature.Loco.ModeTimer = 0f;
+            }
+            else
+            {
+                creature.Position = next;
+            }
         }
     }
 
