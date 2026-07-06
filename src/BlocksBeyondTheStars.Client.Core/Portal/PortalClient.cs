@@ -66,12 +66,50 @@ namespace BlocksBeyondTheStars.Client.Portal
         public string Code { get; set; } = string.Empty;
     }
 
+    /// <summary>Current community rules (GET /api/terms): the version number signup must echo, plus the
+    /// full rules text in both languages so the client renders them in-game (#268).</summary>
+    public sealed class PortalTermsResult
+    {
+        public bool Ok { get; set; }
+        public string Error { get; set; } = string.Empty;
+
+        /// <summary>Stable machine code of the error (empty on success/unknown) — the UI localizes it.</summary>
+        public string Code { get; set; } = string.Empty;
+        public int Version { get; set; }
+        public string TextDe { get; set; } = string.Empty;
+        public string TextEn { get; set; } = string.Empty;
+    }
+
+    /// <summary>A single world, as answered by world creation (POST /api/worlds).</summary>
+    public sealed class PortalWorldResult
+    {
+        public bool Ok { get; set; }
+        public string Error { get; set; } = string.Empty;
+
+        /// <summary>Stable machine code of the error (empty on success/unknown) — the UI localizes it.</summary>
+        public string Code { get; set; } = string.Empty;
+        public PortalWorldInfo? World { get; set; }
+    }
+
+    /// <summary>A downloaded world save (GET /api/worlds/{id}/save): raw bytes on success, the usual
+    /// error envelope otherwise (e.g. stop_first while the world still runs).</summary>
+    public sealed class PortalSaveResult
+    {
+        public bool Ok { get; set; }
+        public string Error { get; set; } = string.Empty;
+
+        /// <summary>Stable machine code of the error (empty on success/unknown) — the UI localizes it.</summary>
+        public string Code { get; set; } = string.Empty;
+        public byte[] Bytes { get; set; } = System.Array.Empty<byte>();
+    }
+
     /// <summary>
-    /// Client for the hosted-worlds control plane ("WorldHost") — sign in, list/join your worlds, file a
-    /// player report. Mirrors <see cref="Feedback.FeedbackUploader"/>: plain <see cref="HttpClient"/> +
-    /// System.Text.Json so the exact same code runs in the Unity player AND the headless test suite;
-    /// calls are synchronous and never throw (the Unity layer runs them on a background task). Desktop
-    /// only — the browser client never selects servers (HOSTED_WORLDS.md).
+    /// Client for the hosted-worlds control plane ("WorldHost") — full portal parity (#268-#270): sign
+    /// up (incl. rules acceptance), sign in, create/list/join/manage your worlds, save backups, feedback
+    /// and reports, account deletion. Mirrors <see cref="Feedback.FeedbackUploader"/>: plain
+    /// <see cref="HttpClient"/> + System.Text.Json so the exact same code runs in the Unity player AND
+    /// the headless test suite; calls are synchronous and never throw (the Unity layer runs them on a
+    /// background task). Desktop only — the browser client never selects servers (HOSTED_WORLDS.md).
     /// </summary>
     public sealed class PortalClient
     {
@@ -116,6 +154,78 @@ namespace BlocksBeyondTheStars.Client.Portal
         public PortalSimpleResult Report(string session, string reportedName, string category, string message, string? worldId = null)
         {
             var (status, body) = Post("/api/reports", new { reportedName, category, message, worldId = worldId ?? string.Empty }, session);
+            return ParseSimple(status, body);
+        }
+
+        /// <summary>Current rules version + text — anonymous; fetched before signup (the version must be
+        /// echoed) and for the in-game rules screen (#268).</summary>
+        public PortalTermsResult GetTerms()
+        {
+            var (status, body) = Get("/api/terms", session: null);
+            return ParseTerms(status, body);
+        }
+
+        /// <summary>Creates an account; <paramref name="acceptedTermsVersion"/> must be the CURRENT
+        /// version from <see cref="GetTerms"/> — the player accepted the rules in the signup UI.
+        /// The answer carries the fresh session, so a successful signup is also a sign-in.</summary>
+        public PortalLoginResult Signup(string name, string password, int acceptedTermsVersion)
+        {
+            var (status, body) = Post("/api/signup", new { name, password, acceptedTermsVersion }, session: null);
+            return ParseLogin(status, body);
+        }
+
+        /// <summary>Re-accepts the current community rules after a version bump (terms_outdated).</summary>
+        public PortalSimpleResult AcceptTerms(string session)
+        {
+            var (status, body) = Post("/api/accept-terms", new { }, session);
+            return ParseSimple(status, body);
+        }
+
+        /// <summary>Creates a hosted world; <paramref name="password"/> (empty/null = open world)
+        /// protects it with a join password (4-24 chars).</summary>
+        public PortalWorldResult CreateWorld(string session, string name, string? password = null)
+        {
+            var (status, body) = Post("/api/worlds", new { name, password }, session);
+            return ParseWorld(status, body);
+        }
+
+        /// <summary>Owner-only: set/change (4-24 chars) or remove (empty) the world's join password.</summary>
+        public PortalSimpleResult SetWorldPassword(string session, string worldId, string password)
+        {
+            var (status, body) = Post($"/api/worlds/{worldId}/password", new { password }, session);
+            return ParseSimple(status, body);
+        }
+
+        public PortalSimpleResult StopWorld(string session, string worldId)
+        {
+            var (status, body) = Post($"/api/worlds/{worldId}/stop", new { }, session);
+            return ParseSimple(status, body);
+        }
+
+        public PortalSimpleResult DeleteWorld(string session, string worldId)
+        {
+            var (status, body) = Delete($"/api/worlds/{worldId}", session);
+            return ParseSimple(status, body);
+        }
+
+        /// <summary>Deletes the account, ALL its worlds and their saves — irreversible (DSGVO Art. 17).</summary>
+        public PortalSimpleResult DeleteAccount(string session)
+        {
+            var (status, body) = Delete("/api/account", session);
+            return ParseSimple(status, body);
+        }
+
+        /// <summary>Downloads the world's save (world.db) — the world must be stopped.</summary>
+        public PortalSaveResult DownloadSave(string session, string worldId)
+        {
+            var (status, bytes) = GetBytes($"/api/worlds/{worldId}/save", session);
+            return ParseSave(status, bytes);
+        }
+
+        /// <summary>Uploads a save (raw world.db bytes) — the world must be stopped; 50 MB server cap.</summary>
+        public PortalSimpleResult UploadSave(string session, string worldId, byte[] save)
+        {
+            var (status, body) = PostBytes($"/api/worlds/{worldId}/save", save, session);
             return ParseSimple(status, body);
         }
 
@@ -213,6 +323,84 @@ namespace BlocksBeyondTheStars.Client.Portal
             return result;
         }
 
+        public static PortalTermsResult ParseTerms(int status, string body)
+        {
+            var result = new PortalTermsResult();
+            if (!Succeeded(status, body, out string error, out string code, out JsonDocument? doc))
+            {
+                result.Error = error;
+                result.Code = code;
+                return result;
+            }
+
+            using (doc)
+            {
+                result.Ok = true;
+                result.TextDe = GetString(doc!, "textDe");
+                result.TextEn = GetString(doc!, "textEn");
+                if (doc!.RootElement.TryGetProperty("version", out var v) && v.TryGetInt32(out int version))
+                {
+                    result.Version = version;
+                }
+            }
+
+            return result;
+        }
+
+        public static PortalWorldResult ParseWorld(int status, string body)
+        {
+            var result = new PortalWorldResult();
+            if (!Succeeded(status, body, out string error, out string code, out JsonDocument? doc))
+            {
+                result.Error = error;
+                result.Code = code;
+                return result;
+            }
+
+            using (doc)
+            {
+                result.Ok = true;
+                result.World = new PortalWorldInfo
+                {
+                    Id = GetString(doc!, "id"),
+                    Name = GetString(doc!, "name"),
+                    Status = GetString(doc!, "status"),
+                    HasPassword = doc!.RootElement.TryGetProperty("hasPassword", out var hp) && hp.ValueKind == JsonValueKind.True,
+                };
+            }
+
+            return result;
+        }
+
+        /// <summary>A save download is raw bytes on success; on failure the body is the usual JSON
+        /// error envelope (decoded as UTF-8 before the shared parsing).</summary>
+        public static PortalSaveResult ParseSave(int status, byte[] body)
+        {
+            var result = new PortalSaveResult();
+            if (status is >= 200 and < 300)
+            {
+                result.Ok = true;
+                result.Bytes = body;
+                return result;
+            }
+
+            string text;
+            try
+            {
+                text = Encoding.UTF8.GetString(body);
+            }
+            catch (Exception)
+            {
+                text = string.Empty;
+            }
+
+            Succeeded(status, text, out string error, out string code, out JsonDocument? doc);
+            doc?.Dispose();
+            result.Error = error;
+            result.Code = code;
+            return result;
+        }
+
         /// <summary>Shared success/error shape: 2xx = ok (body parsed into <paramref name="doc"/>); anything
         /// else surfaces the server's player-safe <c>{"error": …}</c> text, or a status code fallback.</summary>
         private static bool Succeeded(int status, string body, out string error, out string code, out JsonDocument? doc)
@@ -281,6 +469,59 @@ namespace BlocksBeyondTheStars.Client.Portal
             try
             {
                 using var request = new HttpRequestMessage(HttpMethod.Get, _baseUrl + path);
+                Authorize(request, session);
+#pragma warning disable VSTHRD002 // Runs on a background Task (the menu awaits Task.Run) — no SynchronizationContext, cannot deadlock.
+                using var response = _http.SendAsync(request).GetAwaiter().GetResult();
+                return ((int)response.StatusCode, response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+#pragma warning restore VSTHRD002
+            }
+            catch (Exception)
+            {
+                return (0, string.Empty);
+            }
+        }
+
+        private (int Status, string Body) Delete(string path, string? session)
+        {
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Delete, _baseUrl + path);
+                Authorize(request, session);
+#pragma warning disable VSTHRD002 // Runs on a background Task (the menu awaits Task.Run) — no SynchronizationContext, cannot deadlock.
+                using var response = _http.SendAsync(request).GetAwaiter().GetResult();
+                return ((int)response.StatusCode, response.Content.ReadAsStringAsync().GetAwaiter().GetResult());
+#pragma warning restore VSTHRD002
+            }
+            catch (Exception)
+            {
+                return (0, string.Empty);
+            }
+        }
+
+        private (int Status, byte[] Body) GetBytes(string path, string? session)
+        {
+            try
+            {
+                using var request = new HttpRequestMessage(HttpMethod.Get, _baseUrl + path);
+                Authorize(request, session);
+#pragma warning disable VSTHRD002 // Runs on a background Task (the menu awaits Task.Run) — no SynchronizationContext, cannot deadlock.
+                using var response = _http.SendAsync(request).GetAwaiter().GetResult();
+                return ((int)response.StatusCode, response.Content.ReadAsByteArrayAsync().GetAwaiter().GetResult());
+#pragma warning restore VSTHRD002
+            }
+            catch (Exception)
+            {
+                return (0, System.Array.Empty<byte>());
+            }
+        }
+
+        private (int Status, string Body) PostBytes(string path, byte[] payload, string? session)
+        {
+            try
+            {
+                using var content = new ByteArrayContent(payload);
+                content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+                using var request = new HttpRequestMessage(HttpMethod.Post, _baseUrl + path) { Content = content };
                 Authorize(request, session);
 #pragma warning disable VSTHRD002 // Runs on a background Task (the menu awaits Task.Run) — no SynchronizationContext, cannot deadlock.
                 using var response = _http.SendAsync(request).GetAwaiter().GetResult();

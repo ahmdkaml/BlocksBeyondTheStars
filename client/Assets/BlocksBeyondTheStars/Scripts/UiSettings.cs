@@ -52,7 +52,7 @@ namespace BlocksBeyondTheStars.Client
 
             UiKit.AddImage(_root, 0, 0, 1920, 1080, UiKit.SolidSprite, new Color(0.02f, 0.04f, 0.08f, 0.55f));
             _px = 660f; _pw = 600f;
-            UiKit.AddPanel(_root, _px, 80, _pw, 920, UiKit.Panel);
+            UiKit.AddDialogPanel(_root, _px, 80, _pw, 920); // opaque: the menu/game behind must not mix into the rows
 
             // The settings list is taller than the panel, so host it in a scroll viewport (mouse wheel / drag)
             // clipped to the panel — previously everything was placed straight on the canvas, so the lower rows
@@ -212,6 +212,10 @@ namespace BlocksBeyondTheStars.Client
 
             scroll.viewport = viewGo.GetComponent<RectTransform>();
             scroll.content = content;
+
+            // Visible scrollbar along the panel's right edge: shows the position in the long list and
+            // lets the player jump anywhere by dragging (the wheel alone gave no overview).
+            UiKit.AddVerticalScrollbar(_root, scroll, _px + _pw - 18f, 84f, 12f, 912f);
             return content;
         }
 

@@ -365,6 +365,20 @@ app.MapGet("/ask", (string? domain) =>
 
 // ---------------- Accounts ----------------
 
+// Current community-rules version + plain text (DE/EN), anonymous: the desktop client shows the rules
+// in-game and needs the version number for signup (login only reports a boolean termsOutdated). Static
+// per deployment, so browsers/clients may cache it briefly.
+app.MapGet("/api/terms", (HttpContext ctx) =>
+{
+    ctx.Response.Headers.CacheControl = "public, max-age=300";
+    return Results.Json(new
+    {
+        version = config.TermsVersion,
+        textDe = CommunityRules.PlainText("de"),
+        textEn = CommunityRules.PlainText("en"),
+    });
+});
+
 app.MapPost("/api/signup", (HttpContext ctx, SignupRequest req) =>
 {
     if (!signupLimit.TryPass(CallerIp(ctx)))

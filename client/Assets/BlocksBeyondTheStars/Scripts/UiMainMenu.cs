@@ -103,8 +103,21 @@ namespace BlocksBeyondTheStars.Client
                 wextra = gap;
             }
 
-            UiKit.AddButton(root, bx, wby + wextra + gap, bw, bh, shell.L("ui.menu.settings"), shell.OpenSettings, "btn_settings");
-            UiKit.AddButton(root, bx, wby + wextra + gap * 2f, bw, bh, shell.L("ui.menu.credits"), () => shell.GoTo(ShellPhase.Credits), "btn_credits");
+            // "My Worlds / Account" (#272): one click back to the worlds portal the game was served
+            // from — same origin, so a self-hosted WorldHost links to its own portal, never to ours.
+            // The portal's Play button deep-links back into /play, which closes the round-trip; the
+            // portal page itself stays the browser home for signup/create/manage (HOSTED_WORLDS.md:
+            // the WebGL menu never grows a server picker).
+            UiKit.AddButton(root, bx, wby + wextra + gap, bw, bh, shell.L("ui.menu.my_worlds"), () =>
+            {
+                string portalUrl = System.Uri.TryCreate(Application.absoluteURL, System.UriKind.Absolute, out var page)
+                    && page.Scheme != System.Uri.UriSchemeFile
+                    ? page.GetLeftPart(System.UriPartial.Authority)
+                    : PortalClient.DefaultPortalUrl; // local file test builds → the official portal
+                Application.OpenURL(portalUrl + "/worlds");
+            }, "btn_credits");
+            UiKit.AddButton(root, bx, wby + wextra + gap * 2f, bw, bh, shell.L("ui.menu.settings"), shell.OpenSettings, "btn_settings");
+            UiKit.AddButton(root, bx, wby + wextra + gap * 3f, bw, bh, shell.L("ui.menu.credits"), () => shell.GoTo(ShellPhase.Credits), "btn_credits");
 #else
             // Pilot name on the menu itself (#221): play actions require a chosen name — the old silent
             // "Pilot" default meant nobody ever picked one and multiplayer names collided. The value is
@@ -183,7 +196,7 @@ namespace BlocksBeyondTheStars.Client
             var dim = UiKit.AddImage(root, 0f, 0f, 1920f, 1080f, UiKit.SolidSprite, new Color(0f, 0f, 0f, 0.6f));
             connect = dim.gameObject;
             dim.raycastTarget = true; // swallow clicks behind the dialog
-            var dlg = UiKit.AddPanel(connect.transform, 660f, 280f, 600f, 520f, UiKit.Panel).transform;
+            var dlg = UiKit.AddDialogPanel(connect.transform, 660f, 280f, 600f, 520f);
             UiKit.AddText(dlg, 30f, 24f, 540f, 30f, shell.L("ui.menu.connect_title"), 22, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
             UiKit.AddText(dlg, 30f, 80f, 540f, 22f, shell.L("ui.menu.connect_name"), 15, UiKit.TextCol, TextAnchor.MiddleLeft);
             dlgName = UiKit.AddInput(dlg, 30f, 106f, 540f, 38f, name[0], v => name[0] = v);
@@ -223,24 +236,42 @@ namespace BlocksBeyondTheStars.Client
 
 #if !UNITY_WEBGL || UNITY_EDITOR
             // --- Official-worlds overlay (native only; HOSTED_WORLDS.md: the browser NEVER picks servers).
-            // Sign in to the worlds portal, list your hosted worlds and join one — the portal answers with
-            // host/port + a short-lived join grant that is threaded through shell.HostedToken.
+            // Full portal parity (#268-#270): sign up (incl. in-game rules acceptance), sign in, create,
+            // join and manage your hosted worlds, save backups, feedback and account deletion — the web
+            // portal is optional for desktop players. Joining threads the grant through shell.HostedToken.
+
+            // Dialog slots, declared BEFORE any button lambda that may close them (definite assignment):
+            // one for the form dialogs (signup / new world / manage / feedback / account — only one open),
+            // one for the rules screen (may overlay the signup form without destroying its typed state),
+            // one for the error-driven join-password prompt (#250).
+            GameObject portalModal = null;
+            GameObject rulesModal = null;
+            GameObject passwordPrompt = null;
+
             var odim = UiKit.AddModalDim(root);
             official = odim.gameObject;
-            var odlg = UiKit.AddPanel(official.transform, 610f, 180f, 700f, 720f, UiKit.Panel).transform;
+            var odlg = UiKit.AddDialogPanel(official.transform, 610f, 180f, 700f, 720f);
             UiKit.AddText(odlg, 30f, 24f, 640f, 30f, shell.L("ui.portal.title"), 22, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
 
             // The same notices the portal shows (client parity): the beta warning, the one-line rules
-            // summary, and a button opening the full rules page in the browser.
-            UiKit.AddText(odlg, 30f, 58f, 640f, 40f, shell.L("ui.portal.beta"), 13,
+            // summary, and a button opening the full rules page in the browser. The long notices MUST
+            // wrap — AddText defaults to overflow, which ran them under the button and off the panel.
+            var betaLine = UiKit.AddText(odlg, 30f, 58f, 640f, 40f, shell.L("ui.portal.beta"), 13,
                 new Color(1f, 0.72f, 0.35f), TextAnchor.UpperLeft);
-            UiKit.AddText(odlg, 30f, 100f, 470f, 44f, shell.L("ui.portal.rules_line"), 13, UiKit.CyanDim, TextAnchor.UpperLeft);
+            betaLine.horizontalOverflow = HorizontalWrapMode.Wrap;
+            var rulesLine = UiKit.AddText(odlg, 30f, 100f, 455f, 44f, shell.L("ui.portal.rules_line"), 13, UiKit.CyanDim, TextAnchor.UpperLeft);
+            rulesLine.horizontalOverflow = HorizontalWrapMode.Wrap;
             UiKit.AddButton(odlg, 510f, 100f, 160f, 40f, shell.L("ui.portal.view_rules"),
                 () => Application.OpenURL(PortalBase() + "/rules"), "btn_credits");
 
             var oStatus = UiKit.AddText(odlg, 30f, 592f, 640f, 48f, "", 14,
                 new Color(1f, 0.55f, 0.4f), TextAnchor.UpperLeft, FontStyle.Bold);
-            UiKit.AddButton(odlg, 400f, 648f, 270f, 54f, shell.L("ui.menu.back"), () => official.SetActive(false), "btn_exit");
+            oStatus.horizontalOverflow = HorizontalWrapMode.Wrap; // localized errors can be long
+            UiKit.AddButton(odlg, 400f, 648f, 270f, 54f, shell.L("ui.menu.back"), () =>
+            {
+                CloseAllPortalModals(); // leaving the overlay must not park stale dialogs behind it
+                official.SetActive(false);
+            }, "btn_exit");
 
             // Content area rebuilt on every state change (signed out ↔ signed in ↔ fresh world list).
             var oContent = UiKit.AddPanel(odlg, 0f, 150f, 700f, 440f, new Color(0f, 0f, 0f, 0f)).transform;
@@ -313,15 +344,546 @@ namespace BlocksBeyondTheStars.Client
                 shell.Settings.PortalSessionToken = r.SessionToken; // session only — the password is never stored
                 shell.Settings.PortalAccountName = account;
                 shell.Settings.Save();
-                oStatus.text = r.TermsOutdated ? shell.L("ui.portal.terms_outdated") : "";
+                oStatus.text = "";
                 RebuildPortal();
                 DoRefresh();
+                if (r.TermsOutdated)
+                {
+                    PromptReaccept(); // rules changed since the last visit — re-accept in-game (#268)
+                }
             }
 
             // Session-scoped world passwords (#250): entered once per protected world, reused on re-joins,
             // never persisted. The prompt is error-driven — open worlds join without ever seeing it.
             var joinPasswords = new Dictionary<string, string>();
-            GameObject passwordPrompt = null;
+
+            // Secondary portal dialogs (#268-#270).
+            PortalTermsResult cachedTerms = null; // rules text+version change per deployment — fetch once
+            string saveBackupDir = System.IO.Path.Combine(Application.persistentDataPath, "portal_saves");
+            var warnCol = new Color(1f, 0.55f, 0.4f);
+
+            void CloseModal()
+            {
+                if (portalModal != null)
+                {
+                    Object.Destroy(portalModal);
+                    portalModal = null;
+                }
+            }
+
+            void CloseRules()
+            {
+                if (rulesModal != null)
+                {
+                    Object.Destroy(rulesModal);
+                    rulesModal = null;
+                }
+            }
+
+            void CloseAllPortalModals()
+            {
+                CloseRules();
+                CloseModal();
+                if (passwordPrompt != null)
+                {
+                    Object.Destroy(passwordPrompt);
+                    passwordPrompt = null;
+                }
+            }
+
+            // Opens a fresh form dialog: full-screen scrim + an OPAQUE dialog panel — the overlay's form
+            // must never shine through and blend with the dialog (user acceptance feedback).
+            Transform OpenModalPanel(float x, float y, float w, float h)
+            {
+                CloseModal();
+                var mDim = UiKit.AddModalDim(official.transform, 0.9f);
+                portalModal = mDim.gameObject;
+                return UiKit.AddDialogPanel(portalModal.transform, x, y, w, h);
+            }
+
+            async void LoadTerms(System.Action<PortalTermsResult> done)
+            {
+                if (cachedTerms != null && cachedTerms.Ok)
+                {
+                    done(cachedTerms);
+                    return;
+                }
+
+                var portal = new PortalClient(PortalBase());
+                var r = await Task.Run(() => portal.GetTerms());
+                if (official == null) { return; }
+                cachedTerms = r;
+                done(r);
+            }
+
+            // The in-game community-rules screen (text from GET /api/terms, localized DE/EN). With an
+            // accept action it doubles as the consent step for signup and for re-acceptance after a
+            // rules change; without one it is a plain viewer.
+            void ShowRules(System.Action<PortalTermsResult> onAccept)
+            {
+                CloseRules();
+                var rDim = UiKit.AddModalDim(official.transform, 0.92f);
+                rulesModal = rDim.gameObject;
+                var rDlg = UiKit.AddDialogPanel(rulesModal.transform, 160f, 80f, 1600f, 920f);
+                var rTitle = UiKit.AddText(rDlg, 40f, 22f, 1520f, 32f, shell.L("ui.portal.rules_title"), 24, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
+                var rBody = UiKit.AddText(rDlg, 60f, 76f, 1480f, 730f, "", 17, UiKit.TextCol, TextAnchor.UpperLeft);
+                rBody.horizontalOverflow = HorizontalWrapMode.Wrap;
+
+                // Fetches (or re-fetches) the rules into the body — a friendly message instead of a raw
+                // "http_404" when the portal is unreachable or too old to know /api/terms yet.
+                void ApplyTerms()
+                {
+                    rBody.text = shell.L("ui.portal.working");
+                    LoadTerms(terms =>
+                    {
+                        if (rulesModal == null) { return; }
+                        if (!terms.Ok)
+                        {
+                            string msg = PortalErr(terms.Code, terms.Error);
+                            rBody.text = msg.StartsWith("http_", System.StringComparison.Ordinal) ? shell.L("ui.portal.err_offline") : msg;
+                            return;
+                        }
+
+                        rTitle.text = shell.L("ui.portal.rules_title") + " (v" + terms.Version + ")";
+                        rBody.text = shell.Settings.Language == "de" ? terms.TextDe : terms.TextEn;
+                    });
+                }
+
+                if (onAccept != null)
+                {
+                    UiKit.AddButton(rDlg, 430f, 836f, 380f, 54f, shell.L("ui.portal.rules_accept"), () =>
+                    {
+                        if (cachedTerms != null && cachedTerms.Ok)
+                        {
+                            onAccept(cachedTerms);
+                        }
+                        else
+                        {
+                            ApplyTerms(); // nothing loaded to consent to — retry instead of ignoring the click
+                        }
+                    }, "btn_join");
+                }
+
+                UiKit.AddButton(rDlg, 830f, 836f, 340f, 54f, shell.L("ui.menu.back"), CloseRules, "btn_exit");
+                ApplyTerms();
+            }
+
+            async void DoAcceptTerms()
+            {
+                oStatus.text = shell.L("ui.portal.working");
+                var portal = new PortalClient(PortalBase());
+                string session = shell.Settings.PortalSessionToken;
+                var r = await Task.Run(() => portal.AcceptTerms(session));
+                if (official == null) { return; }
+                CloseRules();
+                if (!r.Ok)
+                {
+                    oStatus.text = PortalErr(r.Code, r.Error);
+                    return;
+                }
+
+                oStatus.text = "";
+                DoRefresh();
+            }
+
+            // The rules changed since this account accepted them (terms_outdated): world actions are
+            // blocked until the player re-reads and re-accepts — same flow as the portal's login gate.
+            void PromptReaccept()
+            {
+                oStatus.text = shell.L("ui.portal.terms_outdated");
+                ShowRules(_ => DoAcceptTerms());
+            }
+
+            async void DoSignup(string accName, string password, int termsVersion, Text warn)
+            {
+                warn.color = warnCol;
+                warn.text = shell.L("ui.portal.working");
+                var portal = new PortalClient(PortalBase());
+                var r = await Task.Run(() => portal.Signup(accName, password, termsVersion));
+                if (official == null || warn == null) { return; } // overlay/dialog closed while the request ran
+                if (!r.Ok)
+                {
+                    warn.text = PortalErr(r.Code, r.Error);
+                    return;
+                }
+
+                shell.Settings.PortalSessionToken = r.SessionToken; // a signup IS a sign-in (fresh session)
+                shell.Settings.PortalAccountName = accName;
+                shell.Settings.Save();
+                CloseModal();
+                oStatus.text = "";
+                RebuildPortal();
+                DoRefresh();
+            }
+
+            void OpenSignup()
+            {
+                var sDlg = OpenModalPanel(560f, 220f, 800f, 600f);
+                UiKit.AddText(sDlg, 30f, 24f, 740f, 30f, shell.L("ui.portal.signup_title"), 22, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
+                string[] accName = { "" };
+                string[] pw1 = { "" };
+                string[] pw2 = { "" };
+                bool[] accepted = { false };
+                int[] termsVersion = { 0 };
+                UiKit.AddText(sDlg, 40f, 70f, 720f, 22f, shell.L("ui.portal.account"), 15, UiKit.TextCol);
+                UiKit.AddInput(sDlg, 40f, 94f, 720f, 38f, accName[0], v => accName[0] = v);
+                UiKit.AddText(sDlg, 40f, 146f, 340f, 22f, shell.L("ui.portal.password_label"), 15, UiKit.TextCol);
+                var sp1 = UiKit.AddInput(sDlg, 40f, 170f, 340f, 38f, pw1[0], v => pw1[0] = v);
+                sp1.contentType = InputField.ContentType.Password;
+                UiKit.AddText(sDlg, 420f, 146f, 340f, 22f, shell.L("ui.portal.password_repeat"), 15, UiKit.TextCol);
+                var sp2 = UiKit.AddInput(sDlg, 420f, 170f, 340f, 38f, pw2[0], v => pw2[0] = v);
+                sp2.contentType = InputField.ContentType.Password;
+                var parents = UiKit.AddText(sDlg, 40f, 224f, 720f, 40f, shell.L("ui.portal.signup_parents"), 13, UiKit.Warn, TextAnchor.UpperLeft);
+                parents.horizontalOverflow = HorizontalWrapMode.Wrap;
+
+                // Consent is deliberate: the rules must be OPENED to accept them (the accept button lives
+                // on the rules screen itself), mirroring the portal's required signup checkbox.
+                var rulesState = UiKit.AddText(sDlg, 40f, 282f, 360f, 44f, shell.L("ui.portal.rules_state_open"), 14, warnCol, TextAnchor.MiddleLeft, FontStyle.Bold);
+                UiKit.AddButton(sDlg, 420f, 280f, 340f, 46f, shell.L("ui.portal.rules_read"), () => ShowRules(terms =>
+                {
+                    accepted[0] = true;
+                    termsVersion[0] = terms.Version;
+                    CloseRules();
+                    rulesState.text = shell.L("ui.portal.rules_state_ok");
+                    rulesState.color = UiKit.Ok;
+                }), "btn_credits");
+
+                var sWarn = UiKit.AddText(sDlg, 40f, 344f, 720f, 44f, "", 14, warnCol, TextAnchor.UpperLeft, FontStyle.Bold);
+                sWarn.horizontalOverflow = HorizontalWrapMode.Wrap;
+                UiKit.AddButton(sDlg, 40f, 406f, 340f, 54f, shell.L("ui.portal.signup"), () =>
+                {
+                    // Client-side pre-checks mirror the server's cheap rules, so typos don't burn the
+                    // 5/hour signup rate limit; everything else (blocked/reserved/taken) is the server's call.
+                    if (string.IsNullOrWhiteSpace(accName[0])) { sWarn.text = shell.L("ui.portal.err_name_invalid"); return; }
+                    if (pw1[0] != pw2[0]) { sWarn.text = shell.L("ui.portal.err_password_mismatch"); return; }
+                    if (pw1[0].Length < 8) { sWarn.text = shell.L("ui.portal.err_password_short"); return; }
+                    if (!accepted[0]) { sWarn.text = shell.L("ui.portal.err_accept_rules"); return; }
+                    DoSignup(accName[0].Trim(), pw1[0], termsVersion[0], sWarn);
+                }, "btn_join");
+                UiKit.AddButton(sDlg, 420f, 406f, 340f, 54f, shell.L("ui.menu.back"), CloseModal, "btn_exit");
+            }
+
+            async void DoCreateWorld(string worldName, string password, Text warn)
+            {
+                warn.color = warnCol;
+                warn.text = shell.L("ui.portal.working");
+                var portal = new PortalClient(PortalBase());
+                string session = shell.Settings.PortalSessionToken;
+                var r = await Task.Run(() => portal.CreateWorld(session, worldName, string.IsNullOrEmpty(password) ? null : password));
+                if (official == null || warn == null) { return; }
+                if (!r.Ok)
+                {
+                    if (r.Code == "terms_outdated") { CloseModal(); PromptReaccept(); return; }
+                    warn.text = PortalErr(r.Code, r.Error);
+                    return;
+                }
+
+                CloseModal();
+                oStatus.text = "";
+                DoRefresh();
+            }
+
+            void OpenCreateWorld()
+            {
+                var cDlg = OpenModalPanel(560f, 270f, 800f, 500f);
+                UiKit.AddText(cDlg, 30f, 24f, 740f, 30f, shell.L("ui.portal.new_world_title"), 22, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
+                string[] worldName = { "" };
+                string[] pw1 = { "" };
+                string[] pw2 = { "" };
+                UiKit.AddText(cDlg, 40f, 70f, 720f, 22f, shell.L("ui.portal.world_name"), 15, UiKit.TextCol);
+                UiKit.AddInput(cDlg, 40f, 94f, 720f, 38f, worldName[0], v => worldName[0] = v);
+                UiKit.AddText(cDlg, 40f, 146f, 340f, 22f, shell.L("ui.portal.world_password"), 15, UiKit.TextCol);
+                var cp1 = UiKit.AddInput(cDlg, 40f, 170f, 340f, 38f, pw1[0], v => pw1[0] = v);
+                cp1.contentType = InputField.ContentType.Password;
+                UiKit.AddText(cDlg, 420f, 146f, 340f, 22f, shell.L("ui.portal.password_repeat"), 15, UiKit.TextCol);
+                var cp2 = UiKit.AddInput(cDlg, 420f, 170f, 340f, 38f, pw2[0], v => pw2[0] = v);
+                cp2.contentType = InputField.ContentType.Password;
+                var optional = UiKit.AddText(cDlg, 40f, 222f, 720f, 40f, shell.L("ui.portal.world_password_optional"), 13, UiKit.CyanDim, TextAnchor.UpperLeft);
+                optional.horizontalOverflow = HorizontalWrapMode.Wrap;
+                var cWarn = UiKit.AddText(cDlg, 40f, 274f, 720f, 44f, "", 14, warnCol, TextAnchor.UpperLeft, FontStyle.Bold);
+                cWarn.horizontalOverflow = HorizontalWrapMode.Wrap;
+                UiKit.AddButton(cDlg, 40f, 336f, 340f, 54f, shell.L("ui.portal.create"), () =>
+                {
+                    if (string.IsNullOrWhiteSpace(worldName[0])) { cWarn.text = shell.L("ui.portal.err_world_name_invalid"); return; }
+                    if (pw1[0] != pw2[0]) { cWarn.text = shell.L("ui.portal.err_password_mismatch"); return; }
+                    DoCreateWorld(worldName[0].Trim(), pw1[0], cWarn);
+                }, "btn_join");
+                UiKit.AddButton(cDlg, 420f, 336f, 340f, 54f, shell.L("ui.menu.back"), CloseModal, "btn_exit");
+            }
+
+            async void DoSetWorldPassword(string worldId, string password, Text warn)
+            {
+                warn.color = warnCol;
+                warn.text = shell.L("ui.portal.working");
+                var portal = new PortalClient(PortalBase());
+                string session = shell.Settings.PortalSessionToken;
+                var r = await Task.Run(() => portal.SetWorldPassword(session, worldId, password));
+                if (official == null || warn == null) { return; }
+                if (!r.Ok)
+                {
+                    warn.text = PortalErr(r.Code, r.Error);
+                    return;
+                }
+
+                warn.color = UiKit.Ok;
+                warn.text = shell.L("ui.portal.pw_updated");
+                DoRefresh(); // the list's [PW] marker must follow
+            }
+
+            async void DoStopWorld(string worldId, Text warn, Text statusLabel)
+            {
+                warn.color = warnCol;
+                warn.text = shell.L("ui.portal.working");
+                var portal = new PortalClient(PortalBase());
+                string session = shell.Settings.PortalSessionToken;
+                var r = await Task.Run(() => portal.StopWorld(session, worldId));
+                if (official == null || warn == null) { return; }
+                if (!r.Ok)
+                {
+                    warn.text = PortalErr(r.Code, r.Error);
+                    return;
+                }
+
+                warn.color = UiKit.Ok;
+                warn.text = shell.L("ui.portal.stopped");
+                if (statusLabel != null) { statusLabel.text = "stopped"; }
+                DoRefresh();
+            }
+
+            async void DoDeleteWorld(PortalWorldInfo world, string typedName, Text warn)
+            {
+                if (typedName.Trim() != world.Name)
+                {
+                    warn.color = warnCol;
+                    warn.text = shell.L("ui.portal.err_delete_name_mismatch");
+                    return;
+                }
+
+                warn.color = warnCol;
+                warn.text = shell.L("ui.portal.working");
+                var portal = new PortalClient(PortalBase());
+                string session = shell.Settings.PortalSessionToken;
+                var r = await Task.Run(() => portal.DeleteWorld(session, world.Id));
+                if (official == null || warn == null) { return; }
+                if (!r.Ok)
+                {
+                    warn.text = PortalErr(r.Code, r.Error);
+                    return;
+                }
+
+                CloseModal();
+                oStatus.text = shell.L("ui.portal.deleted");
+                DoRefresh();
+            }
+
+            async void DoDownloadSave(string worldId, Text warn)
+            {
+                warn.color = warnCol;
+                warn.text = shell.L("ui.portal.working");
+                var portal = new PortalClient(PortalBase());
+                string session = shell.Settings.PortalSessionToken;
+                string path = System.IO.Path.Combine(saveBackupDir, worldId + "-world.db");
+                var r = await Task.Run(() =>
+                {
+                    var dl = portal.DownloadSave(session, worldId);
+                    if (dl.Ok)
+                    {
+                        try
+                        {
+                            System.IO.Directory.CreateDirectory(saveBackupDir);
+                            System.IO.File.WriteAllBytes(path, dl.Bytes);
+                        }
+                        catch (System.Exception ex)
+                        {
+                            return new PortalSaveResult { Error = ex.Message };
+                        }
+                    }
+
+                    return dl;
+                });
+                if (official == null || warn == null) { return; }
+                if (!r.Ok)
+                {
+                    warn.text = PortalErr(r.Code, r.Error);
+                    return;
+                }
+
+                warn.color = UiKit.Ok;
+                warn.text = shell.L("ui.portal.save_downloaded");
+            }
+
+            async void DoUploadSave(string worldId, Text warn)
+            {
+                warn.color = warnCol;
+                warn.text = shell.L("ui.portal.working");
+                var portal = new PortalClient(PortalBase());
+                string session = shell.Settings.PortalSessionToken;
+                string path = System.IO.Path.Combine(saveBackupDir, worldId + "-world.db");
+                var r = await Task.Run(() =>
+                {
+                    try
+                    {
+                        if (!System.IO.File.Exists(path))
+                        {
+                            return new PortalSimpleResult { Code = "save_file_missing", Error = "save_file_missing" };
+                        }
+
+                        return portal.UploadSave(session, worldId, System.IO.File.ReadAllBytes(path));
+                    }
+                    catch (System.Exception ex)
+                    {
+                        return new PortalSimpleResult { Error = ex.Message };
+                    }
+                });
+                if (official == null || warn == null) { return; }
+                if (!r.Ok)
+                {
+                    if (r.Code == "terms_outdated") { CloseModal(); PromptReaccept(); return; }
+                    warn.text = PortalErr(r.Code, r.Error);
+                    return;
+                }
+
+                warn.color = UiKit.Ok;
+                warn.text = shell.L("ui.portal.save_uploaded");
+            }
+
+            void OpenSaveFolder()
+            {
+                System.IO.Directory.CreateDirectory(saveBackupDir);
+                Application.OpenURL("file:///" + saveBackupDir.Replace('\\', '/'));
+            }
+
+            void OpenManage(PortalWorldInfo world)
+            {
+                var mDlg = OpenModalPanel(460f, 150f, 1000f, 780f);
+                UiKit.AddText(mDlg, 30f, 24f, 940f, 30f, world.Name, 22, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
+                var mStatus = UiKit.AddText(mDlg, 40f, 58f, 920f, 24f, world.Status + (world.HasPassword ? "  [PW]" : ""), 14, UiKit.CyanDim, TextAnchor.MiddleCenter);
+                var mWarn = UiKit.AddText(mDlg, 40f, 560f, 920f, 60f, "", 14, warnCol, TextAnchor.UpperLeft, FontStyle.Bold);
+                mWarn.horizontalOverflow = HorizontalWrapMode.Wrap;
+
+                // World join password (owner-only; empty remove keeps the world open).
+                string[] mp1 = { "" };
+                string[] mp2 = { "" };
+                UiKit.AddText(mDlg, 40f, 100f, 920f, 22f, shell.L("ui.portal.world_password"), 15, UiKit.TextCol, TextAnchor.MiddleLeft, FontStyle.Bold);
+                var mpi1 = UiKit.AddInput(mDlg, 40f, 126f, 300f, 38f, mp1[0], v => mp1[0] = v);
+                mpi1.contentType = InputField.ContentType.Password;
+                var mpi2 = UiKit.AddInput(mDlg, 352f, 126f, 300f, 38f, mp2[0], v => mp2[0] = v);
+                mpi2.contentType = InputField.ContentType.Password;
+                UiKit.AddButton(mDlg, 664f, 122f, 155f, 44f, shell.L("ui.portal.pw_set"), () =>
+                {
+                    if (mp1[0] != mp2[0]) { mWarn.color = warnCol; mWarn.text = shell.L("ui.portal.err_password_mismatch"); return; }
+                    if (string.IsNullOrEmpty(mp1[0])) { mWarn.color = warnCol; mWarn.text = shell.L("ui.portal.err_world_password_invalid"); return; }
+                    DoSetWorldPassword(world.Id, mp1[0], mWarn);
+                }, "btn_join");
+                UiKit.AddButton(mDlg, 827f, 122f, 133f, 44f, shell.L("ui.portal.pw_remove"), () => DoSetWorldPassword(world.Id, "", mWarn), "btn_exit");
+
+                // Lifecycle: stopping is also the precondition for save download/upload.
+                UiKit.AddButton(mDlg, 40f, 192f, 300f, 50f, shell.L("ui.portal.stop"), () => DoStopWorld(world.Id, mWarn, mStatus), "btn_settings");
+                var stopHint = UiKit.AddText(mDlg, 360f, 200f, 600f, 40f, shell.L("ui.portal.stop_hint"), 13, UiKit.CyanDim, TextAnchor.UpperLeft);
+                stopHint.horizontalOverflow = HorizontalWrapMode.Wrap;
+
+                // Save backup round-trip (browser-free): download to / upload from a fixed local folder.
+                UiKit.AddText(mDlg, 40f, 262f, 920f, 22f, shell.L("ui.portal.save_title"), 15, UiKit.TextCol, TextAnchor.MiddleLeft, FontStyle.Bold);
+                var saveHint = UiKit.AddText(mDlg, 40f, 288f, 920f, 40f, shell.L("ui.portal.save_hint"), 13, UiKit.CyanDim, TextAnchor.UpperLeft);
+                saveHint.horizontalOverflow = HorizontalWrapMode.Wrap;
+                UiKit.AddButton(mDlg, 40f, 338f, 300f, 50f, shell.L("ui.portal.save_download"), () => DoDownloadSave(world.Id, mWarn), "btn_join");
+                UiKit.AddButton(mDlg, 352f, 338f, 300f, 50f, shell.L("ui.portal.save_upload"), () => DoUploadSave(world.Id, mWarn), "btn_join");
+                UiKit.AddButton(mDlg, 664f, 338f, 296f, 50f, shell.L("ui.portal.save_folder"), OpenSaveFolder, "btn_credits");
+
+                // Danger zone: deletion needs the world's name typed back — a click can't do it by accident.
+                UiKit.AddText(mDlg, 40f, 412f, 920f, 22f, shell.L("ui.portal.delete_world"), 15, UiKit.Warn, TextAnchor.MiddleLeft, FontStyle.Bold);
+                var delHint = UiKit.AddText(mDlg, 40f, 438f, 920f, 24f, shell.L("ui.portal.delete_world_hint"), 13, UiKit.CyanDim, TextAnchor.UpperLeft);
+                delHint.horizontalOverflow = HorizontalWrapMode.Wrap;
+                string[] typed = { "" };
+                UiKit.AddInput(mDlg, 40f, 468f, 480f, 38f, typed[0], v => typed[0] = v, world.Name);
+                UiKit.AddButton(mDlg, 552f, 464f, 408f, 46f, shell.L("ui.portal.delete_world"), () => DoDeleteWorld(world, typed[0], mWarn), "btn_exit");
+
+                UiKit.AddButton(mDlg, 330f, 640f, 340f, 54f, shell.L("ui.menu.back"), CloseModal, "btn_exit");
+            }
+
+            async void DoFeedbackSend(string message, Text warn)
+            {
+                warn.color = warnCol;
+                warn.text = shell.L("ui.portal.working");
+                var portal = new PortalClient(PortalBase());
+                string session = shell.Settings.PortalSessionToken;
+                var r = await Task.Run(() => portal.Report(session, "", "feedback", message));
+                if (official == null || warn == null) { return; }
+                if (!r.Ok)
+                {
+                    warn.text = PortalErr(r.Code, r.Error);
+                    return;
+                }
+
+                warn.color = UiKit.Ok;
+                warn.text = shell.L("ui.portal.feedback_thanks");
+            }
+
+            void OpenFeedback()
+            {
+                var fDlg = OpenModalPanel(560f, 280f, 800f, 500f);
+                UiKit.AddText(fDlg, 30f, 24f, 740f, 30f, shell.L("ui.portal.feedback_title"), 22, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
+                var fHint = UiKit.AddText(fDlg, 40f, 66f, 720f, 44f, shell.L("ui.portal.feedback_hint"), 13, UiKit.CyanDim, TextAnchor.UpperLeft);
+                fHint.horizontalOverflow = HorizontalWrapMode.Wrap;
+                string[] msg = { "" };
+                var msgInput = UiKit.AddInput(fDlg, 40f, 120f, 720f, 170f, msg[0], v => msg[0] = v);
+                msgInput.lineType = InputField.LineType.MultiLineNewline; // feedback wants sentences, not one line
+                msgInput.textComponent.alignment = TextAnchor.UpperLeft;
+                var fWarn = UiKit.AddText(fDlg, 40f, 302f, 720f, 40f, "", 14, warnCol, TextAnchor.UpperLeft, FontStyle.Bold);
+                fWarn.horizontalOverflow = HorizontalWrapMode.Wrap;
+                UiKit.AddButton(fDlg, 40f, 356f, 340f, 54f, shell.L("ui.portal.send"), () =>
+                {
+                    if (string.IsNullOrWhiteSpace(msg[0])) { fWarn.color = warnCol; fWarn.text = shell.L("ui.portal.feedback_hint"); return; }
+                    DoFeedbackSend(msg[0].Trim(), fWarn);
+                }, "btn_join");
+                UiKit.AddButton(fDlg, 420f, 356f, 340f, 54f, shell.L("ui.menu.back"), CloseModal, "btn_exit");
+            }
+
+            async void DoDeleteAccount(Text warn)
+            {
+                warn.color = warnCol;
+                warn.text = shell.L("ui.portal.working");
+                var portal = new PortalClient(PortalBase());
+                string session = shell.Settings.PortalSessionToken;
+                var r = await Task.Run(() => portal.DeleteAccount(session));
+                if (official == null || warn == null) { return; }
+                if (!r.Ok)
+                {
+                    warn.text = PortalErr(r.Code, r.Error);
+                    return;
+                }
+
+                CloseModal();
+                SignOut(); // wipes the (now dead) session + account name and rebuilds the sign-in view
+                oStatus.text = shell.L("ui.portal.account_deleted");
+            }
+
+            void OpenAccount()
+            {
+                var aDlg = OpenModalPanel(510f, 260f, 900f, 560f);
+                UiKit.AddText(aDlg, 30f, 24f, 840f, 30f, shell.L("ui.portal.account_title"), 22, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
+                UiKit.AddText(aDlg, 40f, 70f, 820f, 26f,
+                    shell.L("ui.portal.signed_in") + " " + shell.Settings.PortalAccountName, 16, UiKit.Ok, TextAnchor.MiddleLeft, FontStyle.Bold);
+                var delWarn = UiKit.AddText(aDlg, 40f, 112f, 820f, 110f, shell.L("ui.portal.delete_account_warn"), 14, UiKit.Warn, TextAnchor.UpperLeft);
+                delWarn.horizontalOverflow = HorizontalWrapMode.Wrap;
+                UiKit.AddText(aDlg, 40f, 234f, 820f, 22f, shell.L("ui.portal.delete_confirm_name"), 14, UiKit.TextCol);
+                string[] typed = { "" };
+                UiKit.AddInput(aDlg, 40f, 260f, 480f, 38f, typed[0], v => typed[0] = v, shell.Settings.PortalAccountName);
+                var aWarn = UiKit.AddText(aDlg, 40f, 318f, 820f, 44f, "", 14, warnCol, TextAnchor.UpperLeft, FontStyle.Bold);
+                aWarn.horizontalOverflow = HorizontalWrapMode.Wrap;
+                UiKit.AddButton(aDlg, 40f, 380f, 480f, 50f, shell.L("ui.portal.delete_account"), () =>
+                {
+                    if (typed[0].Trim() != shell.Settings.PortalAccountName)
+                    {
+                        aWarn.color = warnCol;
+                        aWarn.text = shell.L("ui.portal.err_delete_name_mismatch");
+                        return;
+                    }
+
+                    DoDeleteAccount(aWarn);
+                }, "btn_exit");
+                UiKit.AddButton(aDlg, 540f, 380f, 320f, 50f, shell.L("ui.menu.back"), CloseModal, "btn_exit");
+            }
 
             void PromptWorldPassword(string worldId, bool wrongBefore)
             {
@@ -330,9 +892,9 @@ namespace BlocksBeyondTheStars.Client
                     Object.Destroy(passwordPrompt);
                 }
 
-                var pwDim = UiKit.AddModalDim(official.transform, 0.75f);
+                var pwDim = UiKit.AddModalDim(official.transform, 0.9f);
                 passwordPrompt = pwDim.gameObject;
-                var pwDlg = UiKit.AddPanel(passwordPrompt.transform, 660f, 390f, 600f, 300f, UiKit.Panel).transform;
+                var pwDlg = UiKit.AddDialogPanel(passwordPrompt.transform, 660f, 390f, 600f, 300f);
                 UiKit.AddText(pwDlg, 30f, 24f, 540f, 30f, shell.L("ui.portal.world_password"), 20, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
                 if (wrongBefore)
                 {
@@ -417,32 +979,40 @@ namespace BlocksBeyondTheStars.Client
                     var pwInput = UiKit.AddInput(oContent, 30f, 126f, 640f, 38f, pw[0], v => pw[0] = v);
                     pwInput.contentType = InputField.ContentType.Password;
                     UiKit.AddButton(oContent, 30f, 184f, 300f, 54f, shell.L("ui.portal.login"), () => DoLogin(acc[0].Trim(), pw[0]), "btn_join");
-                    UiKit.AddText(oContent, 30f, 260f, 640f, 44f, shell.L("ui.portal.signup_hint"), 14, UiKit.CyanDim, TextAnchor.UpperLeft);
-                    UiKit.AddText(oContent, 30f, 306f, 640f, 24f, PortalBase(), 15, UiKit.Cyan, TextAnchor.UpperLeft, FontStyle.Bold);
+                    UiKit.AddButton(oContent, 370f, 184f, 300f, 54f, shell.L("ui.portal.signup"), OpenSignup, "btn_credits");
+                    var signupHere = UiKit.AddText(oContent, 30f, 260f, 640f, 44f, shell.L("ui.portal.signup_here"), 14, UiKit.CyanDim, TextAnchor.UpperLeft);
+                    signupHere.horizontalOverflow = HorizontalWrapMode.Wrap;
+                    UiKit.AddText(oContent, 30f, 310f, 640f, 24f, PortalBase(), 15, UiKit.Cyan, TextAnchor.UpperLeft, FontStyle.Bold);
                     return;
                 }
 
                 UiKit.AddText(oContent, 30f, 16f, 420f, 26f,
                     shell.L("ui.portal.signed_in") + " " + shell.Settings.PortalAccountName, 16, UiKit.Ok, TextAnchor.MiddleLeft, FontStyle.Bold);
                 UiKit.AddButton(oContent, 460f, 8f, 210f, 42f, shell.L("ui.portal.logout"), SignOut, "btn_exit");
-                UiKit.AddButton(oContent, 30f, 54f, 210f, 42f, shell.L("ui.portal.refresh"), DoRefresh, "btn_settings");
+
+                // Everything the portal's My-Worlds page offers, one row of entry points (#269/#270).
+                UiKit.AddButton(oContent, 30f, 54f, 150f, 42f, shell.L("ui.portal.refresh"), DoRefresh, "btn_settings");
+                UiKit.AddButton(oContent, 190f, 54f, 160f, 42f, shell.L("ui.portal.new_world"), OpenCreateWorld, "btn_join");
+                UiKit.AddButton(oContent, 360f, 54f, 150f, 42f, shell.L("ui.portal.feedback"), OpenFeedback, "btn_credits");
+                UiKit.AddButton(oContent, 520f, 54f, 150f, 42f, shell.L("ui.portal.account_btn"), OpenAccount, "btn_settings");
 
                 if (oWorlds.Count == 0)
                 {
-                    UiKit.AddText(oContent, 30f, 120f, 640f, 48f, shell.L("ui.portal.no_worlds"), 15, UiKit.TextCol, TextAnchor.UpperLeft);
-                    UiKit.AddText(oContent, 30f, 170f, 640f, 24f, PortalBase(), 15, UiKit.Cyan, TextAnchor.UpperLeft, FontStyle.Bold);
+                    var noWorlds = UiKit.AddText(oContent, 30f, 120f, 640f, 48f, shell.L("ui.portal.no_worlds"), 15, UiKit.TextCol, TextAnchor.UpperLeft);
+                    noWorlds.horizontalOverflow = HorizontalWrapMode.Wrap;
                     return;
                 }
 
                 float ry = 116f;
                 foreach (var world in oWorlds)
                 {
-                    string id = world.Id; // capture per row
-                    UiKit.AddText(oContent, 30f, ry + 10f, 380f, 26f, world.Name, 17, UiKit.TextCol, TextAnchor.MiddleLeft, FontStyle.Bold);
-                    UiKit.AddText(oContent, 414f, ry + 10f, 110f, 26f, world.Status, 13, UiKit.CyanDim, TextAnchor.MiddleLeft);
-                    UiKit.AddButton(oContent, 530f, ry, 140f, 46f, shell.L("ui.portal.play"), () => DoJoinWorld(id), "btn_join");
+                    var w = world; // capture per row (Play joins, Manage opens the owner dialog)
+                    UiKit.AddText(oContent, 30f, ry + 10f, 280f, 26f, w.Name, 17, UiKit.TextCol, TextAnchor.MiddleLeft, FontStyle.Bold);
+                    UiKit.AddText(oContent, 314f, ry + 10f, 100f, 26f, w.Status + (w.HasPassword ? " [PW]" : ""), 13, UiKit.CyanDim, TextAnchor.MiddleLeft);
+                    UiKit.AddButton(oContent, 418f, ry, 118f, 46f, shell.L("ui.portal.play"), () => DoJoinWorld(w.Id), "btn_join");
+                    UiKit.AddButton(oContent, 542f, ry, 128f, 46f, shell.L("ui.portal.manage"), () => OpenManage(w));
                     ry += 56f;
-                    if (ry > 380f) { break; } // quota keeps this short; guard against overflow anyway
+                    if (ry > 330f) { break; } // quota keeps this short; guard against overflow anyway
                 }
             }
 
@@ -458,7 +1028,7 @@ namespace BlocksBeyondTheStars.Client
             // --- Participate / "Join in" overlay (added last so it draws on top; hidden until "Mach mit") ---
             var pdim = UiKit.AddModalDim(root);
             participate = pdim.gameObject;
-            var pdlg = UiKit.AddPanel(participate.transform, 560f, 250f, 800f, 580f, UiKit.Panel).transform;
+            var pdlg = UiKit.AddDialogPanel(participate.transform, 560f, 250f, 800f, 580f);
             UiKit.AddText(pdlg, 40f, 26f, 720f, 36f, shell.L("ui.contribute.title"), 26, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
 
             Text Para(float y, float h, string text, int size, Color col)

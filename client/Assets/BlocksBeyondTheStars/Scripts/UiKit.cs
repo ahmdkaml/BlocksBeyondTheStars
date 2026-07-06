@@ -321,6 +321,62 @@ namespace BlocksBeyondTheStars.Client
             return dim;
         }
 
+        /// <summary>A modal dialog panel: the themed frame plus an OPAQUE dark backing, so whatever lies
+        /// behind the dialog can never mix into its content (the plain panel sprite is translucent by
+        /// design — fine for HUD chrome, unreadable for forms). The backing is a CHILD of the panel, so
+        /// hiding/destroying the panel takes it along; add dialog content to the returned transform (it
+        /// draws above the backing). Two stacked sliced layers ≈ fully opaque with rounded corners.</summary>
+        public static Transform AddDialogPanel(Transform parent, float x, float y, float w, float h)
+        {
+            var panel = AddPanel(parent, x, y, w, h, Panel).transform;
+            var dark = new Color(0.02f, 0.05f, 0.11f, 1f);
+            AddImage(panel, 2f, 2f, w - 4f, h - 4f, PanelSprite, dark, Image.Type.Sliced);
+            AddImage(panel, 2f, 2f, w - 4f, h - 4f, PanelSprite, dark, Image.Type.Sliced);
+            return panel;
+        }
+
+        /// <summary>A visible vertical scrollbar for a <see cref="ScrollRect"/> — the wheel already
+        /// scrolls, but a draggable handle shows WHERE you are and jumps anywhere in one drag (long
+        /// lists like the settings screen). Place it along the viewport's right edge; it is wired as
+        /// the ScrollRect's verticalScrollbar with Permanent visibility (no viewport resizing).</summary>
+        public static Scrollbar AddVerticalScrollbar(Transform parent, ScrollRect scroll, float x, float y, float w, float h)
+        {
+            var go = new GameObject("VScrollbar", typeof(RectTransform));
+            go.transform.SetParent(parent, false);
+            Place(go, x, y, w, h);
+            var track = go.AddComponent<Image>();
+            track.sprite = ButtonSprite;
+            track.type = Image.Type.Sliced;
+            track.color = new Color(0.03f, 0.07f, 0.14f, 0.9f);
+
+            var bar = go.AddComponent<Scrollbar>();
+            bar.direction = Scrollbar.Direction.BottomToTop;
+
+            var areaGo = new GameObject("SlidingArea", typeof(RectTransform));
+            areaGo.transform.SetParent(go.transform, false);
+            var area = areaGo.GetComponent<RectTransform>();
+            area.anchorMin = Vector2.zero;
+            area.anchorMax = Vector2.one;
+            area.offsetMin = new Vector2(2f, 2f);
+            area.offsetMax = new Vector2(-2f, -2f);
+
+            var handleGo = new GameObject("Handle", typeof(RectTransform));
+            handleGo.transform.SetParent(areaGo.transform, false);
+            var handleRt = handleGo.GetComponent<RectTransform>();
+            handleRt.offsetMin = Vector2.zero;
+            handleRt.offsetMax = Vector2.zero;
+            var handle = handleGo.AddComponent<Image>();
+            handle.sprite = ButtonSprite;
+            handle.type = Image.Type.Sliced;
+            handle.color = new Color(Cyan.r, Cyan.g, Cyan.b, 0.55f);
+
+            bar.handleRect = handleRt;
+            bar.targetGraphic = handle;
+            scroll.verticalScrollbar = bar;
+            scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
+            return bar;
+        }
+
         public static Text AddText(Transform parent, float x, float y, float w, float h, string text, int size,
             Color color, TextAnchor anchor = TextAnchor.MiddleLeft, FontStyle style = FontStyle.Normal)
         {

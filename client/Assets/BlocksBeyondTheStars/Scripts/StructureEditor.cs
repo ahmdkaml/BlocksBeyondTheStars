@@ -430,7 +430,7 @@ namespace BlocksBeyondTheStars.Client
                 }
             }
 
-            var panel = UiKit.AddPanel(_canvas.transform, 700f, 260f, 520f, 520f, UiKit.Panel);
+            var panel = UiKit.AddDialogPanel(_canvas.transform, 700f, 260f, 520f, 520f);
             _loadPicker = panel.gameObject;
             UiKit.AddText(panel.transform, 20f, 14f, 480f, 28f, L("ui.struct.load"), 18, UiKit.Cyan, TextAnchor.MiddleLeft, FontStyle.Bold);
             if (keys.Count == 0)
