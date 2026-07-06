@@ -11,6 +11,8 @@ the richer, screenshot-laden versions live there. `(#123)` references the pull r
 
 ## [Unreleased]
 
+_Nothing yet — [v0.7.2](#072--2026-07-06) is the latest release._
+
 ## [0.7.2] — 2026-07-06
 
 Play the whole hosted-worlds flow without ever opening a browser, grow your own food, pen in your creatures, get treasure hints from villagers, and start new games somewhere friendlier — plus a round of UI polish.
