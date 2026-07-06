@@ -391,6 +391,9 @@ network, the AGPL requires you to offer them its source code.
 **Source code:** [github.com/marceld23/BlocksBeyondTheStars](https://github.com/marceld23/BlocksBeyondTheStars)
 — the canonical repository for the corresponding source, wherever you obtained this build.
 
+**Website:** [www.blocksbeyondthestars.com](https://www.blocksbeyondthestars.com/en)
+— play in the browser, create hosted worlds and find the latest news.
+
 Third-party libraries and bundled assets keep their own (permissive) licenses — see
 [NOTICES.md](NOTICES.md).
 
