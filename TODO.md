@@ -6,7 +6,7 @@ plans live under [docs/](docs/) (committed); this file is the high-level status.
 keep it current when controls/features change. Last consolidated 2026-06-04.
 
 **Build:** `scripts/build-client.ps1` (Windows) or `scripts/build-client.sh` (Linux) — publishes shared libs + bundled server + Unity player.
-**Test:** `./scripts/run-tests.sh` — currently **943 server + 113 client passing** (2026-07-06). Locale parity (en/de) is enforced by a test.
+**Test:** `./scripts/run-tests.sh` — currently **954 server + 113 client passing** (2026-07-06). Locale parity (en/de) is enforced by a test.
 CI runs two tiers: PRs skip the 31 tests marked `[Trait("Category", "Slow")]` (~6 min gate); pushes to `main` and the release workflow run the full suite.
 **Conventions:** English docs/comments; in-game text bilingual DE+EN; commit to `main` with the
 Claude `Co-Authored-By` trailer; OpenAI texture + ElevenLabs sound generation is blanket-approved
@@ -97,6 +97,17 @@ Per-item detail lives in the dated work log below.
   single-source-of-truth working end-to-end (validated: published the initial Windows zip).
 
 ---
+
+### ★ Portal language switcher made discoverable: header DE/EN toggle + Accept-Language (2026-07-06)
+The portal's DE/EN switcher existed only as small grey footer links — below the fold on longer pages
+and effectively invisible for the kid/parent audience (even the operator couldn't find it). The shared
+`Shell()` header is now flex space-between and carries a **pill toggle "DE | EN"** (current language
+highlighted, same `?lang=` links; footer links kept). First visits without `?lang=` or the `bbs_lang`
+cookie now honor the browser's **`Accept-Language`** (new testable `LangFromAcceptHeader`: first
+supported primary tag wins, German default) — an English browser gets English immediately instead of
+German-with-a-hidden-switch. Auto-detection sets NO cookie; only an explicit choice persists, so
+`?lang=` semantics are unchanged. 11 new tests (header toggle both languages + above `<main>`,
+Accept-Language parsing incl. q-lists, wildcard, case-insensitivity, unsupported-only headers).
 
 ### ★ Kid-friendly worlds portal: feedback & ideas, parental notice, discoverable reporting (#257, 2026-07-06)
 The portal's "Report a player" card was its centerpiece while the better in-game report paths were

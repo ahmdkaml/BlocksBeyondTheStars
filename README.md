@@ -375,7 +375,7 @@ the VEGA ship-AI onboarding/advisor companion, world-creation options, and an op
 for dynamic dialogue/mission text. Self-hostable dedicated server. **Native Windows and Linux**
 clients (no Wine/Proton; an experimental macOS build exists), and **opt-in automatic crash reporting**
 so problems get fixed faster.
-Currently **1056 xUnit tests pass** (943 server/shared + 113 headless client<->server).
+Currently **1067 xUnit tests pass** (954 server/shared + 113 headless client<->server).
 
 See [TODO.md](TODO.md) for the current Done/Open status, the
 [user manual](docs/user/USER_MANUAL.md) for controls/mechanics/commands, and [AGENTS.md](AGENTS.md)
