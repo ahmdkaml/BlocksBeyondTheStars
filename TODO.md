@@ -98,6 +98,14 @@ Per-item detail lives in the dated work log below.
 
 ---
 
+### ★ Code-scanning cleanup: Secure/HttpOnly on the language cookie, LogSafe on the announce log (2026-07-06)
+Closed the two open CodeQL alerts, both in WorldHost `Program.cs`. The `bbs_lang` portal cookie now
+sets `Secure` + `HttpOnly` (`cs/web/cookie-secure-not-set`; safe because the JS never reads it — it
+carries `?lang=` itself, the cookie is the server-side fallback only). The `/admin/announce` form
+handler now logs the world id through the existing `LogSafe()` helper, matching its `/api/admin/announce`
+twin (`cs/log-forging`; practically a false positive — the id is regex-validated 12-hex before use — but
+CodeQL doesn't model the validator, and the twin already did it right). No behavior change, no new tests.
+
 ### ★ Kid-friendly worlds portal: feedback & ideas, parental notice, discoverable reporting (#257, 2026-07-06)
 The portal's "Report a player" card was its centerpiece while the better in-game report paths were
 invisible, and there was no way to send game ideas at all. The worlds page now leads with a

@@ -259,6 +259,9 @@ string PageLang(HttpContext ctx)
             Path = "/",
             MaxAge = TimeSpan.FromDays(365),
             SameSite = SameSiteMode.Lax,
+            // Server-side fallback only (the JS carries ?lang= itself), so it can be locked down fully.
+            Secure = true,
+            HttpOnly = true,
         });
         return q;
     }
@@ -646,7 +649,7 @@ app.MapPost("/admin/announce", async (HttpContext ctx) =>
 
     var (reached, targets) = await orchestrator.AnnounceAsync(kind, message, seconds, worldId);
     log.LogInformation("Admin UI: announce kind {Kind} to {Target} — reached {Reached}/{Targets}.",
-        kind, worldId ?? "fleet", reached, targets);
+        kind, worldId is null ? "fleet" : LogSafe(worldId), reached, targets);
     return Results.Redirect("/admin");
 });
 
