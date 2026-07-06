@@ -436,6 +436,12 @@ separate unlock; admins can still disable it through server world rules.
 - A companion **lives on the world you tamed it on**: it follows you there (friendly green-cyan tint + a floating
   name), re-appears whenever you return, and is hidden elsewhere. Manage them in the **Companions** menu tab
   (rename, release). Companions are peaceful and can't be hurt.
+- **Energy fence pens**: craft **energy fence** pylons (`energy_fence`, workshop, no blueprint — 2 metal
+  panels + 2 cable → 4) and ring in a pen: no creature — wild, tamed or hostile machine — can cross the
+  humming pylons, so animals stay home and fiends stay out. Add an **energy gate** (`energy_gate`,
+  workshop — 2 metal panels + 1 energy cell + 1 circuit board) as the entrance: you and settlement folk
+  walk straight through its membrane while fauna bounce off; there is nothing to open or close. Only
+  flying creatures glide over a normal-height fence.
 
 ### Hover speeder (surface vehicle)
 - Craft a **hover speeder** (`speeder`, blueprint-gated workshop recipe: titanium_plate ×8, cable ×10,

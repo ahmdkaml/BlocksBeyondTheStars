@@ -5577,6 +5577,28 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-06): energy fence + gate — pen in creatures, companions and planet enemies (local branch feat/energy-fence)
+Craftable **energy fence** pylons that fauna cannot cross, plus an **energy gate** membrane that players
+and settlement NPCs walk straight through while fauna bounce off — a door with no open/close state and
+no new networking. Local branch only (no push/PR yet), stacked on feat/algae-tank.
+- **Why a new mechanic**: creatures/companions/planet enemies never consult the voxel world for
+  collision (they steer over the generator surface; only ship hulls stop them), so solid blocks alone
+  can't contain them. New fauna fence sweep `BlockedByEnergyFence` (GameServerFences.cs) samples each
+  step like the NPC wall sweep and walls exactly the two fence blocks; wired into `MoveCreatures`,
+  `MoveCompanion` (pens hold your own animals too) and `MovePlanetEnemy` (fence doubles as base defense).
+- **New blocks + items + recipes** (workshop, NO blueprint, door-tier): `energy_fence` (solid, emissive
+  cyan; 2 metal panels + 2 cable → 4) and `energy_gate` (solid:false membrane; 2 metal panels +
+  1 energy cell + 1 circuit board → 1). Gate is walk-through for the local player via a ChunkMesher
+  collidable exception (like water/fire); both render in the alpha-blended see-through set.
+- **Limits (documented in wiki/manual)**: flying creatures glide over normal-height fences; fauna can
+  still be walled only by fence blocks (ordinary walls stay invisible to them).
+- **AI assets** (logged in NOTICES.md): OpenAI tiles `textures/energy_fence.bytes` +
+  `textures/energy_gate.bytes`; ElevenLabs loop `audio/energy_fence_hum.mp3` wired as the quietest
+  fluid-ambience bed (any water/lava/fire in range outranks it). No item icons needed (block items
+  reuse their atlas tile).
+- **Docs**: taming wiki article + USER_MANUAL cover pens/gates, DE+EN locales.
+- 7 new tests (`EnergyFenceTests`) → suite 969 + 113 = 1082.
+
 ## ✅ Done (2026-07-06): algae tank — grow food from water at a base (local branch feat/algae-tank)
 The first food-producing machine: a placeable **algae tank** station block that turns plain water into
 edible rations, keeping base food supply deliberately EASY (can be made harder later). Detoxifier/

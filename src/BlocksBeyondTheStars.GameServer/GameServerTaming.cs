@@ -517,7 +517,16 @@ public sealed partial class GameServer
             c.Loco, profile, c.Position, owner.State.Position, CompanionFollowDistance, moveDt, Hash(c.Id, "wander"));
         c.Loco = res.State;
         var next = AdjustHabitatHeight(sp, res.Position, res.VertWave, profile);
-        c.Position = EntityBlockedByShip(next) ? c.Position : next;
+        // Companions respect energy fences like wild fauna do — a penned companion stays penned even
+        // when its owner steps out through the gate membrane (that is the point of the pen).
+        if (EntityBlockedByShip(next) || BlockedByEnergyFence(c.Position, next))
+        {
+            c.Loco.ModeTimer = 0f;
+        }
+        else
+        {
+            c.Position = next;
+        }
     }
 
     // ---------------------------------------------------------------------------------------------
