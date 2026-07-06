@@ -96,6 +96,35 @@ public sealed class WorldHostPortalPagesTests
     }
 
     [Fact]
+    public void Shell_ShowsTheLanguageToggle_InTheHeader()
+    {
+        // The footer links alone were effectively invisible (below the fold, small grey text) — the
+        // header pill is the discoverable switcher, rendered before the page body.
+        string de = WorldHostPortalPages.Landing(Config);
+        Assert.Contains("class='langsw'", de);
+        Assert.Contains("<span class='cur'>DE</span><a href='?lang=en'", de);
+        Assert.True(de.IndexOf("class='langsw'", StringComparison.Ordinal)
+            < de.IndexOf("<main>", StringComparison.Ordinal));
+
+        string en = WorldHostPortalPages.Landing(Config, "en");
+        Assert.Contains("<a href='?lang=de' lang='de'>DE</a><span class='cur'>EN</span>", en);
+    }
+
+    [Theory]
+    [InlineData(null, "de")]
+    [InlineData("", "de")]
+    [InlineData("en", "en")]
+    [InlineData("en-US,en;q=0.9", "en")]
+    [InlineData("EN-us", "en")] // header tags are case-insensitive, unlike our own ?lang= values
+    [InlineData("de-DE,de;q=0.9,en;q=0.8", "de")]
+    [InlineData("fr-FR,fr;q=0.9,en;q=0.8", "en")] // first SUPPORTED tag wins, not just the first tag
+    [InlineData("fr-FR,fr", "de")] // nothing supported → German default
+    [InlineData("*", "de")]
+    [InlineData("eng-US", "de")] // only the exact de/en primary tags count
+    public void LangFromAcceptHeader_PicksTheFirstSupportedLanguage(string? header, string expected)
+        => Assert.Equal(expected, WorldHostPortalPages.LangFromAcceptHeader(header));
+
+    [Fact]
     public void Privacy_EnglishPutsTheSummaryFirst_GermanTextStaysAuthoritative()
     {
         string en = WorldHostPortalPages.Privacy(Config, "en");

@@ -7,7 +7,8 @@ namespace BlocksBeyondTheStars.WorldHost;
 /// Server-rendered portal shells for the hosted-worlds control plane: landing (sign in / create account
 /// with the required community-rules + beta acceptance), "My Worlds" management, and the rules page.
 /// Pages are fully localized server-side (German default, English via <c>?lang=en</c> — see
-/// <see cref="NormalizeLang"/>); a DE/EN switcher lives in the shared footer. Self-contained like the
+/// <see cref="NormalizeLang"/>); a DE/EN switcher lives in the shared header (pill toggle) and, as
+/// plain links, in the footer. Self-contained like the
 /// per-instance PortalPage (inline CSS + SVG logo, no shipped assets); the pages talk to /api with a
 /// Bearer session from localStorage. Deliberately compact — the polished experience is the game itself.
 /// </summary>
@@ -25,6 +26,36 @@ public static class WorldHostPortalPages
     /// the default for anything unknown — the service's primary audience — and "en" must be an exact,
     /// deliberate choice (URL parameter or the cookie the switcher set).</summary>
     public static string NormalizeLang(string? lang) => lang == "en" ? "en" : "de";
+
+    /// <summary>First-visit language from the browser's <c>Accept-Language</c> header: the first
+    /// supported primary tag wins (browsers list tags in preference order, so full q-value parsing
+    /// would only complicate this), anything else stays German. Only consulted when neither
+    /// <c>?lang=</c> nor the <c>bbs_lang</c> cookie carries an explicit choice — auto-detection never
+    /// persists, so a deliberate switch always outranks it.</summary>
+    public static string LangFromAcceptHeader(string? acceptLanguage)
+    {
+        if (string.IsNullOrWhiteSpace(acceptLanguage))
+        {
+            return "de";
+        }
+
+        foreach (string part in acceptLanguage.Split(','))
+        {
+            string tag = part.Split(';')[0].Trim();
+            string primary = tag.Length >= 3 && tag[2] == '-' ? tag[..2] : tag;
+            if (primary.Equals("de", StringComparison.OrdinalIgnoreCase))
+            {
+                return "de";
+            }
+
+            if (primary.Equals("en", StringComparison.OrdinalIgnoreCase))
+            {
+                return "en";
+            }
+        }
+
+        return "de";
+    }
 
     public static string Landing(WorldHostConfig config, string lang = "de")
     {
@@ -580,7 +611,10 @@ load();
 body{{font-family:'Rajdhani','Segoe UI',system-ui,sans-serif;color:#dfe9f7;margin:0;padding:24px;min-height:100vh;
  background:radial-gradient(1100px 640px at 50% -12%,#15243f 0%,#070a12 58%),#070a12}}
 main{{max-width:860px;margin:0 auto}}
-header{{max-width:860px;margin:0 auto 6px}}
+header{{max-width:860px;margin:0 auto 6px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}}
+.langsw{{display:flex;flex:none;border:1px solid var(--line);border-radius:10px;overflow:hidden;font-weight:600}}
+.langsw a,.langsw .cur{{padding:7px 14px;text-decoration:none}}
+.langsw .cur{{background:#1c4a6e88;color:#eaf6ff}} .langsw a{{color:#9db2cf}} .langsw a:hover{{color:var(--cyan)}}
 .brand{{display:flex;align-items:center;gap:12px;text-decoration:none}}
 .brand .mark{{width:64px;height:48px;flex:none}}
 .brand .word{{font-size:20px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#eaf6ff;
@@ -651,7 +685,10 @@ window.bbsErr = function(j, fallback) {{
 </script>
 </head>
 <body>
-<header><a class='brand' href='/{(lang == "en" ? "?lang=en" : "")}'>{LogoSvg}<span class='word'><b>Blocks</b> Beyond the Stars</span></a></header>
+<header><a class='brand' href='/{(lang == "en" ? "?lang=en" : "")}'>{LogoSvg}<span class='word'><b>Blocks</b> Beyond the Stars</span></a>
+<nav class='langsw' aria-label='Sprache / Language'>{(lang == "en"
+        ? "<a href='?lang=de' lang='de'>DE</a><span class='cur'>EN</span>"
+        : "<span class='cur'>DE</span><a href='?lang=en' lang='en'>EN</a>")}</nav></header>
 <main>{body}</main>
 <footer>
 <a href='/rules{(lang == "en" ? "?lang=en" : "")}'>{T("Regeln", "Rules")}</a> ·

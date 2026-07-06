@@ -248,7 +248,9 @@ app.MapGet("/api/stats", async (HttpContext ctx) =>
 // ---------------- Portal pages (server-rendered shells; the JS talks to /api with a Bearer session) ----------------
 
 // Page language: explicit ?lang= wins (and is remembered in a cookie so plain links keep the choice);
-// otherwise the cookie; otherwise German — the portal's primary audience. Only "en"/"de" are honored.
+// otherwise the cookie; otherwise the browser's Accept-Language (first visit — auto-detection sets NO
+// cookie, only an explicit switch persists); otherwise German — the portal's primary audience. Only
+// "en"/"de" are honored.
 string PageLang(HttpContext ctx)
 {
     string? q = ctx.Request.Query["lang"];
@@ -259,11 +261,17 @@ string PageLang(HttpContext ctx)
             Path = "/",
             MaxAge = TimeSpan.FromDays(365),
             SameSite = SameSiteMode.Lax,
+            // Server-side fallback only (the JS carries ?lang= itself), so it can be locked down fully.
+            Secure = true,
+            HttpOnly = true,
         });
         return q;
     }
 
-    return WorldHostPortalPages.NormalizeLang(ctx.Request.Cookies["bbs_lang"]);
+    string? cookie = ctx.Request.Cookies["bbs_lang"];
+    return cookie is "en" or "de"
+        ? cookie
+        : WorldHostPortalPages.LangFromAcceptHeader(ctx.Request.Headers.AcceptLanguage);
 }
 
 app.MapGet("/", (HttpContext ctx) => Results.Content(WorldHostPortalPages.Landing(config, PageLang(ctx)), "text/html; charset=utf-8"));
@@ -646,7 +654,7 @@ app.MapPost("/admin/announce", async (HttpContext ctx) =>
 
     var (reached, targets) = await orchestrator.AnnounceAsync(kind, message, seconds, worldId);
     log.LogInformation("Admin UI: announce kind {Kind} to {Target} — reached {Reached}/{Targets}.",
-        kind, worldId ?? "fleet", reached, targets);
+        kind, worldId is null ? "fleet" : LogSafe(worldId), reached, targets);
     return Results.Redirect("/admin");
 });
 
