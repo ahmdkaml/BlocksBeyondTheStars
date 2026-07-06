@@ -6,7 +6,7 @@ plans live under [docs/](docs/) (committed); this file is the high-level status.
 keep it current when controls/features change. Last consolidated 2026-06-04.
 
 **Build:** `scripts/build-client.ps1` (Windows) or `scripts/build-client.sh` (Linux) — publishes shared libs + bundled server + Unity player.
-**Test:** `./scripts/run-tests.sh` — currently **958 server + 113 client passing** (2026-07-06). Locale parity (en/de) is enforced by a test.
+**Test:** `./scripts/run-tests.sh` — currently **962 server + 113 client passing** (2026-07-06). Locale parity (en/de) is enforced by a test.
 CI runs two tiers: PRs skip the 31 tests marked `[Trait("Category", "Slow")]` (~6 min gate); pushes to `main` and the release workflow run the full suite.
 **Conventions:** English docs/comments; in-game text bilingual DE+EN; commit to `main` with the
 Claude `Co-Authored-By` trailer; OpenAI texture + ElevenLabs sound generation is blanket-approved
@@ -5576,6 +5576,22 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
    ship interior; ship interior is water-free after landing in a sea.
 
 ---
+
+## ✅ Done (2026-07-06): algae tank — grow food from water at a base (local branch feat/algae-tank)
+The first food-producing machine: a placeable **algae tank** station block that turns plain water into
+edible rations, keeping base food supply deliberately EASY (can be made harder later). Detoxifier/
+workbench station pattern — no new networking. Local branch only (no push/PR yet).
+- **New block + items**: `algae_tank` (station block, cheap workshop recipe: 2 metal panels + 3 glass,
+  NO blueprint gate) and `algae_ration` (consumable, +30 hunger, stacks 20, fits the suit dispenser).
+- **Grow recipe**: 1 water → 2 algae rations at the placed tank (`CraftingStation.AlgaeTank`, appended
+  last in the enum; on-foot only — aboard ship life support already sates hunger). Plus `water_ice`
+  (2 ice → 1 water) as a second easy water source next to the existing snow-melt.
+- **AI assets** (single-file generations, logged in NOTICES.md): OpenAI block tile
+  `textures/algae_tank.bytes` + inventory icon `icons/item_algae_ration.png`; ElevenLabs bubbling
+  craft cue `audio/algae_tank_craft.mp3` (played instead of the generic beep when an algae-tank
+  recipe completes — ClientAudio keys on the recipe's station).
+- **Docs**: survival wiki article now covers base food (berry replanting + algae tank), DE+EN locales.
+- 4 new tests (`AlgaeTankTests`) → suite 962 + 113 = 1075.
 
 ## ✅ Done (2026-07-06): hospitable start planet — new games begin on "varied", not toxic "rocky"
 A new game used to always start on a rocky planet: `ServerConfig.StartPlanet` defaulted to `"rocky"`

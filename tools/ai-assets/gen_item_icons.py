@@ -62,6 +62,7 @@ ITEMS = [
     ("toxic_gland", "a glistening wet alien organ gland"),
     ("toxic_berries", "a small cluster of round berries with a leaf"),
     ("emergency_ration", "a sealed silver foil ration food pack"),
+    ("algae_ration", "a pressed rectangular bar of green cultured algae with a subtle sheen, sci-fi survival food"),
     ("medpack", "a white medical kit box with a red cross"),
     ("field_medkit", "a compact handheld medical injector gadget, white and green casing with a small red cross and a glowing green emitter tip"),
     ("stasis_projector", "a sleek handheld sci-fi stasis projector gun, dark metal with a glowing cyan crystal emitter and faint blue energy rings"),

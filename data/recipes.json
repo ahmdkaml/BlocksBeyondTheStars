@@ -156,6 +156,7 @@
   { "key": "concrete_deepslate", "station": "hand",     "inputs": [ { "item": "deepslate", "count": 4 }, { "item": "sand", "count": 1 } ], "outputs": [ { "item": "concrete", "count": 4 } ] },
   { "key": "glass_salt",         "station": "refinery", "inputs": [ { "item": "salt", "count": 1 }, { "item": "silicate", "count": 2 } ], "outputs": [ { "item": "glass", "count": 2 } ] },
   { "key": "water_snow",         "station": "hand",     "inputs": [ { "item": "snow", "count": 2 } ],                                     "outputs": [ { "item": "water", "count": 1 } ] },
+  { "key": "water_ice",          "station": "hand",     "inputs": [ { "item": "ice", "count": 2 } ],                                      "outputs": [ { "item": "water", "count": 1 } ] },
   { "key": "fiber_mycelium",     "station": "hand",     "inputs": [ { "item": "mycelium", "count": 1 } ],                                 "outputs": [ { "item": "plant_fiber", "count": 2 } ] },
   { "key": "fiber_alien_grass",  "station": "hand",     "inputs": [ { "item": "alien_grass", "count": 1 } ],                              "outputs": [ { "item": "plant_fiber", "count": 2 } ] },
   { "key": "crate",       "station": "workshop", "inputs": [ { "item": "iron_plate", "count": 3 }, { "item": "wood_log", "count": 2 } ], "outputs": [ { "item": "crate", "count": 1 } ] },
@@ -174,6 +175,11 @@
   { "key": "brass_fitting", "station": "workshop", "inputs": [ { "item": "brass", "count": 2 } ],  "outputs": [ { "item": "brass_fitting", "count": 2 } ] },
 
   { "key": "detoxifier", "station": "workshop", "requiredBlueprint": "detoxifier", "inputs": [ { "item": "metal_panel", "count": 3 }, { "item": "glass", "count": 2 }, { "item": "circuit_board", "count": 1 } ], "outputs": [ { "item": "detoxifier", "count": 1 } ] },
+
+  // Algae tank: an early-game food machine — no blueprint gate, cheap parts, and its grow recipe
+  // needs only water so a fresh base can feed itself (design: keep food production EASY for now).
+  { "key": "algae_tank",   "station": "workshop",  "inputs": [ { "item": "metal_panel", "count": 2 }, { "item": "glass", "count": 3 } ], "outputs": [ { "item": "algae_tank", "count": 1 } ] },
+  { "key": "algae_ration", "station": "algaetank", "inputs": [ { "item": "water", "count": 1 } ],                                        "outputs": [ { "item": "algae_ration", "count": 2 } ] },
 
   { "key": "diamond",        "station": "refinery", "inputs": [ { "item": "diamond_ore", "count": 2 } ], "outputs": [ { "item": "diamond", "count": 1 } ] },
   { "key": "diamond_drill",  "station": "workshop", "requiredBlueprint": "diamond_drill", "inputs": [ { "item": "titanium_plate", "count": 6 }, { "item": "diamond", "count": 2 }, { "item": "cable", "count": 6 }, { "item": "carbide", "count": 1 } ], "outputs": [ { "item": "diamond_drill", "count": 1 } ] },

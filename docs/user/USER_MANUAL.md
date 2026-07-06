@@ -175,6 +175,9 @@ separate unlock; admins can still disable it through server world rules.
 - **Oxygen** (max 100 + tank bonuses): refills aboard ship / on breathable worlds; drains outside on
   toxic/airless worlds. An `oxygen_extractor` cuts the drain on extractable atmospheres.
 - **Hunger** (max 100): drains off-ship; below ~15 the suit auto-eats stored/loose rations.
+  Food sources: hunt creatures (meat), harvest berry flora (replantable via seeds), craft emergency
+  rations — or build an **algae tank** (workshop, no blueprint) at a base: standing next to it grows
+  2 algae rations from 1 water (melt 2 snow or 2 ice into water by hand if there is no lake).
 - **Suit energy** (max 100): powers the stealth-suit cloak and the **jetpack** (hold Space in the air to
   thrust up); both stop when it hits 0. Recharges aboard the ship and refills fully at a heal-tank.
 - **Armor**: each piece (chest/legs/helmet) adds resistance, summed and capped (~75%).

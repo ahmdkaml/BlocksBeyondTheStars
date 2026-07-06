@@ -151,7 +151,19 @@ namespace BlocksBeyondTheStars.Client
             {
                 var n = Game.Network;
                 n.BlockChanged += OnBlock;
-                n.CraftCompleted += m => Play2D(m.Success ? _ok : _err);
+                n.CraftCompleted += m =>
+                {
+                    // Crafting at the algae tank bubbles (recorded cue) instead of the generic confirm beep.
+                    if (m.Success
+                        && Game.Content?.GetRecipe(m.RecipeKey)?.Station == BlocksBeyondTheStars.Shared.Definitions.CraftingStation.AlgaeTank
+                        && _clips.ContainsKey("algae_tank_craft"))
+                    {
+                        Cue("algae_tank_craft");
+                        return;
+                    }
+
+                    Play2D(m.Success ? _ok : _err);
+                };
                 n.ActionRejected += _ => Play2D(_err);
                 n.ScanResultReceived += _ => Play2D(_blip);
                 n.ShipCombatStatusChanged += OnShip;
