@@ -5577,6 +5577,22 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-06): NPC treasure hints — villagers reveal the wreck and hidden caches on the map
+Wrecks and treasure chests existed but were invisible: not on the map, findable only by stumbling over
+them. Now talking to settlement NPCs is how you learn about them (PR #267).
+- **Hint on greeting** (`GameServerNpcHints.cs`): greeting a vendor/quartermaster has a 35 % chance the
+  NPC shares a location instead — a spoken line with rough distance + 8-way direction (wrap-aware,
+  DE+EN `npc.hint.*`/`dir.*`), and the target appears as a map POI **for everyone on the world**.
+- **Wreck for anyone, chest secrets for friends**: the wreck (type `wreck`, the client glyph existed
+  unused) is shared with any visitor; hidden-cache hints (new type `treasure`, gold ◈) need relationship
+  tier `known`+ — the first mechanic that makes NPC memory (item 14) tangible.
+- **Persistence**: reveals live in `WorldMetadata.RevealedPois` (keys carry the location id, unlike
+  `GeneratedLoot`). A claimed wreck and a looted chest drop off the map automatically. No net-codec
+  change (POIs reuse `PlanetPoiList`); `SendPlanetPois` refactored to `BuildPlanetPois` + broadcast.
+- **Deliberately no LLM for hint lines**: the greeting cache is per relationship tier — a cached line
+  would replay one player's coordinates to another. Deterministic localized text instead.
+- 5 new tests (`NpcHintTests`) → suite 974 + 113 = 1087.
+
 ## ✅ Done (2026-07-06): energy fence + gate — pen in creatures, companions and planet enemies (local branch feat/energy-fence)
 Craftable **energy fence** pylons that fauna cannot cross, plus an **energy gate** membrane that players
 and settlement NPCs walk straight through while fauna bounce off — a door with no open/close state and

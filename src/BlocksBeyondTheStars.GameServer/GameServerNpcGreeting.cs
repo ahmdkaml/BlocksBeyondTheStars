@@ -165,6 +165,17 @@ public sealed partial class GameServer
 
         _lastGreetAt[coolKey] = _uptime;
 
+        // NPC treasure hints: occasionally the NPC shares where the wreck / a hidden cache lies instead of a
+        // greeting — revealing it on the map for everyone. Deterministic text; deliberately bypasses the LLM
+        // path (the greeting cache is per relationship tier, so a cached line would replay another player's
+        // coordinates to the wrong listener).
+        string hint = TryEmitHint(session, npcKey);
+        if (hint.Length > 0)
+        {
+            Send(session, new NpcGreeting { NpcId = npc.Id, Name = npc.Name, Role = npc.Role, Text = hint });
+            return;
+        }
+
         // 1) Instant response: a cached LLM line if we have one, else empty → the client shows its localized
         //    fallback. Either way the player always gets a greeting, with or without an AI backend.
         string immediate = _greetingCache.TryGetValue(cacheKey, out var cached) ? cached : string.Empty;

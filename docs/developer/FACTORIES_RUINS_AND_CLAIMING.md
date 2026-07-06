@@ -108,6 +108,21 @@ A chest reuses the structure-loot container flow (`SpawnStructureLoot("chest", .
 after being looted. Chest loot is richer than generic salvage and is the rare world source of an **access
 code** (~14 % per chest).
 
+### 4.1 NPC hints — how wrecks and chests get onto the map
+
+Wrecks and chests are deliberately **not** in the `PlanetPoiList` a joining player receives — they stay
+hidden until a settlement NPC shares them. When a player greets a vendor/quartermaster
+(`EmitGreeting`), `TryEmitHint` (`GameServerNpcHints.cs`) rolls a chance (35 %) to replace the greeting
+with a **location hint**: the NPC speaks a deterministic localized line with a rough distance + 8-way
+direction (`npc.hint.wreck` / `npc.hint.treasure`, wrap-aware via `WrapDeltaX/Z`), and the target is
+added to the POI list for **everyone on the world** (`BroadcastPlanetPois`). The wreck is shared with any
+visitor; chest hints are reserved for players at relationship tier `known`+ (item 14 memory). Reveals
+persist in `WorldMetadata.RevealedPois` — keys carry the location id (`"{locationId}|wreck"`,
+`"{locationId}|chest:{x}:{y}:{z}"`) because coordinates repeat across a save's worlds. A claimed wreck
+and a looted chest (container despawned) drop out of the list automatically. Hint lines intentionally
+bypass the LLM greeting path: that cache is shared per relationship tier, so a cached line would replay
+one player's coordinates to another player standing somewhere else.
+
 ---
 
 ## 5. Access codes & claiming
@@ -150,7 +165,8 @@ claiming are the natural follow-ups.
 | Tracking | `GameServer/WorldManager.cs` (`FactoryInstance`, `RuinsStamped`) |
 | Crafting/protection | `GameServer/GameServer.cs` (`HandleCraft` roster gate, mine/place `IsFactoryProtected`, `Disassemble` exclusion, `StationAvailable`) |
 | Claiming | `GameServer/GameServerFactories.cs` (`ClaimFactory`), `Shared/State/WorldMetadata.cs` (`StructureClaim`) |
+| NPC hints | `GameServer/GameServerNpcHints.cs` (`TryEmitHint`), `GameServerSettlements.cs` (`BuildPlanetPois`), `Shared/State/WorldMetadata.cs` (`RevealedPois`), `client/.../WorldMap.cs` (`PoiLook` `treasure`) |
 | Networking | `Networking/Messages/FactoryMessages.cs`, `Networking/NetCodec.cs` (tags 172/173) |
 | Client | `client/.../FactoryView.cs`, `WorldRig.cs`, `PlayerController.cs` (E-claim), `CraftingTechShipUI.cs` (factory station), `GameBootstrap.cs`, `NetworkClient.cs` |
 | Data | `data/blocks.json` (`factory_terminal`, `machine_block`, `factory_pipe`), `data/items.json` (`access_code`), `data/recipes.json` (factory recipes + `market_buy_access_code`), `data/locales/{en,de}.json` |
-| Tests | `tests/.../FactoryStructureTests.cs`, `FactoryClaimTests.cs`, `FactoryCraftingTests.cs`, `RuinsAndChestsTests.cs` |
+| Tests | `tests/.../FactoryStructureTests.cs`, `FactoryClaimTests.cs`, `FactoryCraftingTests.cs`, `RuinsAndChestsTests.cs`, `NpcHintTests.cs` |
