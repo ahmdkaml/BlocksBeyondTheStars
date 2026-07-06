@@ -57,7 +57,7 @@ Created on first run; editable directly or through the admin UI.
 | `viewDistanceChunks` | Chunk stream radius | `4` |
 | `tickRate` | Simulation Hz (10–20 recommended) | `15` |
 | `seed` | World seed (0 = derive from world name) | `0` |
-| `startPlanet` | Starting planet type | `rocky` |
+| `startPlanet` | Starting planet type | `varied` |
 | `adminBindAddress` | Admin UI bind address | `127.0.0.1` |
 | `enableWebSocket` | Enable browser/WebGL WebSocket gameplay transport | `false` |
 | `webSocketBindAddress` | WebSocket HTTP bind host (`+` for all interfaces/reverse proxies) | `localhost` |

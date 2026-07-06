@@ -79,7 +79,7 @@ namespace BlocksBeyondTheStars.Client
         public readonly Dictionary<string, int> PlanetTypes = new Dictionary<string, int>();
 
         /// <summary>Forces the planet type the world SPAWNS on (e.g. "lava", "ocean"). Empty = worldgen default
-        /// ("rocky"). Not exposed in the normal create-world UI — used by the marketing screenshot capture to
+        /// ("varied"). Not exposed in the normal create-world UI — used by the marketing screenshot capture to
         /// shoot one surface per planet type. Emitted as <c>--start-planet</c>.</summary>
         public string StartPlanetType = "";
 

@@ -306,18 +306,50 @@ public sealed partial class GameServer
             }
         }
 
-        // Choose a start body: first planet matching the configured start planet type, else any planet.
-        CelestialBody? start = null;
+        // Choose a start body: the first planet matching the configured start planet type. When no body
+        // matches, two fallbacks keep the start experience intact (air + food + materials):
+        //  - Unknown type (a --start-planet typo would otherwise crash LoadWorld): adopt the first
+        //    breathable planet that grows flora, else any planet, as the world default.
+        //  - Known type without a body in this galaxy (per-type frequency overrides removed it, or a
+        //    forced --start-planet for the marketing captures): RETYPE the first planet to the configured
+        //    type. The start terrain is always generated from DefaultPlanetType, so retyping keeps the
+        //    star map — and a later travel-back, which regenerates by body type — consistent with the
+        //    surface the player actually spawned on.
+        CelestialBody? start = null, firstPlanet = null, firstBreathable = null;
         foreach (var body in _galaxy.AllBodies())
         {
-            if (body.Kind == CelestialKind.Planet)
+            if (body.Kind != CelestialKind.Planet)
             {
-                start ??= body;
-                if (body.PlanetType == _meta.DefaultPlanetType)
-                {
-                    start = body;
-                    break;
-                }
+                continue;
+            }
+
+            firstPlanet ??= body;
+            if (firstBreathable is null
+                && _content.GetPlanet(body.PlanetType ?? string.Empty) is { } def
+                && string.Equals(def.Atmosphere, "breathable", StringComparison.OrdinalIgnoreCase)
+                && def.FloraDensity > 0)
+            {
+                firstBreathable = body;
+            }
+
+            if (body.PlanetType == _meta.DefaultPlanetType)
+            {
+                start = body;
+                break;
+            }
+        }
+
+        if (start is null && firstPlanet is not null)
+        {
+            if (_content.GetPlanet(_meta.DefaultPlanetType) is null)
+            {
+                start = firstBreathable ?? firstPlanet;
+                _meta.DefaultPlanetType = start.PlanetType ?? string.Empty;
+            }
+            else
+            {
+                start = firstPlanet;
+                start.PlanetType = _meta.DefaultPlanetType;
             }
         }
 
@@ -984,8 +1016,13 @@ public sealed partial class GameServer
             {
                 // Aboard the ship (life support), boarded on a station (its life support), oxygen disabled
                 // by rules, or a breathable atmosphere: regenerate, no drain (up to the tank capacity).
+                // Health regen never revives a dead player (0 HP) — that would outrun the death check
+                // below and quietly skip the respawn on breathable worlds.
                 p.Oxygen = System.Math.Min(maxOxygen, p.Oxygen + (float)(dt * 25));
-                p.Health = System.Math.Min(100f, p.Health + (float)(dt * 2));
+                if (p.Health > 0f)
+                {
+                    p.Health = System.Math.Min(100f, p.Health + (float)(dt * 2));
+                }
 
                 // Aboard the ship the suit recharges (powers the jetpack / stealth / suit tools); outside it
                 // only refills at a heal-tank. Don't recharge while actively spending it.

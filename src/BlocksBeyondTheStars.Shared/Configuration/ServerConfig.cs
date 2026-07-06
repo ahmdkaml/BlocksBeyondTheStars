@@ -62,8 +62,9 @@ public sealed class ServerConfig
     /// <summary>Long world seed; 0 means "derive one from the world name".</summary>
     public long Seed { get; set; }
 
-    /// <summary>Planet type the world starts on.</summary>
-    public string StartPlanet { get; set; } = "rocky";
+    /// <summary>Planet type the world starts on. The default is a breathable, fertile type so a new
+    /// player begins with air, food plants and the common ores (not a toxic survival-pressure world).</summary>
+    public string StartPlanet { get; set; } = "varied";
 
     /// <summary>Authoritative world rules (mode, PvP, hazards, death penalty, cheats, ...).</summary>
     public GameRules Rules { get; set; } = new();

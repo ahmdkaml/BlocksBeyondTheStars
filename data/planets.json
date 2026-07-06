@@ -152,7 +152,8 @@
       { "block": "tin_ore", "rarity": 0.03, "minDepth": 6, "maxDepth": 256 },
       { "block": "lithium_ore", "rarity": 0.03, "minDepth": 12, "maxDepth": 256 },
       { "block": "iron_ore", "rarity": 0.05, "minDepth": 4, "maxDepth": 256 },
-      { "block": "copper_ore", "rarity": 0.04, "minDepth": 6, "maxDepth": 256 }
+      { "block": "copper_ore", "rarity": 0.04, "minDepth": 6, "maxDepth": 256 },
+      { "block": "carbon", "rarity": 0.04, "minDepth": 6, "maxDepth": 256 }
     ]
   },
   {

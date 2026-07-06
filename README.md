@@ -375,7 +375,7 @@ the VEGA ship-AI onboarding/advisor companion, world-creation options, and an op
 for dynamic dialogue/mission text. Self-hostable dedicated server. **Native Windows and Linux**
 clients (no Wine/Proton; an experimental macOS build exists), and **opt-in automatic crash reporting**
 so problems get fixed faster.
-Currently **1067 xUnit tests pass** (954 server/shared + 113 headless client<->server).
+Currently **1071 xUnit tests pass** (958 server/shared + 113 headless client<->server).
 
 See [TODO.md](TODO.md) for the current Done/Open status, the
 [user manual](docs/user/USER_MANUAL.md) for controls/mechanics/commands, and [AGENTS.md](AGENTS.md)
@@ -390,6 +390,9 @@ network, the AGPL requires you to offer them its source code.
 
 **Source code:** [github.com/marceld23/BlocksBeyondTheStars](https://github.com/marceld23/BlocksBeyondTheStars)
 — the canonical repository for the corresponding source, wherever you obtained this build.
+
+**Website:** [www.blocksbeyondthestars.com](https://www.blocksbeyondthestars.com/en)
+— play in the browser, create hosted worlds and find the latest news.
 
 Third-party libraries and bundled assets keep their own (permissive) licenses — see
 [NOTICES.md](NOTICES.md).

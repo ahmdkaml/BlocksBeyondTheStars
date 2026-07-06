@@ -6,7 +6,7 @@ plans live under [docs/](docs/) (committed); this file is the high-level status.
 keep it current when controls/features change. Last consolidated 2026-06-04.
 
 **Build:** `scripts/build-client.ps1` (Windows) or `scripts/build-client.sh` (Linux) — publishes shared libs + bundled server + Unity player.
-**Test:** `./scripts/run-tests.sh` — currently **954 server + 113 client passing** (2026-07-06). Locale parity (en/de) is enforced by a test.
+**Test:** `./scripts/run-tests.sh` — currently **958 server + 113 client passing** (2026-07-06). Locale parity (en/de) is enforced by a test.
 CI runs two tiers: PRs skip the 31 tests marked `[Trait("Category", "Slow")]` (~6 min gate); pushes to `main` and the release workflow run the full suite.
 **Conventions:** English docs/comments; in-game text bilingual DE+EN; commit to `main` with the
 Claude `Co-Authored-By` trailer; OpenAI texture + ElevenLabs sound generation is blanket-approved
@@ -5576,6 +5576,25 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
    ship interior; ship interior is water-free after landing in a sea.
 
 ---
+
+## ✅ Done (2026-07-06): hospitable start planet — new games begin on "varied", not toxic "rocky"
+A new game used to always start on a rocky planet: `ServerConfig.StartPlanet` defaulted to `"rocky"`
+(toxic atmosphere → suit-oxygen drain, `floraDensity` 0 → literally no plants/food) and nothing in the
+normal create-world flow ever overrode it. Local-only change (no PR yet).
+- **Default start planet → `varied`** (breathable, 4 biomes, flora 0.10, "many" creatures): air to
+  breathe and a food loop from the first minute. `--start-planet` / `BBS_START_PLANET` still override;
+  existing saves keep their baked `DefaultPlanetType`.
+- **`varied` ore set + carbon** (rarity 0.04): the early crafting chain (medpack, carbon composite →
+  energy cells) no longer requires leaving the start planet.
+- **Robust start-body selection in `BuildGalaxy`**: an unknown/typo'd start type no longer crashes
+  `LoadWorld` — the server adopts the first breathable flora planet; a known type with no matching
+  body in the galaxy (per-type frequency overrides, forced marketing captures) RETYPES the first
+  planet to the configured type, so the star map, the generated surface and a later travel-back
+  (which regenerates by body type) always agree.
+- **Vitals fix surfaced by the breathable start**: surface health regen ran BEFORE the death check in
+  the same tick, so a player at exactly 0 HP on a breathable world was nudged to 0.2 and never
+  respawned (on toxic rocky the regen branch never ran, hiding this). Dead players no longer regen.
+- 4 new tests (`StartPlanetTests`) → suite 958 + 113 = 1071.
 
 ## ✅ Done (2026-07-05): /report chat command + world id on player reports
 Player reporting now works from inside the game chat, and every report says which world it came from.
