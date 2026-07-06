@@ -384,44 +384,8 @@ load();
         lang = NormalizeLang(lang);
         string T(string de, string en) => lang == "en" ? en : de;
 
-        string card = lang == "en"
-            ? $@"
-<div class='card'>
- <p><b>Blocks Beyond the Stars is a family and community project.</b> Kids and grown-ups play here
- together — be kind to each other!</p>
- <ul>
-  <li>🧒 Please ask your parents first if it is okay for you to play this game.</li>
-  <li>Be friendly and help other players.</li>
-  <li>Build, explore and invent — don't destroy on purpose what others have built.</li>
-  <li><b>No hate speech, no bullying, no racism, no insults</b> — not in chat, names or builds. Such
-   violations lead to an <b>immediate ban</b>, no warning.</li>
-  <li>Never share personal data (real name, address, school …) and don't ask others for theirs.</li>
-  <li>Saw something bad? Report it right in the game: type <b><code>/report &lt;name&gt;</code></b> in
-   chat or use the report button in the player list (ship → alliance) — or the form on the worlds
-   page. We review every report.</li>
- </ul>
- <p class='beta'>⚠ <b>Beta notice:</b> the game and its hosted worlds are a beta. Worlds and saves can
- break or disappear at any time. Download a backup of your world regularly if it matters to you!</p>
-</div>"
-            : $@"
-<div class='card'>
- <p><b>Blocks Beyond the Stars ist ein Familien- und Community-Projekt.</b> Hier spielen Kinder und
- Erwachsene zusammen — seid nett zueinander!</p>
- <ul>
-  <li>🧒 Frag bitte zuerst deine Eltern, ob es okay ist, dieses Spiel zu spielen.</li>
-  <li>Sei freundlich und hilf anderen Spielern.</li>
-  <li>Baue, entdecke und erfinde — zerstöre nicht absichtlich, was andere gebaut haben.</li>
-  <li><b>Keine Hetze, kein Mobbing, kein Rassismus, keine Beleidigungen</b> — weder im Chat noch in Namen
-   oder Bauwerken. Solche Verstöße führen zum <b>sofortigen Bann</b>, ohne Vorwarnung.</li>
-  <li>Gib keine persönlichen Daten weiter (echter Name, Adresse, Schule …) und frage andere nicht danach.</li>
-  <li>Etwas Schlimmes gesehen? Melde es direkt im Spiel: Tippe <b><code>/report &lt;Name&gt;</code></b>
-   in den Chat oder nutze den Melden-Knopf in der Spielerliste (Schiff → Allianz) — oder das Formular
-   auf der Welten-Seite. Wir schauen uns jede Meldung an.</li>
- </ul>
- <p class='beta'>⚠ <b>Beta-Hinweis:</b> Das Spiel und die gehosteten Welten sind eine Beta. Welten und
- Spielstände können jederzeit kaputtgehen oder verloren gehen. Lade dir regelmäßig eine Sicherung deiner
- Welt herunter, wenn sie dir wichtig ist!</p>
-</div>";
+        // Single-sourced with GET /api/terms (the in-game rules screen) — see CommunityRules.
+        string card = CommunityRules.HtmlCard(lang);
 
         return Shell($"{T("Community-Regeln", "Community Rules")} — Blocks Beyond the Stars", $@"
 <h1>Community-<span class='o'>{T("Regeln", "Rules")}</span> <span class='sub'>(v{config.TermsVersion})</span></h1>

@@ -6,7 +6,7 @@ plans live under [docs/](docs/) (committed); this file is the high-level status.
 keep it current when controls/features change. Last consolidated 2026-06-04.
 
 **Build:** `scripts/build-client.ps1` (Windows) or `scripts/build-client.sh` (Linux) — publishes shared libs + bundled server + Unity player.
-**Test:** `./scripts/run-tests.sh` — currently **962 server + 113 client passing** (2026-07-06). Locale parity (en/de) is enforced by a test.
+**Test:** `./scripts/run-tests.sh` — currently **980 server + 117 client passing** (2026-07-06). Locale parity (en/de) is enforced by a test.
 CI runs two tiers: PRs skip the 31 tests marked `[Trait("Category", "Slow")]` (~6 min gate); pushes to `main` and the release workflow run the full suite.
 **Conventions:** English docs/comments; in-game text bilingual DE+EN; commit to `main` with the
 Claude `Co-Authored-By` trailer; OpenAI texture + ElevenLabs sound generation is blanket-approved
@@ -97,6 +97,24 @@ Per-item detail lives in the dated work log below.
   single-source-of-truth working end-to-end (validated: published the initial Windows zip).
 
 ---
+
+### ★ Client-portal parity: signup, create & manage worlds, saves, feedback and account deletion in-game (#268-#270, 2026-07-06)
+The desktop client could only sign in, list and join hosted worlds — creating an account or a world
+required the portal website. The **Official Worlds** menu now covers everything the portal offers, so
+the website is optional for desktop players: **account signup** with the community rules displayed and
+accepted in-game (rules text + version from the new anonymous **`GET /api/terms`**, single-sourced
+with the /rules page via the new `CommunityRules` class so page and API can never drift), the **terms
+re-accept flow** after a rules bump (login `termsOutdated` or any `terms_outdated` error opens the
+rules screen → `POST /api/accept-terms`), **create world** (name + optional join password),
+per-world **Manage** dialog (set/remove join password, stop world, delete world behind a
+type-the-name confirmation), **save backup round-trip** without a browser (download to / upload from
+`persistentDataPath/portal_saves/<worldId>-world.db`; world must be stopped, 50 MB cap), a
+**Feedback & ideas** form (rides the reports pipe, category `feedback`) and **account deletion**
+(type-the-name confirmation; erases account, worlds and saves — GDPR). `PortalClient` grew the
+matching methods incl. a DELETE + raw-bytes transport, all with static parse methods; validation
+stays server-side, the client mirrors only cheap checks (password mismatch/min length) and localizes
+the stable error codes. ~60 new `ui.portal.*` locale keys DE+EN. WebGL stays untouched (no server
+picker in the browser, by design). 10 new tests (6 CommunityRules/terms, 4 PortalClient parsing).
 
 ### ★ Portal language switcher made discoverable: header DE/EN toggle + Accept-Language (2026-07-06)
 The portal's DE/EN switcher existed only as small grey footer links — below the fold on longer pages

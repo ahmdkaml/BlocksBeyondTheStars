@@ -73,4 +73,70 @@ public sealed class PortalClientTests
         Assert.False(bad.Ok);
         Assert.Equal("Unknown report category.", bad.Error);
     }
+
+    // ---------------- Portal parity (#268-#270) ----------------
+
+    [Fact]
+    public void ParseTerms_ReadsVersionAndBothLanguages()
+    {
+        var r = PortalClient.ParseTerms(200, "{\"version\":3,\"textDe\":\"Sei nett.\",\"textEn\":\"Be kind.\"}");
+        Assert.True(r.Ok);
+        Assert.Equal(3, r.Version);
+        Assert.Equal("Sei nett.", r.TextDe);
+        Assert.Equal("Be kind.", r.TextEn);
+
+        Assert.Equal("offline", PortalClient.ParseTerms(0, "").Error); // portal unreachable → signup blocked with a clear message
+    }
+
+    [Fact]
+    public void ParseLogin_CoversSignupOutcomes()
+    {
+        // A successful signup answers exactly like a login (fresh session, no termsOutdated flag).
+        var ok = PortalClient.ParseLogin(200, "{\"accountId\":\"acc-9\",\"sessionToken\":\"tok-9\"}");
+        Assert.True(ok.Ok);
+        Assert.Equal("tok-9", ok.SessionToken);
+        Assert.False(ok.TermsOutdated);
+
+        // Server-side validation errors surface their stable machine code for localization.
+        var taken = PortalClient.ParseLogin(400, "{\"error\":\"This name is already taken.\",\"code\":\"name_taken\"}");
+        Assert.False(taken.Ok);
+        Assert.Equal("name_taken", taken.Code);
+        var rules = PortalClient.ParseLogin(400, "{\"error\":\"Please accept the community rules to create an account.\",\"code\":\"accept_rules\"}");
+        Assert.Equal("accept_rules", rules.Code);
+    }
+
+    [Fact]
+    public void ParseWorld_ReadsTheCreatedWorld_AndTheQuotaError()
+    {
+        var r = PortalClient.ParseWorld(200,
+            "{\"id\":\"ffeeddccbb22\",\"name\":\"New Home\",\"status\":\"stopped\",\"subdomain\":\"w-ffeeddccbb22\",\"hasPassword\":true}");
+        Assert.True(r.Ok);
+        Assert.NotNull(r.World);
+        Assert.Equal("ffeeddccbb22", r.World!.Id);
+        Assert.Equal("New Home", r.World.Name);
+        Assert.Equal("stopped", r.World.Status);
+        Assert.True(r.World.HasPassword);
+
+        var full = PortalClient.ParseWorld(400, "{\"error\":\"World limit reached (2 per account).\",\"code\":\"world_limit\"}");
+        Assert.False(full.Ok);
+        Assert.Null(full.World);
+        Assert.Equal("world_limit", full.Code);
+    }
+
+    [Fact]
+    public void ParseSave_ReturnsRawBytes_AndDecodesErrorEnvelopes()
+    {
+        byte[] payload = { 0x53, 0x51, 0x4C, 0x69, 0x74, 0x65 }; // "SQLite" — save downloads are raw bytes, not JSON
+        var ok = PortalClient.ParseSave(200, payload);
+        Assert.True(ok.Ok);
+        Assert.Equal(payload, ok.Bytes);
+
+        var running = PortalClient.ParseSave(400,
+            System.Text.Encoding.UTF8.GetBytes("{\"error\":\"Stop the world before downloading its save.\",\"code\":\"stop_first\"}"));
+        Assert.False(running.Ok);
+        Assert.Equal("stop_first", running.Code);
+        Assert.Empty(running.Bytes);
+
+        Assert.Equal("offline", PortalClient.ParseSave(0, System.Array.Empty<byte>()).Error);
+    }
 }

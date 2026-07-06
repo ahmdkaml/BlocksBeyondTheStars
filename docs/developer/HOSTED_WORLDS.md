@@ -90,6 +90,19 @@ through Caddy.
   existing connect path (`AppShell.HostedToken` → `GameBootstrap` → `JoinRequest.HostedToken`). The
   HTTP side is `Client.Core/Portal/PortalClient` (mirrors FeedbackUploader: HttpClient, sync, never
   throws, testable headless). Manual/SP/LAN joins explicitly clear the hosted token.
+- **Full portal parity in the native client (#268-#270):** the web portal is OPTIONAL for desktop
+  players. The Official Worlds overlay additionally offers: **account signup** with in-game rules
+  display + acceptance (rules text/version from the anonymous `GET /api/terms`, single-sourced with
+  the /rules page via `CommunityRules`), the **terms re-accept flow** after a rules-version bump
+  (login's `termsOutdated` or any `terms_outdated` error opens the rules screen → `POST
+  /api/accept-terms`), **create world** (name + optional join password), per-world **Manage** dialog
+  (set/remove join password, stop, delete with type-the-name confirmation), **save backup
+  round-trip** (download to / upload from `persistentDataPath/portal_saves/<worldId>-world.db` — no
+  browser needed; world must be stopped, 50 MB cap), a **feedback** form (`POST /api/reports`,
+  category `feedback`) and **account deletion** (type-the-name confirmation; deletes all worlds +
+  saves, GDPR). Signup/login rate limits and all name/password validation stay server-side; the
+  client mirrors only the cheap checks (mismatch, min length) and localizes the stable error codes
+  (`ui.portal.err_<code>`).
 - **In-game report button:** on hosted worlds (portal session + hosted join present) every player row
   in the Alliances → find-players list carries a "Report" button — one tap files a report via
   `POST /api/reports`, the button becomes the confirmation. Absent everywhere else.
