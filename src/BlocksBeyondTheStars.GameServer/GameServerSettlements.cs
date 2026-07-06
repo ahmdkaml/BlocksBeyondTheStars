@@ -76,6 +76,23 @@ public sealed partial class GameServer
 
     /// <summary>Sends the planet's points of interest (settlements + ruins) for the world map.</summary>
     private void SendPlanetPois(PlayerSession session)
+        => Send(session, new PlanetPoiList { Pois = BuildPlanetPois(session).ToArray() });
+
+    /// <summary>Re-sends the POI list to everyone on the world (per session — chest names are localized).</summary>
+    private void BroadcastPlanetPois()
+    {
+        foreach (var s in JoinedInActiveWorld())
+        {
+            SendPlanetPois(s);
+        }
+    }
+
+    /// <summary>Test seam: the POI list exactly as <see cref="SendPlanetPois"/> would send it to this player.</summary>
+    public IReadOnlyList<NetPoi> PlanetPoisForTest(string playerId)
+        => FindSessionByPlayerId(playerId) is { } s ? BuildPlanetPois(s) : new List<NetPoi>();
+
+    /// <summary>Builds the planet's POI list for one player (world map markers + info panel).</summary>
+    private List<NetPoi> BuildPlanetPois(PlayerSession session)
     {
         var pois = new List<NetPoi>();
         foreach (var s in _settlements)
@@ -108,7 +125,31 @@ public sealed partial class GameServer
             pois.Add(new NetPoi { Type = "guardian_core", Name = "Guardian Core", X = c.X, Z = c.Z });
         }
 
-        Send(session, new PlanetPoiList { Pois = pois.ToArray() });
+        // NPC-hint reveals: the wreck + treasure chests stay OFF the map until a villager shares them
+        // (TryEmitHint). A claimed wreck is the player's ship now; a looted chest has no container left —
+        // both drop out of the list on their own.
+        if (_wreckStamped && !_wreckClaimed && _meta.RevealedPois.Contains(_world.LocationId + "|wreck"))
+        {
+            var (wx, wz) = WreckPoiCenter();
+            pois.Add(new NetPoi { Type = "wreck", Name = _wreckName, X = wx, Z = wz });
+        }
+
+        foreach (var cont in _containers)
+        {
+            if (cont.Id.StartsWith(ChestContainerIdPrefix, System.StringComparison.Ordinal)
+                && _meta.RevealedPois.Contains(ChestRevealKey(cont)))
+            {
+                pois.Add(new NetPoi
+                {
+                    Type = "treasure",
+                    Name = Localize(session.Locale, "poi.treasure"),
+                    X = cont.Position.X + 0.5f,
+                    Z = cont.Position.Z + 0.5f,
+                });
+            }
+        }
+
+        return pois;
     }
 
     /// <summary>A settlement chosen for placement, with everything needed to stamp + record it.</summary>

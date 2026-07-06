@@ -357,6 +357,7 @@ namespace BlocksBeyondTheStars.Client
             "settlement_ruin" => ("⌂", new Color(0.65f, 0.6f, 0.55f), "map_ruin"),
             "vault_ruin" => ("◆", new Color(0.8f, 0.7f, 0.95f), "map_ruin"),
             "wreck" => ("✖", new Color(1f, 0.55f, 0.3f), "map_wreck"),
+            "treasure" => ("◈", new Color(1f, 0.8f, 0.25f), null), // NPC-hint reveal; no icon yet → glyph renders
             "landing" => ("⊕", new Color(0.5f, 0.85f, 1f), "map_pad"),
             _ => ("◆", new Color(0.8f, 0.8f, 0.9f), "map_station"),
         };

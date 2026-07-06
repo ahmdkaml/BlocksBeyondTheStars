@@ -46,6 +46,13 @@ public sealed class WorldMetadata
     /// </summary>
     public System.Collections.Generic.List<StructureClaim> Claims { get; set; } = new();
 
+    /// <summary>
+    /// Hidden POIs an NPC hint has revealed on the map, world-globally. Keys carry the location id (unlike
+    /// <see cref="GeneratedLoot"/>) because coordinates repeat across a save's worlds: "{locationId}|wreck"
+    /// and "{locationId}|chest:{x}:{y}:{z}". The POIs themselves re-derive from the seed every session.
+    /// </summary>
+    public System.Collections.Generic.List<string> RevealedPois { get; set; } = new();
+
     // --- Singleplayer "Creative" world options (chosen at creation; persisted so they reapply on every load).
     // A head-start sandbox: everything available + a starter set, while survival mechanics stay on. All false =
     // the normal "Explorer" world. Blueprints + ships are re-applied per join (idempotent); the kit is one-time. ---

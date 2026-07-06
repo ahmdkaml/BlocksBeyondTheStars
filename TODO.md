@@ -5577,6 +5577,22 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-06): NPC treasure hints — villagers reveal the wreck and hidden caches on the map
+Wrecks and treasure chests existed but were invisible: not on the map, findable only by stumbling over
+them. Now talking to settlement NPCs is how you learn about them (local branch, no PR yet).
+- **Hint on greeting** (`GameServerNpcHints.cs`): greeting a vendor/quartermaster has a 35 % chance the
+  NPC shares a location instead — a spoken line with rough distance + 8-way direction (wrap-aware,
+  DE+EN `npc.hint.*`/`dir.*`), and the target appears as a map POI **for everyone on the world**.
+- **Wreck for anyone, chest secrets for friends**: the wreck (type `wreck`, the client glyph existed
+  unused) is shared with any visitor; hidden-cache hints (new type `treasure`, gold ◈) need relationship
+  tier `known`+ — the first mechanic that makes NPC memory (item 14) tangible.
+- **Persistence**: reveals live in `WorldMetadata.RevealedPois` (keys carry the location id, unlike
+  `GeneratedLoot`). A claimed wreck and a looted chest drop off the map automatically. No net-codec
+  change (POIs reuse `PlanetPoiList`); `SendPlanetPois` refactored to `BuildPlanetPois` + broadcast.
+- **Deliberately no LLM for hint lines**: the greeting cache is per relationship tier — a cached line
+  would replay one player's coordinates to another. Deterministic localized text instead.
+- 5 new tests (`NpcHintTests`) → suite 963 + 113 = 1076.
+
 ## ✅ Done (2026-07-06): hospitable start planet — new games begin on "varied", not toxic "rocky"
 A new game used to always start on a rocky planet: `ServerConfig.StartPlanet` defaulted to `"rocky"`
 (toxic atmosphere → suit-oxygen drain, `floraDensity` 0 → literally no plants/food) and nothing in the
