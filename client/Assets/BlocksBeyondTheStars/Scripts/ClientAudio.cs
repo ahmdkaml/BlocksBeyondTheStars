@@ -151,7 +151,19 @@ namespace BlocksBeyondTheStars.Client
             {
                 var n = Game.Network;
                 n.BlockChanged += OnBlock;
-                n.CraftCompleted += m => Play2D(m.Success ? _ok : _err);
+                n.CraftCompleted += m =>
+                {
+                    // Crafting at the algae tank bubbles (recorded cue) instead of the generic confirm beep.
+                    if (m.Success
+                        && Game.Content?.GetRecipe(m.RecipeKey)?.Station == BlocksBeyondTheStars.Shared.Definitions.CraftingStation.AlgaeTank
+                        && _clips.ContainsKey("algae_tank_craft"))
+                    {
+                        Cue("algae_tank_craft");
+                        return;
+                    }
+
+                    Play2D(m.Success ? _ok : _err);
+                };
                 n.ActionRejected += _ => Play2D(_err);
                 n.ScanResultReceived += _ => Play2D(_blip);
                 n.ShipCombatStatusChanged += OnShip;
@@ -333,6 +345,7 @@ namespace BlocksBeyondTheStars.Client
             int px = Mathf.FloorToInt(p.x), py = Mathf.FloorToInt(p.y), pz = Mathf.FloorToInt(p.z);
             string found = string.Empty;   // fire / lava take precedence and short-circuit the scan
             string waterBed = string.Empty; // best water bed seen so far (a waterfall outranks calm water)
+            bool fence = false;             // energy fence/gate nearby — soft hum bed when no fluid plays
             bool stop = false;
             for (int dx = -3; dx <= 3 && !stop; dx++)
             {
@@ -349,8 +362,14 @@ namespace BlocksBeyondTheStars.Client
                             if (WaterRank(bed) > WaterRank(waterBed)) waterBed = bed;
                             if (bed == "water_fall") stop = true; // loudest water — no need to scan further
                         }
+                        else if (k == "energy_fence" || k == "energy_gate") { fence = true; }
                     }
                 }
+            }
+
+            if (found.Length == 0 && waterBed.Length == 0 && fence)
+            {
+                found = "energy_fence_hum"; // quietest bed — any fluid in range outranks it
             }
 
             SetFluid(found.Length == 0 ? waterBed : found);

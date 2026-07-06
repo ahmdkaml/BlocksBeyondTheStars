@@ -337,9 +337,9 @@ public sealed partial class GameServer
         int hover = drone ? ScanDroneHover : 0;          // scan-drones float above the ground
         float bob = drone ? DroneBob * res.VertWave : 0f; // ...and hover-bob; robots stay grounded
         var candidate = new Vector3f(nx, groundY + hover + bob, nz);
-        if (EntityBlockedByShip(candidate))
+        if (EntityBlockedByShip(candidate) || BlockedByEnergyFence(enemy.Position, candidate))
         {
-            enemy.Loco.ModeTimer = 0f; // ship hull in the way — re-roll the heading next tick instead of entering
+            enemy.Loco.ModeTimer = 0f; // ship hull or an energy fence in the way — re-roll the heading next tick
             return false;
         }
 

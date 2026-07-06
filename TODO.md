@@ -6,7 +6,7 @@ plans live under [docs/](docs/) (committed); this file is the high-level status.
 keep it current when controls/features change. Last consolidated 2026-06-04.
 
 **Build:** `scripts/build-client.ps1` (Windows) or `scripts/build-client.sh` (Linux) — publishes shared libs + bundled server + Unity player.
-**Test:** `./scripts/run-tests.sh` — currently **958 server + 113 client passing** (2026-07-06). Locale parity (en/de) is enforced by a test.
+**Test:** `./scripts/run-tests.sh` — currently **962 server + 113 client passing** (2026-07-06). Locale parity (en/de) is enforced by a test.
 CI runs two tiers: PRs skip the 31 tests marked `[Trait("Category", "Slow")]` (~6 min gate); pushes to `main` and the release workflow run the full suite.
 **Conventions:** English docs/comments; in-game text bilingual DE+EN; commit to `main` with the
 Claude `Co-Authored-By` trailer; OpenAI texture + ElevenLabs sound generation is blanket-approved
@@ -5579,7 +5579,7 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ## ✅ Done (2026-07-06): NPC treasure hints — villagers reveal the wreck and hidden caches on the map
 Wrecks and treasure chests existed but were invisible: not on the map, findable only by stumbling over
-them. Now talking to settlement NPCs is how you learn about them (local branch, no PR yet).
+them. Now talking to settlement NPCs is how you learn about them (PR #267).
 - **Hint on greeting** (`GameServerNpcHints.cs`): greeting a vendor/quartermaster has a 35 % chance the
   NPC shares a location instead — a spoken line with rough distance + 8-way direction (wrap-aware,
   DE+EN `npc.hint.*`/`dir.*`), and the target appears as a map POI **for everyone on the world**.
@@ -5591,7 +5591,45 @@ them. Now talking to settlement NPCs is how you learn about them (local branch, 
   change (POIs reuse `PlanetPoiList`); `SendPlanetPois` refactored to `BuildPlanetPois` + broadcast.
 - **Deliberately no LLM for hint lines**: the greeting cache is per relationship tier — a cached line
   would replay one player's coordinates to another. Deterministic localized text instead.
-- 5 new tests (`NpcHintTests`) → suite 963 + 113 = 1076.
+- 5 new tests (`NpcHintTests`) → suite 974 + 113 = 1087.
+
+## ✅ Done (2026-07-06): energy fence + gate — pen in creatures, companions and planet enemies (local branch feat/energy-fence)
+Craftable **energy fence** pylons that fauna cannot cross, plus an **energy gate** membrane that players
+and settlement NPCs walk straight through while fauna bounce off — a door with no open/close state and
+no new networking. Local branch only (no push/PR yet), stacked on feat/algae-tank.
+- **Why a new mechanic**: creatures/companions/planet enemies never consult the voxel world for
+  collision (they steer over the generator surface; only ship hulls stop them), so solid blocks alone
+  can't contain them. New fauna fence sweep `BlockedByEnergyFence` (GameServerFences.cs) samples each
+  step like the NPC wall sweep and walls exactly the two fence blocks; wired into `MoveCreatures`,
+  `MoveCompanion` (pens hold your own animals too) and `MovePlanetEnemy` (fence doubles as base defense).
+- **New blocks + items + recipes** (workshop, NO blueprint, door-tier): `energy_fence` (solid, emissive
+  cyan; 2 metal panels + 2 cable → 4) and `energy_gate` (solid:false membrane; 2 metal panels +
+  1 energy cell + 1 circuit board → 1). Gate is walk-through for the local player via a ChunkMesher
+  collidable exception (like water/fire); both render in the alpha-blended see-through set.
+- **Limits (documented in wiki/manual)**: flying creatures glide over normal-height fences; fauna can
+  still be walled only by fence blocks (ordinary walls stay invisible to them).
+- **AI assets** (logged in NOTICES.md): OpenAI tiles `textures/energy_fence.bytes` +
+  `textures/energy_gate.bytes`; ElevenLabs loop `audio/energy_fence_hum.mp3` wired as the quietest
+  fluid-ambience bed (any water/lava/fire in range outranks it). No item icons needed (block items
+  reuse their atlas tile).
+- **Docs**: taming wiki article + USER_MANUAL cover pens/gates, DE+EN locales.
+- 7 new tests (`EnergyFenceTests`) → suite 969 + 113 = 1082.
+
+## ✅ Done (2026-07-06): algae tank — grow food from water at a base (local branch feat/algae-tank)
+The first food-producing machine: a placeable **algae tank** station block that turns plain water into
+edible rations, keeping base food supply deliberately EASY (can be made harder later). Detoxifier/
+workbench station pattern — no new networking. Local branch only (no push/PR yet).
+- **New block + items**: `algae_tank` (station block, cheap workshop recipe: 2 metal panels + 3 glass,
+  NO blueprint gate) and `algae_ration` (consumable, +30 hunger, stacks 20, fits the suit dispenser).
+- **Grow recipe**: 1 water → 2 algae rations at the placed tank (`CraftingStation.AlgaeTank`, appended
+  last in the enum; on-foot only — aboard ship life support already sates hunger). Plus `water_ice`
+  (2 ice → 1 water) as a second easy water source next to the existing snow-melt.
+- **AI assets** (single-file generations, logged in NOTICES.md): OpenAI block tile
+  `textures/algae_tank.bytes` + inventory icon `icons/item_algae_ration.png`; ElevenLabs bubbling
+  craft cue `audio/algae_tank_craft.mp3` (played instead of the generic beep when an algae-tank
+  recipe completes — ClientAudio keys on the recipe's station).
+- **Docs**: survival wiki article now covers base food (berry replanting + algae tank), DE+EN locales.
+- 4 new tests (`AlgaeTankTests`) → suite 962 + 113 = 1075.
 
 ## ✅ Done (2026-07-06): hospitable start planet — new games begin on "varied", not toxic "rocky"
 A new game used to always start on a rocky planet: `ServerConfig.StartPlanet` defaulted to `"rocky"`

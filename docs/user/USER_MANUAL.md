@@ -175,6 +175,9 @@ separate unlock; admins can still disable it through server world rules.
 - **Oxygen** (max 100 + tank bonuses): refills aboard ship / on breathable worlds; drains outside on
   toxic/airless worlds. An `oxygen_extractor` cuts the drain on extractable atmospheres.
 - **Hunger** (max 100): drains off-ship; below ~15 the suit auto-eats stored/loose rations.
+  Food sources: hunt creatures (meat), harvest berry flora (replantable via seeds), craft emergency
+  rations — or build an **algae tank** (workshop, no blueprint) at a base: standing next to it grows
+  2 algae rations from 1 water (melt 2 snow or 2 ice into water by hand if there is no lake).
 - **Suit energy** (max 100): powers the stealth-suit cloak and the **jetpack** (hold Space in the air to
   thrust up); both stop when it hits 0. Recharges aboard the ship and refills fully at a heal-tank.
 - **Armor**: each piece (chest/legs/helmet) adds resistance, summed and capped (~75%).
@@ -433,6 +436,12 @@ separate unlock; admins can still disable it through server world rules.
 - A companion **lives on the world you tamed it on**: it follows you there (friendly green-cyan tint + a floating
   name), re-appears whenever you return, and is hidden elsewhere. Manage them in the **Companions** menu tab
   (rename, release). Companions are peaceful and can't be hurt.
+- **Energy fence pens**: craft **energy fence** pylons (`energy_fence`, workshop, no blueprint — 2 metal
+  panels + 2 cable → 4) and ring in a pen: no creature — wild, tamed or hostile machine — can cross the
+  humming pylons, so animals stay home and fiends stay out. Add an **energy gate** (`energy_gate`,
+  workshop — 2 metal panels + 1 energy cell + 1 circuit board) as the entrance: you and settlement folk
+  walk straight through its membrane while fauna bounce off; there is nothing to open or close. Only
+  flying creatures glide over a normal-height fence.
 
 ### Hover speeder (surface vehicle)
 - Craft a **hover speeder** (`speeder`, blueprint-gated workshop recipe: titanium_plate ×8, cable ×10,

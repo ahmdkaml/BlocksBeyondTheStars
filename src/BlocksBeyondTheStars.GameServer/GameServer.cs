@@ -3403,6 +3403,7 @@ public sealed partial class GameServer
                 CraftingStation.Refinery => NearStationBlock(player, "forge"),
                 CraftingStation.Detoxifier => NearStationBlock(player, "detoxifier"),
                 CraftingStation.Transmuter => NearStationBlock(player, "matter_forge"),
+                CraftingStation.AlgaeTank => NearStationBlock(player, "algae_tank"),
                 // A factory's production terminal — only present inside spawned factory structures
                 // (players don't craft/place it), so factory recipes are only available at a factory.
                 CraftingStation.Factory => NearStationBlock(player, "factory_terminal"),

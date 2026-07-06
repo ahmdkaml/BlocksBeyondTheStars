@@ -310,9 +310,10 @@ namespace BlocksBeyondTheStars.Client
                 // Water + fire render but don't collide — you swim/sink into water and walk through (and burn
                 // in) fire. Lava DOES collide: you stand on its surface (and take contact damage from the cell
                 // below) rather than dropping straight through it into a cave/void — you must not fall through
-                // lava.
+                // lava. The energy gate is a walk-through membrane: players (and server-side NPCs) pass it,
+                // only fauna are held back by the server's fence check.
                 var collKey = content.BlockById(id)?.Key;
-                bool collidable = collKey != "water" && collKey != "fire";
+                bool collidable = collKey != "water" && collKey != "fire" && collKey != "energy_gate";
                 int wx = origin.X + x, wy = origin.Y + y, wz = origin.Z + z;
 
                 // Ground-detail scatter (T0): on planet chunks, strew a sparse deterministic set of tufts/
@@ -941,6 +942,8 @@ namespace BlocksBeyondTheStars.Client
             {
                 case "glass": return new Vector2(0.90f, 0.0f);
                 case "force_field": return new Vector2(0.60f, 0.0f);
+                case "energy_fence": return new Vector2(0.60f, 0.0f);
+                case "energy_gate": return new Vector2(0.60f, 0.0f);
                 case "ice": return new Vector2(0.85f, 0.0f);
                 case "water": return new Vector2(0.80f, 0.0f);
                 case "crystal": return new Vector2(0.95f, 0.15f);
@@ -1171,7 +1174,8 @@ namespace BlocksBeyondTheStars.Client
             }
 
             var def = content.BlockById(id);
-            return def?.Key is "glass" or "force_field" or "water" or "fire"; // alpha-blended — see through them
+            // alpha-blended — see through them
+            return def?.Key is "glass" or "force_field" or "water" or "fire" or "energy_fence" or "energy_gate";
         }
 
         private static Color BlockColor(GameContent content, BlockId id)
