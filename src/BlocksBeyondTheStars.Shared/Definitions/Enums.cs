@@ -46,4 +46,8 @@ public enum CraftingStation
     /// not needing the refined intermediates or a personal workshop chain. Each factory only offers a
     /// seeded subset of factory recipes (its roster); see the factory structure / roster gating.</summary>
     Factory,
+
+    /// <summary>A placed algae-tank block: a base food machine that grows rations from water. On-foot
+    /// only (no ship-module counterpart) — aboard the ship, life support already sates hunger.</summary>
+    AlgaeTank,
 }

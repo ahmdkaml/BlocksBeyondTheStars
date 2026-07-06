@@ -140,6 +140,8 @@ TEXTURES = [
     ("beam_block", "a sci-fi teleporter pad, a dark metal floor plate with a glowing cyan hexagonal grid, concentric light rings and small status lights around the rim, top-down"),
     # Materialvielfalt — dead-end fixes + new tiers + metal storage blocks.
     ("detoxifier", "a sci-fi chemical detox station, a metal vat of bubbling glowing green fluid with pipes and valves, top-down"),
+    # Algae tank — base food machine (grows rations from water).
+    ("algae_tank", "a sci-fi algae farm tank, a dark metal frame around a glass vat of glowing green algae water with rising bubbles and small feed pipes, top-down"),
     ("diamond_ore", "dark grey rock with glittering pale-blue and white embedded diamond crystals"),
     ("insulated_wall", "a matte dark polymer-coated wall panel with rubber seams and rounded bolts, top-down"),
     ("iron_block", "a solid polished grey iron metal block, seamless"),

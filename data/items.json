@@ -47,6 +47,7 @@
   { "key": "berries",         "nameKey": "item.berries.name",         "category": "consumable", "maxStack": 20, "descriptionKey": "item.berries.desc", "consumeHealth": 5, "consumeHunger": 18 },
   { "key": "toxic_berries",   "nameKey": "item.toxic_berries.name",   "category": "consumable", "maxStack": 20, "descriptionKey": "item.toxic_berries.desc", "consumeHealth": -18, "consumeHunger": 8 },
   { "key": "emergency_ration","nameKey": "item.emergency_ration.name", "category": "consumable", "maxStack": 20, "descriptionKey": "item.emergency_ration.desc", "consumeHunger": 40 },
+  { "key": "algae_ration",    "nameKey": "item.algae_ration.name",    "category": "consumable", "maxStack": 20, "descriptionKey": "item.algae_ration.desc", "consumeHunger": 30 },
   { "key": "suit_teleporter", "nameKey": "item.suit_teleporter.name", "category": "component",  "maxStack": 1,  "descriptionKey": "item.suit_teleporter.desc" },
   { "key": "oxygen_extractor","nameKey": "item.oxygen_extractor.name", "category": "component",  "maxStack": 1,  "descriptionKey": "item.oxygen_extractor.desc" },
   { "key": "stealth_suit",    "nameKey": "item.stealth_suit.name",    "category": "component",  "maxStack": 1,  "descriptionKey": "item.stealth_suit.desc" },
@@ -160,6 +161,7 @@
 
   { "key": "detoxifier",     "nameKey": "item.detoxifier.name",     "category": "block", "maxStack": 16, "placesBlock": "detoxifier", "descriptionKey": "item.detoxifier.desc" },
   { "key": "matter_forge",   "nameKey": "item.matter_forge.name",   "category": "block", "maxStack": 16, "placesBlock": "matter_forge", "descriptionKey": "item.matter_forge.desc" },
+  { "key": "algae_tank",     "nameKey": "item.algae_tank.name",     "category": "block", "maxStack": 16, "placesBlock": "algae_tank", "descriptionKey": "item.algae_tank.desc" },
   { "key": "matter_dust",    "nameKey": "item.matter_dust.name",    "category": "material", "maxStack": 99, "descriptionKey": "item.matter_dust.desc" },
   { "key": "insulated_wall", "nameKey": "item.insulated_wall.name", "category": "block", "maxStack": 99, "placesBlock": "insulated_wall" },
 
