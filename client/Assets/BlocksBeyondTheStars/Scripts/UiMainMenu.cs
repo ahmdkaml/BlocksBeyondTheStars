@@ -196,7 +196,7 @@ namespace BlocksBeyondTheStars.Client
             var dim = UiKit.AddImage(root, 0f, 0f, 1920f, 1080f, UiKit.SolidSprite, new Color(0f, 0f, 0f, 0.6f));
             connect = dim.gameObject;
             dim.raycastTarget = true; // swallow clicks behind the dialog
-            var dlg = UiKit.AddPanel(connect.transform, 660f, 280f, 600f, 520f, UiKit.Panel).transform;
+            var dlg = UiKit.AddDialogPanel(connect.transform, 660f, 280f, 600f, 520f);
             UiKit.AddText(dlg, 30f, 24f, 540f, 30f, shell.L("ui.menu.connect_title"), 22, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
             UiKit.AddText(dlg, 30f, 80f, 540f, 22f, shell.L("ui.menu.connect_name"), 15, UiKit.TextCol, TextAnchor.MiddleLeft);
             dlgName = UiKit.AddInput(dlg, 30f, 106f, 540f, 38f, name[0], v => name[0] = v);
@@ -250,19 +250,23 @@ namespace BlocksBeyondTheStars.Client
 
             var odim = UiKit.AddModalDim(root);
             official = odim.gameObject;
-            var odlg = UiKit.AddPanel(official.transform, 610f, 180f, 700f, 720f, UiKit.Panel).transform;
+            var odlg = UiKit.AddDialogPanel(official.transform, 610f, 180f, 700f, 720f);
             UiKit.AddText(odlg, 30f, 24f, 640f, 30f, shell.L("ui.portal.title"), 22, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
 
             // The same notices the portal shows (client parity): the beta warning, the one-line rules
-            // summary, and a button opening the full rules page in the browser.
-            UiKit.AddText(odlg, 30f, 58f, 640f, 40f, shell.L("ui.portal.beta"), 13,
+            // summary, and a button opening the full rules page in the browser. The long notices MUST
+            // wrap — AddText defaults to overflow, which ran them under the button and off the panel.
+            var betaLine = UiKit.AddText(odlg, 30f, 58f, 640f, 40f, shell.L("ui.portal.beta"), 13,
                 new Color(1f, 0.72f, 0.35f), TextAnchor.UpperLeft);
-            UiKit.AddText(odlg, 30f, 100f, 470f, 44f, shell.L("ui.portal.rules_line"), 13, UiKit.CyanDim, TextAnchor.UpperLeft);
+            betaLine.horizontalOverflow = HorizontalWrapMode.Wrap;
+            var rulesLine = UiKit.AddText(odlg, 30f, 100f, 455f, 44f, shell.L("ui.portal.rules_line"), 13, UiKit.CyanDim, TextAnchor.UpperLeft);
+            rulesLine.horizontalOverflow = HorizontalWrapMode.Wrap;
             UiKit.AddButton(odlg, 510f, 100f, 160f, 40f, shell.L("ui.portal.view_rules"),
                 () => Application.OpenURL(PortalBase() + "/rules"), "btn_credits");
 
             var oStatus = UiKit.AddText(odlg, 30f, 592f, 640f, 48f, "", 14,
                 new Color(1f, 0.55f, 0.4f), TextAnchor.UpperLeft, FontStyle.Bold);
+            oStatus.horizontalOverflow = HorizontalWrapMode.Wrap; // localized errors can be long
             UiKit.AddButton(odlg, 400f, 648f, 270f, 54f, shell.L("ui.menu.back"), () =>
             {
                 CloseAllPortalModals(); // leaving the overlay must not park stale dialogs behind it
@@ -387,16 +391,14 @@ namespace BlocksBeyondTheStars.Client
                 }
             }
 
-            // Opens a fresh form dialog: full-screen scrim + an OPAQUE panel. The themed panel sprite
-            // alone is translucent — the overlay's form would shine through and make dialogs unreadable
-            // (user acceptance feedback), so a solid dark backing sits between scrim and frame.
+            // Opens a fresh form dialog: full-screen scrim + an OPAQUE dialog panel — the overlay's form
+            // must never shine through and blend with the dialog (user acceptance feedback).
             Transform OpenModalPanel(float x, float y, float w, float h)
             {
                 CloseModal();
                 var mDim = UiKit.AddModalDim(official.transform, 0.9f);
                 portalModal = mDim.gameObject;
-                UiKit.AddImage(portalModal.transform, x + 2f, y + 2f, w - 4f, h - 4f, UiKit.SolidSprite, new Color(0.02f, 0.05f, 0.11f, 0.98f));
-                return UiKit.AddPanel(portalModal.transform, x, y, w, h, UiKit.Panel).transform;
+                return UiKit.AddDialogPanel(portalModal.transform, x, y, w, h);
             }
 
             async void LoadTerms(System.Action<PortalTermsResult> done)
@@ -422,8 +424,7 @@ namespace BlocksBeyondTheStars.Client
                 CloseRules();
                 var rDim = UiKit.AddModalDim(official.transform, 0.92f);
                 rulesModal = rDim.gameObject;
-                UiKit.AddImage(rulesModal.transform, 162f, 82f, 1596f, 916f, UiKit.SolidSprite, new Color(0.02f, 0.05f, 0.11f, 0.98f));
-                var rDlg = UiKit.AddPanel(rulesModal.transform, 160f, 80f, 1600f, 920f, UiKit.Panel).transform;
+                var rDlg = UiKit.AddDialogPanel(rulesModal.transform, 160f, 80f, 1600f, 920f);
                 var rTitle = UiKit.AddText(rDlg, 40f, 22f, 1520f, 32f, shell.L("ui.portal.rules_title"), 24, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
                 var rBody = UiKit.AddText(rDlg, 60f, 76f, 1480f, 730f, "", 17, UiKit.TextCol, TextAnchor.UpperLeft);
                 rBody.horizontalOverflow = HorizontalWrapMode.Wrap;
@@ -893,8 +894,7 @@ namespace BlocksBeyondTheStars.Client
 
                 var pwDim = UiKit.AddModalDim(official.transform, 0.9f);
                 passwordPrompt = pwDim.gameObject;
-                UiKit.AddImage(passwordPrompt.transform, 662f, 392f, 596f, 296f, UiKit.SolidSprite, new Color(0.02f, 0.05f, 0.11f, 0.98f));
-                var pwDlg = UiKit.AddPanel(passwordPrompt.transform, 660f, 390f, 600f, 300f, UiKit.Panel).transform;
+                var pwDlg = UiKit.AddDialogPanel(passwordPrompt.transform, 660f, 390f, 600f, 300f);
                 UiKit.AddText(pwDlg, 30f, 24f, 540f, 30f, shell.L("ui.portal.world_password"), 20, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
                 if (wrongBefore)
                 {
@@ -980,8 +980,9 @@ namespace BlocksBeyondTheStars.Client
                     pwInput.contentType = InputField.ContentType.Password;
                     UiKit.AddButton(oContent, 30f, 184f, 300f, 54f, shell.L("ui.portal.login"), () => DoLogin(acc[0].Trim(), pw[0]), "btn_join");
                     UiKit.AddButton(oContent, 370f, 184f, 300f, 54f, shell.L("ui.portal.signup"), OpenSignup, "btn_credits");
-                    UiKit.AddText(oContent, 30f, 260f, 640f, 44f, shell.L("ui.portal.signup_here"), 14, UiKit.CyanDim, TextAnchor.UpperLeft);
-                    UiKit.AddText(oContent, 30f, 306f, 640f, 24f, PortalBase(), 15, UiKit.Cyan, TextAnchor.UpperLeft, FontStyle.Bold);
+                    var signupHere = UiKit.AddText(oContent, 30f, 260f, 640f, 44f, shell.L("ui.portal.signup_here"), 14, UiKit.CyanDim, TextAnchor.UpperLeft);
+                    signupHere.horizontalOverflow = HorizontalWrapMode.Wrap;
+                    UiKit.AddText(oContent, 30f, 310f, 640f, 24f, PortalBase(), 15, UiKit.Cyan, TextAnchor.UpperLeft, FontStyle.Bold);
                     return;
                 }
 
@@ -997,7 +998,8 @@ namespace BlocksBeyondTheStars.Client
 
                 if (oWorlds.Count == 0)
                 {
-                    UiKit.AddText(oContent, 30f, 120f, 640f, 48f, shell.L("ui.portal.no_worlds"), 15, UiKit.TextCol, TextAnchor.UpperLeft);
+                    var noWorlds = UiKit.AddText(oContent, 30f, 120f, 640f, 48f, shell.L("ui.portal.no_worlds"), 15, UiKit.TextCol, TextAnchor.UpperLeft);
+                    noWorlds.horizontalOverflow = HorizontalWrapMode.Wrap;
                     return;
                 }
 
@@ -1026,7 +1028,7 @@ namespace BlocksBeyondTheStars.Client
             // --- Participate / "Join in" overlay (added last so it draws on top; hidden until "Mach mit") ---
             var pdim = UiKit.AddModalDim(root);
             participate = pdim.gameObject;
-            var pdlg = UiKit.AddPanel(participate.transform, 560f, 250f, 800f, 580f, UiKit.Panel).transform;
+            var pdlg = UiKit.AddDialogPanel(participate.transform, 560f, 250f, 800f, 580f);
             UiKit.AddText(pdlg, 40f, 26f, 720f, 36f, shell.L("ui.contribute.title"), 26, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
 
             Text Para(float y, float h, string text, int size, Color col)

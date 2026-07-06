@@ -949,7 +949,7 @@ namespace BlocksBeyondTheStars.Client
             var bg = UiKit.AddImage(canvas.transform, 0, 0, 1920, 1080, UiKit.SolidSprite, new Color(0f, 0f, 0f, 0.6f));
             bg.raycastTarget = true; // swallow clicks behind the dialog
 
-            var panel = UiKit.AddPanel(canvas.transform, 720f, 430f, 480f, 220f, UiKit.Panel);
+            var panel = UiKit.AddDialogPanel(canvas.transform, 720f, 430f, 480f, 220f);
             UiKit.AddText(panel.transform, 24f, 26f, 432f, 72f,
                 de ? "Spiel verlassen und zurück zum Hauptmenü?" : "Leave the game and return to the main menu?",
                 22, UiKit.TextCol, TextAnchor.MiddleCenter);

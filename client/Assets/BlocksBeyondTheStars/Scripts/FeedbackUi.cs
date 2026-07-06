@@ -169,7 +169,7 @@ namespace BlocksBeyondTheStars.Client
             _dialog = dim.gameObject;
 
             const float pw = 760f, ph = 648f;
-            var panel = UiKit.AddPanel(_dialog.transform, (W - pw) / 2f, (H - ph) / 2f, pw, ph, UiKit.Panel).transform;
+            var panel = UiKit.AddDialogPanel(_dialog.transform, (W - pw) / 2f, (H - ph) / 2f, pw, ph);
             const float m = 36f, innerW = pw - 2f * m;
 
             UiKit.AddText(panel, m, 22, innerW, 34, L("ui.feedback.title"), 26, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
