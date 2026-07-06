@@ -103,8 +103,21 @@ namespace BlocksBeyondTheStars.Client
                 wextra = gap;
             }
 
-            UiKit.AddButton(root, bx, wby + wextra + gap, bw, bh, shell.L("ui.menu.settings"), shell.OpenSettings, "btn_settings");
-            UiKit.AddButton(root, bx, wby + wextra + gap * 2f, bw, bh, shell.L("ui.menu.credits"), () => shell.GoTo(ShellPhase.Credits), "btn_credits");
+            // "My Worlds / Account" (#272): one click back to the worlds portal the game was served
+            // from — same origin, so a self-hosted WorldHost links to its own portal, never to ours.
+            // The portal's Play button deep-links back into /play, which closes the round-trip; the
+            // portal page itself stays the browser home for signup/create/manage (HOSTED_WORLDS.md:
+            // the WebGL menu never grows a server picker).
+            UiKit.AddButton(root, bx, wby + wextra + gap, bw, bh, shell.L("ui.menu.my_worlds"), () =>
+            {
+                string portalUrl = System.Uri.TryCreate(Application.absoluteURL, System.UriKind.Absolute, out var page)
+                    && page.Scheme != System.Uri.UriSchemeFile
+                    ? page.GetLeftPart(System.UriPartial.Authority)
+                    : PortalClient.DefaultPortalUrl; // local file test builds → the official portal
+                Application.OpenURL(portalUrl + "/worlds");
+            }, "btn_credits");
+            UiKit.AddButton(root, bx, wby + wextra + gap * 2f, bw, bh, shell.L("ui.menu.settings"), shell.OpenSettings, "btn_settings");
+            UiKit.AddButton(root, bx, wby + wextra + gap * 3f, bw, bh, shell.L("ui.menu.credits"), () => shell.GoTo(ShellPhase.Credits), "btn_credits");
 #else
             // Pilot name on the menu itself (#221): play actions require a chosen name — the old silent
             // "Pilot" default meant nobody ever picked one and multiplayer names collided. The value is
@@ -374,12 +387,15 @@ namespace BlocksBeyondTheStars.Client
                 }
             }
 
-            // Opens a fresh form dialog: full-screen scrim over the overlay + a centered panel.
+            // Opens a fresh form dialog: full-screen scrim + an OPAQUE panel. The themed panel sprite
+            // alone is translucent — the overlay's form would shine through and make dialogs unreadable
+            // (user acceptance feedback), so a solid dark backing sits between scrim and frame.
             Transform OpenModalPanel(float x, float y, float w, float h)
             {
                 CloseModal();
-                var mDim = UiKit.AddModalDim(official.transform, 0.75f);
+                var mDim = UiKit.AddModalDim(official.transform, 0.9f);
                 portalModal = mDim.gameObject;
+                UiKit.AddImage(portalModal.transform, x + 2f, y + 2f, w - 4f, h - 4f, UiKit.SolidSprite, new Color(0.02f, 0.05f, 0.11f, 0.98f));
                 return UiKit.AddPanel(portalModal.transform, x, y, w, h, UiKit.Panel).transform;
             }
 
@@ -404,36 +420,51 @@ namespace BlocksBeyondTheStars.Client
             void ShowRules(System.Action<PortalTermsResult> onAccept)
             {
                 CloseRules();
-                var rDim = UiKit.AddModalDim(official.transform, 0.85f);
+                var rDim = UiKit.AddModalDim(official.transform, 0.92f);
                 rulesModal = rDim.gameObject;
+                UiKit.AddImage(rulesModal.transform, 162f, 82f, 1596f, 916f, UiKit.SolidSprite, new Color(0.02f, 0.05f, 0.11f, 0.98f));
                 var rDlg = UiKit.AddPanel(rulesModal.transform, 160f, 80f, 1600f, 920f, UiKit.Panel).transform;
                 var rTitle = UiKit.AddText(rDlg, 40f, 22f, 1520f, 32f, shell.L("ui.portal.rules_title"), 24, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
-                var rBody = UiKit.AddText(rDlg, 60f, 76f, 1480f, 730f, shell.L("ui.portal.working"), 17, UiKit.TextCol, TextAnchor.UpperLeft);
+                var rBody = UiKit.AddText(rDlg, 60f, 76f, 1480f, 730f, "", 17, UiKit.TextCol, TextAnchor.UpperLeft);
                 rBody.horizontalOverflow = HorizontalWrapMode.Wrap;
+
+                // Fetches (or re-fetches) the rules into the body — a friendly message instead of a raw
+                // "http_404" when the portal is unreachable or too old to know /api/terms yet.
+                void ApplyTerms()
+                {
+                    rBody.text = shell.L("ui.portal.working");
+                    LoadTerms(terms =>
+                    {
+                        if (rulesModal == null) { return; }
+                        if (!terms.Ok)
+                        {
+                            string msg = PortalErr(terms.Code, terms.Error);
+                            rBody.text = msg.StartsWith("http_", System.StringComparison.Ordinal) ? shell.L("ui.portal.err_offline") : msg;
+                            return;
+                        }
+
+                        rTitle.text = shell.L("ui.portal.rules_title") + " (v" + terms.Version + ")";
+                        rBody.text = shell.Settings.Language == "de" ? terms.TextDe : terms.TextEn;
+                    });
+                }
+
                 if (onAccept != null)
                 {
                     UiKit.AddButton(rDlg, 430f, 836f, 380f, 54f, shell.L("ui.portal.rules_accept"), () =>
                     {
-                        if (cachedTerms != null && cachedTerms.Ok) // still loading / failed → nothing to consent to yet
+                        if (cachedTerms != null && cachedTerms.Ok)
                         {
                             onAccept(cachedTerms);
+                        }
+                        else
+                        {
+                            ApplyTerms(); // nothing loaded to consent to — retry instead of ignoring the click
                         }
                     }, "btn_join");
                 }
 
                 UiKit.AddButton(rDlg, 830f, 836f, 340f, 54f, shell.L("ui.menu.back"), CloseRules, "btn_exit");
-                LoadTerms(terms =>
-                {
-                    if (rulesModal == null) { return; }
-                    if (!terms.Ok)
-                    {
-                        rBody.text = PortalErr(terms.Code, terms.Error);
-                        return;
-                    }
-
-                    rTitle.text = shell.L("ui.portal.rules_title") + " (v" + terms.Version + ")";
-                    rBody.text = shell.Settings.Language == "de" ? terms.TextDe : terms.TextEn;
-                });
+                ApplyTerms();
             }
 
             async void DoAcceptTerms()
@@ -495,7 +526,7 @@ namespace BlocksBeyondTheStars.Client
                 int[] termsVersion = { 0 };
                 UiKit.AddText(sDlg, 40f, 70f, 720f, 22f, shell.L("ui.portal.account"), 15, UiKit.TextCol);
                 UiKit.AddInput(sDlg, 40f, 94f, 720f, 38f, accName[0], v => accName[0] = v);
-                UiKit.AddText(sDlg, 40f, 146f, 340f, 22f, shell.L("ui.menu.connect_password"), 15, UiKit.TextCol);
+                UiKit.AddText(sDlg, 40f, 146f, 340f, 22f, shell.L("ui.portal.password_label"), 15, UiKit.TextCol);
                 var sp1 = UiKit.AddInput(sDlg, 40f, 170f, 340f, 38f, pw1[0], v => pw1[0] = v);
                 sp1.contentType = InputField.ContentType.Password;
                 UiKit.AddText(sDlg, 420f, 146f, 340f, 22f, shell.L("ui.portal.password_repeat"), 15, UiKit.TextCol);
@@ -860,8 +891,9 @@ namespace BlocksBeyondTheStars.Client
                     Object.Destroy(passwordPrompt);
                 }
 
-                var pwDim = UiKit.AddModalDim(official.transform, 0.75f);
+                var pwDim = UiKit.AddModalDim(official.transform, 0.9f);
                 passwordPrompt = pwDim.gameObject;
+                UiKit.AddImage(passwordPrompt.transform, 662f, 392f, 596f, 296f, UiKit.SolidSprite, new Color(0.02f, 0.05f, 0.11f, 0.98f));
                 var pwDlg = UiKit.AddPanel(passwordPrompt.transform, 660f, 390f, 600f, 300f, UiKit.Panel).transform;
                 UiKit.AddText(pwDlg, 30f, 24f, 540f, 30f, shell.L("ui.portal.world_password"), 20, UiKit.Cyan, TextAnchor.MiddleCenter, FontStyle.Bold);
                 if (wrongBefore)
@@ -973,10 +1005,10 @@ namespace BlocksBeyondTheStars.Client
                 foreach (var world in oWorlds)
                 {
                     var w = world; // capture per row (Play joins, Manage opens the owner dialog)
-                    UiKit.AddText(oContent, 30f, ry + 10f, 320f, 26f, w.Name, 17, UiKit.TextCol, TextAnchor.MiddleLeft, FontStyle.Bold);
-                    UiKit.AddText(oContent, 356f, ry + 10f, 104f, 26f, w.Status + (w.HasPassword ? " [PW]" : ""), 13, UiKit.CyanDim, TextAnchor.MiddleLeft);
-                    UiKit.AddButton(oContent, 464f, ry, 110f, 46f, shell.L("ui.portal.play"), () => DoJoinWorld(w.Id), "btn_join");
-                    UiKit.AddButton(oContent, 580f, ry, 90f, 46f, shell.L("ui.portal.manage"), () => OpenManage(w));
+                    UiKit.AddText(oContent, 30f, ry + 10f, 280f, 26f, w.Name, 17, UiKit.TextCol, TextAnchor.MiddleLeft, FontStyle.Bold);
+                    UiKit.AddText(oContent, 314f, ry + 10f, 100f, 26f, w.Status + (w.HasPassword ? " [PW]" : ""), 13, UiKit.CyanDim, TextAnchor.MiddleLeft);
+                    UiKit.AddButton(oContent, 418f, ry, 118f, 46f, shell.L("ui.portal.play"), () => DoJoinWorld(w.Id), "btn_join");
+                    UiKit.AddButton(oContent, 542f, ry, 128f, 46f, shell.L("ui.portal.manage"), () => OpenManage(w));
                     ry += 56f;
                     if (ry > 330f) { break; } // quota keeps this short; guard against overflow anyway
                 }
