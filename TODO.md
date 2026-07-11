@@ -98,6 +98,19 @@ Per-item detail lives in the dated work log below.
 
 ---
 
+### ★ Singleplayer start world no longer pinned by a stale bundled server config (#307, 2026-07-11)
+A freshly-built client could still spawn the pre-#264 **rocky** start world: the bundled server auto-writes
+`config/server.json` next to its exe on first run and reads it verbatim afterwards, and the reused build
+output (`client/Build/Windows`) kept a leftover pre-#264 copy (`StartPlanet: rocky`) that overrode the
+current `varied` default — the server exe itself was up to date. **Root fix:** `ServerConfig.LoadForStartup`
+honours a new `--no-config` flag (pure code defaults, touches no file), which `LocalServerLauncher` now
+passes — so the singleplayer host can never be pinned by a stale bundled config on any install path (local
+build, installer, portable, Velopack update). Dedicated servers are unchanged (they keep the auto-generated,
+editable `config/server.json`). **Build hygiene:** `build-client.ps1` strips the shipped `server/config`
+from the build output (locally-built installers pack that folder). Releases were already safe — CI builds in
+a clean workspace and ships a config-less server. +4 config tests (993 server); verified end-to-end: the
+same server exe with a planted rocky config starts `varied` with `--no-config`, `rocky` without.
+
 ### ★ Severin playtest fixes: pause menu, cursor, water, oxygen & iron onboarding (#291-#297, 2026-07-08)
 Comfort and new-player fixes from a hands-on playtest by **Severin**. **Esc** now opens a small in-game
 **pause menu** (Resume / Settings / Quit) so the volume and settings are reachable without leaving the
