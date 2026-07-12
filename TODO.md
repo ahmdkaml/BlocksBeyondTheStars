@@ -12,7 +12,7 @@ CI runs two tiers: PRs skip the 31 tests marked `[Trait("Category", "Slow")]` (~
 Claude `Co-Authored-By` trailer; OpenAI texture + ElevenLabs sound generation is blanket-approved
 (no per-batch gate).
 
-Architecture: Unity 6 (URP since 2026-06-10) client + authoritative .NET 8 server, everything built in
+Architecture: Unity 6 (URP since 2026-06-10) client + authoritative .NET 10 server, everything built in
 code (no scene authoring). One shared world; MessagePack networking for native clients plus a WebGL JSON
 envelope at the WebSocket edge; deterministic seed world-gen; SQLite default persistence with opt-in PostgreSQL.
 
@@ -97,6 +97,21 @@ Per-item detail lives in the dated work log below.
   single-source-of-truth working end-to-end (validated: published the initial Windows zip).
 
 ---
+
+### ★ Server-side stack upgraded from .NET 8 to .NET 10 LTS (#309, closes #308, 2026-07-12)
+.NET 8 LTS support ends Nov 2026, so all ten `net8.0` projects (server, hosts, launchers, tests) now target
+`net10.0` — the Unity boundary is untouched (`Shared`/`Networking`/`WorldGeneration`/`Client.Core` stay
+`netstandard2.1`, `System.Text.Json` stays 8.0.5 in Shared). Packages: Microsoft.Data.Sqlite 10.0.9,
+Npgsql 10.0.3, Test.Sdk 18.7.0, coverlet 10.0.1, **plus a direct `SQLitePCLRaw.bundle_e_sqlite3` 3.0.3
+override** — the transitive 2.1.11 native sqlite has a known high-severity CVE (GHSA-2m69-gcr7-jv3q) that
+the .NET 10 SDK's transitive audit turns into NU1903 errors under `-warnaserror`. Code fixes the new SDK
+demanded: 8 `object` lock fields → `System.Threading.Lock` (MA0158) and `KnownNetworks` → `KnownIPNetworks`
+(ASPDEPR005, Api + WorldHost). CI workflows on `dotnet-version: 10.0.x`, Docker images on `sdk/aspnet:10.0`;
+**gotcha:** the 10.0 base image is Ubuntu noble (8.0 was Debian bookworm), so `Dockerfile.worldhost` now
+derives the Docker-CLI apt repo from `/etc/os-release` instead of hardcoding `linux/debian`. No action for
+players (bundled server + launchers are self-contained) or the VPS (pulls rebuilt images); local dev needs
+the .NET 10 SDK. Verified: solution `-warnaserror` clean, 993+118 tests green, all three images build, the
+dedicated-server container and the self-contained singleplayer publish both boot and generate a world.
 
 ### ★ Singleplayer start world no longer pinned by a stale bundled server config (#307, 2026-07-11)
 A freshly-built client could still spawn the pre-#264 **rocky** start world: the bundled server auto-writes
@@ -876,7 +891,7 @@ New [.github/workflows/ci.yml](.github/workflows/ci.yml) runs on every `pull_req
 from the tag-only `release.yml`). On `ubuntu-latest`, **no Unity / no license**: restores, builds and tests the
 two headless suites directly — `tests/BlocksBeyondTheStars.Tests` (Dotnet) + `tests/BlocksBeyondTheStars.Client.Tests`
 (ClientCore) — the same default set as `run-tests.ps1`.
-- **Targets the test projects, not the `.sln`** — the solution's WinForms launcher (`net8.0-windows`) can't build on Linux.
+- **Targets the test projects, not the `.sln`** — the solution's WinForms launcher (`net10.0-windows`) can't build on Linux.
 - **Warnings fail the PR** via `-warnaserror` (local build keeps `TreatWarningsAsErrors=false`; tree is currently 0-warning). `.trx` results uploaded as an artifact.
 - **Docs-only PRs skip the build but stay green** — a `changes` job (`dorny/paths-filter`) gates the `build-test` job; on a docs-only PR (`**/*.md`, `docs/**`, licences, issue/PR templates) `build-test` is skipped and a skipped *required* job counts as a pass, so it never blocks. `data/**` counts as code (it feeds tests). This makes the check **safe to mark required** (unlike a plain `paths-ignore` skip, which would stall a required check).
 - **Unity tiers (`UnityEdit`/`UnityPlay`) stay local** (need the Editor) — run `./scripts/run-tests.ps1 -Suites All` before client-affecting changes.
@@ -949,7 +964,7 @@ Unity-free client logic (`NetworkClient`, `ClientWorld`) was extracted into a ne
 `src/BlocksBeyondTheStars.Client.Core/` so the *same* code runs in the Unity player and in headless tests; the
 Unity layer keeps `UnityEngine.Vector3` call-sites working via `NetworkClientUnityExtensions` (the Core
 `NetworkClient` speaks Shared's `Vector3f`).
-- **Tier 1 — `tests/BlocksBeyondTheStars.Client.Tests/`** (xUnit, net8.0): the real `NetworkClient` drives the
+- **Tier 1 — `tests/BlocksBeyondTheStars.Client.Tests/`** (xUnit, net10.0): the real `NetworkClient` drives the
   real in-process `GameServer` over a `LoopbackLink` (no Unity, no sockets) via `ClientServerHarness` — join,
   chunk streaming, mine→block-change+inventory, craft success, craft-rejected. **5 tests green.**
 - **Tier 1.5 — `client/Assets/Tests/EditMode/`**: in-Editor unit tests — `ClientWorld` round-trips (Unity-safe
