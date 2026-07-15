@@ -4,24 +4,31 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading.Tasks;
 using BlocksBeyondTheStars.Build;
 using BlocksBeyondTheStars.Client.Feedback;
 using UnityEngine;
 using UnityEngine.UI;
+#if UNITY_WEBGL && !UNITY_EDITOR
+using System.Text;
+using UnityEngine.Networking;
+#endif
 
 namespace BlocksBeyondTheStars.Client
 {
     /// <summary>
     /// Player feedback ("Spieler Feedback"): the F1 hotkey opens a modal dialog where any player can send a bug
     /// report OR a feature wish — one form, no type distinction: a title, a description, an optional e-mail and a
-    /// short note that game data + a screenshot are attached. (F1 is advertised in the on-foot HUD controls hint.)
+    /// short note that game data + a screenshot are attached. (F1 is advertised in the on-foot HUD controls hint
+    /// and in the space-flight cruise hint; it works in both modes.)
     ///
     /// On send we grab a full-frame screenshot WITH the HUD but WITHOUT this dialog (captured at the moment the
     /// dialog opens, while the live HUD is still on screen), gather a small client-side diagnostic snapshot,
     /// and fire BOTH paths:
-    ///   • a client-direct HTTPS POST to the website API (<see cref="FeedbackUploader"/>) — reaches the devs on
-    ///     any server, even someone else's dedicated server;
+    ///   • a client-direct HTTPS POST to the report inbox (<see cref="FeedbackUploader"/>; UnityWebRequest on
+    ///     WebGL, where HttpClient/threads don't exist) — reaches the devs on any server, even someone else's
+    ///     dedicated server;
     ///   • the existing <c>/bump</c> message (<see cref="NetworkClient.SendBumpReport"/>) so the server also
     ///     writes its rich local snapshot (inventory/position/surroundings) when on an own/singleplayer server.
     ///
@@ -35,7 +42,9 @@ namespace BlocksBeyondTheStars.Client
         private const float W = 1920f, H = 1080f;
 
         private FeedbackUploader _uploader;
+        private FeedbackSpool _spool;
         private string _sessionId = string.Empty;
+        private string _pendingJson; // the in-flight dialog send's body, spooled if the upload fails
 
         // Dialog (built lazily on first open).
         private Canvas _dialogCanvas;
@@ -46,6 +55,7 @@ namespace BlocksBeyondTheStars.Client
 
         private bool _open;
         private bool _sending;
+        private bool _cursorWasLocked = true; // cursor state before the dialog opened, restored on close
         private byte[] _shotJpg;                 // screenshot captured when the dialog opened
         private Task<FeedbackUploadResult> _uploadTask;
 
@@ -56,6 +66,12 @@ namespace BlocksBeyondTheStars.Client
             // A random id groups several reports from one sitting (varies per session; no Unity-restricted Date use).
             _sessionId = Guid.NewGuid().ToString("N");
             _uploader = new FeedbackUploader(FeedbackUploader.DefaultEndpoint, BugReportBuildSecrets.ApiKey);
+            _spool = new FeedbackSpool(Path.Combine(Application.persistentDataPath, "feedback"));
+
+            if (_uploader.IsConfigured)
+            {
+                FlushSpool(); // deliver what an earlier session couldn't (bounded attempts, see FeedbackSpool)
+            }
         }
 
         private void Update()
@@ -65,9 +81,9 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
-            // F1 opens feedback only during normal on-foot play (not in menus, flight, chat or the death prompt)
-            // — matching when the HUD (and its controls hint) is up.
-            bool canLaunch = !Game.MenuOpen && !Game.ChatTyping && !Game.AwaitingRespawnConfirm && !Game.SpaceViewActive;
+            // F1 opens feedback during normal play — on foot AND in space flight (both HUDs advertise it);
+            // not while a menu/chat modal or the death prompt already owns the screen.
+            bool canLaunch = !Game.MenuOpen && !Game.ChatTyping && !Game.AwaitingRespawnConfirm;
 
             if (!_open && canLaunch && Input.GetKeyDown(KeyCode.F1))
             {
@@ -117,7 +133,10 @@ namespace BlocksBeyondTheStars.Client
             ResetFields();
             _dialog.SetActive(true);
 
-            // Modal: free the cursor + pause on-foot control (mirrors GameMenu / BeamPadUi).
+            // Modal: free the cursor + pause player/flight control (mirrors GameMenu / BeamPadUi; SpaceView
+            // holds position while MenuOpen). Remember the cursor state so closing restores it — in flight
+            // sub-screens like the landing-pad chooser the cursor was already free, not locked.
+            _cursorWasLocked = Cursor.lockState == CursorLockMode.Locked;
             Game.MenuOpen = true;
             Cursor.lockState = CursorLockMode.None;
             Cursor.visible = true;
@@ -134,8 +153,8 @@ namespace BlocksBeyondTheStars.Client
             if (Game != null)
             {
                 Game.MenuOpen = false;
-                Cursor.lockState = CursorLockMode.Locked;
-                Cursor.visible = false;
+                Cursor.lockState = _cursorWasLocked ? CursorLockMode.Locked : CursorLockMode.None;
+                Cursor.visible = !_cursorWasLocked;
             }
         }
 
@@ -228,10 +247,19 @@ namespace BlocksBeyondTheStars.Client
             string serverNote = string.IsNullOrEmpty(title) ? desc : title + " — " + desc;
             Game?.Network?.SendBumpReport("[feedback] " + serverNote, jpg ?? Array.Empty<byte>());
 
-            // Path B — client-direct upload to the website API, off the game thread.
+            // Path B — client-direct upload to the report inbox. The body is serialized ONCE here on the
+            // main thread; only the POST leaves the game loop.
             if (_uploader != null && _uploader.IsConfigured)
             {
-                _uploadTask = Task.Run(() => _uploader.Upload(report, jpg));
+                string json = FeedbackUploader.Serialize(report, jpg);
+                _pendingJson = json;
+#if UNITY_WEBGL && !UNITY_EDITOR
+                // WASM has neither sockets nor threads — HttpClient/Task.Run can't run in the browser, so
+                // the WebGL player posts the identical body via UnityWebRequest on a coroutine.
+                StartCoroutine(PostJsonWebGl(json, OnUploadFinished));
+#else
+                _uploadTask = Task.Run(() => _uploader.UploadRawJson(json));
+#endif
             }
             else
             {
@@ -246,11 +274,22 @@ namespace BlocksBeyondTheStars.Client
         private void OnUploadFinished(FeedbackUploadResult result)
         {
             _sending = false;
+            string body = _pendingJson;
+            _pendingJson = null;
+
             if (result != null && result.Ok)
             {
                 if (_status != null) { _status.text = L("ui.feedback.sent"); _status.color = UiKit.Ok; }
                 Game?.ShowMessage(L("ui.feedback.sent"));
                 Invoke(nameof(Close), 1.2f);
+            }
+            else if (_spool != null && !string.IsNullOrEmpty(body) && _spool.Write(body) != null)
+            {
+                // Offline / inbox down: the report is queued on disk and retried on later sessions with
+                // bounded attempts — nothing to re-type, so tell the player and close.
+                if (_status != null) { _status.text = L("ui.feedback.queued"); _status.color = UiKit.Ok; }
+                Game?.ShowMessage(L("ui.feedback.queued"));
+                Invoke(nameof(Close), 1.6f);
             }
             else
             {
@@ -289,6 +328,111 @@ namespace BlocksBeyondTheStars.Client
             };
             return report;
         }
+
+        // --- Spool retry -------------------------------------------------------------------------------------
+
+        /// <summary>Retries reports queued by earlier sessions whose upload failed. Each report gets a
+        /// bounded number of attempts (<see cref="FeedbackSpool.MaxAttempts"/>); on the first failure the
+        /// rest wait for the next session — the inbox is likely down or we're offline.</summary>
+        private void FlushSpool()
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            StartCoroutine(FlushSpoolWebGl());
+#else
+            var spool = _spool;
+            var uploader = _uploader;
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    foreach (var path in spool.ListPending())
+                    {
+                        string json = spool.Read(path);
+                        if (string.IsNullOrEmpty(json))
+                        {
+                            continue;
+                        }
+
+                        var result = uploader.UploadRawJson(json);
+                        if (result != null && result.Ok)
+                        {
+                            spool.MarkSent(path);
+                        }
+                        else
+                        {
+                            spool.RegisterFailedAttempt(path);
+                            break;
+                        }
+                    }
+                }
+                catch
+                {
+                    // best-effort startup catch-up — never disturb the game
+                }
+            });
+#endif
+        }
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+        /// <summary>WebGL flavor of <see cref="FlushSpool"/>: one UnityWebRequest at a time on a coroutine
+        /// (persistentDataPath is IndexedDB-backed in the browser, so the queue survives page reloads).</summary>
+        private IEnumerator FlushSpoolWebGl()
+        {
+            foreach (var path in _spool.ListPending())
+            {
+                string json = _spool.Read(path);
+                if (string.IsNullOrEmpty(json))
+                {
+                    continue;
+                }
+
+                FeedbackUploadResult result = null;
+                yield return PostJsonWebGl(json, r => result = r);
+                if (result != null && result.Ok)
+                {
+                    _spool.MarkSent(path);
+                }
+                else
+                {
+                    _spool.RegisterFailedAttempt(path);
+                    yield break;
+                }
+            }
+        }
+#endif
+
+        // --- WebGL transport ---------------------------------------------------------------------------------
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+        /// <summary>Browser upload: posts an already-serialized report body via <see cref="UnityWebRequest"/>
+        /// (the WebGL stand-in for <see cref="FeedbackUploader.UploadRawJson"/> — same endpoint, header and
+        /// never-throws contract). Runs on the main thread as a coroutine; WebGL requests are async under the
+        /// hood, so nothing blocks. Calls <paramref name="done"/> with the outcome.</summary>
+        private IEnumerator PostJsonWebGl(string json, Action<FeedbackUploadResult> done)
+        {
+            using (var req = new UnityWebRequest(FeedbackUploader.DefaultEndpoint, UnityWebRequest.kHttpVerbPOST))
+            {
+                req.uploadHandler = new UploadHandlerRaw(Encoding.UTF8.GetBytes(json)) { contentType = "application/json" };
+                req.downloadHandler = new DownloadHandlerBuffer();
+                req.SetRequestHeader(FeedbackUploader.ApiKeyHeader, BugReportBuildSecrets.ApiKey);
+                req.timeout = 15; // mirrors the HttpClient timeout
+
+                yield return req.SendWebRequest();
+
+                var result = new FeedbackUploadResult
+                {
+                    StatusCode = (int)req.responseCode,
+                    Ok = req.result == UnityWebRequest.Result.Success,
+                };
+                if (!result.Ok)
+                {
+                    result.Error = result.StatusCode > 0 ? "http_" + result.StatusCode : (req.error ?? "network");
+                }
+
+                done?.Invoke(result);
+            }
+        }
+#endif
 
         // --- Screenshot ------------------------------------------------------------------------------------
 
