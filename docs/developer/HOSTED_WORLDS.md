@@ -215,6 +215,9 @@ BBS_WH_BASE_DOMAIN=play.blocksbeyondthestars.de
 BBS_WH_PUBLIC_HOST=play.blocksbeyondthestars.de
 BBS_WH_SERVER_IMAGE=ghcr.io/marceld23/blocks-beyond-the-stars-server:0.6.2   # fleet version pin (WP14)
 # quotas (operator policy): BBS_WH_MAX_WORLDS_PER_ACCOUNT=2, BBS_WH_MAX_PLAYERS=12, BBS_WH_IDLE_MINUTES=20
+# glitch.fun arcade (optional, off without credentials): BBS_WH_GLITCH_ENABLED, BBS_WH_GLITCH_TITLE_ID,
+#   BBS_WH_GLITCH_TITLE_TOKEN, BBS_WH_GLITCH_WORLDS=2, BBS_WH_GLITCH_MAX_PLAYERS=8,
+#   BBS_WH_GLITCH_ALLOWED_ORIGINS — see "glitch.fun arcade channel" below
 ```
 
 Instances the control plane starts carry caddy-docker-proxy labels
@@ -322,6 +325,62 @@ class behind plain methods, so swapping the backend later is contained.
 - **Account self-deletion (DSGVO Art. 17).** `DELETE /api/account` + a double-confirm portal button:
   stops + deletes all the account's worlds (registry rows + live and archived saves on disk), deletes
   the reports it filed and its sessions, then the account. Available to banned accounts too.
+
+## glitch.fun arcade channel (implemented; ships with v0.7.8)
+
+A small pool of **persistent multiplayer worlds that exist ONLY for the glitch.fun platform**
+(Devin Dixon's browser-first storefront). They live on world channel `glitch` in the same registry
+and fleet, but are invisible to every portal surface: not in the public browser, not in any
+account's world list — only the admin dashboard shows them (badge `glitch`, owner `glitch.fun`).
+Note on the published Baumhaus principle: this channel is the publicly-amended exception — a
+separate arcade context under Glitch's platform accounts and rules; the portal/family fleet keeps
+the password-and-word-of-mouth rule unchanged (devblog follow-up published with the launch).
+
+Flow (mirrors Glitch's Aegis contract; the WebGL build is uploaded to and served by Glitch):
+
+1. Glitch serves the build at `play.glitch.fun/game/<titleId>/…?install_id=<uuid>` (iframe).
+2. The client (with a baked `PortalUrl`, no title token) posts the install id to
+   **`POST /api/glitch/session`**. The gateway validates the install server-to-server against
+   `api.glitch.fun` (title token stays in `/opt/bbs/worldhost/.env`), refuses banned installs,
+   assigns a stable player name (Glitch `user_name` → sanitized + 3-hex suffix of the install id;
+   reserved/blocked names fall back to `Explorer`), picks an arcade world with headroom (waking a
+   sleeping one on demand) and mints the normal HMAC join token for the synthetic guest identity
+   `glitch:<install_id>` — no portal account involved.
+3. The client auto-joins through the existing hosted deep-link path (`AppShell` arcade branch).
+4. Heartbeats (Glitch's playtime/payout signal, every 60 s) go to **`POST /api/glitch/heartbeat`**,
+   which relays them to Glitch server-to-server. A banned install gets 403 — the client leaves the
+   world and shows a notice (the operator's live kick lever), while an unreachable Glitch answers
+   503 and the client just keeps playing.
+
+**Cloud-save relay (browser singleplayer):** the WebGL build's in-process singleplayer world (see
+`WEBCLIENT_FEASIBILITY.md`) syncs its snapshot blob to Glitch's per-player **Cloud Save** (slot 0)
+through three relayed routes, so the title token stays server-side: `GET /api/glitch/save?installId=`
+(latest version + payload; 404 = none, 403 = guest — Cloud Save needs a logged-in Glitch account),
+`POST /api/glitch/save` (base64 payload + `baseVersion`; the relay computes Glitch's required
+SHA-256 over the DECODED bytes, enforces the 10 MB decoded cap and `BBS_WH_GLITCH_SAVES_PER_HOUR`
+per install; a stale base answers 409 with `saveId`/`conflictId`) and `POST /api/glitch/save/resolve`
+(`keep_server` | `use_client` — Glitch's explicit optimistic-concurrency flow; nothing is silently
+overwritten, losing states stay in the slot's version history).
+
+Operational notes:
+
+- `/api/glitch/*` are the only CORS-enabled API routes; they echo exactly the configured Glitch
+  origins (`BBS_WH_GLITCH_ALLOWED_ORIGINS`), never `*`, incl. OPTIONS preflight.
+- Arcade worlds are normal fleet citizens otherwise: idle-shutdown, reaper, archive/restore and the
+  `BBS_WH_MAX_ACTIVE` budget all apply (2 arcade worlds on a budget of 10). Their player cap is
+  `BBS_WH_GLITCH_MAX_PLAYERS` (instance env `BBS_MAX_PLAYERS`, applied on the next container start).
+- Worlds are persistent by design (returning players = retention = payout); griefing recourse is
+  the admin stop/wake + install bans. In-game `/report` does NOT work for arcade guests (it needs a
+  portal session) — known v0.7.8 limitation.
+- Guest bookkeeping stores only Glitch's pseudonymous install id + the assigned player name
+  (`glitch_guest`/`glitch_ban` tables); bans are managed on `/admin`.
+- Build/publish: **the release pipeline mirrors every tagged release to glitch.fun automatically**
+  (`release.yml` job `publish-glitch`): the one CI WebGL build gets `Enabled` + `PortalUrl` baked
+  from the `GLITCH_PORTAL_URL` secret (dormant without Glitch's `?install_id=` param, so the same
+  artifact serves `/play`), then `scripts/upload-glitch-webgl.sh` pushes it through Glitch's
+  deployments API (presigned S3 PUT + confirm; `GLITCH_DEPLOY_TOKEN` secret; skips cleanly when
+  unset). Local/manual path: `scripts/publish-glitch-webgl.ps1` (same API via `-Deploy`, or ZIP
+  for the Deploy Page).
 
 ## Version policy (fleet)
 

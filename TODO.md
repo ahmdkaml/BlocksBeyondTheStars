@@ -5637,6 +5637,48 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-15): in-browser singleplayer with Glitch cloud saves (targets v0.7.8)
+
+WebGL now runs the REAL authoritative server **in-process** — ADR 0001's original in-process vision,
+shipped where the child process is impossible (ADR 0005 amendment; desktop keeps its bundled exe).
+Retarget: `GameServer` + `Persistence` are **multi-target** (`net10.0` exe/SQLite + `netstandard2.1`
+sim library; only 4 API fixes across 26.5k lines — `Lock`/`required` shims, span-Concat, File.Move,
+SHA helpers), publish scripts/Dockerfile pin `-f net10.0`, `sync-client-libs` ships both libraries
+into `client/Assets/Plugins` (asmdef + link.xml wired). New fully managed **`MemoryWorldRepository`**
+mirrors every SQLite table in dictionaries and round-trips the whole world as a gzip'd JSON
+**snapshot blob** (`MemoryWorldSnapshot`, palette remap included); `ClientServerHarness` gained a
+repository parameter and `BrowserSingleplayerPersistenceTests` proves the full mine→save→blob→reload
+loop on the real server+client. Client: **`BrowserLocalServer`** pumps `GameServer.Tick()` (fixed-dt
+accumulator, max 5 steps/frame) over the existing `LoopbackTransport`; `GameServer.SaveNow()` (new)
+drives a 2-min durable-save cadence + tab-hide saves → blob → IndexedDB (`BbsFileSync.jslib`
+syncfs) → **Glitch Cloud Save** via the WorldHost relay (`GET/POST /api/glitch/save`,
+`/api/glitch/save/resolve`): checksum server-side over decoded bytes, 10 MB cap,
+`BBS_WH_GLITCH_SAVES_PER_HOUR`, explicit 409 conflict flow (live session resolves `use_client`;
+Glitch keeps version history). Guests (Cloud Save 403) stay local-only with a console hint. WebGL
+menu grew the Singleplayer button (name required — it keys the save identity); AI is forced Off
+in-browser (template texts). Suite: +7 relay tests (31 glitch total) and +4 persistence tests.
+
+## ✅ Done (2026-07-15): glitch.fun arcade channel — instant multiplayer worlds for Glitch (targets v0.7.8)
+
+Persistent multiplayer worlds that exist ONLY for glitch.fun (Devin Dixon's browser-first platform,
+the old #116 integration revived): a new world channel `glitch` in the WorldHost registry (tolerant
+`channel` column migration) with a lazily-created pool ("Glitch Arcade 1..N", default 2 × 8 players),
+hidden from the public browser and all account lists — admin dashboard only. New `GlitchGateway` +
+`POST /api/glitch/session`: validates Glitch's `install_id` server-to-server (title token stays in
+the fleet env, never in the WebGL build), assigns stable suffixed guest names (Glitch `user_name` +
+3-hex install suffix; reserved/blocked → Explorer), picks a world with live headroom (wake-on-demand)
+and mints the normal HMAC join token for the account-less guest identity `glitch:<install_id>`.
+`POST /api/glitch/heartbeat` relays the 60-s Aegis payout heartbeat server-side; **install-id bans**
+(admin card with recent-guest list) refuse new sessions AND answer heartbeats with 403, which the
+client consumes as a live kick (leave world + notice, DE/EN). CORS only on `/api/glitch/*`, echoing
+exactly the configured Glitch origins. Client: `GlitchIntegration` relay mode + arcade auto-join
+branch in `AppShell` (baked `PortalUrl`, no token); new `scripts/publish-glitch-webgl.ps1` (ZIP with
+index.html at root for Glitch's deploy engine, optional CLI deploy). Docs: HOSTED_WORLDS.md section +
+`.env.example` `BBS_WH_GLITCH_*` block. Tests: `GlitchWorldRegistryTests` + `GlitchGatewayTests`
+(24 cases: migration, listing exclusion, guest identity/token, capacity, bans, relay, CORS).
+Known v0.7.8 limitation: in-game `/report` is portal-session-bound and silently unavailable for
+arcade guests (documented). The public Baumhaus amendment ships as a devblog follow-up with launch.
+
 ## ✅ Done (2026-07-10): stop release builds from writing dead tag-scoped Actions caches
 The 10 GB Actions cache budget was 99% full; ~7.7 GB were caches scoped to release tags (four Unity
 Library caches up to 2 GB each + ~60 buildkit blobs). A tag-scoped cache can never be restored by any
