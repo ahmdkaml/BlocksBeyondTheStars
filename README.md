@@ -191,15 +191,17 @@ NAS or a VPS (including via Docker) can host a world that players join.
 
 ## Windows security notice
 
-Windows release builds are digitally **code-signed** using a free code-signing certificate provided
-by the [**SignPath Foundation**](https://signpath.org) — see our
-[Code Signing Policy](CODE_SIGNING.md). Only the installers built by this repository's automated
-GitHub Actions release workflow are signed.
+Windows release builds are currently **not code-signed**. We applied to the
+[SignPath Foundation](https://signpath.org)'s free open-source code-signing program, but the
+application was declined for now — the program requires a level of public visibility (stars,
+contributors, external coverage) that our young project hasn't reached yet. We plan to reapply as
+the community grows; our [Code Signing Policy](CODE_SIGNING.md) documents the release process and
+the current signing status.
 
-> **During onboarding:** while our SignPath certificate is being provisioned, some releases may still
-> be unsigned. Until signing is fully live, Windows 11 / Microsoft Defender SmartScreen may show a
-> warning such as *"Windows protected your PC"* the first time you start the game. If you downloaded
-> the game from this GitHub page (or from the
+> **What this means for you:** Windows 11 / Microsoft Defender SmartScreen may show a warning such
+> as *"Windows protected your PC"* the first time you start the game, because the installer comes
+> from an "unknown publisher" — not because anything is wrong with it. If you downloaded the game
+> from this GitHub page (or from the
 > [official releases](https://github.com/marceld23/BlocksBeyondTheStars/releases)) and trust the
 > source, you can choose **"More info"** and then **"Run anyway"** to start it. If you do not trust
 > the download source, do not run the game.
@@ -428,9 +430,10 @@ network, the AGPL requires you to offer them its source code.
 Third-party libraries and bundled assets keep their own (permissive) licenses — see
 [NOTICES.md](NOTICES.md).
 
-**Windows code signing** is generously provided free of charge by the
-[SignPath Foundation](https://signpath.org) through their open-source program — thank you! How
-releases are signed is documented in our [Code Signing Policy](CODE_SIGNING.md).
+**Windows code signing:** releases are currently unsigned — our application to the
+[SignPath Foundation](https://signpath.org)'s free open-source program was declined for now (we
+plan to reapply as the project grows). The release process and signing status are documented in
+our [Code Signing Policy](CODE_SIGNING.md).
 
 **Our promise to the community:** we guarantee the GitHub version always stays free,
 AGPL-licensed and current. We (the founders) may additionally license the code commercially

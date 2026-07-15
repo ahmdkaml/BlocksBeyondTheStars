@@ -32,9 +32,10 @@ anything that could leak credentials or player data.
 
 ## Code signing
 
-Windows release binaries are digitally signed via the **SignPath Foundation**. How signing works —
-the official repository, which artifacts are signed, and who may authorize a release — is documented
-in **[CODE_SIGNING.md](CODE_SIGNING.md)**.
+Windows release binaries are currently **not code-signed** (our application to the SignPath
+Foundation's free open-source program was declined for now; we plan to reapply as the project
+grows). The release process — the official repository, which artifacts will be signed, and who may
+authorize a release — is documented in **[CODE_SIGNING.md](CODE_SIGNING.md)**.
 
 ## Supported versions
 
