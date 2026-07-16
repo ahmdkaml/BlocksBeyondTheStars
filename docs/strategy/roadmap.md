@@ -180,6 +180,10 @@ MessagePack→JSON lesson from WebGL will recur) and running the singleplayer se
   pool growth.
 - **Community & localization:** keep the invite issues alive (#95–#100 designs/languages/docs),
   credit contributors, honest devblogs per release.
+- **Visibility & reach:** we are live on glitch.fun and grow awareness through it — keep the store
+  page (media, instructions, deep-dive) current, ship a devblog post per release, watch arcade
+  play/return numbers as the honest signal; itch.io and the awesome-lists remain secondary
+  discovery channels.
 - **Operations:** VPS fleet health (Netdata alerts live), rate-limit follow-ups, CI cache fix,
   UptimeRobot; one tagged pipeline feeds all channels — keep it that way as channels grow.
 

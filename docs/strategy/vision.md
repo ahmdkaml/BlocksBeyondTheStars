@@ -31,7 +31,9 @@ and community stay safe by design.
 ### Playable anywhere, hostable by anyone
 
 - **One click in the browser** — the glitch.fun arcade and our own portal make the first minute
-  free of installers, accounts and passwords.
+  free of installers, accounts and passwords. Being live on glitch.fun is also how the game gets
+  discovered: a platform full of players who have never heard of us is our widest window for
+  growing awareness, one release at a time.
 - **At home on anything** — the dedicated server runs on small hardware, explicitly including a
   Raspberry Pi for a family or classroom LAN world. Self-hosting is a documented first-class path,
   not an afterthought.
@@ -73,6 +75,8 @@ the story openly — including the failures — so people know what they are joi
 ## How we know we are getting closer
 
 - Playtesters (especially kids) finish their first session without help and want to come back.
+- New players keep discovering the game on glitch.fun without a personal invitation — plays and
+  returning players there trend upward release over release.
 - Contributions arrive from beyond the two of us — code and non-code alike (playtest reports,
   art, music, translations, design feedback) — and repeat contributors stick around.
 - Zero known "does nothing" mechanics in a release; the open-bug list trends short and young.

@@ -8,8 +8,9 @@
 **We build and operate a free, open-source, kid-friendly voxel space game — and we make its
 existing mechanics bug-free and satisfying before we make them bigger.** We keep it fast enough to
 run in a browser tab and on a Raspberry Pi, we keep it safe enough for children to play online, and
-we carry it to the places players actually are: glitch.fun, itch.io, our own portal — and, as a
-long-held wish rather than a business plan, **Xbox and Steam**.
+we carry it to the places players actually are: **we are live on glitch.fun — where the game finds
+players who would never have found us — plus itch.io and our own portal**, and, as a long-held wish
+rather than a business plan, **Xbox and Steam**.
 
 ## What we do (in priority order)
 
@@ -22,9 +23,11 @@ long-held wish rather than a business plan, **Xbox and Steam**.
 3. **Operate the live game.** glitch.fun arcade, the hosted fleet and the portal are production:
    launch bugs get patched in days, moderation levers exist before problems do, and every release
    reaches all channels from one tagged pipeline.
-4. **Widen where it runs.** Browser and desktop today; documented Raspberry-Pi self-hosting next;
-   Steam and Xbox as deliberate, researched milestones — because having our game there would be
-   wonderful, not profitable.
+4. **Widen where it runs — and where it is seen.** Browser and desktop today; documented
+   Raspberry-Pi self-hosting next; Steam and Xbox as deliberate, researched milestones — because
+   having our game there would be wonderful, not profitable. Platform presence doubles as
+   visibility: glitch.fun is our main discovery surface today, and we tend it so the game keeps
+   getting better known.
 
 ## Operating principles
 
