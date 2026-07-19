@@ -100,6 +100,38 @@ Per-item detail lives in the dated work log below.
 
 ---
 
+### ★ Server infra hardening & polish — bounded caches, WS teardown, docking gates, atomic crash-writer init (#426, 2026-07-19, branch fix/421-terrain-hole-webgl-telemetry)
+Four audit findings (S15–S18). **(S15)** `RateLimiter._windows` and the GlitchGateway `_validateCache`
+grew one entry per unique visitor until process restart; the limiter now amortizes a sweep (≥ 2 idle
+windows → dropped, at most one pass per window length, `TrackedKeyCount` for tests) and the validate
+cache prunes expired entries on the (network-bound) miss path. **(S16)** every browser WebSocket
+connection leaked its socket + send-semaphore until process exit; the receive loop's `finally` now
+disposes both, and `SendAsync` tolerates a concurrent teardown (ObjectDisposedException-guarded
+wait/release). **(S17)** docking (= guest access to the partner's ship) was grantable across worlds
+and across the map; `RequestDock` AND the accept path now require same `CurrentLocationId` +
+≤ 48 blocks (`WrapDistSq`, mirrors `CanTradeTogether`) — matching the client, which only offers the
+K prompt within InteractRange anyway. Consent stays the existing RequestRequired handshake
+(DockingMode.Free remains an explicit server-rule opt-in). **(S18)** `CrashWriter`'s `??=` lazy init
+could double-create under a crash-handler race; now `Lazy<T>(ExecutionAndPublication)`, with the
+periodic flush only touching an already-created writer. Regression tests: limiter sweep bound,
+far-apart/cross-world/moved-after-request docking rejections. (The #424 WorldMinimap client-build
+break was hit here too; main fixed it in parallel — no change left in this branch.)
+
+### ★ Failed chunk builds re-mesh instead of leaving permanent holes; WebGL crash telemetry ships (#421, 2026-07-19, branch fix/421-terrain-hole-webgl-telemetry)
+Two audit findings, both "silent loss". **(M10)** The off-thread chunk-mesh worker swallowed every
+exception in a bare `catch {}` — and since the coord already left `_dirty` at dispatch, a failed
+build was never retried: a permanent un-meshed 16³ hole with no collider (fall-through). The worker
+now carries the fault back to the main thread; `DrainBuiltChunks` re-dirties the chunk (epoch/gen
+guards keep the original teardown-race protection) with a bounded retry (5× per chunk, counter
+resets on success) and a rate-limited `LogError` (≥1 per 5 s) so the cause is finally visible.
+**(M14)** CrashReporter's uploads all ran in `Task.Run` — which **never executes** on WebGL
+(`webGLThreadsSupport:0`) — so the entire browser population shipped zero crash telemetry while the
+IndexedDB spool grew forever. FeedbackUi's proven UnityWebRequest coroutine transport is extracted
+into a shared `FeedbackWebGlTransport` (FeedbackUi now uses it too); CrashReporter gained WebGL
+paths: a one-at-a-time upload pump per crash + a startup flush of the on-disk queue. The spool
+itself is now capped on every platform (50 pending / 50 sent, oldest pruned first, unit-tested).
+Client-only; browsers get it with the next /play deploy, native with the next release.
+
 ### ★ Cursor/menu/input ownership rebuilt on a single arbiter (#413, 2026-07-19, branch fix/413-cursor-input-ownership)
 ~12 panels each wrote the shared `GameBootstrap.MenuOpen` bool AND forced `Cursor.lockState` on their
 own open/close, each assuming it was the only open UI — last-writer-wins produced a whole family of
