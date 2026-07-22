@@ -872,6 +872,10 @@ public sealed class WorldGenerator
                 BlockId? craterMetal = (planet.Cratered || _crateredWorld)
                     ? CraterFloorMetal(planet, seed, worldX, worldZ) : (BlockId?)null;
 
+                // Non-uniform topsoil: this column's surface/sub-surface layer thickness (varies per column, not a
+                // flat band) so the stone/ore boundary undulates and reaches close to the surface in the thin spots.
+                int effSurfaceDepth = VariedSurfaceDepth(planet, seed, worldX, worldZ);
+
                 for (int ly = 0; ly < WorldConstants.ChunkSize; ly++)
                 {
                     int worldY = origin.Y + ly;
@@ -924,7 +928,7 @@ public sealed class WorldGenerator
                     {
                         block = craterMetal.Value; // a rare-metal clump on the crater floor (top two cells)
                     }
-                    else if (depth < planet.SurfaceDepth)
+                    else if (depth < effSurfaceDepth)
                     {
                         block = depth == 0 ? surfaceId : subSurfaceId;
                     }
@@ -1553,11 +1557,13 @@ public sealed class WorldGenerator
         return t < 0.60 ? 0.60 : (t > 0.90 ? 0.90 : t);
     }
 
-    /// <summary>This world's ore-richness multiplier (0.85×..1.6× the planet's vein rarities) — some worlds are
-    /// rich strikes, others lean, so the interior payoff varies even on the same planet type. Nudged up from
-    /// 0.7×..1.4× so ore is a bit less scarce for new players who couldn't find any (Severin playtest).</summary>
+    /// <summary>This world's ore-richness multiplier (1.2×..2.2× the planet's vein rarities) — some worlds are
+    /// rich strikes, others lean, so the interior payoff varies even on the same planet type. Raised again from
+    /// 0.85×..1.6× (itself up from 0.7×..1.4×) so diggable ore is noticeably more common on every planet type —
+    /// new players kept reporting they "couldn't find any" (Severin playtests #1 and #2). The per-ore kept-fraction
+    /// is still clamped to 0.95 in <see cref="SelectOre"/>, so even the richest worlds don't flood.</summary>
     private static double PerWorldOreRichness(long seed)
-        => 0.85 + (double)((ulong)(seed ^ 0x0670EL) % 1000UL) / 1000.0 * 0.75;
+        => 1.2 + (double)((ulong)(seed ^ 0x0670EL) % 1000UL) / 1000.0 * 1.0;
 
     private static readonly string[] MantleRocks = { "basalt", "deepslate", "granite" };
 
@@ -1578,6 +1584,23 @@ public sealed class WorldGenerator
         int lo = System.Math.Max(40, floorDepth / 2);
         int span = System.Math.Max(1, floorDepth - FloorBandThickness - lo);
         return lo + (int)((ulong)(seed ^ 0x0DA27L) % (ulong)span);
+    }
+
+    /// <summary>This column's topsoil thickness — the surface + sub-surface depth before the crust turns to stone.
+    /// Instead of the planet's flat <see cref="PlanetType.SurfaceDepth"/> everywhere, a coarse 2D noise rolls it
+    /// between 1 and that value, so the stone/ore boundary undulates: in the thin patches ore-bearing stone reaches
+    /// within a block or two of the surface (shallow digging is sometimes rewarded), while other patches keep the
+    /// full topsoil. Constant over Y (per-column). (Severin/user playtest #2 — "dug 2 blocks, only stone/soil, no ore".)</summary>
+    private int VariedSurfaceDepth(PlanetType planet, long seed, int worldX, int worldZ)
+    {
+        int baseDepth = planet.SurfaceDepth;
+        if (baseDepth <= 1)
+        {
+            return baseDepth;
+        }
+
+        double n = ValueT(seed + 5150, worldX, 0.0, worldZ, 18.0, 1.0, 18.0); // 0..1, broad smooth patches
+        return 1 + (int)System.Math.Round(n * (baseDepth - 1));
     }
 
     private BlockId SelectOre(PlanetType planet, long seed, int x, int y, int z, int depth, BlockId fallback, double richness)
