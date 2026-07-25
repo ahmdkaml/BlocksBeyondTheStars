@@ -800,6 +800,18 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>Shows a transient HUD message from a client-side system (e.g. the VEGA autopilot).</summary>
         public void ShowMessage(string text) => LastMessage = text ?? string.Empty;
 
+        /// <summary>Machine-readable server-message tokens → localized player text (same idea as
+        /// <see cref="CraftFailMessage"/>; plain text passes through unchanged).</summary>
+        private string ServerMessageText(string text)
+        {
+            if (text == "@spawn_set")
+            {
+                return Localizer?.Get("ui.spawn.set") ?? "Spawn point set — you'll respawn here from now on.";
+            }
+
+            return text;
+        }
+
         /// <summary>Turns a craft-failure reason into a player-facing line. Station-availability failures arrive
         /// as a machine-readable "@need_station:&lt;station&gt;" token so the client can localize them and name the
         /// exact station the recipe needs (Severin playtest #2). Other reasons are shown as-is.</summary>
@@ -1322,6 +1334,7 @@ namespace BlocksBeyondTheStars.Client
                 LastMessage = m.Reason;
                 RespawnTarget = new Vector3(m.X, m.Y, m.Z); // teleport the body to the heal-tank on respawn
             };
+            Network.RespawnOptionsReceived += m => LastMessage = m.Reason; // deferred death: reason shows under the choice modal
             Network.ServerRulesReceived += m => { Rules = m; LastMessage = $"Mode: {m.GameMode} · PvP: {m.Pvp}"; };
             Network.CraftCompleted += m => LastMessage = m.Success ? $"Crafted {m.RecipeKey}" : CraftFailMessage(m.Reason);
             Network.ActionRejected += m =>
@@ -1345,7 +1358,7 @@ namespace BlocksBeyondTheStars.Client
                     }
                 }
             };
-            Network.ServerMessageReceived += m => { Debug.Log(m.Text); LastMessage = m.Text; };
+            Network.ServerMessageReceived += m => { Debug.Log(m.Text); LastMessage = ServerMessageText(m.Text); };
 
             // Connect now; the join handshake is sent once the transport reports Connected
             // (UDP connect is asynchronous — sending the join before that would be dropped).

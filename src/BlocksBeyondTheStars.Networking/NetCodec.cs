@@ -325,6 +325,12 @@ public static class NetCodec
         // prominent banner/modal instead of the low-key ServerMessage toast. Restart countdowns re-broadcast at
         // shrinking thresholds so late joiners and drifted clients stay in sync.
         Register(174, typeof(MaintenanceNotice));        // Server -> Client
+
+        // Base/station home spawn (issues #461/#462): E on a placed heal tank stores a body-qualified
+        // custom spawn point; on death the server offers a choice between the ship and that spawn.
+        Register(175, typeof(SetSpawnPointIntent));      // Client -> Server (E on a placed heal tank)
+        Register(176, typeof(RespawnOptions));           // Server -> Client (death: pick ship vs home spawn)
+        Register(177, typeof(RespawnChoiceIntent));      // Client -> Server (the pick)
     }
 
     private static void Register(byte tag, Type type)

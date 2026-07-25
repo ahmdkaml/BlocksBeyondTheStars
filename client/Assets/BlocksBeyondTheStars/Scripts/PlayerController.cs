@@ -978,6 +978,15 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
+            // A heal tank you're aiming at → make it your home spawn point (base/station, issue #461).
+            if (AimBlock(out var tankHit, out _)
+                && Game.Content?.BlockById(Game.World.GetBlock(tankHit.x, tankHit.y, tankHit.z))?.Key == "heal_tank")
+            {
+                Game.Network?.SendSetSpawnPoint(tankHit.x, tankHit.y, tankHit.z);
+                ClientAudio.Instance?.Cue("heal");
+                return;
+            }
+
             // A beam block (teleporter pad) you're standing on / next to opens the transporter — pick a destination
             // among your own + allied pads on this world, then beam to it.
             int beam = BeamView.Instance != null ? BeamView.Instance.NearestUsableBeam(transform.position, 2.2f) : 0;
@@ -1068,6 +1077,8 @@ namespace BlocksBeyondTheStars.Client
                 case "workshop": Menu?.OpenCrafting(); break;
                 case "market": Menu?.OpenMarket(); Game.Network?.SendNpcGreet("vendor"); break; // item 15: vendor greeting
                 case "cargo": Menu?.OpenInventory(); break;
+                case "console": Menu?.OpenShip(); Game.Network?.SendUseStation("console"); break; // ship status/repairs (#463)
+                case "lab": Menu?.OpenTech(); break; // research tab (#463)
                 default:
                     if (Game.NearbyStation == "medbay") ClientAudio.Instance?.Cue("heal");
                     Game.Network?.SendUseStation(Game.NearbyStation);
