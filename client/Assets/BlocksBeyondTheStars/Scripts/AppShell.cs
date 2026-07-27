@@ -128,6 +128,13 @@ namespace BlocksBeyondTheStars.Client
             ApplyGlitchServerDefaults();
             ConfigureOptionalWebAutoJoin();
 
+            // Quiet update check (#543), fired during the splash so the answer is usually in before the
+            // menu appears. Editor/WebGL/portable runs no-op inside; failures are silent by design.
+            if (Settings.UpdateCheckOnStart)
+            {
+                ClientUpdater.CheckForNoticeOnStartup(Settings.UpdateFeedUrl);
+            }
+
             // The 3D renders at native resolution (crisp on 4K); the IMGUI UI keeps a readable
             // physical size via UiScale (virtual 1080p layout) instead of a blunt resolution cap.
             _splash = new SplashScreen(this);
@@ -829,7 +836,18 @@ namespace BlocksBeyondTheStars.Client
         }
 
         private GameObject _uiMenu;
+        private GameObject _uiUpdateNotice;
+        private GameObject _uiWhatsNew;
+        private bool _whatsNewOpen;
+        private bool _whatsNewAutoDone;
         private GameObject _uiLoading;
+
+        /// <summary>Opens the "What's new?" dialog over the main menu (menu button, and the one-shot
+        /// auto-open after an update). Spawned/torn down by <see cref="Update"/> with the phase.</summary>
+        public void OpenWhatsNew() => _whatsNewOpen = true;
+
+        /// <summary>Closes the "What's new?" dialog (its Back button).</summary>
+        public void CloseWhatsNew() => _whatsNewOpen = false;
         private GameObject _uiSettings;
         private GameObject _uiCredits;
         private GameObject _uiEditors;
@@ -1065,6 +1083,7 @@ namespace BlocksBeyondTheStars.Client
             if (Phase == ShellPhase.MainMenu && _uiMenu == null)
             {
                 _uiMenu = UiMainMenu.Build(this);
+                WhatsNew.BeginFetch(this); // one-per-session background load of the release notes (#543)
 
                 // Land the bombastic intro sting on the first menu reveal (logo + full UI), rather
                 // than during the mandatory black Unity engine splash that precedes it.
@@ -1078,6 +1097,50 @@ namespace BlocksBeyondTheStars.Client
             {
                 Destroy(_uiMenu);
                 _uiMenu = null;
+            }
+
+            // Startup update notice (#543): once the menu is up and the quiet check found a version,
+            // offer it — on its own canvas, so a result landing late needs no menu rebuild. "Later"
+            // sets NoticeDismissed and the else-branch tears the dialog down until the next launch.
+            if (Phase == ShellPhase.MainMenu && _uiUpdateNotice == null
+                && ClientUpdater.NoticeVersion.Length > 0 && !ClientUpdater.NoticeDismissed)
+            {
+                _uiUpdateNotice = UiUpdateNotice.Build(this);
+            }
+            else if ((Phase != ShellPhase.MainMenu || ClientUpdater.NoticeDismissed) && _uiUpdateNotice != null)
+            {
+                Destroy(_uiUpdateNotice);
+                _uiUpdateNotice = null;
+            }
+
+            // One-shot "What's new?" after an update (#543): once the release notes are loaded and the
+            // update notice is settled (none found, or dismissed — it has priority), compare the last
+            // seen version. A fresh install is stamped silently — its player has no "new" to catch up on.
+            if (Phase == ShellPhase.MainMenu && !_whatsNewAutoDone && WhatsNew.Entries != null
+                && _uiUpdateNotice == null
+                && (ClientUpdater.NoticeVersion.Length == 0 || ClientUpdater.NoticeDismissed))
+            {
+                _whatsNewAutoDone = true;
+                string seen = Settings.LastSeenVersion;
+                if (seen != Version)
+                {
+                    Settings.LastSeenVersion = Version;
+                    Settings.Save();
+                    if (seen.Length > 0 && WhatsNew.Entries.Count > 0)
+                    {
+                        OpenWhatsNew();
+                    }
+                }
+            }
+
+            if (Phase == ShellPhase.MainMenu && _whatsNewOpen && _uiWhatsNew == null)
+            {
+                _uiWhatsNew = UiWhatsNew.Build(this);
+            }
+            else if ((Phase != ShellPhase.MainMenu || !_whatsNewOpen) && _uiWhatsNew != null)
+            {
+                Destroy(_uiWhatsNew);
+                _uiWhatsNew = null;
             }
 
             if (Phase == ShellPhase.Loading && _uiLoading == null)

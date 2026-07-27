@@ -100,6 +100,36 @@ Per-item detail lives in the dated work log below.
 
 ---
 
+### ★ Update notice on startup + an official update feed that actually exists (#543, 2026-07-27, branch feat/auto-update-notify)
+Installed clients could never learn about a new release: the in-app Velopack updater only ran from a
+manual settings button, the feed URL shipped empty, and — the real killer — the feed files the
+installer pipeline builds (`releases.win.json` + `.nupkg`) were published NOWHERE (the release CI only
+attached Setup.exe/MSI/Portable; the API's `/updates` endpoint is self-host-only and 404s on the
+official portal). Fixed end-to-end: release CI now attaches the Velopack feed files to the GitHub
+release (Windows + Linux), `ClientSettings.UpdateFeedUrl` defaults to the repository URL (empty values
+are re-defaulted on load — official feed is read via Velopack's `GithubSource`, self-host URLs keep
+the plain static feed), and a quiet check-only pass runs during the splash (`CheckForNoticeOnStartup`,
+silent on every failure). If it finds a newer version, the main menu shows a once-per-session dialog
+(`UiUpdateNotice`) — *Install now* runs the existing download-and-restart flow, *Later* dismisses for
+the session; a new `UpdateCheckOnStart` toggle in Settings → Software update opts out. Note for the
+release notes: the notice only works FROM this version on — 0.9.x installs need one last manual
+download. Rode along (#544): the participate overlay's GitHub "link" was a dead `AddText` that only
+looked clickable — now a real button, plus a language-aware button to the game website.
+Also in this PR: **in-game "What's new?"** — `tools/devblog/export_whatsnew.py` extracts the
+bilingual devblog release posts (the DRAFT FILES `devblog-artikel*.md` are git-ignored and stay so)
+into the committed `data/whatsnew.json`; the client (`UiWhatsNew`) fetches it raw from `main` with
+the StreamingAssets copy as offline fallback, shows it via a menu bottom-bar button, and auto-opens
+it ONCE after an update (`ClientSettings.LastSeenVersion`, queued behind the update notice; fresh
+installs are stamped silently). Release procedure (run export → commit BEFORE tagging) documented in
+AGENTS.md; `WhatsNewContentTests` guards the feed's shape. Menu polish from live feedback: What's-new
+opens from a bottom-bar button next to "Mach mit" (a menu-column entry was tried and reverted on user
+preference), the settings screen's language + back buttons moved out of the scroll list into a fixed
+footer (other menu screens checked — only settings had the issue), and the pilot-name field got an
+accented backdrop + bold cyan label, edges flush with the button column. UI
+gotcha learned here: uGUI `VerticalLayoutGroup` + wrapped `Text` rows overflowed the viewport
+horizontally — the settings screen's absolute-rows + `TextGenerator(scaleFactor=1)` height
+measurement is the reliable pattern for variable-height scroll text.
+
 ### ★ Monuments: arcade arches, gates, stone circles & scannable runes (#522–#527, 2026-07-27, branch feat/monuments-runes)
 Analysed first (`analysis/monuments-arches-and-runes.md`). Ruins were the only ruin-shaped thing in the
 game and they are *statistically* eroded architecture — they can never produce a deliberate silhouette.

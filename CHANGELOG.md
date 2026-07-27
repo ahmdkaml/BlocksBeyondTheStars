@@ -9,6 +9,37 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 Each release below mirrors its [GitHub release notes](https://github.com/marceld23/BlocksBeyondTheStars/releases);
 the richer, screenshot-laden versions live there. `(#123)` references the pull request or issue.
 
+## [Unreleased]
+
+### 🔔 The game finally tells you about updates (#543)
+- **Update notice on startup.** An installed client now quietly checks for a newer release while the
+  splash screens play and, if one exists, offers it on the main menu: *Install now* downloads and
+  restarts into the new version, *Later* dismisses the notice until the next launch. Can be turned
+  off in **Settings → Software update**.
+- **An official update feed exists now.** Release builds attach the Velopack feed files to the GitHub
+  release, and the client's update server defaults to it — previously the feed was never published
+  anywhere and the URL shipped empty, so even the manual "Check for updates" button could never find
+  one. Self-hosters can still point the URL at their own server's `/updates` endpoint.
+- Applies from this release onward: older installs (0.9.1 and before) don't carry the check yet, so
+  they need one last manual download.
+
+### 📰 "What's new?" in the main menu (#543)
+- **The devblog release notes are readable in-game now** — a new bottom-bar button opens them,
+  localized in German and English, newest first. After an update the notes open **once** by
+  themselves, so you see what changed without hunting for a blog post.
+- Sourced from the same posts the website devblog publishes; the game fetches the latest feed online
+  and falls back to the notes bundled with the build when offline.
+
+### 🔗 Fixed
+- **The GitHub link in the "Join in" overlay actually opens now** (#544) — it was link-styled text
+  with no click handler on every desktop platform. It's a real button now, joined by a second one
+  that opens the game website in your language.
+- **Settings: language and back are always visible now** — they used to be the last rows of the
+  scroll list, so leaving the screen meant scrolling the whole way down first. They sit in a fixed
+  footer under the list now.
+- **The pilot-name field on the main menu stands out** — an accented backdrop and a bold label make
+  the required first step obvious instead of a grey side note.
+
 ## [0.9.1] — 2026-07-27
 
 The relics release: somebody was here before you. Ancient monuments now stand on worlds — and on
