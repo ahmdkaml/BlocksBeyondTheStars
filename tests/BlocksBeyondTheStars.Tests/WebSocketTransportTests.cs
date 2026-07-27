@@ -109,6 +109,13 @@ public sealed class WebSocketTransportTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")] // 183 ms in isolation (measured on Linux in a container), but 178.8 s and
+                                // 208.9 s on two consecutive loaded PR runners on 2026-07-27 — both AFTER
+                                // #536's clean-close fix, which made this rarer without removing it. What
+                                // stretches is the runner's scheduling, not the code under test, so the
+                                // fast-tier budget cannot hold it. Same symptom and same reasoning as
+                                // Gateway_DropsAConnectionThatNeverSendsAsync below; full runs on main and
+                                // release still cover it. Real cause tracked in #536 (reopened).
     public async Task Gateway_AcceptLoop_SurvivesAFaultingRequestAsync()
     {
         int port = FreeTcpPort();
@@ -145,7 +152,14 @@ public sealed class WebSocketTransportTests : IDisposable
     public async Task Gateway_RejectsConnectionsBeyondTheCapAsync()
     {
         int port = FreeTcpPort();
-        using var transport = new WebSocketServerTransport("127.0.0.1", maxConnections: 2);
+
+        // The long handshakeTimeout is load-proofing, not a detail: ws1/ws2 never send, so with the default
+        // 15 s window the transport reaps them as slow-loris idlers — and on a loaded 2-core CI runner the
+        // suite once stretched the gap before ws3's connect past that window (failed 2026-07-27 after
+        // 2 m 56 s: both slots free again, ws3 accepted, "no exception was thrown"). This test is about the
+        // connection CAP; the handshake window has its own test right below.
+        using var transport = new WebSocketServerTransport("127.0.0.1", maxConnections: 2,
+            handshakeTimeout: TimeSpan.FromMinutes(10));
         transport.Start(port);
 
         using var ws1 = new ClientWebSocket();
