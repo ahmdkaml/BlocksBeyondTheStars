@@ -45,6 +45,22 @@ public sealed record BanRequest(string AccountId, bool Banned, string? Reason = 
 /// <summary>Acknowledges a player notice; id &lt;= 0 acknowledges all of them.</summary>
 public sealed record NoticeAckRequest(long Id = 0);
 
+/// <summary>Rotates the caller's account password. The current password must be presented even though
+/// the caller is already signed in — a stolen session must not be enough to take the account over.</summary>
+public sealed record ChangePasswordRequest(string OldPassword, string NewPassword);
+
+/// <summary>Self-service password reset with a rescue code ("Rettungscode") — the anonymous flow for a
+/// FORGOTTEN password: account name + one unused code + the new password.</summary>
+public sealed record RecoverRequest(string Name, string Code, string NewPassword);
+
+/// <summary>Re-issues the caller's rescue codes; the current password is required for the same reason
+/// the change-password endpoint requires it (a stolen session must not mint recovery secrets).</summary>
+public sealed record RecoveryCodesRequest(string Password);
+
+/// <summary>Operator password reset (scriptable twin of the /admin form): answers a one-time temp
+/// password and flags the account to change it at the next sign-in.</summary>
+public sealed record AdminResetPasswordRequest(string AccountId);
+
 /// <summary>Owner-only: bar a player from ONE world (#497). Either identifier may be empty as long as one
 /// is given; <paramref name="Kick"/> also ends a session already in progress.</summary>
 public sealed record WorldBanRequest(string? PlayerName = null, string? AccountId = null, string? Reason = null, bool Kick = true);

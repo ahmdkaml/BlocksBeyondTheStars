@@ -107,6 +107,92 @@ public sealed class WorldHostTests : IDisposable
     }
 
     [Fact]
+    public void ChangePassword_RotatesHash_RevokesOtherSessions_AndKeepsCaller()
+    {
+        var registry = NewRegistry();
+        var (ok, _, accountId, otherDeviceSession) = registry.CreateAccount("Pilot", "old-password-1", acceptedTermsVersion: Terms);
+        Assert.True(ok);
+        string callerSession = registry.Login("Pilot", "old-password-1")!.Value.SessionToken;
+
+        // Wrong current password or a too-short new one: nothing changes, the old password stays live.
+        Assert.False(registry.ChangePassword(accountId, "wrong", "new-password-1", callerSession).Ok);
+        Assert.False(registry.ChangePassword(accountId, "old-password-1", "short", callerSession).Ok);
+        Assert.NotNull(registry.Login("Pilot", "old-password-1"));
+
+        Assert.True(registry.ChangePassword(accountId, "old-password-1", "new-password-1", callerSession).Ok);
+
+        Assert.Null(registry.Login("Pilot", "old-password-1"));       // the old password is dead
+        Assert.NotNull(registry.Login("Pilot", "new-password-1"));    // the new one signs in
+        Assert.NotNull(registry.ResolveSession(callerSession));       // the changing device stays signed in
+        Assert.Null(registry.ResolveSession(otherDeviceSession));     // every other session was revoked
+    }
+
+    [Fact]
+    public void RecoveryCodes_RedeemOnce_SetNewPassword_AndSurviveSloppyTyping()
+    {
+        var registry = NewRegistry();
+        var (ok, _, accountId, session) = registry.CreateAccount("Pilot", "old-password-1", acceptedTermsVersion: Terms);
+        Assert.True(ok);
+
+        var codes = registry.CreateRecoveryCodes(accountId);
+        Assert.Equal(HostRegistry.RecoveryCodeCount, codes.Count);
+        Assert.All(codes, c => Assert.Matches("^[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}$", c));
+
+        // Uniform failure on wrong name / wrong code / weak password — and nothing changes.
+        Assert.False(registry.RedeemRecoveryCode("Nobody", codes[0], "new-password-1").Ok);
+        Assert.False(registry.RedeemRecoveryCode("Pilot", "AAAA-AAAA", "new-password-1").Ok);
+        Assert.False(registry.RedeemRecoveryCode("Pilot", codes[0], "short").Ok);
+        Assert.NotNull(registry.Login("Pilot", "old-password-1"));
+
+        // Paper transcription is forgiving: lowercase, spaces and a missing dash all redeem.
+        string sloppy = " " + codes[0].ToLowerInvariant().Replace("-", " ") + " ";
+        var redeemed = registry.RedeemRecoveryCode("pilot", sloppy, "new-password-1");
+        Assert.True(redeemed.Ok);
+        Assert.Equal("Pilot", redeemed.AccountName);
+        Assert.NotNull(registry.ResolveSession(redeemed.SessionToken));
+
+        Assert.Null(registry.Login("Pilot", "old-password-1"));      // old password is gone
+        Assert.NotNull(registry.Login("Pilot", "new-password-1"));   // rescue set the new one
+        Assert.Null(registry.ResolveSession(session));               // pre-rescue sessions are dead
+        Assert.False(registry.RedeemRecoveryCode("Pilot", codes[0], "another-pass-1").Ok); // single use
+        Assert.True(registry.RedeemRecoveryCode("Pilot", codes[1], "another-pass-1").Ok);  // siblings still work
+
+        // Re-issuing voids every previous code.
+        var fresh = registry.CreateRecoveryCodes(accountId);
+        Assert.False(registry.RedeemRecoveryCode("Pilot", codes[2], "third-pass-1").Ok);
+        Assert.True(registry.RedeemRecoveryCode("Pilot", fresh[0], "third-pass-1").Ok);
+    }
+
+    [Fact]
+    public void AdminResetPassword_IssuesTempPassword_FlagsMustChange_AndSparesOperators()
+    {
+        var registry = NewRegistry();
+        var (ok, _, accountId, session) = registry.CreateAccount("Pilot", "old-password-1", acceptedTermsVersion: Terms);
+        Assert.True(ok);
+
+        var (reset, temp) = registry.AdminResetPassword(accountId);
+        Assert.True(reset);
+        Assert.Null(registry.Login("Pilot", "old-password-1"));  // old password is dead
+        Assert.Null(registry.ResolveSession(session));           // sessions revoked
+
+        var login = registry.Login("Pilot", temp);
+        Assert.NotNull(login);
+        var account = registry.ResolveSession(login!.Value.SessionToken)!;
+        Assert.True(account.MustChangePassword); // the client nags until the player picks their own
+
+        // The next change clears the nag flag.
+        Assert.True(registry.ChangePassword(accountId, temp, "my-own-password-1", login.Value.SessionToken).Ok);
+        Assert.False(registry.ResolveSession(login.Value.SessionToken)!.MustChangePassword);
+
+        // Unknown ids and developer accounts are refused — the admin token must not own the operator.
+        Assert.False(registry.AdminResetPassword("acc-does-not-exist").Ok);
+        var devRegistry = NewRegistry(new WorldHostConfig { ReservedClaimCode = "claim", TermsVersion = Terms });
+        var dev = devRegistry.CreateAccount("Justus", "operator-pass-1", "claim", acceptedTermsVersion: Terms); // default-reserved name
+        Assert.True(dev.Ok);
+        Assert.False(devRegistry.AdminResetPassword(dev.AccountId).Ok);
+    }
+
+    [Fact]
     public void Signup_Rejects_TakenNames_CaseInsensitive_AndInvalidInput()
     {
         var registry = NewRegistry();

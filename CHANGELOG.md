@@ -13,6 +13,28 @@ the richer, screenshot-laden versions live there. `(#123)` references the pull r
 
 ## [Unreleased]
 
+### 🆘 Rescue codes + operator password reset — a forgotten password is no longer fatal (#557, #558)
+- **Rescue codes ("Rettungscodes")**: every new account gets 3 one-time codes at signup — shown
+  exactly once with a big "write these on paper!" prompt (in-game and on the portal website). A
+  code plus a new password resets a forgotten account password via the new "Forgot password?"
+  button; codes are stored only as PBKDF2 hashes, survive sloppy typing (case/spaces/dashes),
+  and can be re-issued from the Account panel (current password required — the old set is void).
+- **Operator reset**: the `/admin` account lookup gained a "reset password" button — it shows a
+  one-time readable temp password (never in a URL), signs out every session, and the next login
+  lands the player directly in the change-password form until they pick their own. Developer
+  accounts are excluded on every path, so admin credentials can never take over the operator.
+
+### 🔑 Account access: change your password + clearer sign-in (#555, #556)
+- **Change your account password in-game**: the Official Worlds → Account panel now rotates a known
+  password (current one required; every other signed-in device is signed out). New endpoint
+  `POST /api/account/password` — wrong-guess attempts share the failed-login budget, so a stolen
+  session cannot brute-force its way to owning the account.
+- **The sign-in form no longer causes lockouts**: signing out keeps the account name prefilled (it
+  was blanked, and players then typed their *player* name and concluded the account was gone), the
+  password field is labelled "account password" (it borrowed the world-password wording), and both
+  the in-game and web signup say clearly that the account name is for signing in only — the player
+  name stays a separate, freely changeable identity.
+
 ## [2026.7.19] — 2026-07-28
 
 The constellation release — and the first under the date-based version scheme (`YYYY.MM.N`, see

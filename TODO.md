@@ -6468,6 +6468,66 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-28): account password change + sign-in lockout fixes (#555/#556)
+
+Trigger: the operator locked himself out after "Abmelden" — the sign-in form blanked the account
+name, its password field said "Passwort" in world-join wording, and a forgotten account password had
+no path at all (no change, no recovery). Decision (revised mid-implementation): account name and
+player name **stay separate** — players keep a freely changeable player name and never have to
+switch accounts for it; the fix is clarity + a password-change path, NOT name unification.
+
+- `POST /api/account/password` (WorldHost): verifies the current password, rotates the PBKDF2 hash,
+  revokes every session except the caller's; wrong guesses burn the shared failed-login budget
+  (10/15 min per account). `HostRegistry.ChangePassword` + `ChangePasswordRequest` DTO.
+- Client: Official Worlds → Account panel gained a change-password section (current + new ×2, same
+  pre-checks as signup); login response now carries the canonical `accountName` (NOCASE logins);
+  sign-out keeps the account name for the sign-in prefill (lockout fix); new labels
+  `ui.portal.login_name` ("Kontoname (nicht dein Spielername!)"), `ui.portal.login_password`
+  ("Konto-Passwort"), `ui.portal.signup_name`; error code `wrong_account_password` (the shared
+  `wrong_password` would have localized as "Welt-Passwort").
+- Web portal: signup copy says the account name is sign-in-only and the player name is separate and
+  changeable; "write your ACCOUNT NAME and password down".
+- glitch.fun untouched (guest flow has no accounts/passwords; WebGL compiles the whole overlay out).
+- Tests: `ChangePassword_RotatesHash_RevokesOtherSessions_AndKeepsCaller` (WorldHostTests),
+  `ParseLogin_ReadsCanonicalAccountName_AndToleratesItsAbsence` (PortalClientTests).
+- Ops footnote: the live `maduet` password was reset 2026-07-28 directly in the VPS `worldhost.db`
+  (PBKDF2 hash update; no restart needed) after the lockout.
+- Status: implemented + tested in worktree `SpaceCraft-wt-unified-name`, branch
+  `feat/unified-player-name`; **no PR yet on user instruction**. Follow-up analysis requested:
+  hashed-email verification, TOTP 2FA, secure recovery (see `analysis/`).
+
+---
+
+## ✅ Done (2026-07-28): rescue codes + admin password reset (#557/#558)
+
+User decision on the recovery analysis (`analysis/account-recovery-email-hash-2fa.md`): implement
+ONLY ladder steps 1+2 — **admin reset button** and **signup rescue codes**; email-hash recovery and
+TOTP 2FA explicitly rejected. Local only, no PR.
+
+- Registry: `recovery_code` table (PBKDF2-hashed one-time codes, 3 per account, re-issue voids the
+  set), `account.must_change_password` column, `CreateRecoveryCodes` / `RedeemRecoveryCode`
+  (uniform failure, normalizes case/spaces/dashes, revokes ALL sessions, answers a fresh session) /
+  `AdminResetPassword` (readable temp password, refuses developer accounts) / `VerifyPassword`.
+  Code format `XXXX-XXXX` from a no-lookalike alphabet (no 0/O/1/I/L).
+- Endpoints: signup answers `recoveryCodes` (the one moment plaintexts exist); `POST /api/recover`
+  (anonymous, login limiter pair, code `recover_failed`); `POST /api/account/recovery-codes`
+  (password-gated re-issue); `POST /api/admin/reset-password` (token twin) + `/admin` form handler
+  rendering the temp password directly (never in a redirect URL) + admin-page button; login answers
+  `mustChangePassword`.
+- Client: "Passwort vergessen?" button + recovery dialog on the sign-in form; signup shows the
+  codes dialog ("write on paper", `ShowRecoveryCodes`); Account panel gained "Neue Rettungscodes"
+  (gated on the same current-password field); after a temp-password login the Account panel opens
+  itself with the must-change nag. Portal web mirrors all three flows.
+- Copy fix: all "a forgotten password cannot be recovered" texts (in-game + web) now point to
+  rescue codes instead.
+- Tests: `RecoveryCodes_RedeemOnce_SetNewPassword_AndSurviveSloppyTyping`,
+  `AdminResetPassword_IssuesTempPassword_FlagsMustChange_AndSparesOperators`,
+  `ParseLogin_ReadsRescueCodes_AndMustChangeFlag` — suite green, build 0 warnings.
+- ⚠ Existing accounts have no codes until they re-issue via the Account panel (or an admin reset) —
+  worth a release-notes line when this ships.
+
+---
+
 ## ✅ Done (2026-07-27): star system archetypes — high per-system variance (#546–#549)
 
 Full analysis in `analysis/star-system-variance.md`. Every system in a NEWLY created world rolls a

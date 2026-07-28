@@ -27,6 +27,38 @@ public sealed class PortalClientTests
     }
 
     [Fact]
+    public void ParseLogin_ReadsCanonicalAccountName_AndToleratesItsAbsence()
+    {
+        // Logins are case-insensitive server-side; the answer carries the stored casing for the client
+        // to persist (sign-in form prefill). Older/other answers without the field must keep parsing.
+        var named = PortalClient.ParseLogin(200, "{\"accountId\":\"acc-1\",\"sessionToken\":\"tok\",\"accountName\":\"Pilot\"}");
+        Assert.True(named.Ok);
+        Assert.Equal("Pilot", named.AccountName);
+
+        var unnamed = PortalClient.ParseLogin(200, "{\"accountId\":\"acc-1\",\"sessionToken\":\"tok\"}");
+        Assert.True(unnamed.Ok);
+        Assert.Equal(string.Empty, unnamed.AccountName);
+    }
+
+    [Fact]
+    public void ParseLogin_ReadsRescueCodes_AndMustChangeFlag()
+    {
+        // Signup answers the one-time rescue-code plaintexts; login answers the must-change nag after
+        // an operator reset. Both ride the same login shape.
+        var signup = PortalClient.ParseLogin(200,
+            "{\"accountId\":\"acc-1\",\"sessionToken\":\"tok\",\"recoveryCodes\":[\"AB2C-DEF3\",\"GH4J-KM5N\",\"PQ6R-ST7U\"]}");
+        Assert.True(signup.Ok);
+        Assert.Equal(new[] { "AB2C-DEF3", "GH4J-KM5N", "PQ6R-ST7U" }, signup.RecoveryCodes);
+        Assert.False(signup.MustChangePassword);
+
+        var reset = PortalClient.ParseLogin(200,
+            "{\"accountId\":\"acc-1\",\"sessionToken\":\"tok\",\"mustChangePassword\":true}");
+        Assert.True(reset.Ok);
+        Assert.True(reset.MustChangePassword);
+        Assert.Empty(reset.RecoveryCodes);
+    }
+
+    [Fact]
     public void ParseLogin_FailurePaths()
     {
         Assert.Equal("unauthorized", PortalClient.ParseLogin(401, "").Error);
