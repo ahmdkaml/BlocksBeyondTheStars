@@ -378,6 +378,9 @@ public sealed partial class GameServer
         if (start is not null)
         {
             _meta.ActiveLocationId = start.Id;
+            // #596: the start planet always carries rings — the sky band is the feature's shop window.
+            // Deterministic from the body id, so every restart re-derives the same ring; cosmetic only.
+            UniverseGenerator.EnsureStartPlanetRings(start);
             if (start.Status != GenerationStatus.Visited)
             {
                 start.Status = GenerationStatus.Visited;
@@ -4227,6 +4230,7 @@ public sealed partial class GameServer
             OrbitPeriodDays = b.OrbitPeriodDays,
             ParentId = b.ParentId,
             SizeBias = b.SizeBias, // #549: the client sizes this body with the same bias the server does
+            RingSeed = b.RingSeed, // #596: 0 = no rings; the client renders the ring system from this
             PadsTotal = total,
             PadsFree = total > 0 ? FreePadCount(b.Id, total) : 0,
         };

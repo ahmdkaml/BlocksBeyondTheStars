@@ -6648,6 +6648,45 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-07-29): planetary rings + flight system chart with nav waypoint (#596/#597, branch feat/planet-rings-space-map)
+
+Two features in one pass (Marcel: "beides komplett in einem Rutsch"):
+
+- **Planetary rings (#596)** — ~11 % of planets (large/icy ones more often, up to 30 %; tuned DOWN
+  from an 18 % base after playtest — "every other planet" cheapened it) carry a Saturn-like ring
+  system, **plus the start planet always rings** (server-side guarantee at the start-body pick,
+  `EnsureStartPlanetRings`), visible in all three views:
+  - **Data:** `CelestialBody.RingSeed`/`NetBody.RingSeed` (0 = none), rolled in `UniverseGenerator`
+    from fresh `Hash01` salts **600/601** (6xx = rings; rng stream untouched — verified by an
+    8-config SHA-256 body digest against pre-change `main`: byte-identical). Additive contractless
+    wire field (the `SizeBias` pattern), nothing persisted, **retroactive**: existing worlds gain
+    rings on the same planets every client, deterministically. The playtest surfaced two guarantee
+    iterations: a sys0-only guarantee missed worlds whose start planet lives elsewhere (world 1
+    started on sys5-p5), so the final mechanism rings the START planet itself, server-side at the
+    start-body pick (`EnsureStartPlanetRings`, deterministic from the body id).
+  - **Space view:** shared `PlanetRings` annulus mesh (1.24–2.3 planet radii) + per-seed procedural
+    band texture (3–6 bands, Cassini gaps) on the new always-included `PlanetRing` shader (tint via
+    `_Color`, Cull Off, queue 3001 — after haze 2999/clouds 3000); seeded tilt 8–35°, the ring alone
+    defines perceived axial tilt (bodies never rotate).
+  - **Surface sky:** the same ring child on `SkyBodiesView` discs (≥14 px apparent only), re-tinted
+    per frame with the #585 daytime sky wash so it never reads as a black arc.
+  - **On the ringed planet:** `RingBand` (WorldRig) — a camera-following arc across the sky, bold at
+    night / faint sky-washed by day (Starfield dusk ramp), full-strength on airless worlds.
+  - Tests: `Rings_AreDeterministic_PlanetsOnly_AndReasonablyDistributed` (120 systems).
+- **Flight system chart + nav waypoint (#597, client-only)** — new `SpaceMap` overlay on the new
+  rebindable **FlightMap** action (default **M**, free in flight; the surface map self-gates to
+  on-foot): top-down chart of the current system from the REAL flight coordinates
+  (`SpaceView.Landables` + live space entities + rim-pinned star), ship marker with heading,
+  radius-proportional body discs (#592 legibility rules: white/colour on dark backing + labels).
+  Click a body/station = snap target (`Game.SpaceWaypointId`, launch body via `~home` sentinel);
+  click empty space = free waypoint clamped to the flight bounds (`Game.SpaceWaypointPos`). Menu
+  ownership holds the ship while open (Tab pattern), Esc/M closes. The space radar shows the
+  waypoint as an amber `map_waypoint` blip (rim-pinned like stations) + its own `⌖ N m` distance
+  line; **the VEGA autopilot prefers the waypoint** over its hardcoded nearest-station pick (map +
+  radar work without an AI core; only auto-steering stays gated at Mk2). Cleared with the
+  world-scoped state on travel (the #592 stale-waypoint lesson). Locales DE+EN (`ui.spacemap.*`,
+  `ui.key.flight_map`).
+
 ## ✅ Done (2026-07-29): `/tp` takes named landmarks — admin teleport without coordinates
 
 The world admin could jump to coordinates (`/tp X Y Z`) but not to places; `/goto` already resolved
