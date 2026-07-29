@@ -29,7 +29,7 @@ namespace BlocksBeyondTheStars.Client
 
         // Values match GameMenu.Tab so the whole in-game menu runs on this one uGUI screen. (Launching into
         // space lives on the Map tab now — there is no separate Space tab.)
-        public enum Mode { Inventory = 0, Crafting = 1, Tech = 2, Ship = 3, Map = 4, Missions = 5, Character = 6, Alliances = 7, Story = 8, Companions = 9, Photos = 10 }
+        public enum Mode { Inventory = 0, Crafting = 1, Tech = 2, Ship = 3, Map = 4, Missions = 5, Character = 6, Alliances = 7, Story = 8, Companions = 9, Photos = 10, Achievements = 11 }
 
         // Tab bar display order (left→right), decoupled from the Mode enum value so tabs can be reordered without
         // renumbering the modes: each entry carries its Mode (used for activation, routing and badges) and label
@@ -46,6 +46,7 @@ namespace BlocksBeyondTheStars.Client
             (Mode.Story,     "ui.tab.story"),
             (Mode.Companions, "ui.tab.companions"),
             (Mode.Alliances, "ui.tab.alliances"),
+            (Mode.Achievements, "ui.tab.achievements"),
             (Mode.Photos,    "ui.tab.photos"),
             (Mode.Character, "ui.tab.settings"),
         };
@@ -750,6 +751,7 @@ namespace BlocksBeyondTheStars.Client
                 case Mode.Story: y = BuildStoryList(); break;
                 case Mode.Companions: y = BuildCompanionsList(); break;
                 case Mode.Photos: y = BuildPhotosList(); break;
+                case Mode.Achievements: y = BuildAchievementList(); break;
             }
 
             SetContentHeight(_listContent, y);
@@ -1265,6 +1267,13 @@ namespace BlocksBeyondTheStars.Client
                     status += b.PadsFree == 0
                         ? "   ⊕ " + L("ui.map.pads_full")
                         : $"   ⊕ {b.PadsFree}/{b.PadsTotal}";
+                }
+
+                // The player's own colour mark, so a marked planet is spottable straight from the list.
+                int listMark = MarkerColorOf(b.Id);
+                if (listMark >= 0 && listMark < PlanetMarkerPalette.Count)
+                {
+                    status += "   ● " + L(PlanetMarkerPalette.NameKeys[listMark]);
                 }
 
                 // Your own claims on this body: a station orbiting it, and/or a founded base on it.
@@ -2114,6 +2123,102 @@ namespace BlocksBeyondTheStars.Client
 
         // --- Story Log tab (read-only: progress meter + VEGA beats + recovered net fragments + memories) ---
 
+        /// <summary>
+        /// The achievements page: every achievement grouped by category, with a progress bar and an "x/y" count
+        /// so it doubles as a "what can I do next?" list — a player asked for achievements with rewards, and the
+        /// progress is what makes an unearned one useful rather than just a locked box.
+        /// <para>
+        /// Rows are laid out at ABSOLUTE offsets (no LayoutGroup): a VerticalLayoutGroup with wrapped text
+        /// overflows its rows here, which is a trap this codebase has hit before.
+        /// </para>
+        /// </summary>
+        private float BuildAchievementList()
+        {
+            float y = 8f;
+            var all = Game?.Achievements;
+            if (all == null || all.Length == 0)
+            {
+                UiKit.AddText(_listContent, 8, y, 760, 34, L("ui.achv.none"), 20, UiKit.CyanDim, TextAnchor.MiddleLeft);
+                return y + 44f;
+            }
+
+            int done = 0;
+            for (int i = 0; i < all.Length; i++)
+            {
+                if (all[i].Earned) done++;
+            }
+
+            UiKit.AddText(_listContent, 8, y, 760, 36,
+                (L("ui.achv.summary") ?? "{done}/{total}").Replace("{done}", done.ToString()).Replace("{total}", all.Length.ToString()),
+                24, UiKit.Cyan, TextAnchor.MiddleLeft, FontStyle.Bold);
+            y += 46f;
+
+            // Group by category, keeping the authored order inside each group.
+            var seen = new System.Collections.Generic.List<string>();
+            foreach (var a in all)
+            {
+                string cat = a.Category ?? string.Empty;
+                if (!seen.Contains(cat)) seen.Add(cat);
+            }
+
+            foreach (var cat in seen)
+            {
+                y = AllianceSection(string.IsNullOrEmpty(cat) ? L("ui.achv.title") : L("achv.category." + cat), y);
+
+                foreach (var a in all)
+                {
+                    if ((a.Category ?? string.Empty) != cat)
+                    {
+                        continue;
+                    }
+
+                    y = AchievementRow(y, a);
+                }
+
+                y += 8f;
+            }
+
+            return y + 12f;
+        }
+
+        /// <summary>One achievement row: name, description, a filled bar and the tally (or "Done").</summary>
+        private float AchievementRow(float y, BlocksBeyondTheStars.Networking.Messages.NetAchievement a)
+        {
+            const float RowW = 760f;
+            var nameCol = a.Earned ? UiKit.Ok : UiKit.TextCol;
+
+            UiKit.AddText(_listContent, 8, y, RowW - 150f, 28, (a.Earned ? "✓ " : "") + L($"achv.{a.Key}.name"),
+                20, nameCol, TextAnchor.MiddleLeft, FontStyle.Bold);
+
+            string tally = a.Earned
+                ? L("ui.achv.done")
+                : (L("ui.achv.progress") ?? "{done}/{total}")
+                    .Replace("{done}", a.Progress.ToString())
+                    .Replace("{total}", a.Target.ToString());
+            UiKit.AddText(_listContent, RowW - 140f, y, 140f, 28, tally, 18,
+                a.Earned ? UiKit.Ok : UiKit.CyanDim, TextAnchor.MiddleRight);
+            y += 28f;
+
+            UiKit.AddText(_listContent, 20, y, RowW - 28f, 24, L($"achv.{a.Key}.desc"), 16, UiKit.CyanDim, TextAnchor.MiddleLeft);
+            y += 26f;
+
+            // Progress bar: a dim track with a filled portion on top. Earned rows read as full and green.
+            float frac = a.Target > 0 ? Mathf.Clamp01((float)a.Progress / a.Target) : 0f;
+            if (a.Earned)
+            {
+                frac = 1f;
+            }
+
+            UiKit.AddImage(_listContent, 20, y, RowW - 28f, 8f, null, new Color(1f, 1f, 1f, 0.10f));
+            if (frac > 0f)
+            {
+                UiKit.AddImage(_listContent, 20, y, (RowW - 28f) * frac, 8f, null,
+                    a.Earned ? UiKit.Ok : UiKit.Cyan);
+            }
+
+            return y + 20f;
+        }
+
         private float BuildStoryList()
         {
             float y = 8f;
@@ -2777,7 +2882,7 @@ namespace BlocksBeyondTheStars.Client
                 _systemMap = SystemMapWidget.Create(_detail, 40, y, 500, 380);
                 string sel = !string.IsNullOrEmpty(_selected) && _selected.StartsWith("body:", System.StringComparison.Ordinal)
                     ? _selected.Substring(5) : string.Empty;
-                _systemMap.Show(sys.Bodies, map.ActiveLocationId, sel);
+                _systemMap.Show(sys.Bodies, map.ActiveLocationId, sel, MarkerColorOf);
                 y += 396f;
             }
 
@@ -2809,6 +2914,32 @@ namespace BlocksBeyondTheStars.Client
             bool here = body.Id == map.ActiveLocationId;
             UiKit.AddText(_detail, 8, y, 620, 28, here ? L("ui.map.here") : body.Status, 20, here ? UiKit.Cyan : UiKit.CyanDim, TextAnchor.UpperLeft);
             y += 40f;
+
+            // Colour-mark this body. Asked for by a player who wanted to mark planets in space in different
+            // colours: unlike the single surface waypoint, any number of bodies can carry a mark at once, and the
+            // star map haloes each in its colour. A fixed named palette (not a colour picker) keeps it readable
+            // and translatable. Purely local — no server involvement.
+            int mark = MarkerColorOf(body.Id);
+            string markLabel = mark >= 0 && mark < PlanetMarkerPalette.Count
+                ? L("ui.marker.marked") + ": " + L(PlanetMarkerPalette.NameKeys[mark])
+                : L("ui.marker.unmarked");
+            var markBtn = UiKit.AddButton(_detail, 8, y, 330, 44, markLabel, () => CyclePlanetMarker(body.Id));
+            if (mark >= 0 && mark < PlanetMarkerPalette.Count && markBtn != null)
+            {
+                // Tint the button itself so the current choice is visible without reading the label.
+                var img = markBtn.GetComponent<UnityEngine.UI.Image>();
+                if (img != null)
+                {
+                    img.color = Color.Lerp(img.color, PlanetMarkerPalette.Colors[mark], 0.55f);
+                }
+            }
+
+            if (mark >= 0)
+            {
+                UiKit.AddButton(_detail, 346, y, 180, 44, L("ui.marker.clear"), () => SetPlanetMarker(body.Id, -1));
+            }
+
+            y += 52f;
 
             // A space station: show its owner, board it (if visited), and rename it (if it's yours).
             if (isStation)
@@ -3303,6 +3434,40 @@ namespace BlocksBeyondTheStars.Client
         }
 
         private string L(string key) => Game?.Localizer?.Get(key) ?? key;
+
+        // --- Coloured planet marks in the star map ---------------------------------------------------------
+        // A player wanted to mark planets in space, each in its own colour — several at once, unlike the single
+        // surface waypoint. Stored locally in ClientSettings (never sent to the server) and grouped by world, so
+        // marks from one save don't bleed into another (body ids like "sys0-p5" repeat across saves).
+
+        /// <summary>The save these marks belong to. Set when a local world is started or hosted; for a remote
+        /// server it keeps the last local name, which only ever groups marks slightly oddly — they stay local
+        /// cosmetics either way.</summary>
+        private string MarkerWorld => Menu?.Settings?.LastWorld ?? string.Empty;
+
+        /// <summary>The colour index marking a body, or -1 when unmarked.</summary>
+        private int MarkerColorOf(string bodyId)
+            => Menu?.Settings?.GetPlanetMarker(MarkerWorld, bodyId) ?? -1;
+
+        /// <summary>Steps a body through the palette and off the end back to unmarked, so one button both marks
+        /// and recolours — the fewest controls for the youngest player.</summary>
+        private void CyclePlanetMarker(string bodyId)
+        {
+            int next = MarkerColorOf(bodyId) + 1;
+            SetPlanetMarker(bodyId, next >= PlanetMarkerPalette.Count ? -1 : next);
+        }
+
+        private void SetPlanetMarker(string bodyId, int color)
+        {
+            if (Menu?.Settings == null)
+            {
+                return;
+            }
+
+            Menu.Settings.SetPlanetMarker(MarkerWorld, bodyId, color);
+            Menu.Settings.Save();
+            RebuildDetail(); // redraw the button label/tint and re-halo the orrery
+        }
 
         /// <summary>A mission's display title: FreeText (player missions, L3 LLM board texts) verbatim,
         /// otherwise the locale key resolved.</summary>

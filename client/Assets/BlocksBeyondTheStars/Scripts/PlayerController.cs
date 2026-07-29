@@ -87,6 +87,9 @@ namespace BlocksBeyondTheStars.Client
         // Placement orientation override for shaped building blocks: -1 = auto (the server orients from the
         // surface built against), 0..5 = a forced up-face cycled with the RotateShape key. Sent on each place.
         private int _placeUpFace = -1;
+
+        /// <summary>Explicit quarter-turn (0..3) for the next shaped placement; -1 = derive it from facing.</summary>
+        private int _placeYaw = -1;
         private float _verticalVelocity;
         private float _moveSendTimer;
         private bool _spawned;
@@ -329,15 +332,43 @@ namespace BlocksBeyondTheStars.Client
                 ApplyCameraMode();
             }
 
-            // Rotate the held building shape's placement orientation: auto (-1) → the 6 up-faces → auto.
-            // Only cycles when a shaped block is selected (so it never clashes with RepairWreck on the same key).
+            // Rotate the held building shape's placement orientation. The key walks the orientations in the order
+            // a builder actually wants them: first the four QUARTER TURNS about the current up-face (turning a
+            // staircase to face another way — what a player asked for: "Ich will das Treppen in verschiedenen
+            // Winkeln platzierbar sind"), then on to the next up-face, and finally back to Auto.
+            //
+            // Yaw used to be taken solely from where the player was looking, so getting the turn you wanted meant
+            // standing in a particular direction — which does not work when you are building into a corner. The
+            // shape descriptor has always stored yaw × up-face (24 orientations); this just hands the player the
+            // controls. Only cycles for a shaped block, so it never clashes with RepairWreck on the same key.
             if (InputMap.Down(InputAction.RotateShape))
             {
                 string held = Game != null ? Game.ItemInSlot(Game.SelectedHotbarSlot) : null;
                 if (!string.IsNullOrEmpty(held) && BlocksBeyondTheStars.Shared.State.ItemKey.Shape(held) > 0)
                 {
-                    _placeUpFace = _placeUpFace >= 5 ? -1 : _placeUpFace + 1;
-                    string label = _placeUpFace < 0 ? "Auto" : UpFaceLabel(_placeUpFace);
+                    if (_placeUpFace < 0)
+                    {
+                        _placeUpFace = 0; // leaving Auto: start at +Y up, no turn
+                        _placeYaw = 0;
+                    }
+                    else if (_placeYaw < 3)
+                    {
+                        _placeYaw++; // another quarter turn about the same up-face
+                    }
+                    else if (_placeUpFace < 5)
+                    {
+                        _placeUpFace++; // tipped onto the next face, turns start over
+                        _placeYaw = 0;
+                    }
+                    else
+                    {
+                        _placeUpFace = -1; // back to Auto (orient from the surface built against)
+                        _placeYaw = -1;
+                    }
+
+                    string label = _placeUpFace < 0
+                        ? (Game.Localizer?.Get("hud.shape.auto") ?? "Auto")
+                        : $"{UpFaceLabel(_placeUpFace)} · {_placeYaw * 90}°";
                     Game.ShowMessage(string.Format(Game.Localizer?.Get("hud.shape.orient") ?? "Shape orientation: {0}", label));
                 }
             }
@@ -1194,6 +1225,143 @@ namespace BlocksBeyondTheStars.Client
             _verticalVelocity = 0f;
         }
 
+        // --- Never fall out of the world -----------------------------------------------------------------
+        // Reported by a player: "Beim Bauen bin ich von einem Block gefallen, ich wollte mich mit einem Block
+        // retten, doch beim Platzieren war ich an der Stelle des Blocks und bin durch ihn durchgefallen.
+        // Daraufhin bin ich durch die Blöcke durchgefallen ohne Ende."
+        //
+        // The server deliberately ALLOWS placing into your own feet cell so you can pillar-jump, on the
+        // assumption that "the client collider just lifts you onto the new block". That holds at rest or on the
+        // way up — but not in a fast fall: the capsule ends up inside the new solid cell with a large downward
+        // velocity, and Unity's depenetration resolves it downward, straight through the blocks below.
+
+        /// <summary>The last position at which the player stood safely on the ground — the anchor the
+        /// out-of-world guard restores to.</summary>
+        private Vector3 _lastSafeGround;
+        private bool _hasSafeGround;
+
+        /// <summary>Consecutive frames spent stuck inside solid geometry (see <see cref="GuardAgainstFallingOut"/>).</summary>
+        private int _embeddedFrames;
+
+        /// <summary>Frames of being inside a block before the guard yanks the player back. A couple of frames of
+        /// overlap is normal while a chunk re-meshes; a persistent overlap is a desync we must not ride out.</summary>
+        private const int EmbeddedFramesBeforeRescue = 12;
+
+        /// <summary>Below this the player has left the world for good — nothing is generated down here (it mirrors
+        /// the server's build-band floor), so there is nothing left to land on.</summary>
+        private const float OutOfWorldY = -2100f;
+
+        /// <summary>
+        /// A block just became solid where the player is standing. Lift them onto its top instead of leaving
+        /// Unity's depenetration to guess a direction — guessing "down" is what made a player fall through the
+        /// world after saving themselves mid-fall with a block. Called for every block change, so it also covers
+        /// another player or a server path filling the cell.
+        /// </summary>
+        public void LiftOutOfBlockAt(int cellX, int cellY, int cellZ)
+        {
+            if (_controller == null || !_controller.enabled || (Game != null && Game.Spectating))
+            {
+                return;
+            }
+
+            // Does the cell overlap the capsule's own column? Feet at transform.position, head StandHeight above.
+            var pos = transform.position;
+            if (Mathf.FloorToInt(pos.x) != cellX || Mathf.FloorToInt(pos.z) != cellZ)
+            {
+                return;
+            }
+
+            float feet = pos.y;
+            float head = pos.y + (_crouched ? CrouchHeight : StandHeight);
+            if (cellY + 1f <= feet + 0.001f || cellY >= head - 0.001f)
+            {
+                return; // entirely below the feet or above the head — no overlap
+            }
+
+            SnapTo(new Vector3(pos.x, cellY + 1f, pos.z));
+        }
+
+        /// <summary>
+        /// Last line of defence against ending up outside the world: remembers the last spot the player stood on
+        /// safely and restores it if they spend several frames inside solid geometry or drop below the world
+        /// floor. Independent of any particular cause — whatever desync puts the player inside a block, this
+        /// gets them out instead of letting them fall forever.
+        /// </summary>
+        private void GuardAgainstFallingOut(bool grounded, bool inWater, bool onLadder)
+        {
+            // A climbing player legitimately stands INSIDE the ladder cell, and a swimmer inside water — neither
+            // is "stuck in geometry". Observers pass through everything by design.
+            if (onLadder || inWater || (Game != null && Game.Spectating))
+            {
+                _embeddedFrames = 0;
+                return;
+            }
+
+            // Fell out of the bottom of the world — nothing below will ever stop us.
+            if (transform.position.y < OutOfWorldY)
+            {
+                if (_hasSafeGround)
+                {
+                    SnapTo(_lastSafeGround);
+                }
+
+                _embeddedFrames = 0;
+                return;
+            }
+
+            // Solid at chest height means the capsule is inside geometry, not merely brushing it. Only blocks
+            // that really collide count — walking through grass or past a wall torch is not being stuck.
+            bool embedded = IsCollidingKey(BlockKeyAt(transform.position + Vector3.up * 0.9f));
+            if (embedded)
+            {
+                if (++_embeddedFrames >= EmbeddedFramesBeforeRescue && _hasSafeGround)
+                {
+                    SnapTo(_lastSafeGround);
+                    _embeddedFrames = 0;
+                }
+
+                return;
+            }
+
+            _embeddedFrames = 0;
+
+            // Standing on real ground with clear space around us: this is a spot worth coming back to.
+            if (grounded && _verticalVelocity <= 0f)
+            {
+                _lastSafeGround = transform.position;
+                _hasSafeGround = true;
+            }
+        }
+
+        /// <summary>
+        /// Keeps the auto-step from punching the player's head into a low ceiling. The 1.8 m capsule leaves only
+        /// ~0.14 m of clearance in a 2-block-high gap, and a 0.6 m step sweep eats far more than that — so the
+        /// player wedged and could not walk through a 2-high opening they had built (reported as "Das 2 Blöcke
+        /// Problem"; the earlier skin-width fix only removed part of the cause). Step height is therefore capped
+        /// to the headroom actually available, which still climbs slabs and stair treads in the open.
+        /// </summary>
+        private void UpdateStepOffset()
+        {
+            float capsuleTop = _crouched ? CrouchHeight : StandHeight;
+
+            // Walk upward from the head in step-sized samples and stop at the first solid cell.
+            float headroom = DefaultStepOffset;
+            for (float probe = 0.1f; probe <= DefaultStepOffset + 0.05f; probe += 0.1f)
+            {
+                if (IsCollidingKey(BlockKeyAt(transform.position + Vector3.up * (capsuleTop + probe))))
+                {
+                    headroom = Mathf.Max(0f, probe - 0.1f);
+                    break;
+                }
+            }
+
+            _controller.stepOffset = Mathf.Min(DefaultStepOffset, headroom);
+        }
+
+        /// <summary>The step height used in the open — matches the value WorldRig sets up so a slab (0.5) and each
+        /// stair tread are walked up without jumping.</summary>
+        private const float DefaultStepOffset = 0.6f;
+
         // --- Observer mode (issue #487) -------------------------------------------------------------
 
         /// <summary>Base flight speed while observing (blocks/s). Deliberately not much faster than a walk by
@@ -1770,7 +1938,14 @@ namespace BlocksBeyondTheStars.Client
                 }
             }
 
+            // Cap the auto-step to the headroom above the head before moving, so a 2-block-high opening stays
+            // walkable instead of wedging the capsule (see UpdateStepOffset).
+            UpdateStepOffset();
+
             _controller.Move(move * Time.deltaTime);
+
+            // Last line of defence: if that move left us inside geometry (or below the world), get back out.
+            GuardAgainstFallingOut(grounded, inWater, onLadder);
 
             // Round worlds: latitude (Z) wraps seamlessly like longitude now — the old invisible pole
             // barrier is gone. The transform runs unbounded in both axes; the server canonicalises the
@@ -1878,6 +2053,18 @@ namespace BlocksBeyondTheStars.Client
         /// sink through).</summary>
         private static bool IsSolidKey(string key)
             => !string.IsNullOrEmpty(key) && key != "air" && key != "water" && key != "lava";
+
+        /// <summary>
+        /// A block that actually has a COLLIDER — i.e. one the capsule can be blocked by or stuck inside.
+        /// Cross-billboard props (small flora and the torch) are meshed without a collider on purpose, so the
+        /// player walks straight through them; treating them as solid would make the out-of-world guard think a
+        /// player standing in a grass tuft (or next to a wall torch) was embedded in geometry, and would make a
+        /// torch overhead cancel the auto-step.
+        /// </summary>
+        private static bool IsCollidingKey(string key)
+            => IsSolidKey(key)
+               && key != "torch"
+               && !key.StartsWith("flora_", System.StringComparison.Ordinal);
 
         /// <summary>Whether there is solid footing just past the player's edge in a horizontal direction — used by
         /// the sneak edge-stop. Samples a little ahead of the capsule and allows a single step-down (so you can
@@ -2133,7 +2320,7 @@ namespace BlocksBeyondTheStars.Client
                     }
                     else
                     {
-                        Game.Network.SendPlace(placeCell.x, placeCell.y, placeCell.z, item, upFace: _placeUpFace);
+                        Game.Network.SendPlace(placeCell.x, placeCell.y, placeCell.z, item, upFace: _placeUpFace, yaw: _placeYaw);
                     }
 
                     TriggerSwing();

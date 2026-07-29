@@ -76,6 +76,10 @@ namespace BlocksBeyondTheStars.Client
         public event Action<MissionResult>? MissionResultReceived;
         public event Action<RespawnNotice>? RespawnNoticeReceived;
         public event Action<RespawnOptions>? RespawnOptionsReceived;
+
+        /// <summary>Whether the world is actually held, and whether the server allowed the request at all
+        /// (it declines with more than one player joined).</summary>
+        public event Action<PauseState>? PauseStateReceived;
         public event Action<ServerRules>? ServerRulesReceived;
 
         // Multiplayer presence (M24).
@@ -124,6 +128,16 @@ namespace BlocksBeyondTheStars.Client
         // First-scan ledger backing the Codex "Discoveries" chapter (#484): a full snapshot on join,
         // then a one-entry delta per first-time scan.
         public event Action<DiscoveryLog>? DiscoveryLogReceived;
+
+        /// <summary>The player's achievements with live progress: a full snapshot on join and whenever a
+        /// watched counter moves.</summary>
+        public event Action<AchievementList>? AchievementsReceived;
+
+        /// <summary>One achievement just earned — the cue for the celebration toast.</summary>
+        public event Action<AchievementUnlocked>? AchievementUnlockedReceived;
+
+        /// <summary>An achievement is due but its reward has nowhere to go; it stays claimable.</summary>
+        public event Action<AchievementRewardDeferred>? AchievementRewardDeferredReceived;
 
         // Ship AI companion "VEGA": onboarding/advisor/story lines + the active objective chip.
         public event Action<ShipAiLine>? ShipAiLineReceived;
@@ -200,8 +214,17 @@ namespace BlocksBeyondTheStars.Client
 
         public void SendMine(int x, int y, int z) => Send(new MineBlockIntent { X = x, Y = y, Z = z });
 
-        public void SendPlace(int x, int y, int z, string itemKey, string? label = null, int upFace = -1)
-            => Send(new PlaceBlockIntent { X = x, Y = y, Z = z, ItemKey = itemKey, Label = label ?? string.Empty, UpFace = upFace });
+        public void SendPlace(int x, int y, int z, string itemKey, string? label = null, int upFace = -1, int yaw = -1)
+            => Send(new PlaceBlockIntent
+            {
+                X = x,
+                Y = y,
+                Z = z,
+                ItemKey = itemKey,
+                Label = label ?? string.Empty,
+                UpFace = upFace,
+                Yaw = yaw,
+            });
 
         public void SendSetBeaconLabel(int beaconId, string label)
             => Send(new SetBeaconLabelIntent { BeaconId = beaconId, Label = label ?? string.Empty });
@@ -398,6 +421,10 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>E on a placed heal tank: make it the custom spawn point (issue #461).</summary>
         public void SendSetSpawnPoint(int x, int y, int z) => Send(new SetSpawnPointIntent { X = x, Y = y, Z = z });
 
+        /// <summary>Ask the server to hold (or release) the world while the local player sits in a menu. Only
+        /// honoured while they are the sole player — the answer arrives as <see cref="PauseStateReceived"/>.</summary>
+        public void SendPause(bool paused) => Send(new PauseIntent { Paused = paused });
+
         /// <summary>Answers a deferred death respawn: wake at the home spawn or at the ship (issue #462).</summary>
         public void SendRespawnChoice(bool useCustomSpawn) => Send(new RespawnChoiceIntent { UseCustomSpawn = useCustomSpawn });
 
@@ -551,6 +578,7 @@ namespace BlocksBeyondTheStars.Client
                 case MissionResult m: MissionResultReceived?.Invoke(m); break;
                 case RespawnNotice m: RespawnNoticeReceived?.Invoke(m); break;
                 case RespawnOptions m: RespawnOptionsReceived?.Invoke(m); break;
+                case PauseState m: PauseStateReceived?.Invoke(m); break;
                 case ServerRules m: ServerRulesReceived?.Invoke(m); break;
                 case PlayerPresence m: PlayerPresenceReceived?.Invoke(m); break;
                 case PlayerLeft m: PlayerLeftReceived?.Invoke(m); break;
@@ -574,6 +602,9 @@ namespace BlocksBeyondTheStars.Client
                 case ShipAiLine m: ShipAiLineReceived?.Invoke(m); break;
                 case OreScanResult m: OreScanReceived?.Invoke(m); break;
                 case DiscoveryLog m: DiscoveryLogReceived?.Invoke(m); break;
+                case AchievementList m: AchievementsReceived?.Invoke(m); break;
+                case AchievementUnlocked m: AchievementUnlockedReceived?.Invoke(m); break;
+                case AchievementRewardDeferred m: AchievementRewardDeferredReceived?.Invoke(m); break;
                 case AllianceList m: AllianceListReceived?.Invoke(m); break;
                 case AllianceRequestNotice m: AllianceRequestReceived?.Invoke(m); break;
                 case TameProgress m: TameProgressReceived?.Invoke(m); break;

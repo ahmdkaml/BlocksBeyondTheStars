@@ -944,9 +944,113 @@ public sealed partial class GameServer
 
     // ---------------- Tick ----------------
 
+    // --- Singleplayer pause ---------------------------------------------------------------------------
+    // "Im Einzelspieler sollte das Spiel pausiert werden, wenn man in das Menü geht." The Esc dialog was
+    // already titled "Pause" with a "Resume" button but nothing ever stopped.
+
+    /// <summary>True while a lone player has the world held from their menu. Only the simulation stops — the
+    /// transport keeps being polled, or the unpause could never arrive.</summary>
+    private bool _paused;
+
+    /// <summary>Seconds the world has been held. A client that dies with its menu open must not leave the world
+    /// frozen forever (it would also never save), so the hold expires.</summary>
+    private double _pausedFor;
+
+    /// <summary>Longest a pause may last before the world resumes on its own.</summary>
+    private const double MaxPauseSeconds = 30 * 60;
+
+    /// <summary>True while the world is holding — for tests and the /status snapshot.</summary>
+    public bool IsPaused => _paused;
+
+    /// <summary>Drives the pause intent for tests (the client sends it when the Esc menu opens/closes).</summary>
+    public void PauseForTest(PlayerSession session, bool paused)
+        => HandlePause(session, new PauseIntent { Paused = paused });
+
+    /// <summary>Number of players who have completed the join handshake.</summary>
+    private int JoinedCount
+    {
+        get
+        {
+            int n = 0;
+            foreach (var s in _sessions.Values)
+            {
+                if (s.Joined)
+                {
+                    n++;
+                }
+            }
+
+            return n;
+        }
+    }
+
+    /// <summary>
+    /// Honours a pause request only while the asking player is alone in the world — one player must never be
+    /// able to freeze a dedicated or hosted world under everybody else. The answer goes back either way so the
+    /// client can keep its menu honest instead of claiming a pause it did not get.
+    /// </summary>
+    private void HandlePause(PlayerSession session, PauseIntent intent)
+    {
+        bool allowed = JoinedCount <= 1;
+        if (allowed)
+        {
+            if (intent.Paused && !_paused)
+            {
+                SaveAll(); // a held world is a natural, safe save point — and covers a client that never comes back
+            }
+
+            _paused = intent.Paused;
+            _pausedFor = 0;
+        }
+
+        Send(session, new PauseState { Paused = _paused, Allowed = allowed });
+    }
+
+    /// <summary>Lifts a pause that must not continue: someone else joined, or the holder has been gone too long.
+    /// Returns true when the world is (still) held after this check.</summary>
+    private bool HoldingPause(double deltaSeconds)
+    {
+        if (!_paused)
+        {
+            return false;
+        }
+
+        // The hold only makes sense for exactly the one player who asked for it: a second player arriving always
+        // wins over one player's menu, and a holder who disconnected (or quit to the main menu) leaves nobody to
+        // hold it for — a dedicated world must not sit frozen because someone left with the menu open.
+        if (JoinedCount != 1)
+        {
+            _paused = false;
+            _pausedFor = 0;
+            Broadcast(new PauseState { Paused = false, Allowed = false });
+            return false;
+        }
+
+        _pausedFor += deltaSeconds;
+        if (_pausedFor >= MaxPauseSeconds)
+        {
+            _log.Info("Pause expired — resuming the world.");
+            _paused = false;
+            _pausedFor = 0;
+            Broadcast(new PauseState { Paused = false, Allowed = true });
+            return false;
+        }
+
+        return true;
+    }
+
     public void Tick(double deltaSeconds)
     {
         _transport.Poll();
+
+        // A held world still pumps the network (the unpause has to get through) and still runs the moderation /
+        // maintenance intake, but no simulation advances: no hunger, no creatures, no weather, no clock.
+        if (HoldingPause(deltaSeconds))
+        {
+            Guard("Moderation", deltaSeconds, TickModeration);
+            Guard("Maintenance", deltaSeconds, TickMaintenance);
+            return;
+        }
         Guard("TickSpace", deltaSeconds, TickSpace); // space instances are keyed by location and handle their own players
 
         // Tick each occupied world with the Active cursor set to it, so its environment/fauna/fluids/
@@ -2032,6 +2136,7 @@ public sealed partial class GameServer
             case TractorPullIntent pull: HandleTractorPull(session, pull); break;
             case DoorInteractIntent door: HandleDoorInteract(session, door); break;
             case SetSpawnPointIntent spawnPoint: HandleSetSpawnPoint(session, spawnPoint); break;
+            case PauseIntent pause: HandlePause(session, pause); break;
             case RespawnChoiceIntent respawnChoice: HandleRespawnChoice(session, respawnChoice); break;
             case UnlockGameIntent unlockGame: HandleUnlockGame(session, unlockGame); break;
             case MinigameResultIntent miniResult: HandleMinigameResult(session, miniResult); break;
@@ -2305,6 +2410,10 @@ public sealed partial class GameServer
         SendFactories(session);   // factories on the join world (animated machines + production terminals)
         SendGameUnlocks(session); // the player's downloaded-games collection (per-player, persisted)
         SendDiscoveryLog(session); // the first-scan ledger, for the Codex "Discoveries" chapter (#484)
+
+        // Achievements: settle anything that came due while a reward had nowhere to go, retro-award entries that
+        // were added to the data file since this save was made, and send the list with live progress.
+        SettleAchievements(session);
         SendBeacons(session);
         SendBeams(session); // placed beam blocks (teleporter pads) on the join world
         SendBases(session); // player-founded bases on the join world (Grundstein markers)
@@ -2546,11 +2655,21 @@ public sealed partial class GameServer
 
     /// <summary>Places a block from a held item for a player (test/util entrypoint). An optional label rides
     /// along for labelled blocks (a radio beacon).</summary>
-    public void PlaceBlock(string playerId, int x, int y, int z, string itemKey, string? label = null)
+    public void PlaceBlock(string playerId, int x, int y, int z, string itemKey, string? label = null,
+        int upFace = -1, int yaw = -1)
     {
         if (FindSessionByPlayerId(playerId) is { } session)
         {
-            HandlePlace(session, new PlaceBlockIntent { X = x, Y = y, Z = z, ItemKey = itemKey, Label = label ?? string.Empty });
+            HandlePlace(session, new PlaceBlockIntent
+            {
+                X = x,
+                Y = y,
+                Z = z,
+                ItemKey = itemKey,
+                Label = label ?? string.Empty,
+                UpFace = upFace,
+                Yaw = yaw,
+            });
         }
     }
 
@@ -2786,7 +2905,13 @@ public sealed partial class GameServer
         }
 
         var pool = new MaterialPool(_content, session.State, _ship);
-        BreakBlockAt(session, pos, def, pool);
+        if (!BreakBlockAt(session, pos, def, pool))
+        {
+            // Nothing was mined — say so instead of eating the drop. The accumulated progress is kept so the
+            // block breaks on the next swing once the player has made room.
+            Reject(session, "mine", "@inventory_full");
+            return;
+        }
 
         // Powerful drills clear a small area at once.
         if (tool.MiningRadius > 0)
@@ -2799,12 +2924,44 @@ public sealed partial class GameServer
     }
 
     /// <summary>Breaks one block: clears it, banks its drops in the pool, broadcasts the change,
-    /// schedules flora regrowth and advances mining missions. Clears any accumulated mining progress.</summary>
-    private void BreakBlockAt(PlayerSession session, Vector3i pos, BlockDefinition def, MaterialPool pool)
+    /// schedules flora regrowth and advances mining missions. Clears any accumulated mining progress.
+    /// <para>
+    /// Returns <c>false</c> — changing nothing at all — when the drops would not fit in the player's
+    /// inventory (or cargo when aboard). Mining used to clear the cell and then silently destroy whatever
+    /// did not fit, so a full inventory quietly ate every drop; refusing the break is the only lossless
+    /// option while there are no ground items to spill onto.
+    /// </para></summary>
+    private bool BreakBlockAt(PlayerSession session, Vector3i pos, BlockDefinition def, MaterialPool pool)
     {
         var current = _world.GetBlock(pos);
         var (dropTint, dropGlow) = _world.GetModifier(pos); // read the dye/glow BEFORE clearing, to recover it into the drop
         int dropShape = ShapeCode.ShapeOf(_world.GetShape(pos)); // recover the FORM (orientation is re-derived on re-place)
+
+        // Work out exactly what this break would yield, then make sure it all fits before touching the world.
+        var yield = new List<ItemAmount>();
+        bool toxicFloraDrop = IsFlora(current.Value)
+            && _floraSpeciesByBlock.TryGetValue(current.Value, out var toxSp) && toxSp.Toxic;
+        foreach (var drop in def.Drops)
+        {
+            string item = toxicFloraDrop && drop.Item == "berries" ? "toxic_berries" : drop.Item;
+            if ((dropTint != 0 || dropGlow != 0 || dropShape != 0) && _content.GetItem(item)?.PlacesBlock == def.Key)
+            {
+                item = ItemKey.Compose(item, dropTint, dropGlow, dropShape);
+            }
+
+            yield.Add(new ItemAmount(item, drop.Count));
+        }
+
+        if (def.Key == "crate")
+        {
+            yield.AddRange(CrateContentsAt(pos)); // a mined crate hands its stored stacks back too
+        }
+
+        if (!pool.CanFit(yield))
+        {
+            return false;
+        }
+
         // Attribution (issue #490): removing a block is an edit like any other, and it is the one that grief
         // reports are actually about ("someone tore my house down") — so the remover is recorded as the owner.
         _world.SetBlock(pos, BlockId.Air, owner: session.State.PlayerId);
@@ -2827,19 +2984,11 @@ public sealed partial class GameServer
             RemoveBeamAt(pos); // mining a beam block forgets its name/owner + map marker (teleporter pad)
         }
 
-        // A toxic flora species yields poisonous berries instead of edible ones (the scan warns which is which).
-        bool toxicFlora = IsFlora(current.Value)
-            && _floraSpeciesByBlock.TryGetValue(current.Value, out var fsp) && fsp.Toxic;
-        foreach (var drop in def.Drops)
+        // Bank the yield computed (and capacity-checked) above. The crate case already handed its own stacks
+        // over in RemoveCrateContainer, so only the block's own drops are added here.
+        foreach (var drop in yield.Take(def.Drops.Count))
         {
-            string item = toxicFlora && drop.Item == "berries" ? "toxic_berries" : drop.Item;
-            // If this cell was dyed/glowing/shaped and the drop is the block itself, return it still coloured + formed.
-            if ((dropTint != 0 || dropGlow != 0 || dropShape != 0) && _content.GetItem(item)?.PlacesBlock == def.Key)
-            {
-                item = ItemKey.Compose(item, dropTint, dropGlow, dropShape);
-            }
-
-            pool.Add(item, drop.Count);
+            pool.Add(drop.Item, drop.Count);
         }
 
         BroadcastToWorld(new BlockChanged { X = pos.X, Y = pos.Y, Z = pos.Z, Block = BlockId.AirValue });
@@ -2857,6 +3006,7 @@ public sealed partial class GameServer
 
         OnBlockMined(session, def.Key);
         ShipAiOnMine(session); // VEGA onboarding: the "mine a few blocks" stage counts every break
+        return true;
     }
 
     /// <summary>Area mining for powerful drills: breaks the mineable, unprotected blocks around a centre.</summary>
@@ -2885,8 +3035,28 @@ public sealed partial class GameServer
                         continue;
                     }
 
+                    // A block whose drops no longer fit is simply left standing (BreakBlockAt returns false
+                    // without changing anything) — the area sweep stops yielding rather than destroying loot.
                     BreakBlockAt(session, p, d, pool);
                 }
+    }
+
+    /// <summary>
+    /// Banks loot from an event that cannot be refused after the fact — a creature is already dead, a wreck
+    /// already burst. Anything that does not fit is genuinely lost, so the player is TOLD instead of the drop
+    /// vanishing in silence (the complaint that started this: "Items futsch"). Prefer a capacity check up
+    /// front (<see cref="MaterialPool.CanFit"/>) wherever the action can still be refused.
+    /// </summary>
+    private void BankLoot(PlayerSession session, MaterialPool pool, IEnumerable<ItemAmount> drops)
+    {
+        foreach (var drop in drops)
+        {
+            pool.Add(drop.Item, drop.Count);
+        }
+
+        // Reuses the same rate-limited "your pockets are full" hint as every other overflow site (#600), rather
+        // than a second warning channel saying the same thing.
+        WarnIfPoolOverflowed(session, pool);
     }
 
     /// <summary>Auto-orients a placed shape from the surface it was built against: the shape's base rests on
@@ -2932,6 +3102,17 @@ public sealed partial class GameServer
         if (!WithinBuildHeight(pos.Y))
         {
             Reject(session, "place", "Out of the buildable height range.");
+            return;
+        }
+
+        // A torch is an open flame: it needs air to burn. On an airless body (atmosphere "none" — asteroids and
+        // the like) there is nothing to sustain it, so it is refused with a reason the player can act on instead
+        // of being placed as a dud that mysteriously gives no light. A toxic atmosphere is fine — you need a
+        // suit, the flame does not. Checked HERE, before the item is consumed further down, so a refused torch
+        // stays in the pack.
+        if (blockDef.Key == "torch" && !AtmospherePresent)
+        {
+            Reject(session, "place", "@no_air");
             return;
         }
 
@@ -3041,9 +3222,14 @@ public sealed partial class GameServer
         }
 
         // A door isn't a voxel block — it fills the (air) cell as a server door entity (Task 5 Stage 3c).
-        if (blockDef.Key == "door_hinge" || blockDef.Key == "door_slide")
+        if (blockDef.Key == "door_hinge" || blockDef.Key == "door_slide" || blockDef.Key == "door_wood")
         {
-            PlaceDoor(session, pos, blockDef.Key == "door_slide" ? "slide" : "hinge");
+            PlaceDoor(session, pos, blockDef.Key switch
+            {
+                "door_slide" => "slide",
+                "door_wood" => "wood", // cheap early-game hinge door, swings by hand like the metal one
+                _ => "hinge",
+            });
             SendInventory(session);
             return;
         }
@@ -3066,7 +3252,12 @@ public sealed partial class GameServer
             int shapeIndex = ItemKey.Shape(place.ItemKey);
             if (ShapeCode.IsValidShape(shapeIndex))
             {
-                int facing = ((int)System.MathF.Round(session.State.Yaw / 90f)) & 3;
+                // Yaw: the client may send an explicit quarter-turn (rotate key); otherwise it follows where the
+                // player is looking. An explicit turn is what lets you build stairs into a corner without having
+                // to stand in a particular direction to get the angle you want.
+                int facing = place.Yaw >= 0 && place.Yaw <= 3
+                    ? place.Yaw
+                    : ((int)System.MathF.Round(session.State.Yaw / 90f)) & 3;
                 // Orientation: the client may send an explicit rotation override (rotate key); otherwise the
                 // shape auto-orients so its base rests on the surface it was built against (floor → +Y, i.e.
                 // unchanged; walls/ceiling tilt it). up-face × yaw give the full 24 orientations.
@@ -3101,6 +3292,7 @@ public sealed partial class GameServer
         }
 
         SendInventory(session);
+        OnAchievementBuild(session);
     }
 
     private void HandleCraft(PlayerSession session, CraftIntent craft)
@@ -3179,10 +3371,23 @@ public sealed partial class GameServer
             return;
         }
 
-        pool.Remove(scaledInputs);
-        foreach (var output in recipe.Outputs)
+        // Room for the RESULT before anything is consumed. Without this the inputs were removed, the
+        // output silently dropped on the floor of a full inventory (MaterialPool.Add's leftover was
+        // ignored) and the client was still told Success = true — a player lost crafted glass AND the
+        // sand that went into it with 24/24 slots occupied and no ship cargo in reach. Checked against
+        // the SCALED outputs so a batch craft that only partly fits is refused as a whole.
+        var scaledOutputs = recipe.Outputs.Select(o => new ItemAmount(o.Item, o.Count * count)).ToList();
+        if (!pool.CanFit(scaledOutputs))
         {
-            pool.Add(output.Item, output.Count * count);
+            // Machine-readable so the client can localize it (same convention as "@need_station:").
+            CraftFail(session, recipe.Key, "@inventory_full");
+            return;
+        }
+
+        pool.Remove(scaledInputs);
+        foreach (var output in scaledOutputs)
+        {
+            pool.Add(output.Item, output.Count);
         }
 
         // Bartering at a settlement/station market stall is a trade with that vendor NPC — remembered (item 14).
@@ -3196,6 +3401,7 @@ public sealed partial class GameServer
         SendInventory(session);
         WarnIfPoolOverflowed(session, pool); // #600: outputs that found no room are gone — say so
         ShipAiOnCraft(session); // VEGA onboarding: first successful craft
+        OnAchievementCraft(session, recipe.Key);
     }
 
     /// <summary>
@@ -3257,6 +3463,14 @@ public sealed partial class GameServer
         if (!pool.Has(inputs))
         {
             CraftFail(session, "tint", glow != 0 ? "Need the material and a crystal." : "Missing material.");
+            return;
+        }
+
+        // The coloured result is a DIFFERENT item key than the source, so it always needs a free slot (or a
+        // matching part-stack). Verify before consuming — otherwise a full inventory eats the material.
+        if (!pool.CanFit(new[] { new ItemAmount(output, count) }))
+        {
+            CraftFail(session, "tint", "@inventory_full");
             return;
         }
 
@@ -3333,6 +3547,14 @@ public sealed partial class GameServer
             return;
         }
 
+        // Same as tinting: the re-formed result carries a different composed key, so it needs room of its
+        // own. Check first — a 1:1 transform must never be able to destroy the material.
+        if (!pool.CanFit(new[] { new ItemAmount(output, count) }))
+        {
+            CraftFail(session, "shape", "@inventory_full");
+            return;
+        }
+
         pool.Remove(inputs);
         pool.Add(output, count);
         Send(session, new CraftResult { Success = true, RecipeKey = "shape" });
@@ -3397,14 +3619,28 @@ public sealed partial class GameServer
             return;
         }
 
-        pool.Remove(new[] { new ItemAmount(itemKey, 1) });
+        // Work out the salvage first so it can be checked for room BEFORE the item is consumed — otherwise
+        // disassembling with a full inventory destroys the item and returns nothing.
+        var salvage = new List<ItemAmount>();
         foreach (var input in recipe.Inputs)
         {
             int recovered = (int)System.Math.Floor(input.Count * DisassemblyRecoveryRate / perCraft);
             if (recovered > 0)
             {
-                pool.Add(input.Item, recovered);
+                salvage.Add(new ItemAmount(input.Item, recovered));
             }
+        }
+
+        if (!pool.CanFit(salvage))
+        {
+            Reject(session, "disassemble", "@inventory_full");
+            return;
+        }
+
+        pool.Remove(new[] { new ItemAmount(itemKey, 1) });
+        foreach (var part in salvage)
+        {
+            pool.Add(part.Item, part.Count);
         }
 
         SendInventory(session);
@@ -4194,7 +4430,13 @@ public sealed partial class GameServer
             return;
         }
 
-        session.State.LandedBodies.Add(body.Id);
+        // Only the FIRST arrival on a body counts toward the explorer achievements — hopping back and forth
+        // between two planets must not farm them.
+        if (session.State.LandedBodies.Add(body.Id))
+        {
+            OnAchievementVisit(session);
+        }
+
         if (!string.IsNullOrEmpty(body.SystemId) && session.State.KnownSystems.Add(body.SystemId))
         {
             RecordStoryMilestone(); // a new star system mapped → story milestone (P3)

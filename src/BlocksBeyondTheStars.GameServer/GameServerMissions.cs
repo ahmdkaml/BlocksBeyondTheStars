@@ -40,6 +40,8 @@ public sealed partial class GameServer
     /// <summary>Called when a player mines a block, to advance any matching Mine objectives.</summary>
     private void OnBlockMined(PlayerSession session, string blockKey)
     {
+        OnAchievementMine(session, blockKey); // "Baue 5 Eisen ab" and friends ride the same event
+
         foreach (var pr in session.State.Missions)
         {
             if (pr.Status != MissionStatus.Active)
@@ -179,6 +181,16 @@ public sealed partial class GameServer
                 MissionFail(session, missionId, "Objectives are not complete yet.");
                 return;
             }
+        }
+
+        // Room for the reward before anything is consumed or the mission is closed out. A turn-in that pays
+        // into a full inventory used to destroy the reward AND the delivered items, with the mission gone.
+        // Refusing leaves the mission claimable, so the player just makes room and hands it in again.
+        // (Depot payouts are the poster's own staked items — checked the same way inside PayoutDepot.)
+        if (def.Source != MissionSource.Player && !pool.CanFit(def.Rewards))
+        {
+            MissionFail(session, missionId, "@inventory_full");
+            return;
         }
 
         // Consume Deliver items.

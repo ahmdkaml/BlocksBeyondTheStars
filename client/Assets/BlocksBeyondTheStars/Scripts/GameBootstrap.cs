@@ -206,6 +206,10 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>An optional world-map waypoint (XZ); the HUD compass points to it when set.</summary>
         public Vector3? Waypoint;
 
+        /// <summary>The player's achievements with live progress, as last sent by the server (authoritative —
+        /// the client never counts anything itself). Empty until the join snapshot arrives.</summary>
+        public NetAchievement[] Achievements { get; private set; } = System.Array.Empty<NetAchievement>();
+
         /// <summary>An optional space-flight nav waypoint (#597), set on the system chart while flying:
         /// either the id of a landable body / space station (snap-to-marker; <see cref="SpaceView"/>
         /// resolves it to a live position) or a free scene-space point. The space radar shows it and the
@@ -841,7 +845,9 @@ namespace BlocksBeyondTheStars.Client
 
         /// <summary>Turns a craft-failure reason into a player-facing line. Station-availability failures arrive
         /// as a machine-readable "@need_station:&lt;station&gt;" token so the client can localize them and name the
-        /// exact station the recipe needs (Severin playtest #2). Other reasons are shown as-is.</summary>
+        /// exact station the recipe needs (Severin playtest #2); "@inventory_full" is the same idea for "the
+        /// result wouldn't fit". Anything else falls back to a generic localized line — the raw English server
+        /// text used to be shown to the player, which read as broken in a German session.</summary>
         private string CraftFailMessage(string reason)
         {
             const string stationPrefix = "@need_station:";
@@ -853,7 +859,55 @@ namespace BlocksBeyondTheStars.Client
                 return template.Replace("{station}", stationName);
             }
 
-            return $"Craft failed: {reason}";
+            if (reason == "@inventory_full")
+            {
+                return Localizer?.Get("ui.craft.inventory_full")
+                    ?? "No room for the result — make space in your inventory first.";
+            }
+
+            Debug.Log($"Craft failed: {reason}"); // keep the exact server reason for diagnosis, not for the player
+            return Localizer?.Get("ui.craft.failed") ?? "That didn't work.";
+        }
+
+        /// <summary>Turns a rejected action into a player-facing line. Reasons the player is expected to act on
+        /// arrive as machine-readable "@token"s so they can be localized; everything else is a developer-facing
+        /// string that stays in the log rather than being pushed at the player as raw English.</summary>
+        private string RejectionMessage(string action, string reason)
+        {
+            if (reason == "@inventory_full")
+            {
+                // Mining says "make space"; picking a door back up is the same situation.
+                return Localizer?.Get(action == "mine" ? "ui.mine.inventory_full" : "ui.craft.inventory_full")
+                    ?? "Inventory full — make space first.";
+            }
+
+            if (reason == "@no_air")
+            {
+                // A torch on an airless body: there is nothing for the flame to burn.
+                return Localizer?.Get("ui.place.no_air")
+                    ?? "There is no air here — a torch only burns on worlds with an atmosphere.";
+            }
+
+            return $"{action}: {reason}";
+        }
+
+        /// <summary>The "you made something" toast. Names the crafted ITEM in the player's language — this used to
+        /// read "Crafted &lt;recipe_key&gt;" in English regardless of language (a German player saw
+        /// "Crafted glass"), which is also how we learned the craft reported success while the item was being
+        /// destroyed by a full inventory.</summary>
+        private string CraftedMessage(string recipeKey)
+        {
+            // "tint" and "shape" are pseudo-recipes for the dye/re-form actions, not entries in recipes.json.
+            var outputs = Content?.GetRecipe(recipeKey)?.Outputs;
+            if (outputs == null || outputs.Count == 0)
+            {
+                return Localizer?.Get("ui.craft.crafted_generic") ?? "Crafted!";
+            }
+
+            string baseKey = BlocksBeyondTheStars.Shared.State.ItemKey.Parse(outputs[0].Item).Base;
+            string itemName = Localizer?.Get($"item.{baseKey}.name") ?? baseKey;
+            string template = Localizer?.Get("ui.craft.crafted") ?? "Crafted {item}";
+            return template.Replace("{item}", itemName);
         }
 
         /// <summary>Rebuilds <see cref="WikiStateJson"/> from the current star map for the wiki's discovery-gated
@@ -1344,6 +1398,30 @@ namespace BlocksBeyondTheStars.Client
                         m.KnowledgeTotal);
                 }
             };
+            // Achievements: the server owns the counters and the payouts; the client just renders them.
+            Network.AchievementsReceived += m =>
+            {
+                Achievements = m?.Items?.ToArray() ?? System.Array.Empty<NetAchievement>();
+            };
+            Network.AchievementUnlockedReceived += m =>
+            {
+                if (m == null || string.IsNullOrEmpty(m.Key))
+                {
+                    return;
+                }
+
+                string name = Localizer?.Get($"achv.{m.Key}.name") ?? m.Key;
+                string template = Localizer?.Get("ui.achv.unlocked") ?? "Achievement unlocked: {name}";
+                LastMessage = template.Replace("{name}", name);
+                ClientAudio.Instance?.Cue("ui_success", 0.9f);
+            };
+            Network.AchievementRewardDeferredReceived += m =>
+            {
+                // Earned but unpaid — say so, because the reward is the point of the achievement.
+                LastMessage = Localizer?.Get("ui.achv.reward_full")
+                    ?? "Achievement earned — but no room for the reward! Make space in your inventory.";
+            };
+
             Network.DiscoveryLogReceived += m =>
             {
                 if (m.Full)
@@ -1381,11 +1459,11 @@ namespace BlocksBeyondTheStars.Client
             };
             Network.RespawnOptionsReceived += m => LastMessage = m.Reason; // deferred death: reason shows under the choice modal
             Network.ServerRulesReceived += m => { Rules = m; LastMessage = $"Mode: {m.GameMode} · PvP: {m.Pvp}"; };
-            Network.CraftCompleted += m => LastMessage = m.Success ? $"Crafted {m.RecipeKey}" : CraftFailMessage(m.Reason);
+            Network.CraftCompleted += m => LastMessage = m.Success ? CraftedMessage(m.RecipeKey) : CraftFailMessage(m.Reason);
             Network.ActionRejected += m =>
             {
                 Debug.Log($"Action '{m.Action}' rejected: {m.Reason}");
-                LastMessage = $"{m.Action}: {m.Reason}";
+                LastMessage = RejectionMessage(m.Action, m.Reason);
 
                 // The server is authoritative: if a dig is rejected because the cell is "already empty", the
                 // client's view of it is stale — a ghost block (a cell some server path cleared to air without a
@@ -1812,11 +1890,37 @@ namespace BlocksBeyondTheStars.Client
             (1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1),
         };
 
+        private PlayerController _playerController;
+
+        /// <summary>The local player rig (created by <see cref="WorldRig"/>), looked up once and cached. Null in
+        /// the menu, and while a world transition is tearing the old rig down.</summary>
+        private PlayerController Player
+        {
+            get
+            {
+                if (_playerController == null)
+                {
+                    _playerController = FindAnyObjectByType<PlayerController>();
+                }
+
+                return _playerController;
+            }
+        }
+
         private void OnBlockChanged(BlocksBeyondTheStars.Networking.Messages.BlockChanged m)
         {
             if (!World.ApplyBlockChange(m.X, m.Y, m.Z, m.Block, m.Tint, m.Glow, m.Shape, out var coord))
             {
                 return;
+            }
+
+            // A cell that just became solid where we are standing must lift us out, not swallow us: the server
+            // allows placing into your own feet cell (pillar jumping), and mid-fall that used to drop the player
+            // straight through the world. Every block change funnels through here, so another player filling the
+            // cell is covered too.
+            if (m.Block != BlockId.AirValue && Player != null)
+            {
+                Player.LiftOutOfBlockAt(m.X, m.Y, m.Z);
             }
 
             _dirty.Add(coord);
