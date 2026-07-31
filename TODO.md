@@ -223,11 +223,13 @@ makes Italian real without announcing it:
   `data/locales/**` change (job summary, not a PR comment: contributions come from forks, where the
   token is read-only).
 
-Coverage today: **it 290/2271 (12.8 %)**, block 290/292 — the two stragglers (`block.torch.name`,
-`block.door_wood.name`) arrived in #618 while the PR was open. Next groups agreed with the contributor:
-`item.*` (346), then the core UI (`ui.menu`/`ui.settings`/`ui.hud`/`ui.craft`, ~200) because that is what
-gates showing "Italiano" in the menu. Still open before the flip: the client `== "de"` gates in the
-DE/EN-only surfaces and a real language picker.
+Coverage after `item.*` part 1 (#645, 2026-07-31): **it 473 keys (20.6 %)**, `block.*` complete at
+296/296. Part 2 (the other 177 `item.*` keys) follows, then the core UI
+(`ui.menu`/`ui.settings`/`ui.hud`/`ui.craft`, ~200) because that is what gates showing "Italiano" in the
+menu. While translating, the contributor caught that `block.beam_block.desc` described a light beam
+although the block is the teleporter pad (#646) — EN/DE fixed in #647, the Italian rename
+("Trave luminosa" → "Piastra di teletrasporto") lands with part 2. Still open before the flip: the
+client `== "de"` gates in the DE/EN-only surfaces and a real language picker.
 
 ### ★ Portal accessibility: labelled fields, announced messages, keyboard forms (#574, 2026-07-30, branch fix/portal-accessibility)
 A community accessibility review by [@SpaleRuby](https://github.com/SpaleRuby) audited the public portal
