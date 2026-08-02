@@ -6944,6 +6944,24 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-08-02): true Sandbox game mode selectable at world creation (#662, PR #663)
+
+The new-world panel's "Creative" was only a head start (everything unlocked, survival still on, crafting
+still paid). The rules layer had carried a real sandbox all along — `GameMode.Creative` drives free
+crafting at every craft/build/repair site, disables oxygen/hunger, and keeps planet enemies + bandits off
+(both gate on `GameMode.Survival`) — but nothing settable ever reached it (only the test-only
+`peaceful-creative` preset). Now wired end to end:
+
+- **`--game-mode <Survival|Creative>`** (`ServerConfig.ApplyCommandLine`) — baked into the save's
+  `RulesOverride` at creation, so the mode persists across relaunches **without** the flag; existing
+  saves keep Survival (default unchanged → no `GameServer.Start` lift needed, unlike #642).
+- **`UiSaveSelect`**: mode row is three buttons — **Explorer / Creative / Sandbox**. Sandbox forces all
+  three creative grants (blueprints moot under free crafting, but all ships + kit keep testing
+  friction-free) and swaps the checklist for a hint text (`ui.save.sandbox_hint`, EN/DE).
+- Launcher passes the flag at world creation only, same pattern as the creative args.
+- Tests: flag parsing (bad value → Survival stays) + mode-persists-across-restart. Non-Slow tier at
+  merge: 1334 server + 147 client, 0-warning Release build.
+
 ## ✅ Done (2026-07-30): binoculars + a thermal upgrade that shows every energy signature (#629/#630, branch feat/binoculars-thermal)
 
 On foot there was no way to look at anything at a distance. Two new craftable tools fix that, and both are
