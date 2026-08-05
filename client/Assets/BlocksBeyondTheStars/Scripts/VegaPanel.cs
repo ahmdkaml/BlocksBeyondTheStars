@@ -19,6 +19,14 @@ namespace BlocksBeyondTheStars.Client
         public GameBootstrap Game;
         public ClientSettings Settings;
 
+        /// <summary>Cinematic staging for the first-spawn prologue (#760), wired by WorldRig. When it can
+        /// stage (aboard, on foot), the Kind-4 pages get letterbox + a camera orbit of the player's ship
+        /// instead of the plain dim; the panel keeps showing the text, subtitle-style.</summary>
+        public PrologueCinematic Cinematic;
+
+        /// <summary>Flashback treatment for Kind-2 memory beats (#762), wired by WorldRig.</summary>
+        public MemoryFlashback Flashback;
+
         private const float CharsPerSecond = 42f;
         private const float AutoAdvanceSeconds = 25f; // fallback so an unattended line never blocks forever
         private const KeyCode ContinueKey = KeyCode.N;
@@ -58,9 +66,23 @@ namespace BlocksBeyondTheStars.Client
         // only prologue extras now are a dim behind the panel and Esc-to-skip.
         private Image _dim;
         private bool _currentIsPrologue;
+        private bool _chromeOn; // edge detection for the chrome side effects (chip hide/restore)
+
+        // Staged-prologue state (#760): whether the cinematic took the stage for this prologue run, and
+        // which of the Kind-4 lines is up (drives the camera legs). Reset when the prologue ends, so a
+        // deliberately restarted onboarding stages again.
+        private bool _prologueStarted;
+        private bool _prologueStaged;
+        private int _prologueLineIndex;
 
         private string _objectiveKey = string.Empty;
         private int _objProgress, _objTarget;
+
+        // VEGA's non-verbal vocoder voice (#761): short ElevenLabs chatter variants chained while a
+        // page types out. No words → language-independent, nothing to re-record when texts change.
+        private AudioClip[] _chatterClips;
+        private AudioSource _chatterSource;
+        private WorldLoadingOverlay _worldVeil; // chatter never plays behind the loading curtain
 
         // How many break reminders have fired this session — drives the escalating wording and the next due time.
         private int _remindersSent;
@@ -119,6 +141,22 @@ namespace BlocksBeyondTheStars.Client
             {
                 Game.Network.ShipAiLineReceived += OnLine;
             }
+
+            // Load every bundled chatter variant (vega_chatter_1..n); none bundled → silent typewriter.
+            var chatter = new List<AudioClip>();
+            for (int i = 1; ; i++)
+            {
+                var clip = Resources.Load<AudioClip>("audio/vega_chatter_" + i);
+                if (clip == null)
+                {
+                    break;
+                }
+
+                chatter.Add(clip);
+            }
+
+            _chatterClips = chatter.ToArray();
+            _worldVeil = FindAnyObjectByType<WorldLoadingOverlay>();
         }
 
         private string L(string key) => Game?.Localizer?.Get(key) ?? key;
@@ -137,6 +175,89 @@ namespace BlocksBeyondTheStars.Client
             }
 
             SetPrologueChrome(false); // never hold an unattended capture run hostage on a story page
+            EndStagedPrologue("capture dismiss");
+        }
+
+        /// <summary>Starts/chains a chatter segment while a page is typing (#761): random variant, a
+        /// touch of pitch jitter so the babble never sounds looped, volume from the audio settings.
+        /// The existing per-line "ai_blip" stays as the radio keying transient.</summary>
+        private void UpdateChatter()
+        {
+            if (_chatterClips == null || _chatterClips.Length == 0)
+            {
+                return;
+            }
+
+            // A line typing behind the loading curtain (veteran greeting, a landing transition) must not
+            // be audible before anything is visible — VEGA speaks only once the world does.
+            if (_worldVeil != null && _worldVeil.VeilActive)
+            {
+                StopChatter();
+                return;
+            }
+
+            if (_chatterSource == null)
+            {
+                _chatterSource = gameObject.AddComponent<AudioSource>();
+                _chatterSource.spatialBlend = 0f;
+                _chatterSource.playOnAwake = false;
+            }
+
+            if (_chatterSource.isPlaying)
+            {
+                return;
+            }
+
+            _chatterSource.clip = _chatterClips[Random.Range(0, _chatterClips.Length)];
+            _chatterSource.pitch = Random.Range(0.94f, 1.08f);
+            float master = Settings != null ? Settings.MasterVolume : 0.8f;
+            float sfx = Settings != null ? Settings.SfxVolume : 1f;
+            _chatterSource.volume = Mathf.Clamp01(master * sfx) * 0.5f;
+            _chatterSource.Play();
+        }
+
+        /// <summary>Cuts the chatter the moment the reveal completes, is fast-forwarded or dismissed —
+        /// trailing babble under a finished page reads as a glitch.</summary>
+        private void StopChatter()
+        {
+            if (_chatterSource != null && _chatterSource.isPlaying)
+            {
+                _chatterSource.Stop();
+            }
+        }
+
+        /// <summary>True when any queued line still carries the prologue flag.</summary>
+        private bool QueueHasPrologue()
+        {
+            foreach (var item in _queue)
+            {
+                if (item.Prologue)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>Winds down the staged prologue (#760), if it is running, and resets the staging state
+        /// so a deliberately restarted onboarding can stage again.</summary>
+        private void EndStagedPrologue(string reason)
+        {
+            if (!_prologueStarted && !_prologueStaged)
+            {
+                return;
+            }
+
+            Debug.Log($"[Cinematic] Prologue wind-down ({reason}).");
+            if (_prologueStaged)
+            {
+                Cinematic?.End();
+            }
+
+            _prologueStaged = false;
+            _prologueStarted = false;
+            _prologueLineIndex = 0;
         }
 
         private void OnLine(ShipAiLine m)
@@ -145,10 +266,18 @@ namespace BlocksBeyondTheStars.Client
             _objProgress = m.ObjectiveProgress;
             _objTarget = m.ObjectiveTarget;
 
+            if (m.Kind == 2)
+            {
+                Flashback?.Trigger(); // a recovered memory gets the brief flashback treatment (#762)
+            }
+
             bool muted = m.Kind == 1 && Settings is { VegaHints: false };
+            Debug.Log($"[Cinematic] VEGA line kind={m.Kind} key={m.LineKey} textLen={m.Text?.Length ?? 0} muted={muted}");
             if (!string.IsNullOrEmpty(m.Text) && !muted)
             {
-                _queue.Enqueue((m.Text, false)); // LLM-authored line (already in the player's language)
+                // LLM-authored line (already in the player's language). The prologue flag keys on Kind,
+                // NOT on the text source — an authored Kind-4 page must not lose its staging (#760).
+                _queue.Enqueue((m.Text, m.Kind == 4));
             }
             else if (!string.IsNullOrEmpty(m.LineKey) && !muted)
             {
@@ -226,8 +355,71 @@ namespace BlocksBeyondTheStars.Client
 
             if (_current.Length == 0 && _queue.Count > 0)
             {
+                // No line starts behind the loading curtain (#760/#761): a page typing into blackness
+                // is inaudible-invisible and burns its auto-advance window. Bounded inside HoldQueue.
+                if (Cinematic != null && Cinematic.HoldQueue)
+                {
+                    return;
+                }
+
+                // Story pages open the narrative: a flavour/advisor line that raced in FRONT of the
+                // prologue on join (the world-type hint fires on the join placement) would otherwise
+                // show first and stall the cinematic behind a keypress. Stable partition — prologue
+                // pages first, everything else after, both in their original order.
+                if (!_prologueStarted && !_queue.Peek().Prologue && QueueHasPrologue())
+                {
+                    var story = new List<(string Text, bool Prologue)>();
+                    var rest = new List<(string Text, bool Prologue)>();
+                    while (_queue.Count > 0)
+                    {
+                        var item = _queue.Dequeue();
+                        (item.Prologue ? story : rest).Add(item);
+                    }
+
+                    foreach (var item in story)
+                    {
+                        _queue.Enqueue(item);
+                    }
+
+                    foreach (var item in rest)
+                    {
+                        _queue.Enqueue(item);
+                    }
+
+                    Debug.Log($"[Cinematic] Reordered queue: {story.Count} story page(s) ahead of {rest.Count} other line(s).");
+                }
+
                 var (text, prologue) = _queue.Dequeue();
                 _currentIsPrologue = prologue;
+                Debug.Log($"[Cinematic] Dequeued line (prologue={prologue}, started={_prologueStarted}, staged={_prologueStaged}, queued={_queue.Count})");
+                if (prologue)
+                {
+                    if (!_prologueStarted)
+                    {
+                        _prologueStarted = true;
+                        _prologueLineIndex = 0;
+                        _prologueStaged = Cinematic != null && Cinematic.Begin();
+                    }
+                    else
+                    {
+                        _prologueLineIndex++;
+                    }
+
+                    if (_prologueStaged)
+                    {
+                        Cinematic.OnPrologueLine(_prologueLineIndex);
+                    }
+                }
+                else if (_prologueStarted && !QueueHasPrologue())
+                {
+                    // The story pages are over but the queue continues straight into the normal
+                    // onboarding lines (they arrive together on join) — the idle branch below would
+                    // never run, so wind the staging down here (#760). Only once NO further prologue
+                    // page is queued: a stray non-prologue line interleaved between story pages must
+                    // display over the running stage, not kill it.
+                    EndStagedPrologue("non-prologue dequeue");
+                }
+
                 SetPrologueChrome(prologue);
                 _pages.Clear();
                 _pages.AddRange(SplitPages(text));
@@ -245,6 +437,7 @@ namespace BlocksBeyondTheStars.Client
 
                 SetPrologueChrome(false);
                 _currentIsPrologue = false;
+                EndStagedPrologue("queue idle"); // finished or skipped — camera back, letterbox out (#760)
                 return;
             }
 
@@ -262,6 +455,7 @@ namespace BlocksBeyondTheStars.Client
                 _pages.Clear();
                 _speechText.text = string.Empty;
                 _continueHint.gameObject.SetActive(false);
+                StopChatter();
                 return;
             }
 
@@ -274,7 +468,12 @@ namespace BlocksBeyondTheStars.Client
                 _speechText.text = _current.Substring(0, (int)_shown);
                 if (_shown >= _current.Length)
                 {
+                    StopChatter();
                     ShowContinueHint();
+                }
+                else
+                {
+                    UpdateChatter();
                 }
 
                 return;
@@ -329,14 +528,37 @@ namespace BlocksBeyondTheStars.Client
         /// instead of opening the leave-game menu.</summary>
         private void SetPrologueChrome(bool on)
         {
-            if (_dim != null && _dim.gameObject.activeSelf != on)
+            // With the cinematic staging up (#760) the letterbox is the chrome — the dim would just
+            // darken the very scene the camera is orbiting.
+            bool dimOn = on && !_prologueStaged;
+            if (_dim != null && _dim.gameObject.activeSelf != dimOn)
             {
-                _dim.gameObject.SetActive(on);
+                _dim.gameObject.SetActive(dimOn);
             }
 
             if (Game != null)
             {
                 Game.VegaPrologueActive = on;
+            }
+
+            // The objective chip is HUD, not story: the onboarding objective arrives with the queued
+            // lines while the prologue still shows, and would float over the letterboxed shot. Hide it
+            // for the duration; Refresh() restores it from the stored objective afterwards. Edge-gated —
+            // this runs every idle frame with on=false, and Refresh() builds strings.
+            if (on != _chromeOn)
+            {
+                _chromeOn = on;
+                if (_chip != null)
+                {
+                    if (on)
+                    {
+                        _chip.SetActive(false);
+                    }
+                    else
+                    {
+                        Refresh();
+                    }
+                }
             }
         }
 
