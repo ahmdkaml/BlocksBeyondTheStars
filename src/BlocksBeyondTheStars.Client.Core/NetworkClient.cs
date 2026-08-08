@@ -91,6 +91,10 @@ namespace BlocksBeyondTheStars.Client
         // Player-painted block designs (#817): the save-global registry (join list + live additions/wipes).
         public event Action<PaintDesignData>? PaintDesignReceived;
         public event Action<PaintDesignList>? PaintDesignListReceived;
+
+        // Player-designed block forms (#843): the same pair for the form registry.
+        public event Action<CustomShapeData>? CustomShapeReceived;
+        public event Action<CustomShapeList>? CustomShapeListReceived;
         public event Action<OwnedShips>? OwnedShipsReceived;
         public event Action<WorldEnvironment>? WorldEnvironmentReceived;
         public event Action<WorldReset>? WorldResetReceived;
@@ -269,6 +273,17 @@ namespace BlocksBeyondTheStars.Client
         /// shape 0 reverts it to a plain cube.</summary>
         public void SendShapeCraft(string sourceItemKey, int shape, int count = 1)
             => Send(new ShapeCraftIntent { SourceItemKey = sourceItemKey ?? string.Empty, Shape = shape, Count = count });
+
+        /// <summary>Crafts a player-designed form (#843): the micro-voxel bitmap rides along so the server can
+        /// register/dedup it, then hands back the material carrying the registered shape index.</summary>
+        public void SendCustomShapeCraft(string sourceItemKey, string voxels, string name, int count = 1)
+            => Send(new CustomShapeCraftIntent
+            {
+                SourceItemKey = sourceItemKey ?? string.Empty,
+                Voxels = voxels ?? string.Empty,
+                Name = name ?? string.Empty,
+                Count = count,
+            });
         public void SendFallDamage(float impactSpeed) => Send(new FallDamageIntent { ImpactSpeed = impactSpeed });
 
         public void SendUnlock(string blueprintKey) => Send(new UnlockBlueprintIntent { BlueprintKey = blueprintKey });
@@ -616,6 +631,8 @@ namespace BlocksBeyondTheStars.Client
                 case PlayerFace m: PlayerFaceReceived?.Invoke(m); break;
                 case PaintDesignData m: PaintDesignReceived?.Invoke(m); break;
                 case PaintDesignList m: PaintDesignListReceived?.Invoke(m); break;
+                case CustomShapeData m: CustomShapeReceived?.Invoke(m); break;
+                case CustomShapeList m: CustomShapeListReceived?.Invoke(m); break;
                 case OwnedShips m: OwnedShipsReceived?.Invoke(m); break;
                 case WorldEnvironment m: WorldEnvironmentReceived?.Invoke(m); break;
                 case WorldReset m: WorldResetReceived?.Invoke(m); break;
