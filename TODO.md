@@ -104,6 +104,18 @@ Per-item detail lives in the dated work log below. **Since 2026-07 versions are 
 
 ---
 
+### ★ Body-paint follow-up: full-size per-face painting + inverted-mesh fix (2026-08-09, branch fix/avatar-body-paint-editor-and-winding)
+First playtest of #874 found two problems, both fixed:
+- **Editor was unusably small**: the whole strip on one 512-wide canvas = 4 px cells. Reworked to
+  paint **one 32×32 face at a time at the full 512×512** (16 px cells, same as the face editor), with
+  the part's faces STACKED as live click-to-select tiles right of the canvas (one tile column per limb
+  for arms/legs, headed Links/Rechts; active face named above the canvas and framed cyan). Tiles crop
+  the shared canvas texture via `RawImage.uvRect`, so they repaint live while drawing. **Clear** now
+  wipes only the active face in this mode.
+- **Painted parts rendered inside-out** ("hollow form", near face culled): the generated meshes'
+  triangle winding was inverted — with the BL/TL/TR/BR corner layout Unity needs (0,2,1)/(0,3,2),
+  not (0,1,2)/(0,2,3). Flipped in `PlayerAvatar.BuildPaintedMesh` (comment documents it).
+
 ### ★ Creature voices enriched: per-call jitter, second takes, baked cave reverb (Web-safe) (#876/#877/#878/#879, 2026-08-09, branch feat/creature-sound-variants)
 Sampler-style variety for the fauna without touching the species-deterministic voice model:
 - **Per-utterance jitter** (`CreatureView`, `WorldEntities`): every idle/alert/attack/hurt/die cue
@@ -119,6 +131,8 @@ Sampler-style variety for the fauna without touching the species-deterministic v
   AudioReverbFilter/AudioLowPassFilter** (#878): web players never heard the cave echo or the
   underwater muffle on positional one-shots. One identical sound on every platform now; the global
   2D bus low-pass (whole-mix underwater duck) remains desktop-only by design.
+
+### ★ Avatar body paint: torso, arms, legs and helmet are paintable like the face (#874, 2026-08-09, branch feature/avatar-body-paint)
 The pixel-face idea extended to the whole figure. Each part opens its own editor showing the part
 **unfolded into a strip of 32×32 side faces** with separator lines and labels (walk once around the box:
 Vorne | Rechts | Hinten | Links); arms/legs are NOT mirrored — two labelled canvas rows, top = left limb,
