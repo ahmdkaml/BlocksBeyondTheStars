@@ -104,6 +104,28 @@ Per-item detail lives in the dated work log below. **Since 2026-07 versions are 
 
 ---
 
+### ★ Marketing screenshots regenerated on the continents worldgen — sandbox capture, clean frames, planet in the space shot (2026-08-09)
+Full DE+EN re-capture (26 PNGs) with all `MarketingShots*` saves deleted first, so every planet shot
+shows the current continents/wonders worldgen. Pipeline fixes on the way (all capture-only except the
+locale fix):
+- **Sandbox capture worlds** (`sandbox: true` in `ScreenshotDirector`): planet enemies, bandit turrets
+  and the temperature hazard gate on Survival — no more "Taking damage!"/laser beams in frames; the
+  HUD looks identical. Lava CONTACT damage stays on even in Sandbox → new hand-picked **lava seed 2468**
+  (lava river in view, dry basalt footing). The old jungle/ocean/lava seeds predate the new worldgen
+  and stopped producing valid placements (silent skip = stale PNG, watch the timestamps).
+- **HUD toast cleared before every shot**: `LastMessage` never expires and `HudUi` copies it to the
+  label only on its 10 Hz refresh — the director now clears it and waits 0.25 s, so "Data fragment
+  recovered!", the mode line and space-return notices no longer land in frames.
+- **`fix(client)`: `@srv.*` toast reasons localized** — `GameBootstrap` set `LastMessage = m.Reason`
+  raw at five sites (SpaceClosed/Trade/Dock/Respawn); now routed through `ServerMessageText()`, so
+  "@srv.space.returned" renders localized in normal play too.
+- **Space shot aims at the home planet**: new `SpaceView.CaptureAimAtNearestBody()` snaps flight
+  yaw+pitch toward the nearest landable body, so `space_flight.png` shows ship + ringed planet instead
+  of empty starfield (fixed `FlightHeading` stays as the no-bodies fallback).
+- Known pre-existing wart (unchanged): the space HUD "Cargo: N" label overlaps the Hull bar.
+docs/screenshots/README.md documents the sandbox mode, the lava seed and the single-language-reshoot
+gotcha (reused save resumes on foot; a wandered creature can block the frame — delete the save).
+
 ### ★ Missing block-item images: ladder, stairs, station core, trading post, mission board, storage container (#868, 2026-08-09, branch fix/missing-block-item-textures-868)
 Six placeable block items had no real image anywhere: their blocks had no generated texture bundled
 under `client/Assets/Resources/textures/`, so the atlas painted a flat procedural colour tile — which is

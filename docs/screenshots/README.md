@@ -82,6 +82,9 @@ wrapper script.
 # Single language / custom world seed / custom output:
 ./scripts/capture-screenshots.ps1 -Lang de
 ./scripts/capture-screenshots.ps1 -Seed 424242 -OutRoot ./docs/screenshots
+
+# Lava uses a hand-picked seed (see below) — after deleting its save, regenerate it with:
+./scripts/capture-screenshots.ps1 -SkipMain -Planets lava -Seed 2468
 ```
 
 **Requirements:** the Unity editor (6000.4.x) for the build, and a machine with a GPU — the
@@ -108,16 +111,29 @@ because some state can't be reached without input during an unattended run:
 **Determinism:** a fixed world (`MarketingShots`) + a fixed seed (`-seed`, default `424242`) make
 every run reproducible, so the set can be regenerated after any game change.
 
-Three planet surfaces use hand-picked seeds because the default seed framed them badly (jungle: camera
-against a tree trunk; lava: dark, no lava in view; ocean: a dark thicket wall): **jungle = `-Seed 133742`**,
-**lava = `-Seed 8080`**, **ocean = `-Seed 555555`**.
+**Capture worlds are Sandbox/Creative worlds** (`sandbox: true` in the director): planet enemies,
+bandit turrets and the temperature hazard all gate on Survival, so nothing can shoot the player or
+burn "Taking damage!" into a frame — while the HUD (vitals, minimap, hotbar) looks the same as in
+Survival. Direct lava CONTACT damage is unconditional even in Sandbox, which is one reason the lava
+seed is hand-picked (see below).
+
+One planet surface uses a hand-picked seed because the default seed framed it badly (lava: the
+placement ring found footing amid a lava ocean → contact damage in frame, or a dark no-lava scene):
+**lava = `-Seed 2468`** (visible lava river, dry basalt footing). The older hand-picked jungle/ocean
+seeds (133742/555555) predate the continents worldgen and no longer produce a usable placement —
+both types now use the default seed.
 Note that the per-planet worlds are persisted saves (`singleplayer-saves/MarketingShots_<type>`) — a
 re-run reuses the existing world and ignores `-seed`; delete the save to regenerate from a new seed.
+Beware when only ONE language of a per-planet shot needs a re-shoot: a reused save resumes the player
+on foot where the last run left them (#401), and a wandering/sleeping creature can end up blocking the
+new placement — delete the save so the world regenerates fresh (same seed ⇒ same world).
 The MAIN-sequence world (`MarketingShots`) is deleted automatically by the wrapper before each run:
 since #401 a quit saves the live player position, so a reused save would resume the player on foot
-outside the ship, breaking the cockpit shots and the take-off. The director dismisses VEGA's intro
-lines before every shot (`VegaPanel.DismissSpeechForCapture`), so fresh worlds no longer need a
-throwaway run.
+outside the ship, breaking the cockpit shots and the take-off. Before every shot the director
+dismisses VEGA's intro lines (`VegaPanel.DismissSpeechForCapture`) and clears the single-line HUD
+toast (`GameBootstrap.ShowMessage("")` + a 0.25 s settle — HudUi only copies the message to the label
+on its 10 Hz refresh), so lingering notices ("Data fragment recovered!", the mode line, space-return
+messages) never land in a frame.
 
 ### Tuning
 
