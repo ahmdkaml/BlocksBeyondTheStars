@@ -22,6 +22,7 @@ public enum GameLocale
     French,
     Spanish,
     Portuguese,
+    Dutch,
 }
 
 public static class GameLocaleExtensions
@@ -37,6 +38,7 @@ public static class GameLocaleExtensions
         GameLocale.French => "fr",
         GameLocale.Spanish => "es",
         GameLocale.Portuguese => "pt",
+        GameLocale.Dutch => "nl",
         _ => "en",
     };
 
@@ -50,6 +52,7 @@ public static class GameLocaleExtensions
         GameLocale.French => "Français",
         GameLocale.Spanish => "Español",
         GameLocale.Portuguese => "Português",
+        GameLocale.Dutch => "Nederlands",
         _ => locale.ToString(),
     };
 
@@ -98,6 +101,12 @@ public static class GameLocaleExtensions
             case "portugues":
             case "português":
                 locale = GameLocale.Portuguese;
+                return true;
+            case "nl":
+            case "nl-nl":
+            case "dutch":
+            case "nederlands":
+                locale = GameLocale.Dutch;
                 return true;
             default:
                 locale = GameLocale.English;

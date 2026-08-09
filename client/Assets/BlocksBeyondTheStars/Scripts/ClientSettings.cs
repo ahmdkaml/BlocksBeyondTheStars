@@ -594,6 +594,7 @@ namespace BlocksBeyondTheStars.Client
                     SystemLanguage.French => "fr",
                     SystemLanguage.Spanish => "es",
                     SystemLanguage.Portuguese => "pt",
+                    SystemLanguage.Dutch => "nl",
                     _ => "en",
                 };
 

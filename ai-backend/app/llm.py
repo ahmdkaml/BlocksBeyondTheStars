@@ -52,6 +52,7 @@ _LANGUAGE_NAMES = {
     "es": "Spanish",
     "it": "Italian",
     "pt": "Brazilian Portuguese",
+    "nl": "Dutch",
 }
 
 

@@ -12,7 +12,7 @@ CI runs two tiers: PRs skip the tests marked `[Trait("Category", "Slow")]`; push
 tests in Release, and a per-test duration guardrail (`scripts/check-test-durations.py`, PRs only) fails the gate when a non-Slow test exceeds 120 s.
 The server suite is sharded across a 4-runner matrix (`scripts/partition-tests.py` + checked-in weights; `Tests passed` is the required fan-in check) — PR gate ~4½ min.
 **Conventions:** English docs/comments; in-game text localized via locale keys — EN+DE mandatory-complete,
-FR/ES/PT machine-first-pass, IT community (see docs/developer/TRANSLATION_GUIDE.md); commit to `main` with the
+FR/ES/PT/NL machine-first-pass, IT community (see docs/developer/TRANSLATION_GUIDE.md); commit to `main` with the
 Claude `Co-Authored-By` trailer; OpenAI texture + ElevenLabs sound generation is blanket-approved
 (no per-batch gate).
 
@@ -104,6 +104,15 @@ Per-item detail lives in the dated work log below. **Since 2026-07 versions are 
 
 ---
 
+### ★ Dutch (Nederlands) is the game's seventh language (#881, 2026-08-09, branch feat/nl-locale)
+Machine first pass per TRANSLATION_GUIDE Step 6: `data/locales/nl.json` (full main table) +
+`data/stories/vega_protocol/locales/nl.json`, generated with `tools/translate_locale.py nl`
+(the tool learned the `nl` code + "je/jij" tone rule). Wiring per Step 4: `GameLocale.Dutch`
+(code/native name/TryParse), `StreamingAssetsCache` fallback-manifest entries, first-run OS-language
+default (`SystemLanguage.Dutch => "nl"`), AI-backend `_LANGUAGE_NAMES`, and a Dutch branch in the
+hardcoded content-error dialog. README language mentions updated. Above the 45 % picker bar, so
+Nederlands appears in the settings automatically.
+
 ### ★ Body-paint follow-up: full-size per-face painting + inverted-mesh fix (2026-08-09, branch fix/avatar-body-paint-editor-and-winding)
 First playtest of #874 found two problems, both fixed:
 - **Editor was unusably small**: the whole strip on one 512-wide canvas = 4 px cells. Reworked to
@@ -131,6 +140,7 @@ Sampler-style variety for the fauna without touching the species-deterministic v
   AudioReverbFilter/AudioLowPassFilter** (#878): web players never heard the cave echo or the
   underwater muffle on positional one-shots. One identical sound on every platform now; the global
   2D bus low-pass (whole-mix underwater duck) remains desktop-only by design.
+>>>>>>> origin/main
 
 ### ★ Avatar body paint: torso, arms, legs and helmet are paintable like the face (#874, 2026-08-09, branch feature/avatar-body-paint)
 The pixel-face idea extended to the whole figure. Each part opens its own editor showing the part
