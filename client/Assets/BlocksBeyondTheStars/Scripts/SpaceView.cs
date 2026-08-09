@@ -43,6 +43,41 @@ namespace BlocksBeyondTheStars.Client
         public bool CaptureLandMapShowing => _landMapGo != null;
         public void CaptureLandOnPad(int padIndex) => LandOnPad(padIndex);
 
+        /// <summary>Capture hook (<see cref="ScreenshotDirector"/>): snap the flight heading so the nearest
+        /// landable body (usually the home planet the ship just rose off) sits in frame — the marketing space
+        /// shot should show a planet, not empty starfield. Unlike <see cref="CaptureSteerToNearestBody"/> this
+        /// snaps yaw/pitch instantly and adds no thrust. Returns false when no body exists to aim at.</summary>
+        public bool CaptureAimAtNearestBody()
+        {
+            if (_ship == null || _landables == null)
+            {
+                return false;
+            }
+
+            Vector3 pos = _ship.transform.localPosition;
+            Vector3 target = Vector3.zero;
+            float bestSq = float.MaxValue;
+            foreach (var b in _landables)
+            {
+                float sq = (b.Pos - pos).sqrMagnitude;
+                if (sq < bestSq)
+                {
+                    bestSq = sq;
+                    target = b.Pos;
+                }
+            }
+
+            if (bestSq == float.MaxValue)
+            {
+                return false;
+            }
+
+            Vector3 to = (target - pos).normalized;
+            _yaw = Mathf.Atan2(to.x, to.z) * Mathf.Rad2Deg;
+            _pitch = Mathf.Clamp(-Mathf.Asin(Mathf.Clamp(to.y, -1f, 1f)) * Mathf.Rad2Deg, -80f, 80f);
+            return true;
+        }
+
         /// <summary>Steer + cruise toward the nearest landable body (planets/moons; stations skipped). Returns the
         /// distance to it as a MULTIPLE of its landing range (1 = at landing range, larger = farther), or -1 if
         /// there's none. The caller throttles down before it reaches ~1 so the ship doesn't dive into the surface

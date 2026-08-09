@@ -193,7 +193,11 @@ namespace BlocksBeyondTheStars.Client
 
             // 2) Start a fixed singleplayer world. Needs the bundled local server in StreamingAssets
             //    (publish-local-server.ps1 / a full build); otherwise the world never connects.
-            shell.StartSingleplayerWorld(WorldName, _seed, creativeUnlockAll: true, creativeAllShips: true, creativeKit: true);
+            // Sandbox worlds keep enemies, bandit turrets and the temperature hazard off (they all gate on
+            // Survival), so no "Taking damage!" warning or attack fx can land in a frame — the HUD itself
+            // (bars, minimap, hotbar) looks the same as in Survival.
+            shell.StartSingleplayerWorld(WorldName, _seed, creativeUnlockAll: true, creativeAllShips: true, creativeKit: true,
+                sandbox: true);
 
             yield return WaitForPhase(shell, ShellPhase.InGame, WorldLoadTimeout);
             var boot = shell.CurrentBoot;
@@ -237,8 +241,10 @@ namespace BlocksBeyondTheStars.Client
             yield return WaitUntil(() => boot.InSpace, 25f);
             yield return new WaitForSecondsRealtime(ChunkSettle);
 
+            // Aim at the nearest landable body (normally the home planet below) so the shot shows ship +
+            // planet instead of empty starfield; the fixed heading is only the no-bodies fallback.
             var space = FindAnyObjectByType<SpaceView>();
-            if (space != null)
+            if (space != null && !space.CaptureAimAtNearestBody())
             {
                 space.SetFlightYaw(FlightHeading);
             }
@@ -314,7 +320,7 @@ namespace BlocksBeyondTheStars.Client
             string worldName = WorldName + "_" + _planet;
             var opts = new WorldCreationOptions { StartPlanetType = _planet };
             shell.StartSingleplayerWorld(worldName, _seed, creativeUnlockAll: true, creativeAllShips: true,
-                creativeKit: true, worldOptions: opts);
+                creativeKit: true, sandbox: true, worldOptions: opts);
 
             yield return WaitForPhase(shell, ShellPhase.InGame, WorldLoadTimeout);
             var boot = shell.CurrentBoot;
@@ -433,6 +439,12 @@ namespace BlocksBeyondTheStars.Client
             // Never catch the VEGA onboarding/greeting dialog in a frame — a fresh world queues her intro
             // lines right at spawn. (No-op on the menu, where no panel exists yet.)
             FindAnyObjectByType<VegaPanel>()?.DismissSpeechForCapture();
+            // Likewise the single-line HUD toast: whatever arrived last ("Data fragment recovered!",
+            // "Mode: … · PvP: …", space-return notices) would linger into the shot — LastMessage never
+            // auto-expires. HudUi copies LastMessage → label only on its 10 Hz Refresh tick
+            // (RefreshInterval 0.1 s), so outwait one full interval before reading the frame back.
+            FindAnyObjectByType<GameBootstrap>()?.ShowMessage(string.Empty);
+            yield return new WaitForSecondsRealtime(0.25f);
             yield return new WaitForEndOfFrame(); // let the pipeline finish the frame before reading it back
             Texture2D tex = null;
             try
