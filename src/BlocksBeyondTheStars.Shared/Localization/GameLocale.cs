@@ -22,6 +22,8 @@ public enum GameLocale
     French,
     Spanish,
     Portuguese,
+    Polish,
+    Turkish,
     Dutch,
 }
 
@@ -38,6 +40,8 @@ public static class GameLocaleExtensions
         GameLocale.French => "fr",
         GameLocale.Spanish => "es",
         GameLocale.Portuguese => "pt",
+        GameLocale.Polish => "pl",
+        GameLocale.Turkish => "tr",
         GameLocale.Dutch => "nl",
         _ => "en",
     };
@@ -52,6 +56,8 @@ public static class GameLocaleExtensions
         GameLocale.French => "Français",
         GameLocale.Spanish => "Español",
         GameLocale.Portuguese => "Português",
+        GameLocale.Polish => "Polski",
+        GameLocale.Turkish => "Türkçe",
         GameLocale.Dutch => "Nederlands",
         _ => locale.ToString(),
     };
@@ -101,6 +107,19 @@ public static class GameLocaleExtensions
             case "portugues":
             case "português":
                 locale = GameLocale.Portuguese;
+                return true;
+            case "pl":
+            case "pl-pl":
+            case "polish":
+            case "polski":
+                locale = GameLocale.Polish;
+                return true;
+            case "tr":
+            case "tr-tr":
+            case "turkish":
+            case "türkçe":
+            case "turkce":
+                locale = GameLocale.Turkish;
                 return true;
             case "nl":
             case "nl-nl":
