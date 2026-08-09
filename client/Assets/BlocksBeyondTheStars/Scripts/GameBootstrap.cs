@@ -1694,7 +1694,7 @@ namespace BlocksBeyondTheStars.Client
                     LandedShipsChanged?.Invoke();
                 }
             };
-            Network.SpaceClosed += m => { InSpace = false; Space = null; LastMessage = m.Reason; };
+            Network.SpaceClosed += m => { InSpace = false; Space = null; LastMessage = ServerMessageText(m.Reason); };
             Network.StationBoardedReceived += m => { LastMessage = $"Boarded {m.Name}."; CurrentStationId = m.StationId ?? string.Empty; };
             Network.PlanetEnemiesReceived += m => PlanetEnemies = m.Enemies;
             Network.CreaturesReceived += m => Creatures = m.Creatures;
@@ -1801,21 +1801,21 @@ namespace BlocksBeyondTheStars.Client
             {
                 TradeActive = false;
                 Trade = null;
-                LastMessage = m.Completed ? "Trade complete." : m.Reason;
+                LastMessage = m.Completed ? "Trade complete." : ServerMessageText(m.Reason);
             };
             Network.DockRequested += m => { PendingDockFrom = m.Requester; LastMessage = $"{m.Requester} requests docking."; };
             Network.DockStatusChanged += m =>
             {
                 Dock = m;
-                LastMessage = m.Docked ? $"Docked with {m.Partner}" : m.Reason;
+                LastMessage = m.Docked ? $"Docked with {m.Partner}" : ServerMessageText(m.Reason);
             };
             Network.MissionResultReceived += m => LastMessage = m.Success ? $"Mission '{m.MissionId}' complete!" : $"Mission: {m.Reason}";
             Network.RespawnNoticeReceived += m =>
             {
-                LastMessage = m.Reason;
+                LastMessage = ServerMessageText(m.Reason);
                 RespawnTarget = new Vector3(m.X, m.Y, m.Z); // teleport the body to the heal-tank on respawn
             };
-            Network.RespawnOptionsReceived += m => LastMessage = m.Reason; // deferred death: reason shows under the choice modal
+            Network.RespawnOptionsReceived += m => LastMessage = ServerMessageText(m.Reason); // deferred death: reason shows under the choice modal
             Network.ServerRulesReceived += m => { Rules = m; LastMessage = $"Mode: {m.GameMode} · PvP: {m.Pvp}"; };
             Network.CraftCompleted += m => LastMessage = m.Success ? CraftedMessage(m.RecipeKey) : CraftFailMessage(m.Reason);
             Network.ActionRejected += m =>
