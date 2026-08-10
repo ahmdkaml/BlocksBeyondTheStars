@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
 using System.Linq;
+using BlocksBeyondTheStars.GameServer;
 using BlocksBeyondTheStars.Networking.Transport;
 using BlocksBeyondTheStars.Persistence;
 using BlocksBeyondTheStars.Shared.Configuration;
@@ -58,7 +59,7 @@ public sealed class WorldEnvironmentTests : IDisposable
             Assert.InRange(r, 0xC0, 0xFF);
             Assert.InRange(g, 0xA0, 0xFF);
             Assert.InRange(b, 0x60, 0xFF);
-            Assert.Contains(server.Weather, new[] { "clear", "clouds", "rain", "storm", "fog" });
+            Assert.Contains(server.Weather, WeatherCatalog.AllKeys);
         }
     }
 
@@ -71,13 +72,12 @@ public sealed class WorldEnvironmentTests : IDisposable
             // The default world has an atmosphere → a seeded haziness in 0..1 (drives fog density + fog weather).
             Assert.InRange(server.AtmosphereDensity, 0.0, 1.0);
 
-            // Run a long stretch of weather changes; the state must always stay a known value — including the
-            // new "fog" — so the fog branch integrates cleanly with the per-biome rain ramp.
-            var valid = new[] { "clear", "clouds", "rain", "storm", "fog" };
+            // Run a long stretch of weather changes; the state must always stay a known catalogue value, so
+            // every ladder state AND every event integrates cleanly with the per-biome rain ramp.
             for (int i = 0; i < 400; i++)
             {
                 server.Tick(1.0);
-                Assert.Contains(server.Weather, valid);
+                Assert.Contains(server.Weather, WeatherCatalog.AllKeys);
             }
         }
     }
