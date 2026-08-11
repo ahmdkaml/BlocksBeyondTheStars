@@ -1,3 +1,6 @@
+// Blocks Beyond the Stars — Copyright (c) 2026 Justus Dütscher & Marcel Dütscher (JuMaVe Games)
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
 using BlocksBeyondTheStars.Shared.Geometry;
 using Xunit;
 
@@ -85,6 +88,21 @@ public sealed class Vector3iTests
 
         Assert.False(a == b);
         Assert.True(a != b);
+    }
+    [Fact]
+    public void Equals_ReturnsFalseForNull()
+    {
+        var vector = new Vector3i(1, 2, 3);
+
+        Assert.False(vector.Equals(null));
+    }
+
+    [Fact]
+    public void Equals_ReturnsFalseForDifferentType()
+    {
+        var vector = new Vector3i(1, 2, 3);
+
+        Assert.False(vector.Equals("not a vector"));
     }
 
     [Theory]
