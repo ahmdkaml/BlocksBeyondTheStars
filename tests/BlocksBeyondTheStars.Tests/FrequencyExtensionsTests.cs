@@ -10,13 +10,7 @@ namespace BlocksBeyondTheStars.Tests;
 public sealed class FrequencyExtensionsTests
 {
     private static readonly Frequency[] Levels =
-    {
-        Frequency.Off,
-        Frequency.VeryRare,
-        Frequency.Rare,
-        Frequency.Normal,
-        Frequency.Frequent
-    };
+    Enum.GetValues<Frequency>();
 
     private static void AssertMonotone(
         Func<Frequency, double> selector,
@@ -35,12 +29,7 @@ public sealed class FrequencyExtensionsTests
     {
         Assert.Equal(0, Frequency.Off.Weight());
 
-        for (var i = 1; i < Levels.Length; i++)
-        {
-            Assert.True(
-                Levels[i].Weight() >= Levels[i - 1].Weight(),
-                $"{Levels[i]} should not have a lower weight than {Levels[i - 1]}.");
-        }
+        AssertMonotone(f => f.Weight());
     }
 
     [Fact]
