@@ -30,6 +30,19 @@ namespace BlocksBeyondTheStars.Client
         // objective chip 594…642 — see VegaPanel), so this panel starts at 650 (#482).
         private const float ScanPanelY = 650f, ScanPanelW = 390f, ScanPanelH = 182f;
 
+        // Vitals panel (top-left, under the location panel), in HUD reference units. Its HEIGHT VARIES:
+        // the ship rows (hull/shield) are appended only in the states that have them, so anything parked
+        // below it must read VitalsBottomY rather than assume a fixed edge (#915).
+        private const float VitalsPanelY = 64f;
+
+        /// <summary>Bottom edge of the vitals panel in HUD reference coordinates (y down from the top),
+        /// republished on every refresh. The space-flight overlay is a SEPARATE canvas drawn above this
+        /// one, but at the same reference resolution — it parks its cargo/oxygen readout below this edge
+        /// so the two can't overprint each other whichever rows the panel is currently showing (#915).
+        /// The initial value is the tallest the panel ever gets, so a reader that runs before the first
+        /// refresh still clears it.</summary>
+        public static float VitalsBottomY { get; private set; } = VitalsPanelY + 196f;
+
         /// <summary>How long a scan readout lingers once the scanner is put away. Was 12 s — long enough to
         /// read the old one-liner, not the fuller readout (#482). While the scanner is still the held item
         /// the panel stays pinned regardless (see <see cref="RefreshScan"/>).</summary>
@@ -456,7 +469,7 @@ namespace BlocksBeyondTheStars.Client
             _locPlace = UiKit.AddText(_locationPanel.transform, 10, 22, 260, 18, string.Empty, 14, UiKit.TextCol, TextAnchor.MiddleLeft);
 
             // Vitals panel (6 rows; ship rows toggled).
-            _vitalsPanel = Panel(root, 10, 64, 226, 196).gameObject;
+            _vitalsPanel = Panel(root, 10, VitalsPanelY, 226, 196).gameObject;
             _vitals = new VitalRow[6];
             string[] order = { "health", "oxygen", "energy", "hunger", "hull", "shield" };
             for (int i = 0; i < 6; i++)
@@ -674,7 +687,13 @@ namespace BlocksBeyondTheStars.Client
             SetVital(2, loc.Get("ui.hud.energy"), Game.SuitEnergy, Game.SuitEnergy / 100f,
                 Game.SuitClimateActive ? EnergyStressed : Energy, true);
             SetVital(3, loc.Get("ui.hud.hunger"), Game.Hunger, Game.Hunger / 100f, Hunger, true);
-            bool ship = Game.ShipCombat != null;
+            // Ship rows (hull/shield) exist whenever the player owns a ship in combat range — but while
+            // PILOTING they repeat the flight instrument line (SPD/THR/HDG + HULL/SHD, bottom-left), so
+            // hide them there, exactly as the compass and the time-of-day panel already do (#915). On an
+            // EVA the instrument line is hidden (it needs !_eva), so these bars are the only hull readout
+            // and must stay.
+            bool piloting = Game.SpaceViewActive && !Game.InEva;
+            bool ship = Game.ShipCombat != null && !piloting;
             if (ship)
             {
                 var c = Game.ShipCombat;
@@ -687,7 +706,9 @@ namespace BlocksBeyondTheStars.Client
                 SetVital(5, null, 0, 0, ShieldC, false);
             }
 
-            _vitalsPanel.GetComponent<RectTransform>().sizeDelta = new Vector2(226, ship ? 196 : 116);
+            float vitalsHeight = ship ? 196f : 116f;
+            _vitalsPanel.GetComponent<RectTransform>().sizeDelta = new Vector2(226, vitalsHeight);
+            VitalsBottomY = VitalsPanelY + vitalsHeight;
 
             RefreshHotbar(loc);
             RefreshTimeOfDay(loc);
@@ -1374,8 +1395,51 @@ namespace BlocksBeyondTheStars.Client
             string gravStr = env.GravityFactor > 0.01f && Mathf.Abs(env.GravityFactor - 1f) > 0.05f && !Game.OnFootInSpace
                 ? "  " + string.Format(loc.Get("ui.hud.gravity"), env.GravityFactor.ToString("0.0"))
                 : string.Empty;
-            _todText.text = $"{(day ? loc.Get("ui.hud.day") : loc.Get("ui.hud.night")).ToUpperInvariant()}  {mm}:{ss:00}  {tempStr}{gravStr}";
+            _todText.text = $"{(day ? loc.Get("ui.hud.day") : loc.Get("ui.hud.night")).ToUpperInvariant()}  {mm}:{ss:00}  {tempStr}{WeatherChip(loc, env)}{gravStr}";
             _todMarker.anchoredPosition = new Vector2(10 + 150 * t, _todMarker.anchoredPosition.y);
+        }
+
+        /// <summary>
+        /// The weather chip (#900): a small icon + the localized state name next to the temperature, shown
+        /// only when there is actually weather to name — a clear sky says nothing, so a calm world stays as
+        /// uncluttered as it was. Before this the game never named its own weather anywhere.
+        /// </summary>
+        private string WeatherChip(BlocksBeyondTheStars.Shared.Localization.Localizer loc,
+            BlocksBeyondTheStars.Networking.Messages.WorldEnvironment env)
+        {
+            string state = env.Weather;
+            if (string.IsNullOrEmpty(state) || state == "clear" || env.SpaceSky)
+            {
+                return string.Empty;
+            }
+
+            string icon = state switch
+            {
+                "clouds" => "☁",
+                "rain" or "drizzle" => "☂",
+                "storm" => "⚡",
+                "blizzard" or "gale" => "❄",
+                "fog" or "ground_fog" => "≈",
+                "heatwave" => "☀",
+                "acid_rain" => "☣",
+                "ion_storm" => "⚡",
+                "meteor_shower" => "★",
+                "ember_fall" => "▲",
+                "spore_bloom" => "❋",
+                _ => "•",
+            };
+
+            // Violent and exotic weather is worth a warning colour; the mild states stay plain.
+            string colour = env.WeatherFamily switch
+            {
+                "violent" => "#ff7439",
+                "exotic" => "#c58bff",
+                "obscuring" => "#9fb4c8",
+                _ => null,
+            };
+
+            string label = $"{icon} {loc.Get("weather." + state)}";
+            return "  " + (colour is null ? label : $"<color={colour}>{label}</color>");
         }
 
         /// <summary>Temperature readout tinted by comfort (#666): icy blue below the band, hot orange above

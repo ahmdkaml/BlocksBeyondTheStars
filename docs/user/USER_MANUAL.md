@@ -76,7 +76,7 @@ Last updated: 2026-08-08.
 | **Mouse wheel** | Cycle hotbar slot |
 | **1 – 9** | Select hotbar slot |
 | **F** | Attack with the held tool/weapon — hits what's **under your crosshair** (the reticle turns red over a target; with **auto-aim** on, the nearest enemy in front of you is acquired automatically) |
-| **R** | Repair the targeted wreck breach with the selected hotbar block (see §5 → Wrecks); with a **shaped block or furniture** selected: rotate its placement orientation (**Shift+R** cycles backwards — see §5 → Craftable block shapes) |
+| **R** | Repair the targeted wreck breach with the selected hotbar block (see §5 → Wrecks); with a **shaped block, furniture, ladder or stairs** selected: rotate its placement orientation (**Shift+R** cycles backwards — see §5 → Craftable block shapes) |
 | **L** | Toggle the suit headlamp (requires a `suit_lamp`) |
 | **G** | Loot the nearest container |
 | **E** | Use a nearby ship/station tile (cockpit, workshop, cargo, medbay, …); **trade with a vendor** (opens the Market); **board your hover speeder**; **beam** from a teleporter pad you're standing on |
@@ -597,8 +597,10 @@ separate unlock; admins can still disable it through server world rules.
 
 ### Paint tool & block designs
 - Craft a **Paint Tool** (`paint_tool`, workshop recipe + the cheap `paint_tool` blueprint). Select it and
-  **right-click a placed solid block** — a **32×32 pixel editor** opens (same palette and controls as the
-  avatar face editor: left-click paints, right-click erases, **E** is the eraser swatch). **Apply** paints the
+  **right-click a placed solid block** — a **32×32 pixel editor** opens (same palette and tools as the
+  appearance screen: left-click paints, right-click erases, **E** is the eraser swatch, **Fill area** floods,
+  **Alt+click** picks up a colour and **Undo** takes a step back; unpainted pixels show the design's paper-white
+  canvas, which is what the block will look like). **Apply** paints the
   design onto the block for everyone; **Clear + Apply** removes it. Works on every block form — panels/plates
   on a wall are the natural canvas, but slabs, ramps and plain cubes take a design too (all faces show it).
 - **Save & reuse**: the *My designs* column in the editor stores designs **locally** ("Save design") and loads
@@ -633,9 +635,24 @@ separate unlock; admins can still disable it through server world rules.
 - **Day/night is by location** — because X is a longitude, a planet has a real day/night terminator: one
   player can be in daylight while another, far away, is in night, and one lap around the world is one day.
   The clock still advances.
-- **Weather is per biome** — a stormy biome can rain while a neighbouring clear biome stays sunny; some
-  biomes are reliably wetter than others. Weather is hidden + silent in caves/underground. Admins can
-  override time/weather (see §7).
+- **Weather comes in episodes** — it swells, holds and fades rather than switching on and off, and every
+  world has its own temper: some flip between squalls, others brood under one sky for minutes. Storms
+  build through the afternoon, mist gathers around dawn, and a slow wet/dry season rides on top.
+- **Weather is per position** — a stormy biome can rain while a neighbouring clear one stays sunny,
+  mountain tops sit in cloud and snow while the valley below is clear, and **fronts drift across the
+  world**, so you can watch a storm arrive and move on. Weather is hidden + silent in caves/underground.
+  Admins can override time/weather (see §7).
+- **Beyond rain and snow** — drizzle, sleet, hail, ground fog and whiteout fog, gales, blizzards,
+  heatwaves, and the genuinely alien: **acid rain** on toxic worlds, **ember fall** on volcanic ones,
+  **spore blooms** in jungles and swamps, and **ion storms** and **meteor showers** that even airless
+  moons and asteroids get — those used to have no weather at all.
+- **Weather has consequences** — corrosive and falling weather drains your suit out in the open, so a
+  roof is a real answer; rain waters planted flora so it regrows faster; scanners lose range in blown
+  grit and charged air; animals hunker down in violent weather; snow settles on the ground and melts
+  again when it warms up.
+- **…and opportunities** — an **ion storm charges an exposed suit**, a **spore bloom** fattens what you
+  harvest. Sometimes the right move is to walk into the bad weather. Craft the **weather scanner** to
+  read what is coming before you set out.
 - **Multiplayer:** players can be on **different planets / star systems at once**, each with their own ship
   and start point. The star map (Tab → Map) shows where everyone is ("◈ Alice, Bob").
 
@@ -699,6 +716,16 @@ separate unlock; admins can still disable it through server world rules.
   the vertical axis — it always stays upright so beds and campfires keep working. Symmetric forms (sphere,
   dome, cylinder, …) ignore orientation. Mining returns the shaped item; orientation is re-derived each
   time you place it again.
+- **Auto follows your crosshair:** when a cell has no floor under it, the shape leans on **the wall face you
+  actually clicked** instead of whichever neighbouring wall the game finds first. Building on a floor still
+  keeps the shape upright, so extending a floor sideways lays the next block flat as before.
+- **Ladders** are rotatable too, with their own short cycle: **Auto → each of the four walls → free-standing
+  → Auto**. A placed ladder now *keeps* the side you gave it — mining the wall next to it no longer flips the
+  whole column around or turns it into poles. Ladders placed before this update, and those in settlements,
+  keep choosing their wall automatically.
+- **Stairs** you craft are a real staircase now instead of a full cube: they get step geometry you can walk
+  up, and **R** turns them to face any direction (or tips them upside down for an inverted step). Stairs
+  placed before this update stay cubes until you mine and place them again.
 
 ### Designing your own forms
 - Craft the **Shaping Tool** (`shape_tool`, workshop recipe + the cheap `shape_tool` blueprint) and
@@ -722,24 +749,31 @@ separate unlock; admins can still disable it through server world rules.
 - **Reporting:** `/reportshape` flags the nearest self-made form for the server operator, the same way
   `/reportpaint` flags a painted block.
 
-### Character & the pixel-face editor
-- The **Character** menu tab shows your avatar (colours/gear preview). It also hosts a **pixel-face editor**:
-  open it to **draw a 32×32 pixel face** on a paint canvas (a 16-colour palette plus an eraser), then **Apply**.
-  **Pick colour** turns the cursor into an eyedropper for one click — it takes the colour already under it,
-  which beats hunting for the shade you used earlier. The **colour wheel** picks by hue: drag the point around
-  the ring (outward = more saturated) and the brush snaps to the closest palette entry. Faces drawn at the old
-  16×16 size still work — they are scaled up automatically the first time you open them.
-- Your drawn face appears on **your figure**, in the live Character-tab preview, and **on your avatar for every
-  other player** (it's server-persistent, so the face follows you). The same editor is also available before you
-  start, in the main-menu **Avatar Designer** (a **Pixel face** button there).
-- **Body paint**: the Character tab (and the Avatar Designer) also has **Paint torso / Paint arms / Paint legs /
-  Paint helmet** — the same pixel editor, painting **one face of the part at a time at full size**. The part's
-  faces are stacked as small labelled **live tiles** beside the canvas (Front / Right / Back / Left; arms and
-  legs get one tile column per limb, headed Left/Right) — click a tile to paint that face, and the tiles update
-  while you draw so you always see the whole part. **Clear** wipes only the face you are on. The helmet's front
-  stays open — your face always shows — and unpainted pixels keep the part's chosen colour, so the colour
-  buttons still work underneath a painting. Paintings are server-persistent and visible to everyone, exactly
-  like the face.
+### Appearance: colours, your pixel face and body paint
+- **Tab → Settings → Appearance** opens one screen for how your figure looks. Along the top are tabs for
+  **Face · Torso · Arms · Legs · Helmet**; a slowly turning figure beside the canvas shows what you are doing,
+  including the back you just painted. Switching tabs saves the part you were on, **Apply** saves and closes,
+  **Back** leaves the part you are on unsaved. The same screen sits behind the **Appearance** button in the
+  main-menu **Avatar Designer**.
+- **Base colour** — every tab has the part's colour right beside the canvas: 30 swatches, or the **colour
+  wheel** for any colour at all (skin and suit colours are not limited to the list). Unpainted pixels are drawn
+  in that colour on the canvas, because that is what will show through. The helmet takes the torso colour.
+- **Painting** — left-click paints, right-click erases, **E** is the eraser swatch. **Fill area** floods the
+  area you click with the current colour (right-click fills it back to empty, **Shift** replaces that colour
+  everywhere on the face you are on). **Pick colour** takes the colour under the cursor for one click —
+  **Alt+click** or the **middle mouse button** do the same at any time. **Undo** takes the last step back;
+  press it again and the step returns.
+- **Colours** — 32 paint colours plus the eraser, arranged so each hue has a lighter and a darker partner for
+  shading. The colour wheel picks by hue (outward = more saturated) with a **brightness column** beside it, and
+  snaps to the closest palette entry. Faces drawn at the old 16×16 size still work — they are scaled up
+  automatically the first time you open them.
+- **The body parts** are painted **one face at a time at full size**. The part's faces are stacked as small
+  labelled **live tiles** beside the canvas (Front / Right / Back / Left; arms and legs get one tile column per
+  limb, headed Left/Right) — click a tile to paint that face, and the tiles update while you draw so you always
+  see the whole part. **Clear** wipes only the face you are on, and a fill never runs over onto another face.
+  The helmet's front stays open, so your face always shows.
+- Everything here appears on **your figure** and **on your avatar for every other player** — it is
+  server-persistent, so your look follows you to any world.
 
 ### Death & respawn
 - At 0 health you respawn at the ship's **Medbay heal-tank** (vitals restored); a salvage capsule may drop

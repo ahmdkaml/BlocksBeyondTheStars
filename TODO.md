@@ -104,6 +104,143 @@ Per-item detail lives in the dated work log below. **Since 2026-07 versions are 
 
 ---
 
+### ★ Space HUD: the cargo readout stopped overprinting the hull bar (#915, 2026-08-10, branch fix/space-hud-cargo-overlap)
+The flight view's top-left `Cargo: N` label was drawn straight across the on-foot HUD's **Hull** bar (and
+`O₂: n%` did the same on an EVA). The two live on **different canvases** — `SpaceView`'s overlay at
+`sortingOrder 12` over `HudUi` at `10` — but both are built at the same 1536×864 reference with the same
+`Expand` mode and UI-scale divisor, so they share one coordinate space and the overlay's text wins the
+depth test. The label sat at a hard-coded `y = -160`, which is exactly where the vitals panel's content ends
+**on foot**; `RefreshVitals` appends the hull + shield rows and grows the panel from 116 to 196 px whenever
+`ShipCombat != null` — precisely the space-flight state — so the first appended row landed in the reserved
+slot. Guaranteed in flight, impossible on foot, which is why it survived so long.
+**Fix, two parts.** `HudUi` now publishes its live panel edge as `VitalsBottomY` and `SpaceView` parks its
+readout below it every frame, so the block follows whatever rows the panel is showing instead of assuming a
+fixed edge — the bug class is gone, not just this instance. And **hull + shield moved into the flight HUD**
+as real gauges: the vitals panel drops its ship rows while piloting (the same step-aside the compass and the
+time-of-day panel already make), and the flight view draws its own hull/shield bars under the cargo line, in
+the same column as the suit's bars so the two read as one stack. A pilot gets the fill back — `HULL 240`
+alone never said 240 *of what* — and the numbers stay, printed on the bars. The old duplicate `HULL/SHD`
+text is gone from the instrument line, which is back to `SPD/THR/HDG`. The bars inherit the panel's warning
+behaviour (blink toward red below 10 %, clearing at 15 %, plus the 2.5 s `vitals_warning` cue) and add a
+guard the panel lacked: a system the ship doesn't *have* (`Max == 0`) never alarms, so a shield-less ship
+stops screaming. On an EVA nothing changes — the panel keeps its rows there, because the flight instruments
+are hidden and it is the only hull readout. Clears the "known pre-existing wart" noted under the screenshot
+work below.
+
+### ★ Every species gets its own voice: phrase, cadence, timbre — and the combat cues too (#901–#907, 2026-08-10, branch feat/creature-voice-genome)
+Generated species differed enormously by sight and barely at all by ear, because **the voice was not a
+generated trait**: the client picked `pool[hash(speciesId) % poolLength]` plus a pitch multiplier — and
+species ids are `sp0`..`sp8`, which repeat on *every* planet, so the whole game had about nine voices per
+habitat. Now a species derives a full **voice genome** from a per-world `VoiceSeed` and the traits it
+already has: base call, optional second call layered behind it, a timbre op, phrase length, pulse gap,
+pitch contour and its own calling rate. The coupling is the point — an eyeless cave dweller fires a rising
+train of 4–7 clicks, a titan lets out one slow bellow every half-minute, a medusa is nearly silent, a pack
+hunter barks short saturated bursts. The **combat cues inherit the same timbre** (#903), which retires the
+6-slot bank where every large hostile creature in every world screamed from the same five files.
+Supporting work: `SampleKit` grew eight WebGL-safe sampler ops plus two-sample layering, and its **static
+bake cache is now capped (LRU 64) and cleared on world teardown** (#901) — it was neither, and per-species
+bakes would have leaked ~22 MB per planet with no release point, since `GameBootstrap` survives
+interplanetary travel; bakes are mono (halving memory and DSP) and rendered one per frame off the audio
+path. Phrases run on the #908 world clock, so a paused world holds mid-call. Call selection moved to
+**rendezvous hashing** (#905), so growing a pool now re-voices ~1/N of species instead of all of them.
+21 new ElevenLabs calls top up the starved water/lava/air/amphibian pools (#906, water had five voices for
+every ocean in the game), and all 69 call assets were switched to mono. The scanner now names a creature's
+call (#907) in all 14 languages, making the voice a readable trait like its colour.
+### ★ Weather overhaul: episodes, wind, alien weather, moving fronts and real stakes (#900, 2026-08-10, branch feat/weather-overhaul)
+The weather system was technically complete but structurally flat, and one bug made it worse than it
+looked: `InitWeather` seeded the weather RNG from the **save seed alone**, unsalted by `LocationId`, so
+every world in a save ran the *same* stream in lockstep — two worlds with the same storm chance had
+literally identical weather — and because `InitWeather` runs on every fresh world load, a restart
+replayed it. Salting it per world is a one-line fix and the single biggest win in the package.
+
+The model moved into a pure, server-free `WeatherModel.cs` (fast to test) built as **two layers**: a
+**ladder** (`clear/clouds/rain/storm`) carrying an explicit severity — the only thing the biome offset,
+fronts and altitude shift — and **events** that override the state and never enter that arithmetic.
+That split is what defuses the old `+2` biome-offset trap: appending a state to the ramp array used to
+silently rebalance every biome.
+
+Weather now runs in **episodes**: each rolls its own peak, duration and precipitation form, and
+intensity is an envelope (attack → plateau → decay), so it swells and fades instead of snapping on and
+no two storms are equally strong. Episode length scales with a **per-world volatility** (the hardcoded
+25 s tick is gone), transitions are biased by **afternoon convection**, a **dawn** fog window and a slow
+**seasonal** swing over the shared clock, and the precipitation form is rolled per episode — a temperate
+world no longer sees exactly one kind of rain forever.
+
+New states: `drizzle`, `ground_fog`, `gale`, `blizzard`, `heatwave`, `acid_rain`, `ion_storm`,
+`meteor_shower`, `ember_fall`, `spore_bloom` (no protocol change — `Weather`/`Precipitation` are
+strings). **Airless bodies finally have weather**: the ladder stays pinned to clear, but the
+vacuum-safe events run, so asteroids and airless moons stop being the one place a space game is
+boring. `overcast` worlds gained a ladder **floor** instead of being frozen on clouds; `clear` worlds a
+**ceiling** (no rain ramp, but gales, fog and heatwaves still pass through).
+
+Space: 0–2 **fronts** drift along the world's east–west wrap and boost the ladder where they pass, and
+**altitude** adds a step above the cloud line — summits sit in cloud and snow while the valley is
+clear. Both feed the existing per-player environment, so no new plumbing was needed.
+
+Stakes, finally: corrosive/falling weather drains the suit **unless roofed**, an **ion storm charges an
+exposed suit** (the inversion that makes bad weather worth walking into), rain speeds flora regrow, a
+**spore bloom** fattens the harvest, scanners lose range in grit and charged air, creatures hunker down,
+and **snow settles as real blocks** on a hard budget — near a player only, capped per pass and per
+world, melting on warm-up, tracked in a new `weather_deposit` table so the melt pass can never remove
+snow a *player* placed. New `weather_scanner` gadget + forecast messages read the coming episodes.
+Client: extrapolated intensity/wind (no more 5 s staircase), lightning that lights the **terrain**,
+thunder delayed by distance, a HUD weather chip, 7 new audio beds, 15 languages.
+
+### ★ Paint editors: fill tool, findable eyedropper, 32-colour palette, one Appearance screen (#899, 2026-08-10, branch feat/paint-editor-tools)
+Every pixel editor (avatar face, the four body-paint parts, the block paint tool — all one `FaceEditor`)
+gained a **fill tool** (region-clamped flood fill; Shift = replace that colour everywhere in the region)
+with **single-level undo** that doubles as redo, and the eyedropper that was already there became
+findable: **Alt+click / middle-click** pick a colour, and fill/pick/undo sit in one tool row. The pixel
+palette doubled to **32 colours** — the payload alphabet widened from hex to base32 (`0-9a-v`, same
+payload length, indices 1–15 unchanged, so no existing art moves) and the 16 new slots are shading
+partners for the existing hues; the colour wheel got a brightness column, without which half of them
+were unreachable. Unpainted pixels now render in the subject's **real base colour** (skin / part tint /
+the block's paper canvas) instead of a lying dark slate. Base colours moved into one shared
+`AppearancePalette` (30 curated entries, replacing two different hard-coded lists) and can be any RGB
+via the wheel. Finally the Character tab's **nine cards collapsed into one "Appearance" card**: the five
+parts are tabs of a single editor with the base colour beside the canvas it tints and a full-turntable
+live figure; switching tabs auto-commits, and a client-side send queue paces commits past the server's
+shared 2 s appearance rate limit (which used to swallow all but the first). `Protocol.Version` 2 → 3:
+an older server charset-checks against hex and would silently drop a painting using the new symbols.
+
+### ★ The Esc pause actually stops the world the player can see (#908, 2026-08-10, branch fix/908-singleplayer-pause)
+Follow-up to #612, which made the Esc menu hold the **server** but never told the client about it:
+`NetworkClient.PauseStateReceived` had no subscribers, so everything the client simulates itself kept
+running behind the dialog. `GameBootstrap` now exposes `WorldPaused` / `WorldDeltaTime` / `WorldTime`,
+fed from `PauseState` by a new unit-tested `WorldClock` (Client.Core) that stands still while held and
+skips the paused stretch, so timers don't all fire at once on resume. Moved onto that clock: the
+player's own gravity (pausing mid-fall no longer drops you), micro-fauna, creature bodies + idle/answer
+calls + lunges, planet enemies and bandits, settlement NPCs, the geyser/lava-fall/waterfall ambience,
+and — the "night keeps falling" part — the client's *local* day clock in `Sky` and `SkyBodiesView` plus
+the cloud deck. Deliberately still live: music, UI, the camera and shader/station-prop flicker, because
+a fully frozen image reads as a crash. Weather needed no change (already gated on `MenuOpen`). Server
+side: `JoinedCount` no longer counts spectators (#487 observers), so an admin quietly watching a world
+stops silently denying its only player their pause. No new locale keys.
+
+### ★ Orientable ladders, real crafted stairs, Auto follows the crosshair (#909, 2026-08-10, branch feat/orientable-ladders-909)
+Three placement fixes that all live on the existing per-voxel shape descriptor — no wire, save or format
+change anywhere. **(1) Auto uses the face you clicked.** `DeriveShapeUpFace` picked the surface a shape
+rests on by scanning neighbours in a fixed order, so building a ramp into a corner landed on whichever
+neighbour that order reached first. The client now answers the Auto question itself (`PendingPlacement`)
+and sends the result: floor first as before, then **the wall under the crosshair**, then the old scan
+order. The server keeps its own derivation for intents with no up-face (older clients, internal
+placements). **(2) The ladder keeps the wall it was given.** A placed ladder stored *no* form at all —
+`ladder` is neither shapeable nor furniture — and the mesher re-invented the look on every rebuild
+(`LadderMountUpFace`), so ladders hugged the wrong wall, turned into poles when free-standing, and flipped
+whenever a neighbouring wall was mined. Placement now stamps the real form (`Panel` + mount face, or
+`Post` free-standing) and the mesher prefers it, falling back to the old heuristic for a descriptor of 0 —
+so pre-#909 saves, settlement ladders and ship layouts keep behaving exactly as before. The rotate key gets
+a ladder-sized cycle: **Auto → the four walls → free-standing → Auto** (its plate is a square Panel, so the
+24-state walk would offer four identical turns and two useless tips). **(3) The crafted staircase is a
+staircase.** `stairs` placed as a plain solid cube although `BlockShape.Stairs` was fully implemented; it
+is now stamped like a prop (step geometry + collider, R turns and tips it). Existing stairs blocks stay
+cubes until re-placed. Plus a drop-strip fix: `BreakBlockAt` compared the stamped form against the ONE
+default, so the ladder's pole form would have dropped as its own item key, split the stack and then placed
+as a plate anyway — the rule now asks `PropShapes.IsStampedForm`. `FurnitureShapes` → `PropShapes`
+(furniture, ladder and stairs share the path) with a `PropOrientation` per prop, so the client cycle can
+only ever offer what the server honours. 7 new tests, `hud.shape.on_wall`/`free_standing` in en+de, manual
+updated.
+
 ### ★ Website translated into all 13 game languages (2026-08-10, branch feat/wix-i18n-locale-tools)
 The full website (all pages, menu, forms, image alt texts) now has complete translations in every
 game language: en/it plus newly created es, fr, nl, pl, pt, tr, ru, uk, ja, ko, zh — the 11 new Wix
@@ -206,7 +343,8 @@ locale fix):
 - **Space shot aims at the home planet**: new `SpaceView.CaptureAimAtNearestBody()` snaps flight
   yaw+pitch toward the nearest landable body, so `space_flight.png` shows ship + ringed planet instead
   of empty starfield (fixed `FlightHeading` stays as the no-bodies fallback).
-- Known pre-existing wart (unchanged): the space HUD "Cargo: N" label overlaps the Hull bar.
+- Known pre-existing wart (noted here, since **fixed** — see the #915 entry above): the space HUD
+  "Cargo: N" label overlapped the Hull bar.
 docs/screenshots/README.md documents the sandbox mode, the lava seed and the single-language-reshoot
 gotcha (reused save resumes on foot; a wandered creature can block the frame — delete the save).
 

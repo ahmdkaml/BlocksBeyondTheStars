@@ -3,6 +3,7 @@
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
 using System.Collections.Generic;
 using BlocksBeyondTheStars.Networking.Messages;
+using BlocksBeyondTheStars.Shared.Definitions;
 using UnityEngine;
 
 namespace BlocksBeyondTheStars.Client
@@ -22,9 +23,14 @@ namespace BlocksBeyondTheStars.Client
             public GameObject Root;
             public Vector3 Target;
             public string Bank;   // creature_{size}_{disposition} voice bank (hurt/alert/attack/die)
-            public string Call;   // this species' signature idle call (creature_call_*)
+            public CreatureVoice Voice; // this species' generated voice — call, phrase, cadence, timbre (#902)
             public float Pitch;   // per-species voice pitch (size + a per-species offset)
-            public float NextCall; // Time.time of the next idle vocalisation
+            public float NextCall; // world time of the next idle vocalisation
+            public int PulsesLeft; // pulses still to fire in the phrase currently being spoken (#902)
+            public int PulseIndex; // which pulse of the phrase comes next (drives the pitch contour)
+            public float NextPulseAt; // world time of that pulse — a paused world holds mid-phrase (#908)
+            public float PhraseVol;   // base volume for the phrase in progress (a snore is quieter)
+            public Vector3 PhraseOffset; // where the phrase is spoken from (an "answer" comes from nearby)
             public float AnswerAt; // pending call-answer time (#876) — 0 while none is scheduled
             public float NextAttack; // throttles the attack call while hostile + close
             public bool PrevHostile; // to detect the turn-hostile transition (alert)
@@ -33,7 +39,7 @@ namespace BlocksBeyondTheStars.Client
             public Vector3 PrevSettled; // last frame's smoothed position → velocity for facing
             public Vector3 FaceDir;     // smoothed heading the body turns to face (so it doesn't moonwalk)
             public Vector3 TargetVel;     // velocity estimated from consecutive server updates (#654)
-            public float LastTargetChange; // Time.time of the last authoritative position change (#654)
+            public float LastTargetChange; // world time of the last authoritative position change (#654)
             public float PitchDeg;         // smoothed slope pitch (#652) — nose up/down along real motion
             public float RollDeg;          // smoothed banking roll (#652) — fliers lean into turns
             public Vector3 PrevFaceDir;    // last frame's facing → heading rate for the banking roll
@@ -60,6 +66,18 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
+            // World time, not frame time (#908). While the server holds the world for the pause menu both are
+            // stationary, so animals stop walking, calling, answering and lunging with everything else — and
+            // because WorldTime skips the paused stretch, the timers below do not all fire at once on resume.
+            float now = Game.WorldTime;
+            float dt = Game.WorldDeltaTime;
+
+            // One queued voice variant is rendered per frame (#901): the sampler runs synchronously on the
+            // main thread, so baking several in one frame would stutter — worst on WebGL's single thread.
+            // Deliberately on frame time, not world time: this is render-side work with no world effect, and
+            // a paused world is exactly when there is spare budget to get the baking done.
+            CreatureVoiceBank.Pump();
+
             var seen = _seenScratch;
             seen.Clear();
             var cam = Camera.main; // for the floating health bars (#692)
@@ -73,26 +91,30 @@ namespace BlocksBeyondTheStars.Client
                     root.transform.SetParent(transform, true); // under the game root → destroyed on teardown (not leaked into menus/editors)
                     root.transform.position = Game.ScenePos(pos.x, pos.y, pos.z); // seam-aware (longitude wraps)
                     new CreatureBuilder().Build(root, c);
-                    int idh = SpeciesHash(c.SpeciesId);
+                    // The generated voice (#902–#907): call sample, phrase rhythm, pitch contour, calling
+                    // rate and timbre op, all derived from the species' world-unique voice seed and the
+                    // traits it already has — so the sound reads as coming from THAT body. Deterministic
+                    // per species: every individual of a species sounds like the same animal.
+                    var voice = CreatureVoiceBank.For(c);
+                    bool echo = string.Equals(c.Habitat, "Cave", System.StringComparison.OrdinalIgnoreCase);
+                    string bank = Bank(c);
+                    CreatureVoiceBank.Prewarm(voice, bank, echo);
                     float sizePitch = Mathf.Clamp(1.5f - 0.35f * c.Size, 0.7f, 1.6f);
-                    float speciesOffset = 0.82f + (idh % 37) / 37f * 0.45f; // 0.82..1.27, consistent per species
+                    float speciesOffset = 0.82f + voice.PitchStep / 37f * 0.45f; // 0.82..1.27 per species
                     entry = new Entry
                     {
                         Root = root,
                         Target = pos,
-                        Bank = Bank(c),
-                        // The signature call gives each species a distinct voice; the size+species pitch keeps
-                        // it consistent across all individuals of that species (never random per individual). The
-                        // call pool is habitat-flavoured (item 21): cave dwellers moan/drone, amphibians croak.
-                        Call = CallForHabitat(c.Habitat, idh),
-                        Echo = string.Equals(c.Habitat, "Cave", System.StringComparison.OrdinalIgnoreCase),
+                        Bank = bank,
+                        Voice = voice,
+                        Echo = echo,
                         Pitch = Mathf.Clamp(sizePitch * speciesOffset, 0.6f, 1.85f),
-                        NextCall = Time.time + Random.Range(2f, 6f),
+                        NextCall = now + Random.Range(2f, 6f),
                         Settled = pos,
                         PrevSettled = pos,
                         FaceDir = Vector3.forward,
                         PrevFaceDir = Vector3.forward,
-                        LastTargetChange = Time.time,
+                        LastTargetChange = now,
                         PrevHostile = c.Hostile,
                         PrevHull = c.Hull,
                     };
@@ -106,21 +128,21 @@ namespace BlocksBeyondTheStars.Client
                 // (spawn shove, eviction) reset the estimate instead of predicting through them.
                 if ((pos - entry.Target).sqrMagnitude > 1e-6f)
                 {
-                    float gap = Mathf.Max(0.05f, Time.time - entry.LastTargetChange);
+                    float gap = Mathf.Max(0.05f, now - entry.LastTargetChange);
                     var estimated = (pos - entry.Target) / gap;
                     entry.TargetVel = estimated.sqrMagnitude > 64f ? Vector3.zero : estimated;
-                    entry.LastTargetChange = Time.time;
+                    entry.LastTargetChange = now;
                 }
 
                 entry.Target = pos;
-                var predicted = entry.Target + entry.TargetVel * Mathf.Min(Time.time - entry.LastTargetChange, 0.3f);
+                var predicted = entry.Target + entry.TargetVel * Mathf.Min(now - entry.LastTargetChange, 0.3f);
                 // Smoothly chase the (extrapolated) authoritative position; a visible lunge toward the
                 // player is added on top during an attack so attacks read clearly.
-                entry.Settled = Vector3.Lerp(entry.Settled, predicted, Time.deltaTime * 8f);
+                entry.Settled = Vector3.Lerp(entry.Settled, predicted, dt * 8f);
                 Vector3 lunge = Vector3.zero;
-                if (Time.time < entry.AttackUntil)
+                if (now < entry.AttackUntil)
                 {
-                    float k = 1f - (entry.AttackUntil - Time.time) / 0.22f;
+                    float k = 1f - (entry.AttackUntil - now) / 0.22f;
                     var to = Game.PlayerPosition - Game.ScenePos(entry.Settled.x, entry.Settled.y, entry.Settled.z); to.y = 0f;
                     if (to.sqrMagnitude > 0.04f)
                     {
@@ -146,7 +168,7 @@ namespace BlocksBeyondTheStars.Client
                 vel.y = 0f;
                 if (vel.sqrMagnitude > 1e-5f)
                 {
-                    entry.FaceDir = Vector3.Slerp(entry.FaceDir, vel.normalized, 1f - Mathf.Exp(-8f * Time.deltaTime));
+                    entry.FaceDir = Vector3.Slerp(entry.FaceDir, vel.normalized, 1f - Mathf.Exp(-8f * dt));
                     bool medusa = string.Equals(c.BodyPlan, "Medusa", System.StringComparison.OrdinalIgnoreCase);
                     float targetPitch = 0f, targetRoll = 0f;
                     if (!medusa)
@@ -157,14 +179,14 @@ namespace BlocksBeyondTheStars.Client
                         if (string.Equals(c.Habitat, "Air", System.StringComparison.OrdinalIgnoreCase))
                         {
                             float turnRate = Vector3.SignedAngle(entry.PrevFaceDir, entry.FaceDir, Vector3.up)
-                                / Mathf.Max(Time.deltaTime, 1e-4f);
+                                / Mathf.Max(dt, 1e-4f);
                             targetRoll = Mathf.Clamp(-turnRate * 0.25f, -20f, 20f);
                         }
                     }
 
                     entry.PrevFaceDir = entry.FaceDir;
-                    entry.PitchDeg = Mathf.Lerp(entry.PitchDeg, targetPitch, 1f - Mathf.Exp(-6f * Time.deltaTime));
-                    entry.RollDeg = Mathf.Lerp(entry.RollDeg, targetRoll, 1f - Mathf.Exp(-6f * Time.deltaTime));
+                    entry.PitchDeg = Mathf.Lerp(entry.PitchDeg, targetPitch, 1f - Mathf.Exp(-6f * dt));
+                    entry.RollDeg = Mathf.Lerp(entry.RollDeg, targetRoll, 1f - Mathf.Exp(-6f * dt));
                     if (entry.FaceDir.sqrMagnitude > 1e-4f)
                     {
                         entry.Root.transform.rotation = Quaternion.LookRotation(entry.FaceDir, Vector3.up)
@@ -176,66 +198,71 @@ namespace BlocksBeyondTheStars.Client
                 UpdateNameplate(entry, c);          // floating name label above a tamed companion
                 UpdateSleep(entry, c);              // breathing bob + "z z z" while the creature is asleep (off-phase)
 
-                // Periodic idle vocalisation, spatialised at the creature, pitched by its size. A sleeper is
-                // quiet — only an occasional soft, low snore rather than its full waking call. Every utterance
-                // gets a small pitch/volume jitter and a random take of the species call (#876/#879) — the
-                // species voice stays deterministic, only the individual utterance varies.
-                if (Time.time >= entry.NextCall)
+                // Periodic idle vocalisation (#902): a species speaks a PHRASE, not a one-shot — a number of
+                // pulses at its own spacing, along its own pitch contour, at its own calling rate. A blind
+                // cave dweller fires a rising click train; a titan lets out one slow bellow a half-minute
+                // apart. A sleeper is quiet: an occasional soft, low snore rather than its waking call.
+                // Every utterance still gets the small pitch/volume jitter from #876, so no two are identical.
+                // All of it runs on world time (#908), so a paused world holds mid-phrase.
+                if (entry.PulsesLeft <= 0 && now >= entry.NextCall)
                 {
                     if (c.Asleep)
                     {
-                        entry.NextCall = Time.time + Random.Range(9f, 18f);
-                        ClientAudio.Instance?.At(TakeOf(entry.Call), entry.Root.transform.position,
-                            entry.Pitch * 0.7f * PitchJitter(), 0.3f * VolJitter(), entry.Echo);
+                        // Sleep slows the species' own rate rather than replacing it with a global constant.
+                        entry.NextCall = now + Random.Range(entry.Voice.CadenceMin, entry.Voice.CadenceMax) * 1.8f;
+                        StartPhrase(entry, Mathf.Min(entry.Voice.Pulses, 2), 0.3f, Vector3.zero, now);
                     }
                     else
                     {
-                        entry.NextCall = Time.time + Random.Range(5f, 12f);
-                        ClientAudio.Instance?.At(TakeOf(entry.Call), entry.Root.transform.position,
-                            entry.Pitch * PitchJitter(), 0.8f * VolJitter(), entry.Echo);
+                        entry.NextCall = now + Random.Range(entry.Voice.CadenceMin, entry.Voice.CadenceMax);
+                        StartPhrase(entry, entry.Voice.Pulses, 0.8f, Vector3.zero, now);
                         if (Random.value < 0.2f)
                         {
-                            entry.AnswerAt = Time.time + Random.Range(0.4f, 0.9f); // a second animal "answers"
+                            entry.AnswerAt = now + PhraseLength(entry.Voice) + Random.Range(0.4f, 0.9f);
                         }
                     }
                 }
 
-                // The scheduled answer call (#876): the same species voice from a slightly different spot at a
-                // slightly different pitch — reads as a second animal answering the first.
-                if (entry.AnswerAt > 0f && Time.time >= entry.AnswerAt)
+                FirePhrasePulse(entry, c, now);
+
+                // The scheduled answer call (#876): the same species phrase from a slightly different spot,
+                // once the first animal has finished speaking — reads as a second one answering it.
+                if (entry.AnswerAt > 0f && now >= entry.AnswerAt)
                 {
                     entry.AnswerAt = 0f;
-                    if (!c.Asleep)
+                    if (!c.Asleep && entry.PulsesLeft <= 0)
                     {
                         var off = new Vector3(Random.Range(-3f, 3f), 0f, Random.Range(-3f, 3f));
-                        ClientAudio.Instance?.At(TakeOf(entry.Call), entry.Root.transform.position + off,
-                            entry.Pitch * PitchJitter(), 0.55f * VolJitter(), entry.Echo);
+                        StartPhrase(entry, entry.Voice.Pulses, 0.55f, off, now);
                     }
                 }
 
                 // React to authoritative state: hurt on a hull drop, alert on turning hostile,
                 // and a throttled attack call when a hostile creature is close to the player.
+                // The combat cues carry the species' own timbre too (#903). Before this they came straight
+                // out of a 6-slot bank (size × hostility), so every large hostile creature in every world
+                // screamed from the same five files — the loudest and most repetitive sound in the game.
                 var audio = ClientAudio.Instance;
                 if (audio != null)
                 {
                     if (c.Hull < entry.PrevHull - 0.5f)
                     {
-                        audio.At(entry.Bank + "_hurt", entry.Root.transform.position, entry.Pitch * PitchJitter(), 0.9f * VolJitter(), entry.Echo);
+                        PlayCue(entry, "_hurt", 0.9f);
                     }
 
                     if (c.Hostile && !entry.PrevHostile)
                     {
-                        audio.At(entry.Bank + "_alert", entry.Root.transform.position, entry.Pitch * PitchJitter(), 0.9f * VolJitter(), entry.Echo);
+                        PlayCue(entry, "_alert", 0.9f);
                     }
 
                     // No bite-lunge once the player has fled into their ship: the server stops targeting a
                     // boarded player (no proximity damage), so the render side must not keep mauling the hull.
-                    if (c.Hostile && !Game.Aboard && Time.time >= entry.NextAttack
+                    if (c.Hostile && !Game.Aboard && now >= entry.NextAttack
                         && (entry.Root.transform.position - Game.PlayerPosition).sqrMagnitude < 9f)
                     {
-                        entry.NextAttack = Time.time + Random.Range(1.5f, 3.5f);
-                        audio.At(entry.Bank + "_attack", entry.Root.transform.position, entry.Pitch * PitchJitter(), 1f * VolJitter(), entry.Echo);
-                        entry.AttackUntil = Time.time + 0.22f;            // lunge
+                        entry.NextAttack = now + Random.Range(1.5f, 3.5f);
+                        PlayCue(entry, "_attack", 1f);
+                        entry.AttackUntil = now + 0.22f;            // lunge
                         SpawnAttackFx(Vector3.Lerp(Game.PlayerPosition, entry.Settled, 0.35f) + Vector3.up * 0.9f);
                     }
                 }
@@ -267,7 +294,7 @@ namespace BlocksBeyondTheStars.Client
                 foreach (var id in stale)
                 {
                     var e = _creatures[id];
-                    ClientAudio.Instance?.At(e.Bank + "_die", e.Root.transform.position, e.Pitch * PitchJitter(), 0.9f * VolJitter());
+                    PlayCue(e, "_die", 0.9f);
                     if (e.Nameplate != null) Destroy(e.Nameplate); // parented to the game root, not e.Root → free it too
                     if (e.Zzz != null) Destroy(e.Zzz);             // sleep label is under the game root too
                     Destroy(e.Root);
@@ -355,7 +382,7 @@ namespace BlocksBeyondTheStars.Client
             }
 
             float s = Mathf.Clamp(c.Size, 0.4f, 8f); // 8: titans (#638)
-            float breathe = Mathf.Sin(Time.time * 1.6f) * 0.03f * s;
+            float breathe = Mathf.Sin(Game.WorldTime * 1.6f) * 0.03f * s;
             e.Root.transform.position += Vector3.up * (breathe - 0.12f * s); // settle low + gentle breathing
 
             if (e.Zzz == null)
@@ -377,7 +404,7 @@ namespace BlocksBeyondTheStars.Client
             }
 
             float top = 1.5f * s + 0.5f;
-            float drift = Mathf.Repeat(Time.time * 0.4f, 1f) * 0.5f; // slow upward drift
+            float drift = Mathf.Repeat(Game.WorldTime * 0.4f, 1f) * 0.5f; // slow upward drift
             var platePos = e.Root.transform.position + Vector3.up * (top + drift);
             e.Zzz.transform.position = platePos;
 
@@ -397,7 +424,7 @@ namespace BlocksBeyondTheStars.Client
             }
 
             if (!e.Zzz.activeSelf) e.Zzz.SetActive(true);
-            alpha *= 0.6f + 0.4f * Mathf.Abs(Mathf.Sin(Time.time * 1.2f)); // gentle breathing pulse
+            alpha *= 0.6f + 0.4f * Mathf.Abs(Mathf.Sin(Game.WorldTime * 1.2f)); // gentle breathing pulse
             var col = new Color(0.8f, 0.88f, 1f, 0.85f * alpha);
             if (e.ZzzText.color != col) e.ZzzText.color = col;
         }
@@ -450,66 +477,9 @@ namespace BlocksBeyondTheStars.Client
             return $"creature_{size}_{(c.Hostile ? "hostile" : "calm")}";
         }
 
-        // Signature idle calls — each species picks one (by id), so a world's fauna sounds varied.
-        private static readonly string[] Calls =
-        {
-            "creature_call_chirp", "creature_call_croak", "creature_call_growl", "creature_call_screech",
-            "creature_call_warble", "creature_call_hoot", "creature_call_trill", "creature_call_click",
-            "creature_call_rumble", "creature_call_bellow", "creature_call_hiss", "creature_call_chitter",
-            // Task 6 — more creature voices.
-            "creature_call_purr", "creature_call_moan", "creature_call_squeak", "creature_call_drone",
-            "creature_call_gurgle", "creature_call_yelp", "creature_call_snarl", "creature_call_whistle",
-            "creature_call_cluck", "creature_call_wail",
-        };
-
-        // Habitat-flavoured idle-call pools (item 21): cave dwellers sound deep + echoey, amphibians wet +
-        // croaky, water creatures burble, lava critters hiss/rumble, fliers shriek/trill. Land uses the full
-        // pool. The per-species pick stays deterministic (by id), so each species keeps one consistent voice.
-        private static readonly string[] CaveCalls =
-        {
-            "creature_call_moan", "creature_call_drone", "creature_call_wail", "creature_call_hoot",
-            "creature_call_whistle", "creature_call_click", "creature_call_thrum",
-        };
-
-        private static readonly string[] AmphibianCalls =
-        {
-            "creature_call_croak", "creature_call_gurgle", "creature_call_warble", "creature_call_trill",
-            "creature_call_cluck", "creature_call_burble",
-        };
-
-        private static readonly string[] WaterCalls =
-        {
-            "creature_call_gurgle", "creature_call_warble", "creature_call_click", "creature_call_whistle",
-            "creature_call_burble",
-        };
-
-        private static readonly string[] LavaCalls =
-        {
-            "creature_call_hiss", "creature_call_rumble", "creature_call_growl", "creature_call_snarl",
-            "creature_call_sizzle",
-        };
-
-        private static readonly string[] AirCalls =
-        {
-            "creature_call_screech", "creature_call_whistle", "creature_call_trill", "creature_call_chirp",
-            "creature_call_warble", "creature_call_keen",
-        };
-
-        /// <summary>The species' signature idle call, chosen deterministically (by species id) from its
-        /// habitat's call pool (item 21).</summary>
-        private static string CallForHabitat(string habitat, int idh)
-        {
-            var pool = (habitat ?? "Land").ToLowerInvariant() switch
-            {
-                "cave" => CaveCalls,
-                "amphibian" => AmphibianCalls,
-                "water" => WaterCalls,
-                "lava" => LavaCalls,
-                "air" => AirCalls,
-                _ => Calls,
-            };
-            return pool[(idh & 0x7fffffff) % pool.Length];
-        }
+        // The habitat-flavoured call pools moved to Shared (CreatureVoices) with #905: the server needs them
+        // to name a species' call on a scan, and the selection is now rendezvous hashing rather than
+        // `pool[hash % length]`, so growing a pool no longer re-rolls every existing species' voice.
 
         /// <summary>Per-utterance pitch jitter (#876): small enough to keep the species voice recognisable,
         /// large enough that two calls never sound bit-identical. Web only allows positive pitch.</summary>
@@ -520,23 +490,74 @@ namespace BlocksBeyondTheStars.Client
 
         /// <summary>Picks a random take of the species call (#879): the second ElevenLabs take
         /// (<c>*_2</c>), when bundled, plays half the time — the species keeps its call TYPE but no
-        /// longer repeats one identical file.</summary>
-        private static string TakeOf(string call)
+        /// longer repeats one identical file.
+        /// <para>Only for voices that need no bake. A baked voice would need its alternate take rendered
+        /// too, doubling the sampler's working set (#901) to buy variety the phrase and contour already
+        /// provide.</para></summary>
+        private static string TakeOf(Entry e)
         {
-            var audio = ClientAudio.Instance;
-            string alt = call + "_2";
-            return audio != null && audio.Has(alt) && Random.value < 0.5f ? alt : call;
-        }
-
-        private static int SpeciesHash(string id)
-        {
-            int h = 0;
-            foreach (char ch in id ?? string.Empty)
+            if (e.Voice.NeedsBake || e.Echo)
             {
-                h = h * 31 + ch;
+                return e.Voice.Call;
             }
 
-            return h & 0x7fffffff;
+            var audio = ClientAudio.Instance;
+            string alt = e.Voice.Call + "_2";
+            return audio != null && audio.Has(alt) && Random.value < 0.5f ? alt : e.Voice.Call;
+        }
+
+        /// <summary>Begins a call phrase (#902): <paramref name="pulses"/> one-shots spaced by the species'
+        /// own gap, along its own pitch contour.</summary>
+        private static void StartPhrase(Entry e, int pulses, float volume, Vector3 offset, float now)
+        {
+            e.PulsesLeft = Mathf.Max(1, pulses);
+            e.PulseIndex = 0;
+            e.PhraseVol = volume;
+            e.PhraseOffset = offset;
+            e.NextPulseAt = now;
+        }
+
+        /// <summary>Fires the phrase's next pulse when it is due. Pulses fade slightly across the phrase so a
+        /// click train reads as one utterance rather than several separate animals. Runs on world time
+        /// (#908), so pausing holds a phrase where it is instead of dumping the rest on resume.</summary>
+        private static void FirePhrasePulse(Entry e, NetCreature c, float now)
+        {
+            if (e.PulsesLeft <= 0 || now < e.NextPulseAt)
+            {
+                return;
+            }
+
+            var voice = e.Voice;
+            float contour = CreatureVoiceBank.ContourPitch(voice.Contour, e.PulseIndex, voice.Pulses);
+            float decay = 1f - 0.1f * e.PulseIndex;
+            float pitch = e.Pitch * contour * PitchJitter() * (c.Asleep ? 0.7f : 1f);
+            var pos = e.Root.transform.position + e.PhraseOffset;
+
+            string clipId = TakeOf(e);
+            var clip = CreatureVoiceBank.Resolve(clipId, voice, e.Echo);
+            if (clip != null)
+            {
+                ClientAudio.Instance?.AtClip(clip, pos, pitch, e.PhraseVol * decay * VolJitter(), clipId);
+            }
+
+            e.PulseIndex++;
+            e.PulsesLeft--;
+            e.NextPulseAt = now + voice.PulseGapMs * 0.001f;
+        }
+
+        /// <summary>How long a full phrase takes — so an answering animal waits for the first to finish.</summary>
+        private static float PhraseLength(CreatureVoice voice)
+            => Mathf.Max(0, voice.Pulses - 1) * voice.PulseGapMs * 0.001f;
+
+        /// <summary>Plays one of the species' combat/damage cues with its own timbre applied (#903).</summary>
+        private static void PlayCue(Entry e, string cue, float volume)
+        {
+            var clip = CreatureVoiceBank.Resolve(e.Bank + cue, e.Voice, e.Echo);
+            if (clip != null)
+            {
+                ClientAudio.Instance?.AtClip(clip, e.Root.transform.position,
+                    e.Pitch * PitchJitter(), volume * VolJitter(), e.Bank + cue);
+            }
         }
 
         /// <summary>A brief red "claw slash" burst at the player so a creature's attack reads clearly.</summary>

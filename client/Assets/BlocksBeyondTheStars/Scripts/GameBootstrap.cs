@@ -172,6 +172,27 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>Live total playtime = the server's saved cumulative seconds plus this session so far.</summary>
         public long TotalPlaytimeSeconds => CumulativePlaytimeSeconds + (long)SessionSeconds;
 
+        // --- The held world (#908) -----------------------------------------------------------------------
+        // #612 made the Esc menu stop the SERVER simulation, but the client was never told about it, so
+        // everything it animates itself kept running behind the dialog. Fed from the server's PauseState.
+        private readonly BlocksBeyondTheStars.Client.WorldClock _worldClock = new BlocksBeyondTheStars.Client.WorldClock();
+
+        /// <summary>True while the server is holding the world for our pause menu. False whenever the server
+        /// declined the hold (more than one player joined) — the world really is still running then.</summary>
+        public bool WorldPaused => _worldClock.Paused;
+
+        /// <summary>Seconds to advance CLIENT-SIDE world simulation by this frame — <c>Time.deltaTime</c> while
+        /// the world runs, 0 while it is held. Deliberately derived from the live frame rather than from the
+        /// clock's stored delta so it is correct regardless of script execution order.
+        /// <para>Use this instead of <c>Time.deltaTime</c> for anything that is part of the WORLD (fauna,
+        /// weather, creature bodies). Menus, music, the camera and shader time keep real time on purpose: a
+        /// completely frozen image reads as a crash rather than as a pause.</para></summary>
+        public float WorldDeltaTime => _worldClock.Paused ? 0f : Time.deltaTime;
+
+        /// <summary>Monotonic count of unpaused seconds — the <c>Time.time</c> equivalent for world simulation.
+        /// Timers scheduled against it (a creature's next idle call) do not all fire at once after a long pause.</summary>
+        public float WorldTime => _worldClock.Now;
+
         /// <summary>Recomputes the world's per-species flora colours (deterministic from seed + location,
         /// so every client agrees). Chunks meshed afterwards pick them up via the tint resolver.</summary>
         private void RebuildFloraTints()
@@ -600,6 +621,50 @@ namespace BlocksBeyondTheStars.Client
             env.Weather = "clear";
             env.Precipitation = "none";
             env.Intensity = 0f;
+            env.IntensityRate = 0f;
+            env.WindSpeed = 0f;
+        }
+
+        // --- Weather smoothing (#900) ---------------------------------------------------------------
+        // The server broadcasts the environment on a 5 s heartbeat (plus on state changes and on a big
+        // intensity move). Reading Intensity/WindSpeed straight off the message would step visibly, so the
+        // client extrapolates with the authoritative IntensityRate and eases toward the result. Every FX
+        // reads these instead of env.Intensity.
+        private float _weatherIntensity;
+        private float _windSpeed;
+        private float _windDirection;
+        private float _envAge;
+
+        /// <summary>Smoothed, extrapolated weather strength 0..1 — a swelling storm ramps instead of stepping.</summary>
+        public float WeatherIntensity => _weatherIntensity;
+
+        /// <summary>Smoothed wind strength 0..1: cloud speed, precipitation slant, flora sway, jetpack drift.</summary>
+        public float WindSpeed => _windSpeed;
+
+        /// <summary>Smoothed wind direction in radians on the world XZ plane.</summary>
+        public float WindDirection => _windDirection;
+
+        /// <summary>Wind as a world-space direction vector, scaled by strength — ready to add to a velocity.</summary>
+        public Vector3 WindVector => new Vector3(Mathf.Cos(_windDirection), 0f, Mathf.Sin(_windDirection)) * _windSpeed;
+
+        private void TickWeatherSmoothing()
+        {
+            var env = Environment;
+            if (env == null)
+            {
+                _weatherIntensity = Mathf.MoveTowards(_weatherIntensity, 0f, Time.deltaTime);
+                _windSpeed = Mathf.MoveTowards(_windSpeed, 0f, Time.deltaTime);
+                return;
+            }
+
+            _envAge += Time.deltaTime;
+            // Extrapolate along the reported rate, but never past the 0..1 band or more than one heartbeat
+            // out — a stale message must not run away on its own.
+            float target = Mathf.Clamp01(env.Intensity + env.IntensityRate * Mathf.Min(_envAge, 6f));
+            _weatherIntensity = Mathf.MoveTowards(_weatherIntensity, target, Time.deltaTime * 0.6f);
+            _windSpeed = Mathf.MoveTowards(_windSpeed, Mathf.Clamp01(env.WindSpeed), Time.deltaTime * 0.35f);
+            _windDirection = Mathf.MoveTowardsAngle(
+                _windDirection * Mathf.Rad2Deg, env.WindDirection * Mathf.Rad2Deg, Time.deltaTime * 20f) * Mathf.Deg2Rad;
         }
 
         /// <summary>World-X span over which the local time-of-day shifts a full cycle. This is the world
@@ -907,6 +972,36 @@ namespace BlocksBeyondTheStars.Client
 
         /// <summary>Shows a transient HUD message from a client-side system (e.g. the VEGA autopilot).</summary>
         public void ShowMessage(string text) => LastMessage = text ?? string.Empty;
+
+        /// <summary>
+        /// Renders a weather-scanner reading (#900) as a short, localized block: what the sky is doing here
+        /// now, the next episodes with their ETA, and the nearest front. This is what turns weather from
+        /// something that happens TO the player into something they can plan around.
+        /// </summary>
+        private void OnWeatherForecast(WeatherForecast m)
+        {
+            string Name(string state) => Localizer?.Get("weather." + state) ?? state;
+            string Eta(float seconds) => seconds >= 90f
+                ? string.Format(Localizer?.Get("weather.forecast.minutes") ?? "{0} min", Mathf.RoundToInt(seconds / 60f))
+                : string.Format(Localizer?.Get("weather.forecast.seconds") ?? "{0} s", Mathf.RoundToInt(seconds));
+
+            var sb = new System.Text.StringBuilder();
+            sb.Append(Localizer?.Get("weather.forecast.title") ?? "Weather reading").Append(": ");
+            sb.Append(string.Format(Localizer?.Get("weather.forecast.now") ?? "Now: {0}", Name(m.Current)));
+            foreach (var entry in m.Upcoming)
+            {
+                sb.Append("  •  ").Append(string.Format(
+                    Localizer?.Get("weather.forecast.then") ?? "in {0}: {1}", Eta(entry.StartsInSeconds), Name(entry.State)));
+            }
+
+            sb.Append("  •  ").Append(m.FrontDistance >= 0f
+                ? string.Format(Localizer?.Get("weather.forecast.front") ?? "Front {0} blocks away", Mathf.RoundToInt(m.FrontDistance))
+                : Localizer?.Get("weather.forecast.no_front") ?? "No front nearby");
+            sb.Append("  •  ").Append(Localizer?.Get(
+                m.SeasonWetness >= 0.5f ? "weather.forecast.season_wet" : "weather.forecast.season_dry") ?? string.Empty);
+
+            LastMessage = sb.ToString();
+        }
 
         /// <summary>Generic resolution for "@srv.*" tokens: the token (minus '@') IS the locale key, an
         /// optional ":arg" tail fills the template's {name} placeholder. New server messages use this
@@ -1553,6 +1648,9 @@ namespace BlocksBeyondTheStars.Client
 
                 Knowledge = m.KnowledgePoints;
             };
+            // The server's answer to our pause intent (#908). Honours Allowed implicitly: a declined hold comes
+            // back with Paused = false, so the client keeps simulating exactly as it did before.
+            Network.PauseStateReceived += m => _worldClock.SetPaused(m.Paused);
             Network.ShipPlacementReceived += m => ShipPosition = new Vector3(m.X, m.Y, m.Z);
             Network.ShipStationsReceived += m => Stations = m.Stations;
             Network.PlanetPoisReceived += m => PlanetPois = m.Pois;
@@ -1708,6 +1806,7 @@ namespace BlocksBeyondTheStars.Client
             Network.WorldEnvironmentReceived += m =>
             {
                 Environment = m;
+                _envAge = 0f; // restart the extrapolation window (#900)
                 Circumference = m.Circumference > 0 ? m.Circumference : WorldConstants.Circumference;
                 World?.SetCircumference(Circumference); // chunk/block wrap at this world's size
                 if (CaptureEnvActive)
@@ -1715,6 +1814,7 @@ namespace BlocksBeyondTheStars.Client
                     ApplyCaptureEnv(Environment); // keep marketing shots clear-weather daylight across re-broadcasts
                 }
             };
+            Network.WeatherForecastReceived += OnWeatherForecast;
             Network.WorldResetReceived += OnWorldReset;
             Network.ShipAiLineReceived += m =>
             {
@@ -1858,6 +1958,8 @@ namespace BlocksBeyondTheStars.Client
         private void Update()
         {
             Network?.Poll();
+            _worldClock.Advance(Time.deltaTime); // after Poll, so a PauseState that just landed takes effect now
+            TickWeatherSmoothing();
 
             _skyScanTimer -= Time.deltaTime;
             if (_skyScanTimer <= 0f)
@@ -2750,6 +2852,12 @@ namespace BlocksBeyondTheStars.Client
             IconResolver.ClearCache();
             ShapeIconFactory.ClearCache();
             HeldItem.BlockTileResolver = null;
+
+            // The sampler's baked creature voices are code-created AudioClips held by a STATIC cache, so
+            // they fall in exactly the same trap as the icon caches above: UnloadUnusedAssets cannot free
+            // what a live static reference still pins (#901).
+            SampleKit.ClearCache();
+            CreatureVoiceBank.Clear();
 
             if (ChunkMaterial != null)
             {

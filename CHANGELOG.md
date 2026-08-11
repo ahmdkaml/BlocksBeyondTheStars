@@ -13,6 +13,55 @@ the richer, screenshot-laden versions live there. `(#123)` references the pull r
 
 ## [Unreleased]
 
+### 🌦 Weather overhaul: episodes, wind, alien skies and real stakes (#900)
+
+- **Every world used to have the same weather.** The weather randomiser was seeded from the save seed
+  alone, so all worlds in a save ran the identical sequence in lockstep — and a restart replayed it.
+  Each world now has its own.
+- **Weather comes in episodes.** It builds, holds and fades instead of switching on and off, with its
+  own strength each time, so no two storms are alike. Every world has its own temper: some flip
+  between squalls, others brood under one sky for minutes.
+- **The day and the season have a shape.** Storms build through the afternoon, mist gathers around
+  dawn, and a slow wet/dry season rides on top of it all.
+- **New weather:** drizzle, sleet, ground fog and whiteout fog, gales, blizzards and heatwaves — plus
+  the genuinely alien: **acid rain** on toxic worlds, **ember fall** on volcanic ones, **spore blooms**
+  in jungles and swamps, and **ion storms** and **meteor showers**. Airless moons and asteroids get
+  weather for the first time; overcast worlds are no longer frozen under one grey sky.
+- **Weather moves.** Fronts drift across the world, so you can watch a storm arrive and pass, and
+  mountain tops sit in cloud and snow while the valley below stays clear.
+- **It matters now.** Corrosive and falling weather drains your suit out in the open, so a roof is a
+  real answer. Rain waters planted flora. Scanners lose range in blown grit and charged air. Animals
+  hunker down. Snow settles on the ground and melts again when it warms up.
+- **…and it can pay.** An **ion storm charges an exposed suit**, a **spore bloom** fattens the harvest
+  — sometimes the right move is to walk into the bad weather. The new **weather scanner** reads what
+  is coming before you set out.
+- **Sights and sounds:** lightning lights the whole landscape now, thunder rolls in late from a
+  distant strike, the sky's speed follows the real wind, a weather chip sits in the HUD in all 15
+  languages, and there are seven new weather soundscapes.
+
+### 🎨 Paint editors: fill, a findable eyedropper, 32 colours and one Appearance screen (#899)
+
+- **Fill tool + undo.** Click to flood an area with the current colour (right-click fills with
+  "empty", Shift replaces that colour everywhere in the region). It cannot leak from one box face
+  onto another. Undo takes the last fill, clear or stroke back — press it twice and the change
+  returns.
+- **The eyedropper found its shortcuts.** **Alt+click** or the **middle mouse button** picks up the
+  colour under the cursor; fill, pick and undo now sit together as one tool row.
+- **32 colours instead of 16.** The new half of the palette is shading partners — a lighter and a
+  darker sibling for the hues you actually shade with, two more greys and a deep skin tone — and the
+  colour wheel gained a brightness column so the dark tones are reachable. Every painting drawn
+  before this keeps its exact colours.
+- **The canvas stopped lying.** Unpainted pixels are drawn in the colour that will really show
+  through: your skin, the part's tint, or a block design's paper white.
+- **One "Appearance" screen.** Face, torso, arms, legs and helmet are tabs of a single editor, with
+  the base colour for the part right beside the canvas it tints and a slowly turning figure showing
+  the result — including the back you just painted. It replaces nine separate menu cards.
+- **Any colour for skin and suit.** Base colours come from one shared 30-colour set (the in-game menu
+  and the Avatar Designer used to offer different ones) — or from the colour wheel, which is not
+  limited to the list at all.
+
+  ⚠ Multiplayer: client and server must both be on this version (protocol 3).
+
 ## [2026.8.10] — 2026-08-10
 
 The polyglot release. In one week the game went from four languages to **fourteen** — Dutch,
