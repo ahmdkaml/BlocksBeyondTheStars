@@ -69,6 +69,17 @@ the richer, screenshot-laden versions live there. `(#123)` references the pull r
   is what they were always meant to do; menu tabs, the sidebar headings and the touch controls get
   the same treatment. Text that already fits looks exactly as before.
 
+### 🐛 Fixes
+
+- **The French credits screen was one long line.** Every line break in the French credits text was
+  double-escaped, so the whole screen — family, contributors, playtesters, licences — ran together
+  with visible `\n` markers instead of breaking into lines. The other thirteen languages were fine.
+
+### 🛠️ Behind the scenes
+
+- Ahmed Mohamed Abdelhady Kamel joins the credits for the first unit tests covering `Vector3i`,
+  the block-coordinate type the whole world sits on (#917).
+
 ## [2026.8.10] — 2026-08-10
 
 The polyglot release. In one week the game went from four languages to **fourteen** — Dutch,

@@ -70,12 +70,17 @@ These mirror [AGENTS.md](AGENTS.md) (the deeper contributor guide — please ski
 - **Text language.** Documentation and code comments are **English**. In-game player-facing
   text is **localized** via localization keys in `data/locales/*.json` — never hardcode
   player-facing strings. New keys go into `en.json` **and** `de.json`: that pair is mandatory
-  and must stay complete. Every other language sits on top of it and falls back to English per
-  missing key — French and Spanish are complete too, Italian is in progress
+  and must stay complete. The other twelve languages sit on top of that pair and fall back to
+  English per missing key. All twelve are essentially complete today, but they are still allowed
+  to lag behind — only `en.json` + `de.json` are mandatory
   (see [Translating the game](#translating-the-game)).
 - **Data-driven content.** Blocks, items, recipes, ship modules, tech nodes and planets live
   in `data/*.json`; adding content should not require touching game logic.
 - **Keep `Shared`/`WorldGeneration` `netstandard2.1`-clean** so the Unity client can consume them.
+- **License header on every source file.** Every `.cs` file — tests included — starts with the
+  same three-line AGPL header (`Blocks Beyond the Stars — Copyright …` / `SPDX-License-Identifier:
+  AGPL-3.0-or-later` / `This file is part of …`). Copy it verbatim from any neighbouring file;
+  nothing in CI adds it for you.
 - **Update [TODO.md](TODO.md)** — it is the single Done/Open status doc — when your change
   affects it, and update any doc in `docs/` that your change makes stale.
 
