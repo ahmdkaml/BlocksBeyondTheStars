@@ -55,4 +55,34 @@ public sealed class LocalizerTests
 
         Assert.False(localizer.Has("missing.key"));
     }
+    [Fact]
+    public void Get_ReturnsEnglishFallback_WhenKeyIsMissingFromActiveLocale()
+    {
+        var localizer = new Localizer(
+            GameLocale.German,
+            new Dictionary<string, string>(),
+            new Dictionary<string, string>
+            {
+                ["greeting"] = "Hello",
+            });
+
+        Assert.Equal("Hello", localizer.Get("greeting"));
+    }
+
+    [Fact]
+    public void Get_PrefersActiveLocale_WhenKeyExistsInBothTables()
+    {
+        var localizer = new Localizer(
+            GameLocale.German,
+            new Dictionary<string, string>
+            {
+                ["greeting"] = "Hallo",
+            },
+            new Dictionary<string, string>
+            {
+                ["greeting"] = "Hello",
+            });
+
+        Assert.Equal("Hallo", localizer.Get("greeting"));
+    }
 }
