@@ -7738,10 +7738,38 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
-## 🔬 Analysis (2026-08-12): LAN-playtest multiplayer bugs — NOT implemented yet, awaiting go
+## ✅ Done (2026-08-12): LAN-playtest multiplayer fixes — ghost ships, frozen avatars, landing hang, pad bookkeeping (#954–#959)
+
+Fixes for the five bugs from the 2026-08-12 two-player playtest (analysis in the section above):
+**#954 ghost ships** — `SpaceView.OnStructureDesign` now whitelists static kinds (`asteroid`/`station`);
+`"ship_remote"` designs (other pilots, NPC traders) no longer ALSO spawn as an unscaled, collider-less
+voxel body at the design position (players: the scene origin). `SwitchShip` sends the rebuilt design as
+`"ship_remote"` to everyone but the owner — it used to replace the OTHER clients' own hull. **#955
+flicker** — space interpolators now render behind the actual broadcast intervals (remote ships 0.3 s vs
+0.2 s sends, entities 0.25 s vs 0.15 s), remote avatars get a 2 s grace period instead of being destroyed
+on a single missing snapshot, and collision/incoming-fire ticks run per PILOT (new `PilotSims` per-player
+position/cooldown; the shared `ShipPosition` no longer routes ram damage onto the wrong hull, shields
+regen per ship). **#956 E-landing hang** — `HandleRequestLandingPads` resolves the empty home-body id
+(like `HandleLeaveSpace`) and ALWAYS replies, echoing the requested id; the client resolves the empty id
+before sending and the chooser re-requests once after 5 s, then cancels with a localized error
+(`ui.space.pad_timeout`, all 14 locales) instead of freezing flight forever. **#957 ship "missing"** —
+same-body landings (`RelocateToAssignedPad`) now clear `SentChunks` (stale-world self-heal: everything
+that changed while the player was away re-streams) and send the travel path's ship placement/stations/
+combat-status/environment/doors messages, so compass + map ship markers point at the REAL pad; pads stay
+reserved while their holder is in space, and `PlayerPad` re-validates a stored in-range index against
+occupancy (a fresh joiner's default index 0 was the host's pad). **#958 frozen avatars** — remote avatars
+hide after 3 s without a presence update and despawn after 10 s (presence is a fixed ~10 Hz stream inside
+the AoI, so a live player never trips this); timed-out remotes stop offering trade/dock targeting.
+**#959 locked in own ship** — most plausible triggers removed: the stale door registry after a same-body
+landing (doors now re-sent) and the frozen avatar at the hatch; remote avatars carry no colliders, so
+they cannot physically block. New `LanPlaytestRegressionTests` (5). Playtest verify pending.
+
+---
+
+## 🔬 Analysis (2026-08-12): LAN-playtest multiplayer bugs — implemented the same day, see the entry above
 
 Two-player "Host Game" playtest (world `JustusTest`, v2026.8.11) surfaced five bugs. Root causes
-identified from code + the host-side savegame/server log; fixes are planned but NOT started.
+identified from code + the host-side savegame/server log; fixed in #954–#959 (kept as the analysis record).
 
 1. **Ghost ship in space (fly-through copy).** `SpaceView.OnStructureDesign` only filters
    `Kind == "ship"`/empty — `"ship_remote"` (other players' + NPC traders' hulls) falls through and is
