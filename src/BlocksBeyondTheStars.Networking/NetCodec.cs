@@ -56,6 +56,10 @@ public static class NetCodec
     private static readonly Dictionary<byte, Type> TagToType = new();
     private static readonly Dictionary<Type, byte> TypeToTag = new();
 
+    internal static IReadOnlyDictionary<byte, Type> RegisteredMessages => TagToType;
+
+    internal static IReadOnlyDictionary<Type, byte> RegisteredMessageTags => TypeToTag;
+
     static NetCodec()
     {
         // Client -> Server
