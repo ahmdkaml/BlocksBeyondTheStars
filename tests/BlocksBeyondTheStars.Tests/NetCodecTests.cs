@@ -49,6 +49,239 @@ public sealed class NetCodecTests
                 nonTopLevelRegistrations.Select(
                     entry => $"{entry.Key} -> {entry.Value.FullName}")));
     }
+    private static readonly Dictionary<byte, Type> ProtocolGoldenList = new()
+    {
+        [1] = typeof(JoinRequest),
+        [2] = typeof(MoveIntent),
+        [3] = typeof(MineBlockIntent),
+        [4] = typeof(PlaceBlockIntent),
+        [5] = typeof(CraftIntent),
+        [6] = typeof(UnlockBlueprintIntent),
+        [7] = typeof(SelectHotbarIntent),
+        [8] = typeof(RequestStarMap),
+        [9] = typeof(AdminCommandIntent),
+        [10] = typeof(RequestMissions),
+        [11] = typeof(AcceptMissionIntent),
+        [12] = typeof(TurnInMissionIntent),
+        [13] = typeof(CreateMissionIntent),
+        [14] = typeof(DockRequestIntent),
+        [15] = typeof(DockResponseIntent),
+        [16] = typeof(UndockIntent),
+        [17] = typeof(BuildShipModuleIntent),
+        [18] = typeof(EnterSpaceIntent),
+        [19] = typeof(LeaveSpaceIntent),
+        [20] = typeof(FireWeaponIntent),
+        [21] = typeof(AttackEntityIntent),
+        [22] = typeof(UseStationIntent),
+        [23] = typeof(SetAppearanceIntent),
+        [24] = typeof(CraftShipIntent),
+        [25] = typeof(SwitchShipIntent),
+        [26] = typeof(ConsumeItemIntent),
+        [27] = typeof(LootContainerIntent),
+        [28] = typeof(ShipMoveIntent),
+        [29] = typeof(DisassembleIntent),
+        [30] = typeof(TradeRequestIntent),
+        [31] = typeof(TradeRespondIntent),
+        [32] = typeof(TradeOfferIntent),
+        [33] = typeof(TradeConfirmIntent),
+        [34] = typeof(TradeCancelIntent),
+        [35] = typeof(ScanIntent),
+        [36] = typeof(ScanEntityIntent),
+        [37] = typeof(LoadRationIntent),
+        [38] = typeof(TeleportToShipIntent),
+        [39] = typeof(ToggleStealthIntent),
+        [40] = typeof(BoardStationIntent),
+        [41] = typeof(LeaveStationIntent),
+        [42] = typeof(RepairWreckIntent),
+        [43] = typeof(ClaimWreckIntent),
+        [44] = typeof(TravelIntent),
+        [45] = typeof(SetJetpackIntent),
+        [46] = typeof(DoorInteractIntent),
+        [47] = typeof(FallDamageIntent),
+        [48] = typeof(ShootBlockIntent),
+
+        [50] = typeof(JoinAccepted),
+        [51] = typeof(JoinRejected),
+        [52] = typeof(ChunkDataMessage),
+        [53] = typeof(BlockChanged),
+        [54] = typeof(InventoryUpdate),
+        [55] = typeof(PlayerStateUpdate),
+        [56] = typeof(CraftResult),
+        [57] = typeof(ActionRejected),
+        [58] = typeof(ServerMessage),
+        [59] = typeof(ServerRules),
+        [60] = typeof(RespawnNotice),
+        [61] = typeof(StarMapData),
+        [62] = typeof(MissionList),
+        [63] = typeof(MissionResult),
+        [64] = typeof(DockRequestNotice),
+        [65] = typeof(DockStatus),
+        [66] = typeof(ShipCombatStatus),
+        [67] = typeof(SpaceState),
+        [68] = typeof(SpaceEntityDestroyed),
+        [69] = typeof(SpaceClosed),
+        [70] = typeof(PlanetEnemyList),
+        [71] = typeof(PlanetEnemyDefeated),
+        [72] = typeof(ShipPlacement),
+        [73] = typeof(ShipStations),
+        [74] = typeof(PlayerPresence),
+        [75] = typeof(PlayerLeft),
+        [76] = typeof(OwnedShips),
+        [77] = typeof(WorldEnvironment),
+        [78] = typeof(CreatureList),
+        [79] = typeof(ContainerList),
+        [80] = typeof(TradeUpdate),
+        [81] = typeof(TradeClosed),
+        [82] = typeof(ScanResult),
+        [83] = typeof(StationBoarded),
+        [84] = typeof(NpcList),
+        [85] = typeof(WreckRepairStatus),
+        [86] = typeof(WorldReset),
+        [87] = typeof(MiningProgress),
+        [88] = typeof(PlanetPoiList),
+        [89] = typeof(ChatIntent),
+        [90] = typeof(ChatMessage),
+        [91] = typeof(SaveGameIntent),
+        [92] = typeof(TractorPullIntent),
+        [93] = typeof(DoorList),
+        [94] = typeof(SetEvaIntent),
+        [95] = typeof(EnterShipIntent),
+        [96] = typeof(ExitShipIntent),
+        [97] = typeof(TradeKnowledgeIntent),
+        [98] = typeof(DepositContainerIntent),
+        [99] = typeof(UseGadgetIntent),
+        [100] = typeof(BeaconList),
+        [101] = typeof(SetBeaconLabelIntent),
+        [102] = typeof(RequestLandingPadsIntent),
+        [103] = typeof(LandingPadList),
+        [104] = typeof(ShipTransitFx),
+        [105] = typeof(SpaceShipDesign),
+        [106] = typeof(StructureEditIntent),
+        [107] = typeof(StructureBlockChanged),
+        [108] = typeof(DeployStationCoreIntent),
+        [109] = typeof(NpcGreetIntent),
+        [110] = typeof(NpcGreeting),
+        [111] = typeof(MoveItemIntent),
+        [112] = typeof(OreScanResult),
+        [113] = typeof(ShipAiLine),
+        [114] = typeof(SkipOnboardingIntent),
+        [115] = typeof(SetWorldRulesIntent),
+        [116] = typeof(LandedShipState),
+        [117] = typeof(HyperjumpSystemIntent),
+        [118] = typeof(DataCubeList),
+        [119] = typeof(UnlockGameIntent),
+        [120] = typeof(GameUnlocks),
+        [121] = typeof(MinigameResultIntent),
+        [122] = typeof(BaseList),
+        [123] = typeof(SetBaseNameIntent),
+        [124] = typeof(SetStationNameIntent),
+        [125] = typeof(TintCraftIntent),
+        [126] = typeof(RequestAllianceListIntent),
+        [127] = typeof(RequestAllianceIntent),
+        [128] = typeof(AllianceResponseIntent),
+        [129] = typeof(DissolveAllianceIntent),
+        [130] = typeof(AllianceList),
+        [131] = typeof(AllianceRequestNotice),
+        [132] = typeof(SetFaceIntent),
+        [133] = typeof(PlayerFace),
+        [134] = typeof(BeamList),
+        [135] = typeof(SetBeamNameIntent),
+        [136] = typeof(BeamTeleportIntent),
+        [137] = typeof(BeamTeleported),
+        [138] = typeof(BeamFx),
+        [139] = typeof(StoryStateMessage),
+        [147] = typeof(StorySelectIntent),
+        [140] = typeof(NetFragmentFoundIntent),
+        [141] = typeof(NetFragmentRevealed),
+        [142] = typeof(PlayerMemoryRevealed),
+        [148] = typeof(NetFragmentList),
+        [143] = typeof(GuardianSystemRevealed),
+        [144] = typeof(CoreDialogueMessage),
+        [145] = typeof(CoreDialogueChoiceIntent),
+        [146] = typeof(CoreHackIntent),
+        [149] = typeof(CoreHackProgress),
+        [150] = typeof(SpaceWarpFx),
+        [151] = typeof(RepairShipIntent),
+        [152] = typeof(ShipRepairStatus),
+        [153] = typeof(TameRespondIntent),
+        [154] = typeof(TameProgress),
+        [155] = typeof(TameResult),
+        [156] = typeof(RequestCompanionsIntent),
+        [157] = typeof(CompanionList),
+        [158] = typeof(SetCompanionNameIntent),
+        [159] = typeof(ReleaseCompanionIntent),
+        [160] = typeof(ShapeCraftIntent),
+        [161] = typeof(SpeederList),
+        [162] = typeof(EnterSpeederIntent),
+        [163] = typeof(ExitSpeederIntent),
+        [164] = typeof(StowSpeederIntent),
+        [165] = typeof(RefuelSpeederIntent),
+        [166] = typeof(SpeederImpactIntent),
+        [167] = typeof(SpeederFx),
+        [168] = typeof(BumpReport),
+        [169] = typeof(VoiceFrame),
+        [170] = typeof(MoveCargoItemIntent),
+        [171] = typeof(FloraRegrowStarted),
+        [172] = typeof(FactoryList),
+        [173] = typeof(ClaimStructureIntent),
+        [174] = typeof(MaintenanceNotice),
+        [175] = typeof(SetSpawnPointIntent),
+        [176] = typeof(RespawnOptions),
+        [177] = typeof(RespawnChoiceIntent),
+        [178] = typeof(DiscoveryLog),
+        [179] = typeof(BanditDemand),
+        [180] = typeof(BanditResponseIntent),
+        [181] = typeof(BanditEncounterResult),
+        [182] = typeof(DiscardItemIntent),
+        [183] = typeof(PauseIntent),
+        [184] = typeof(PauseState),
+        [185] = typeof(AchievementList),
+        [186] = typeof(AchievementUnlocked),
+        [187] = typeof(AchievementRewardDeferred),
+        [188] = typeof(StructureMiningProgress),
+        [189] = typeof(VegaJournal),
+        [190] = typeof(SetSeatedIntent),
+        [191] = typeof(PaintBlockIntent),
+        [192] = typeof(PaintDesignData),
+        [193] = typeof(PaintDesignList),
+        [194] = typeof(CustomShapeCraftIntent),
+        [195] = typeof(CustomShapeData),
+        [196] = typeof(CustomShapeList),
+        [197] = typeof(DropPacketList),
+        [198] = typeof(SetBodyPaintIntent),
+        [199] = typeof(PlayerBodyPaint),
+        [200] = typeof(WeatherForecastRequest),
+        [201] = typeof(WeatherForecast),
+        [202] = typeof(PaintCraftIntent),
+        [203] = typeof(TradeRequestNotice),
+    };
+
+    [Fact]
+    public void RegisteredMessageTags_MatchProtocolGoldenList()
+    {
+
+        Assert.Equal(ProtocolGoldenList.Count, NetCodec.RegisteredMessages.Count);
+
+        foreach (var (tag, expectedType) in ProtocolGoldenList)
+        {
+            Assert.True(
+                NetCodec.RegisteredMessages.TryGetValue(tag, out var actualType),
+                $"Expected NetCodec tag {tag} to be registered as {expectedType.Name}.");
+
+            Assert.Equal(expectedType, actualType);
+        }
+    }
+
+    [Fact]
+    public void ProtocolGoldenList_ContainsExactlyAllTopLevelMessages()
+    {
+
+        var topLevelMessages = GetTopLevelMessageTypes();
+
+        Assert.Equal(topLevelMessages.Count, ProtocolGoldenList.Count);
+        Assert.Equal(topLevelMessages.Count, NetCodec.RegisteredMessages.Count);
+    }
+
     [Fact]
     public void EveryRegisteredMessage_RoundTripsThroughMessagePack()
     {
@@ -64,6 +297,7 @@ public sealed class NetCodecTests
             Assert.Equal(type, decoded.GetType());
         }
     }
+
     [Fact]
     public void JoinRequest_PreservesFieldsThroughMessagePackRoundTrip()
     {
@@ -89,6 +323,7 @@ public sealed class NetCodecTests
         Assert.Equal(original.Locale, decoded.Locale);
         Assert.Equal(original.ViewDistanceChunks, decoded.ViewDistanceChunks);
     }
+
     [Fact]
     public void EveryRegisteredMessage_RoundTripsThroughJson()
     {
@@ -105,6 +340,7 @@ public sealed class NetCodecTests
             Assert.Equal(type, decoded.GetType());
         }
     }
+
     [Fact]
     public void JoinRequest_PreservesFieldsThroughJsonRoundTrip()
     {
@@ -130,6 +366,7 @@ public sealed class NetCodecTests
         Assert.Equal(original.Locale, decoded.Locale);
         Assert.Equal(original.ViewDistanceChunks, decoded.ViewDistanceChunks);
     }
+
     [Fact]
     public void MutatedMessagePackPayload_NeverThrows()
     {
