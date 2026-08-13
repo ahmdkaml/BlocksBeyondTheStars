@@ -1429,6 +1429,7 @@
   "ui.menu.connect_name": "Spelersnaam",
   "ui.menu.connect_host": "Serveradres (IP of hostnaam)",
   "ui.menu.connect_port": "Poort",
+  "ui.menu.connect_port_hint": "Officiële servers: {official}\nSpel hosten: {hosted}",
   "ui.menu.connect_password": "Serverwachtwoord (leeg laten als er geen is)",
   "ui.menu.connect": "Verbinden",
   "ui.menu.play": "Spelen",
@@ -1656,7 +1657,7 @@
   "ui.loading.tip": "Upgrade de modules van je schip om zwaardere planeten te overleven.",
   "ui.loading.status": "Sterrensystemen genereren     ·     Planeten-chunks voorbereiden     ·     Missiegegevens synchroniseren",
   "ui.credits.title": "Credits",
-  "ui.credits.body": "Blocks Beyond the Stars — JuMaVe Games\n\nA family project:\nJustus Dütscher (son) — ideas, game design, playtesting\nMarcel Dütscher (father) — technical lead and AI prompting\nVerena Dütscher (mother) — game balancing and playtesting\n\nA family game — made so kids can play safely. There's nothing here that isn't suitable for children. Please keep chat, names and builds friendly.\n\nWe're hoping for community support! Get involved and join in — your name could soon be here too!\n\nCommunity contributions:\nCora de la Mouche (corarona) — Linux support (client build, console launcher, build scripts & CI)\nMaqbool Ahmed (Maqbool61) — German localization (deduplicated keys and improved wording)\nDevin Dixon (ProdigyView) — web support (browser WebGL client & optional PostgreSQL backend)\nSpaleRuby — accessibility review of the portal website (field labels, announced messages, keyboard forms)\nFrancesco Quirino (alessandroquirino-lab) — Italian localization (the game's third language, block names and descriptions)\nAhmed Mohamed Abdelhady Kamel (ahmdkaml) — servertests (Vector3i, ChunkCoord en de frequentie-invarianten)\n\nPlaytesters:\nSeverin — detailed hands-on playtest feedback\n\nOpen-source software used: Unity engine, UniTask, LiteNetLib, MessagePack, Velopack and others.\nFull license notices: THIRD-PARTY-NOTICES.txt in the game folder.\n\nBlocks Beyond the Stars is free software, licensed under the GNU AGPL-3.0-or-later. Source code: https://github.com/marceld23/BlocksBeyondTheStars",
+  "ui.credits.body": "Blocks Beyond the Stars — JuMaVe Games\n\nA family project:\nJustus Dütscher (son) — ideas, game design, playtesting\nMarcel Dütscher (father) — technical lead and AI prompting\nVerena Dütscher (mother) — game balancing and playtesting\n\nA family game — made so kids can play safely. There's nothing here that isn't suitable for children. Please keep chat, names and builds friendly.\n\nWe're hoping for community support! Get involved and join in — your name could soon be here too!\n\nCommunity contributions:\nCora de la Mouche (corarona) — Linux support (client build, console launcher, build scripts & CI)\nMaqbool Ahmed (Maqbool61) — German localization (deduplicated keys and improved wording)\nDevin Dixon (ProdigyView) — web support (browser WebGL client & optional PostgreSQL backend)\nSpaleRuby — accessibility review of the portal website (field labels, announced messages, keyboard forms)\nFrancesco Quirino (alessandroquirino-lab) — Italian localization (the game's third language, block names and descriptions)\nAhmed Mohamed Abdelhady Kamel (ahmdkaml) — servertests (centrale servertypes en -contracten, van wereldwiskunde tot ruisgeneratie)\n\nPlaytesters:\nSeverin — detailed hands-on playtest feedback\n\nOpen-source software used: Unity engine, UniTask, LiteNetLib, MessagePack, Velopack and others.\nFull license notices: THIRD-PARTY-NOTICES.txt in the game folder.\n\nBlocks Beyond the Stars is free software, licensed under the GNU AGPL-3.0-or-later. Source code: https://github.com/marceld23/BlocksBeyondTheStars",
   "ui.hud.location": "Locatie",
   "ui.hud.aboard": "aan boord",
   "ui.hud.station": "station",
@@ -1711,6 +1712,7 @@
   "ui.space.land_confirm": "Terug naar het oppervlak waar je vandaan gelanceerd bent?   Enter = ja · Esc = nee",
   "ui.space.pad_choose": "Kies een landingsplatform",
   "ui.space.pad_loading": "Landingsplaatsen lezen…",
+  "ui.space.pad_timeout": "Geen landingsgegevens van de server - probeer het opnieuw.",
   "ui.space.pad_full": "— ALLE LANDINGSPLATFORMEN BEZET",
   "ui.space.land_on": "Land op",
   "ui.space.land_prompt": "Druk op E om te landen op",
@@ -2866,6 +2868,7 @@
   "srv.join.not_whitelisted": "Je staat niet op de whitelist.",
   "srv.join.protocol_mismatch": "Protocol mismatch (server {server}, client {client}).",
   "srv.join.server_full": "Server is vol.",
+  "srv.join.failed": "Deelnemen is mislukt op de server. Probeer het opnieuw.",
   "srv.join.token_required": "Deze server vereist een geldig toegangstoken. Gebruik het wereldportaal om mee te doen.",
   "srv.join.welcome": "Welkom! Deze wereld maakt deel uit van een familieproject — wees aardig voor anderen. Geen haat, pesten of racisme (leidt tot een ban). Bèta: werelden kunnen verloren gaan — download back-ups op het portaal!",
   "srv.land.full": "Alle landingszones zijn bezet.",
@@ -3120,5 +3123,7 @@
   "ui.minigame.time": "Tijd",
   "ui.pause.quit": "Terug naar hoofdmenu",
   "ui.pause.resume": "Doorgaan",
-  "ui.pause.title": "Gepauzeerd"
+  "ui.pause.title": "Gepauzeerd",
+  "ui.pause.waiting_for": "Gepauzeerd {0}/{1} — wachten op: {2}",
+  "ui.pause.world_held": "Wereld stilgezet — iedereen zit in het pauzemenu."
 }

@@ -314,14 +314,14 @@ app.MapGet("/api/stats", async (HttpContext ctx) =>
 
 // Page language: explicit ?lang= wins (and is remembered in a cookie so plain links keep the choice);
 // otherwise the cookie; otherwise the browser's Accept-Language (first visit — auto-detection sets NO
-// cookie, only an explicit switch persists); otherwise German — the portal's primary audience. Only
-// "en"/"de" are honored.
+// cookie, only an explicit switch persists); otherwise German — the portal's primary audience. Every
+// language the game ships is honored (#970), not just de/en.
 string PageLang(HttpContext ctx)
 {
     string? q = ctx.Request.Query["lang"];
-    if (q is "en" or "de")
+    if (PortalLocales.IsSupported(q))
     {
-        ctx.Response.Cookies.Append("bbs_lang", q, new CookieOptions
+        ctx.Response.Cookies.Append("bbs_lang", q!, new CookieOptions
         {
             Path = "/",
             MaxAge = TimeSpan.FromDays(365),
@@ -330,13 +330,13 @@ string PageLang(HttpContext ctx)
             Secure = true,
             HttpOnly = true,
         });
-        return q;
+        return q!;
     }
 
     string? cookie = ctx.Request.Cookies["bbs_lang"];
-    return cookie is "en" or "de"
-        ? cookie
-        : WorldHostPortalPages.LangFromAcceptHeader(ctx.Request.Headers.AcceptLanguage);
+    return PortalLocales.IsSupported(cookie)
+        ? cookie!
+        : PortalLocales.LangFromAcceptHeader(ctx.Request.Headers.AcceptLanguage);
 }
 
 app.MapGet("/", (HttpContext ctx) => Results.Content(WorldHostPortalPages.Landing(config, PageLang(ctx)), "text/html; charset=utf-8"));
@@ -521,15 +521,19 @@ app.MapPost("/api/glitch/save/resolve", async (HttpContext ctx, GlitchSaveResolv
 
 // ---------------- Accounts ----------------
 
-// Current community-rules version + plain text (DE/EN), anonymous: the desktop client shows the rules
-// in-game and needs the version number for signup (login only reports a boolean termsOutdated). Static
-// per deployment, so browsers/clients may cache it briefly.
+// Current community-rules version + plain text, anonymous: the desktop client shows the rules in-game
+// and needs the version number for signup (login only reports a boolean termsOutdated). `text` carries
+// the requested ?lang= (every game language, #970); textDe/textEn stay for clients that predate it.
+// Still cacheable: the language rides in the query string, which is part of the HTTP cache key.
 app.MapGet("/api/terms", (HttpContext ctx) =>
 {
     ctx.Response.Headers.CacheControl = "public, max-age=300";
+    string lang = PortalLocales.Normalize(ctx.Request.Query["lang"]);
     return Results.Json(new
     {
         version = config.TermsVersion,
+        lang,
+        text = CommunityRules.PlainText(lang),
         textDe = CommunityRules.PlainText("de"),
         textEn = CommunityRules.PlainText("en"),
     });
@@ -1338,7 +1342,7 @@ app.MapPost("/api/worlds/{id}/join", async (HttpContext ctx, string id, JoinRequ
     if (nameScreen.Verdict == BlocksBeyondTheStars.Shared.Moderation.NameVerdict.Block)
     {
         metrics.NameBlocked();
-        log.LogWarning("Join name blocked on world {Id} for account {Account} (matched '{Term}').", id, LogSafe(account.Name), nameScreen.MatchedTerm);
+        log.LogWarning("Join name blocked on world {Id} for account {Account} (matched '{Term}').", LogSafe(id), LogSafe(account.Name), nameScreen.MatchedTerm);
         notifier.Post("Blocked player name", $"Account '{account.Name}' tried to join world {id} under a name matching blocked term '{nameScreen.MatchedTerm}'.", "no_entry");
     }
 
@@ -1360,7 +1364,7 @@ app.MapPost("/api/worlds/{id}/join", async (HttpContext ctx, string id, JoinRequ
     if (nameScreen.Verdict == BlocksBeyondTheStars.Shared.Moderation.NameVerdict.Watch)
     {
         metrics.NameFlagged();
-        log.LogWarning("Player name '{Name}' flagged on world {Id} (matched watch term '{Term}'); join allowed.", LogSafe(req.PlayerName), id, nameScreen.MatchedTerm);
+        log.LogWarning("Player name '{Name}' flagged on world {Id} (matched watch term '{Term}'); join allowed.", LogSafe(req.PlayerName), LogSafe(id), nameScreen.MatchedTerm);
         notifier.Post("Player name flagged", $"Player '{req.PlayerName}' (account '{account.Name}') joined world {id} under a name matching watch-list term '{nameScreen.MatchedTerm}'. Review manually.", "triangular_flag_on_post");
     }
 

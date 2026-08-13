@@ -1429,6 +1429,7 @@
   "ui.menu.connect_name": "プレイヤー名",
   "ui.menu.connect_host": "サーバーアドレス（IPまたはホスト名）",
   "ui.menu.connect_port": "ポート",
+  "ui.menu.connect_port_hint": "公式サーバー: {official}\nゲームをホスト: {hosted}",
   "ui.menu.connect_password": "サーバーパスワード（なければ空欄）",
   "ui.menu.connect": "接続",
   "ui.menu.play": "プレイ",
@@ -1656,7 +1657,7 @@
   "ui.loading.tip": "船のモジュールをアップグレードして、過酷な惑星を生き延びよう。",
   "ui.loading.status": "恒星系を生成中     ·     惑星チャンクを準備中     ·     ミッションデータを同期中",
   "ui.credits.title": "クレジット",
-  "ui.credits.body": "Blocks Beyond the Stars — JuMaVe Games\n\n家族のプロジェクト:\nJustus Dütscher (息子) — アイデア、ゲームデザイン、プレイテスト\nMarcel Dütscher (父) — 技術リードとAIプロンプト\nVerena Dütscher (母) — ゲームバランスとプレイテスト\n\n子どもが安心して遊べるように作られた家族向けゲームです。チャット、名前、建築はみんなに優しくしてください。\n\nコミュニティの支援をお待ちしています！参加してみてください — 近いうちにあなたの名前もここに載るかも！\n\nコミュニティ貢献者:\nCora de la Mouche (corarona) — Linuxサポート（クライアントビルド、コンソールランチャー、ビルドスクリプト & CI）\nMaqbool Ahmed (Maqbool61) — ドイツ語ローカライズ（キーの重複排除と表現改善）\nDevin Dixon (ProdigyView) — ウェブサポート（ブラウザWebGLクライアント＆任意のPostgreSQLバックエンド）\nSpaleRuby — ポータルサイトのアクセシビリティレビュー（フィールドラベル、アナウンスメッセージ、キーボードフォーム）\nFrancesco Quirino (alessandroquirino-lab) — イタリア語ローカライズ（ゲームの第3言語、ブロック名と説明）\nAhmed Mohamed Abdelhady Kamel (ahmdkaml) — サーバーテスト（Vector3i、ChunkCoord、頻度の不変条件）\n\nプレイテスター:\nSeverin — 詳細なハンズオンプレイテストのフィードバック\n\n使用したオープンソースソフトウェア: Unity engine、UniTask、LiteNetLib、MessagePack、Velopack 他。\n完全なライセンス表示: ゲームフォルダ内の THIRD-PARTY-NOTICES.txt を参照。\n\nBlocks Beyond the Stars はフリーソフトウェアで、GNU AGPL-3.0-or-later の下でライセンスされています。ソースコード: https://github.com/marceld23/BlocksBeyondTheStars",
+  "ui.credits.body": "Blocks Beyond the Stars — JuMaVe Games\n\n家族のプロジェクト:\nJustus Dütscher (息子) — アイデア、ゲームデザイン、プレイテスト\nMarcel Dütscher (父) — 技術リードとAIプロンプト\nVerena Dütscher (母) — ゲームバランスとプレイテスト\n\n子どもが安心して遊べるように作られた家族向けゲームです。チャット、名前、建築はみんなに優しくしてください。\n\nコミュニティの支援をお待ちしています！参加してみてください — 近いうちにあなたの名前もここに載るかも！\n\nコミュニティ貢献者:\nCora de la Mouche (corarona) — Linuxサポート（クライアントビルド、コンソールランチャー、ビルドスクリプト & CI）\nMaqbool Ahmed (Maqbool61) — ドイツ語ローカライズ（キーの重複排除と表現改善）\nDevin Dixon (ProdigyView) — ウェブサポート（ブラウザWebGLクライアント＆任意のPostgreSQLバックエンド）\nSpaleRuby — ポータルサイトのアクセシビリティレビュー（フィールドラベル、アナウンスメッセージ、キーボードフォーム）\nFrancesco Quirino (alessandroquirino-lab) — イタリア語ローカライズ（ゲームの第3言語、ブロック名と説明）\nAhmed Mohamed Abdelhady Kamel (ahmdkaml) — サーバーテスト（サーバーの中核型とコントラクト — ワールド計算からノイズ生成まで）\n\nプレイテスター:\nSeverin — 詳細なハンズオンプレイテストのフィードバック\n\n使用したオープンソースソフトウェア: Unity engine、UniTask、LiteNetLib、MessagePack、Velopack 他。\n完全なライセンス表示: ゲームフォルダ内の THIRD-PARTY-NOTICES.txt を参照。\n\nBlocks Beyond the Stars はフリーソフトウェアで、GNU AGPL-3.0-or-later の下でライセンスされています。ソースコード: https://github.com/marceld23/BlocksBeyondTheStars",
   "ui.hud.location": "場所",
   "ui.hud.aboard": "船内",
   "ui.hud.station": "ステーション",
@@ -1711,6 +1712,7 @@
   "ui.space.land_confirm": "発進した地点の表面に戻りますか？   Enter = はい · Esc = いいえ",
   "ui.space.pad_choose": "着陸パッドを選んでください",
   "ui.space.pad_loading": "着陸パッドを読み込み中…",
+  "ui.space.pad_timeout": "サーバーから着陸データが届きません。もう一度お試しください。",
   "ui.space.pad_full": "— すべての着陸パッドが埋まっています",
   "ui.space.land_on": "着陸する",
   "ui.space.land_prompt": "Eを押して着陸",
@@ -2866,6 +2868,7 @@
   "srv.join.not_whitelisted": "ホワイトリストに登録されていません。",
   "srv.join.protocol_mismatch": "プロトコル不一致（サーバー {server}、クライアント {client}）。",
   "srv.join.server_full": "サーバーが満員です。",
+  "srv.join.failed": "サーバー側で参加に失敗しました。もう一度お試しください。",
   "srv.join.token_required": "このサーバーには有効な参加トークンが必要です。ワールドポータル経由で参加してください。",
   "srv.join.welcome": "ようこそ！この世界はファミリープロジェクトの一部です — 他の人に優しくしてください。ヘイト、いじめ、人種差別はダメ（違反で追放）。ベータ：ワールドは失われることがあります — ポータルでバックアップをダウンロードしてください！",
   "srv.land.full": "すべての着陸ゾーンが埋まっています。",
@@ -3120,5 +3123,7 @@
   "ui.minigame.time": "時間",
   "ui.pause.quit": "メインメニューに戻る",
   "ui.pause.resume": "再開",
-  "ui.pause.title": "一時停止中"
+  "ui.pause.title": "一時停止中",
+  "ui.pause.waiting_for": "一時停止 {0}/{1} — 待機中: {2}",
+  "ui.pause.world_held": "ワールド停止中 — 全員が一時停止メニューにいます。"
 }

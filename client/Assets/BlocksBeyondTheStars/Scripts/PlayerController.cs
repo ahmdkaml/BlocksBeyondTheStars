@@ -1039,10 +1039,20 @@ namespace BlocksBeyondTheStars.Client
             // effort until the block breaks); soft hand-digging breaks in one but the loop lets you sweep along.
             if (Time.time >= _nextDrillMine)
             {
-                _nextDrillMine = Time.time + (drill ? 0.28f : 0.22f); // slower, weightier mining (was 0.18)
-                Game.LastMineCell = hitCell; // so an "already empty" rejection can clear the ghost here (B32)
-                Game.Network?.SendMine(hitCell.x, hitCell.y, hitCell.z);
+                SendMineHit(hitCell, drill);
             }
+        }
+
+        /// <summary>Sends ONE mine attempt and arms the shared cooldown. Both mining paths — the click in
+        /// <see cref="HandleInteract"/> and the hold loop in <see cref="HandleDrillAudio"/> — go through here
+        /// (#965): they ran in the SAME Update, and because only the hold loop armed the cooldown, the first
+        /// frame of every click sent the cell TWICE. The second intent hit air on the server, which answered
+        /// with a ghost-block heal + a full chunk re-stream — roughly one per block mined.</summary>
+        private void SendMineHit(Vector3Int cell, bool drill)
+        {
+            _nextDrillMine = Time.time + (drill ? 0.28f : 0.22f); // slower, weightier mining (was 0.18)
+            Game.LastMineCell = cell; // so an "already empty" rejection can clear the ghost here (B32)
+            Game.Network?.SendMine(cell.x, cell.y, cell.z);
         }
 
         /// <summary>True when the block at a cell can be broken by bare hands — mineable and requiring no tool
@@ -2805,8 +2815,7 @@ namespace BlocksBeyondTheStars.Client
                     return;
                 }
 
-                Game.LastMineCell = hitCell; // so an "already empty" rejection can clear the ghost here (B32)
-                Game.Network.SendMine(hitCell.x, hitCell.y, hitCell.z);
+                SendMineHit(hitCell, HoldingDrill()); // arms the cooldown too — see SendMineHit (#965)
                 TriggerSwing();
             }
             else
@@ -2823,6 +2832,17 @@ namespace BlocksBeyondTheStars.Client
                     if (boundsShip != null)
                     {
                         Game.Network.SendStructureEdit(boundsShip.StructureId, lp.X, lp.Y, lp.Z, mine: false, item);
+                        TriggerSwing();
+                        return;
+                    }
+
+                    // Growing a ship CONSTRUCTION SITE (#948): aiming at the half-built hull but the target
+                    // cell lies outside its current bounds — still a structure edit (the server re-anchors
+                    // the grid and re-broadcasts), never a world place next to it.
+                    if (aimedShip != null && aimedShip.StructureId.StartsWith("shipyard:", System.StringComparison.Ordinal))
+                    {
+                        var gl = ShipLocal(aimedShip, placeCell);
+                        Game.Network.SendStructureEdit(aimedShip.StructureId, gl.x, gl.y, gl.z, mine: false, item);
                         TriggerSwing();
                         return;
                     }

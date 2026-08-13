@@ -1429,6 +1429,7 @@
   "ui.menu.connect_name": "玩家名字",
   "ui.menu.connect_host": "服务器地址（IP 或主机名）",
   "ui.menu.connect_port": "端口",
+  "ui.menu.connect_port_hint": "官方服务器：{official}\n创建游戏：{hosted}",
   "ui.menu.connect_password": "服务器密码（无则留空）",
   "ui.menu.connect": "连接",
   "ui.menu.play": "开始游戏",
@@ -1656,7 +1657,7 @@
   "ui.loading.tip": "升级飞船模块以在更严酷的星球上生存。",
   "ui.loading.status": "生成星系     ·     准备行星区块     ·     同步任务数据",
   "ui.credits.title": "鸣谢",
-  "ui.credits.body": "Blocks Beyond the Stars — JuMaVe Games\n\n家庭项目：\nJustus Dütscher（儿子）— 创意、游戏设计、游戏测试\nMarcel Dütscher（父亲）— 技术负责人与 AI 提示\nVerena Dütscher（母亲）— 游戏平衡与游戏测试\n\n这是一个面向儿童的家庭游戏，内容适合儿童。请保持聊天、名称和建筑友好。\n\n我们期待社区支持！参与进来——也许下一个出现在这里的就是你的名字！\n\n社区贡献：\nCora de la Mouche (corarona) — Linux 支持（客户端构建、控制台启动器、构建脚本与 CI）\nMaqbool Ahmed (Maqbool61) — 德语本地化（去重键与措辞改进）\nDevin Dixon (ProdigyView) — 网络支持（浏览器 WebGL 客户端与可选 PostgreSQL 后端）\nSpaleRuby — 门户网站无障碍审查（字段标签、朗读消息、键盘表单）\nFrancesco Quirino (alessandroquirino-lab) — 意大利语本地化（游戏第三语言，方块名称与描述）\nAhmed Mohamed Abdelhady Kamel (ahmdkaml) — 服务器测试（Vector3i、ChunkCoord 与频率不变式）\n\n游戏测试者：\nSeverin — 详细的实机测试反馈\n\n使用的开源软件：Unity 引擎、UniTask、LiteNetLib、MessagePack、Velopack 等。\n完整许可证说明：游戏文件夹中的 THIRD-PARTY-NOTICES.txt。\n\nBlocks Beyond the Stars 是自由软件，采用 GNU AGPL-3.0-or-later 许可发布。源代码：https://github.com/marceld23/BlocksBeyondTheStars",
+  "ui.credits.body": "Blocks Beyond the Stars — JuMaVe Games\n\n家庭项目：\nJustus Dütscher（儿子）— 创意、游戏设计、游戏测试\nMarcel Dütscher（父亲）— 技术负责人与 AI 提示\nVerena Dütscher（母亲）— 游戏平衡与游戏测试\n\n这是一个面向儿童的家庭游戏，内容适合儿童。请保持聊天、名称和建筑友好。\n\n我们期待社区支持！参与进来——也许下一个出现在这里的就是你的名字！\n\n社区贡献：\nCora de la Mouche (corarona) — Linux 支持（客户端构建、控制台启动器、构建脚本与 CI）\nMaqbool Ahmed (Maqbool61) — 德语本地化（去重键与措辞改进）\nDevin Dixon (ProdigyView) — 网络支持（浏览器 WebGL 客户端与可选 PostgreSQL 后端）\nSpaleRuby — 门户网站无障碍审查（字段标签、朗读消息、键盘表单）\nFrancesco Quirino (alessandroquirino-lab) — 意大利语本地化（游戏第三语言，方块名称与描述）\nAhmed Mohamed Abdelhady Kamel (ahmdkaml) — 服务器测试（核心服务器类型与契约——从世界数学到噪声生成）\n\n游戏测试者：\nSeverin — 详细的实机测试反馈\n\n使用的开源软件：Unity 引擎、UniTask、LiteNetLib、MessagePack、Velopack 等。\n完整许可证说明：游戏文件夹中的 THIRD-PARTY-NOTICES.txt。\n\nBlocks Beyond the Stars 是自由软件，采用 GNU AGPL-3.0-or-later 许可发布。源代码：https://github.com/marceld23/BlocksBeyondTheStars",
   "ui.hud.location": "位置",
   "ui.hud.aboard": "在船上",
   "ui.hud.station": "空间站",
@@ -1711,6 +1712,7 @@
   "ui.space.land_confirm": "要返回你起飞的地面吗？   回车 = 是 · Esc = 否",
   "ui.space.pad_choose": "选择着陆平台",
   "ui.space.pad_loading": "读取着陆平台…",
+  "ui.space.pad_timeout": "未从服务器收到着陆数据——请重试。",
   "ui.space.pad_full": "— 所有着陆平台已被占用",
   "ui.space.land_on": "降落在",
   "ui.space.land_prompt": "按 E 降落",
@@ -2866,6 +2868,7 @@
   "srv.join.not_whitelisted": "你不在白名单上。",
   "srv.join.protocol_mismatch": "协议不匹配（服务器 {server}，客户端 {client}）。",
   "srv.join.server_full": "服务器已满。",
+  "srv.join.failed": "服务器加入失败，请重试。",
   "srv.join.token_required": "此服务器需要有效的加入令牌。请通过世界门户加入。",
   "srv.join.welcome": "欢迎！这个世界是一个家族项目的一部分——请友善相处。禁止仇恨、欺凌或种族歧视（将导致封禁）。测试版：世界可能丢失——请在门户下载备份！",
   "srv.land.full": "所有降落区已被占用。",
@@ -3120,5 +3123,7 @@
   "ui.minigame.time": "时间",
   "ui.pause.quit": "退出到主菜单",
   "ui.pause.resume": "继续",
-  "ui.pause.title": "已暂停"
+  "ui.pause.title": "已暂停",
+  "ui.pause.waiting_for": "已暂停 {0}/{1} — 等待：{2}",
+  "ui.pause.world_held": "世界已停止 — 所有人都在暂停菜单中。"
 }

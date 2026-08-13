@@ -1429,6 +1429,7 @@
   "ui.menu.connect_name": "Nombre de jugador",
   "ui.menu.connect_host": "Dirección del servidor (IP o nombre de host)",
   "ui.menu.connect_port": "Puerto",
+  "ui.menu.connect_port_hint": "Servidores oficiales: {official}\nCrear partida: {hosted}",
   "ui.menu.connect_password": "Contraseña del servidor (déjalo vacío si no hay)",
   "ui.menu.connect": "Conectar",
   "ui.menu.play": "Jugar",
@@ -1656,7 +1657,7 @@
   "ui.loading.tip": "Mejora los módulos de tu nave para sobrevivir en planetas más hostiles.",
   "ui.loading.status": "Generando sistemas estelares     ·     Preparando sectores del planeta     ·     Sincronizando datos de misiones",
   "ui.credits.title": "Créditos",
-  "ui.credits.body": "Blocks Beyond the Stars — JuMaVe Games\n\nUn proyecto familiar:\nJustus Dütscher (hijo) — ideas, diseño de juego, pruebas de juego\nMarcel Dütscher (padre) — líder técnico y creación de prompts para IA\nVerena Dütscher (madre) — balanceo del juego y pruebas\n\nUn juego familiar — creado para que los niños jueguen de forma segura. No hay nada aquí que no sea apto para niños. Por favor, mantén los chats, nombres y construcciones amigables.\n\n¡Esperamos el apoyo de la comunidad! Involúcrate y participa — ¡tu nombre podría estar aquí pronto también!\n\nContribuciones de la comunidad:\nCora de la Mouche (corarona) — soporte Linux (compilación del cliente, lanzador de consola, scripts de compilación y CI)\nMaqbool Ahmed (Maqbool61) — localización al alemán (depuración de claves duplicadas y mejora de redacción)\nDevin Dixon (ProdigyView) — soporte web (cliente WebGL para navegador y backend opcional PostgreSQL)\nSpaleRuby — revisión de accesibilidad del portal web (etiquetas de campo, mensajes anunciados, formularios con teclado)\nFrancesco Quirino (alessandroquirino-lab) — localización al italiano (el tercer idioma del juego, nombres y descripciones de bloques)\nAhmed Mohamed Abdelhady Kamel (ahmdkaml) — pruebas del servidor (Vector3i, ChunkCoord y las invariantes de frecuencia)\n\nProbadores:\nSeverin — comentarios detallados de pruebas prácticas\n\nSoftware de código abierto utilizado: motor Unity, UniTask, LiteNetLib, MessagePack, Velopack y otros.\nAvisos de licencia completos: THIRD-PARTY-NOTICES.txt en la carpeta del juego.\n\nBlocks Beyond the Stars es software libre, licenciado bajo la GNU AGPL-3.0-or-later. Código fuente: https://github.com/marceld23/BlocksBeyondTheStars",
+  "ui.credits.body": "Blocks Beyond the Stars — JuMaVe Games\n\nUn proyecto familiar:\nJustus Dütscher (hijo) — ideas, diseño de juego, pruebas de juego\nMarcel Dütscher (padre) — líder técnico y creación de prompts para IA\nVerena Dütscher (madre) — balanceo del juego y pruebas\n\nUn juego familiar — creado para que los niños jueguen de forma segura. No hay nada aquí que no sea apto para niños. Por favor, mantén los chats, nombres y construcciones amigables.\n\n¡Esperamos el apoyo de la comunidad! Involúcrate y participa — ¡tu nombre podría estar aquí pronto también!\n\nContribuciones de la comunidad:\nCora de la Mouche (corarona) — soporte Linux (compilación del cliente, lanzador de consola, scripts de compilación y CI)\nMaqbool Ahmed (Maqbool61) — localización al alemán (depuración de claves duplicadas y mejora de redacción)\nDevin Dixon (ProdigyView) — soporte web (cliente WebGL para navegador y backend opcional PostgreSQL)\nSpaleRuby — revisión de accesibilidad del portal web (etiquetas de campo, mensajes anunciados, formularios con teclado)\nFrancesco Quirino (alessandroquirino-lab) — localización al italiano (el tercer idioma del juego, nombres y descripciones de bloques)\nAhmed Mohamed Abdelhady Kamel (ahmdkaml) — pruebas del servidor (tipos y contratos centrales del servidor, desde las matemáticas del mundo hasta la generación de ruido)\n\nProbadores:\nSeverin — comentarios detallados de pruebas prácticas\n\nSoftware de código abierto utilizado: motor Unity, UniTask, LiteNetLib, MessagePack, Velopack y otros.\nAvisos de licencia completos: THIRD-PARTY-NOTICES.txt en la carpeta del juego.\n\nBlocks Beyond the Stars es software libre, licenciado bajo la GNU AGPL-3.0-or-later. Código fuente: https://github.com/marceld23/BlocksBeyondTheStars",
   "ui.hud.location": "Ubicación",
   "ui.hud.aboard": "a bordo de la nave",
   "ui.hud.station": "estación",
@@ -1711,6 +1712,7 @@
   "ui.space.land_confirm": "¿Regresar a la superficie desde la que despegaste?   Enter = sí · Esc = no",
   "ui.space.pad_choose": "Elige una plataforma de aterrizaje",
   "ui.space.pad_loading": "Leyendo plataformas de aterrizaje…",
+  "ui.space.pad_timeout": "No llegan datos de aterrizaje del servidor. Inténtalo de nuevo.",
   "ui.space.pad_full": "— TODAS LAS PLATAFORMAS DE ATERRIZAJE OCUPADAS",
   "ui.space.land_on": "Aterrizar en",
   "ui.space.land_prompt": "Pulsa E para aterrizar en",
@@ -2866,6 +2868,7 @@
   "srv.join.not_whitelisted": "No estás en la lista blanca.",
   "srv.join.protocol_mismatch": "Incompatibilidad de protocolo (servidor {server}, cliente {client}).",
   "srv.join.server_full": "Servidor lleno.",
+  "srv.join.failed": "El servidor no pudo completar la entrada. Inténtalo de nuevo.",
   "srv.join.token_required": "Este servidor requiere un token de acceso válido. Únete desde el portal de mundos.",
   "srv.join.welcome": "¡Bienvenido! Este mundo es parte de un proyecto familiar — sé amable con los demás. No toleramos odio, acoso ni racismo (puede conllevar expulsión). Beta: los mundos pueden perderse — descarga copias de seguridad en el portal!",
   "srv.land.full": "Todas las zonas de aterrizaje están ocupadas.",
@@ -3120,5 +3123,7 @@
   "ui.minigame.time": "Tiempo",
   "ui.pause.quit": "Salir al menú principal",
   "ui.pause.resume": "Continuar",
-  "ui.pause.title": "Pausado"
+  "ui.pause.title": "Pausado",
+  "ui.pause.waiting_for": "Pausado {0}/{1}: esperando a {2}",
+  "ui.pause.world_held": "Mundo detenido: todos están en el menú de pausa."
 }

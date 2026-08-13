@@ -105,6 +105,52 @@ Per-item detail lives in the dated work log below. **Since 2026-07 versions are 
 
 ---
 
+### ★ Multiplayer pauses too — once everybody is in the pause menu (#973, 2026-08-13, branch feat/973-multiplayer-pause)
+The Esc hold from #612/#908 only ever served a **lone** player: `HandlePause` refused the request outright
+while a second player was joined, and `HoldingPause` lifted a running hold the moment that count moved. Two
+friends taking a break both watched hunger drain behind their menus. The intent now lives on the session
+(`PlayerSession.WantsPause`) and the world holds while **every** joined non-spectator wants it — a group
+decision nobody can force on anyone else, which is why there is no rule to switch it off. `RecomputePause`
+derives `_paused` and every lift condition falls out of it: someone resumes, someone joins (a fresh session
+starts unpaused), the last holder leaves (an empty world must never hold — it would never save or idle out),
+or the ceiling expires (30 min solo, **10 min** for a group). `PauseState` is now **broadcast** rather than
+answered to the asker — each client stops its own `WorldClock` from it — and carries the tally
+(`HoldingPlayers`/`JoinedPlayers`/`WaitingFor`), so the dialog shows "Paused 1/2 — waiting for: Severin"
+instead of claiming a hold it does not have. Appended fields on contractless MessagePack: **no protocol
+bump**, and a pre-#973 client still pauses correctly on `Paused` alone. The #908 spectator carve-out matters
+more than ever — an observer never opens a pause menu, so counting them would block the hold forever.
+
+**The heartbeat trap this exposed (follow-up to #964).** Behind an open menu the client sends *nothing*:
+`PlayerController` returns before `SendMovement()` whenever `MenuOpen` is set. That the old singleplayer hold
+never tripped the 90 s `SweepSilentSessions` drop was an accident of tick order — `_uptime` and the sweep both
+sit behind the paused early-return, so the heartbeat froze with the world. A client that dies behind its
+dialog therefore squatted its name and slot for the whole hold (the rejoin lockout #964 removed), and if
+*every* paused client died there was nobody left to resume at all. The client now **repeats its pause intent
+every 15 s** and the paused branch runs `SweepSilentPausedSessions` against the hold's own real-time clock.
+`_uptime` is deliberately *not* advanced during a hold — every `_uptime`-keyed cooldown in the server would
+expire for free across a pause. Only clients that have shown they send the keep-alive are swept, so a
+mixed-version world keeps the old behaviour instead of dropping an innocent old client. `TickHostedLifecycle`
+also runs while held now: the /status snapshot the fleet polls must not go stale for ten minutes.
+`SingleplayerPauseTests` → `WorldPauseTests` (12 tests: the two that encoded "one player only" now assert the
+group rule). Two new locale keys in all 14 languages.
+
+### ★ The worlds portal speaks all 14 game languages (#970, 2026-08-13, branch feat/970-portal-i18n)
+play.blocksbeyondthestars.de was German/English only while the game shipped fourteen languages: every
+portal string lived inline as a two-argument `T(de, en)` helper, so a third language was structurally
+impossible. The text now lives in `src/BlocksBeyondTheStars.WorldHost/Locales/<code>.json` — the same
+flat key→text JSON as the game locales, **embedded in the assembly** (the WorldHost image carries no
+`data/` folder, so an embedded resource is what survives a plain `dotnet publish`), resolved through the
+shared `Localizer` with English as the per-key fallback. `PortalLocales` replaces the old
+`NormalizeLang`/`LangFromAcceptHeader` pair and accepts every code `GameLocale` knows; `PageLang` stores
+any of them in `bbs_lang`. The DE/EN pill became a header language picker (a plain GET form, so it works
+without JavaScript) plus per-language footer links and `hreflang` alternates. The community rules moved
+into the same tables — and since they are single-sourced into `GET /api/terms`, the **in-game** rules
+screen gets all fourteen too (new `?lang=`/`text`; `textDe`/`textEn` stay for older clients). `/play`'s
+loading shell localizes from the `lang` the Play button now appends. Impressum and Datenschutz keep
+their German bodies (the authoritative text) with a localized summary on top. The twelve new tables were
+machine-generated with `tools/translate_locale.py`; `PortalLocalizationTests` fails on a missing key, a
+lost `{placeholder}`/`%s`, or altered inline markup.
+
 ### ★ Arcade full? The WebGL menu now says so — and points at singleplayer (#936, 2026-08-11, branch feature/arcade-full-notice-936)
 When every glitch.fun arcade world is at capacity, the portal's `/api/glitch/session` already answered
 with a machine-readable code (`glitch_full`; `no_capacity` when the fleet RAM budget is spent) — but the
@@ -7738,6 +7784,239 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-08-13): landing back on the same planet puts you back in your ship (#971)
+
+Found in a singleplayer playtest of the released v2026.8.12 build: launch from the starter planet, land
+back on it, pick a **different pad** in the chooser — the ship parks on the chosen pad, but the player is
+still standing at the pad they launched from. It reads as *"I landed and my ship isn't there"*.
+
+The savegame proves the split: the player row's `RespawnPoint` (server-only) had moved to the new ship's
+heal-tank at `(2489, 89, -369)`, while `Position` (client-writable) was still at the old ship's
+`(10232, 75, -3)`. `RelocateToAssignedPad` set the position and called `SendPlayerState` — but the client
+**discards** a position arriving on `PlayerStateUpdate` (the rule the suit teleporter already documents,
+#414 N17), and unlike the cross-body travel path there is no `WorldReset` here to re-arm its spawn snap.
+`AwaitingSpawnAdopt` was not set either, so the client's next stale `MoveIntent` overwrote the
+authoritative touchdown server-side — and that is what the checkpoint save persisted.
+
+Fix: the same-body landing now sends a `RespawnNotice` (`Died = false`, new `srv.land.touchdown`) with the
+computed spawn and arms the #865 spawn-adoption gate — the same two things the cross-body landing does.
+Server-side only, no protocol change. It stayed hidden until the pad chooser shipped because the auto-pick
+path (`padIndex = -1`) counts the player's own pad as free, so a solo pilot normally lands back on the pad
+they launched from. Two new regression tests in `LanPlaytestRegressionTests` (both fail without the fix).
+
+---
+
+## ✅ Done (2026-08-13): chunk-mesh memory — packed vertex format + non-readable upload (#966)
+
+Closes the part of #966 that the previous round deliberately left open: the chunk meshes themselves.
+Two independent factors, each roughly a halving:
+
+**The system-RAM copy is gone.** Unity keeps a full CPU-side copy of every mesh next to the GPU one
+unless it is told otherwise, and `UploadMeshData(markNoLongerReadable: true)` appeared nowhere in
+`client/`. The render mesh is now uploaded non-readable. That rules out the old Clear()+refill reuse
+(a non-readable mesh cannot be rewritten), so each rebuild returns a **fresh** mesh and
+`ApplyChunkMesh` destroys the one it replaces — without that, A2's rebuild rate would leak a mesh per
+remesh. Nothing reads a chunk mesh back: collision has its own mesh, and the ship/speeder meshers only
+ever assign the render mesh to a `MeshFilter`. The **collision** mesh stays readable on purpose —
+`Physics.BakeMesh`/`MeshCollider` cook from it, and its vertex count is a fraction of the render mesh's.
+
+**The vertex format is packed: 112 → 56 B/vertex.** The plain `Mesh` setters store every channel as
+floats — position, normal, tangent, colour and five UV sets. `ChunkMeshData.Pack` now interleaves the
+build lists into a `PackedVertex` uploaded through `SetVertexBufferParams`/`SetVertexBufferData`:
+normal, tangent and block-light direction as `SNorm8` (all unit vectors), the material colour as
+`UNorm8` (gloss/metal/shade×AO/emission are 0..1), sky/leaf/block-light as `Float16`. Position and the
+**atlas UV stay `Float32`** — a UV off by a quantum bleeds the neighbouring tile in. Packing runs on
+the build worker thread, not next to the main-thread upload. **Shaders are untouched:** the GPU expands
+these formats to float on read, so `BlockAtlas`/`BlockAtlasTransparent` see exactly what they saw before.
+
+New tests: `ChunkMeshPackingEditModeTests` (5, EditMode) — half/SNorm/UNorm round-trips, positions and
+atlas UVs bit-exact, buffer reuse across builds, and the upload keeping the three-submesh index split
+while reporting `isReadable == false`. Not covered by PR CI (it is .NET-only); verified with a local
+EditMode run (24/24) and a Windows player build.
+
+Still open from the issue and deliberately not done here: greedy-meshing the **render** mesh (the
+collider path already does it) — a change to the geometry itself, not to how it is stored. Playtest
+verify pending: watch peak RAM at view distance 8.
+
+---
+
+## ✅ Done (2026-08-12): hosting stability — alt-tab freeze, reconnect after a crash, ghost-block storm, client memory (#963–#966)
+
+Second round of fixes from the same LAN playtest. Root cause of two of them was the same setting:
+**`runInBackground` was off**, so the Unity player loop stopped when the window lost focus while LiteNetLib's
+own thread kept the connection alive and kept queueing.
+
+**#963 alt-tab freeze** — `runInBackground` is on now, and `NetworkClient.Poll` gained a **receive budget**:
+payloads are queued and dispatched at most 64 per frame (chunks capped at 8), preserving stream order, so a
+backlog costs a few paced frames instead of one multi-second freeze plus minutes of mesh-backlog stutter.
+The server always budgeted its *sending*; this is the missing receive-side counterpart. New
+`NetCodec.IsMessageType<T>` classifies a payload from its type tag alone (native and browser-JSON framing)
+so the budget needs no second decode.
+
+**#964 could not reconnect after a client crash** — a dead client's session kept looking joined (its peer
+answered pings from the transport thread), holding the player's name and slot; the playtest log shows the
+disconnect landing **22 minutes** after the crash. Now: a join presenting the same name **and** the matching
+name token **evicts** the stale session (that is what the token is for; a wrong token is still refused, so
+this is not a name-stealing tool); an **app-level heartbeat** (`LastPayloadAt`, stamped on join and on every
+payload) drops sessions silent for 90 s — the only signal that reveals "network thread alive, game dead";
+`DisconnectTimeout`/`PingInterval` are set explicitly on both transports instead of inherited; the native
+transport gets the same slot headroom as the WebSocket path (it was sized exactly at `MaxPlayers`, so a
+crashed player's own reconnect could be refused at the transport, **silently** — rejects are logged now);
+`HandleJoin` is guarded like every other handler (an exception used to strand a half-built session holding
+the name forever, new `srv.join.failed` in all 14 locales); and `JoinRejected` is routed through the token
+resolver, so players see a real sentence instead of `[srv.join.name_online:Justus]`. The client also flushes
+`player_token.txt` to disk — an empty token after a power loss meant a permanent lockout from your own name.
+
+**#965 ghost-block storm** (769 warnings in one session, ~one per mined block) — the client sent **two** mine
+intents on the first frame of every click: `HandleInteract` and `HandleDrillAudio` run in the same `Update`
+and only the latter armed the cooldown. Both now go through one `SendMineHit` helper. Server-side the
+amplifier is defused too: a ghost still gets its corrective `BlockChanged`, but the **full chunk re-stream**
+(and its log line) is rate-limited to once per chunk per 10 s — it used to cost a whole chunk on the wire
+plus seven client remeshes per ghost.
+
+**#966 client memory** — the 1.8 GB was the *client* (the bundled server is its own process, a few MB of
+chunk cache): chunk meshes at view distance 8, kept in a system-RAM copy on top of the GPU copy. Fixed here:
+`WorldMinimap`'s static preview cache and `ShapeIconFactory` now **destroy** their textures instead of just
+dropping references (Unity never collects those), and the chunk unload pass runs on a 5 s heartbeat as well
+as on movement — a standing or stuck player never released a chunk before. The vertex-format packing and
+`UploadMeshData(true)` were left open here as the bigger, riskier change — done on 2026-08-13, see the
+section above.
+
+New tests: `ReceiveBudgetTests` (5) and `ReconnectAndGhostTests` (5). Playtest verify pending.
+
+---
+
+## ✅ Done (2026-08-12): LAN-playtest multiplayer fixes — ghost ships, frozen avatars, landing hang, pad bookkeeping (#954–#959)
+
+Fixes for the five bugs from the 2026-08-12 two-player playtest (analysis in the section above):
+**#954 ghost ships** — `SpaceView.OnStructureDesign` now whitelists static kinds (`asteroid`/`station`);
+`"ship_remote"` designs (other pilots, NPC traders) no longer ALSO spawn as an unscaled, collider-less
+voxel body at the design position (players: the scene origin). `SwitchShip` sends the rebuilt design as
+`"ship_remote"` to everyone but the owner — it used to replace the OTHER clients' own hull. **#955
+flicker** — space interpolators now render behind the actual broadcast intervals (remote ships 0.3 s vs
+0.2 s sends, entities 0.25 s vs 0.15 s), remote avatars get a 2 s grace period instead of being destroyed
+on a single missing snapshot, and collision/incoming-fire ticks run per PILOT (new `PilotSims` per-player
+position/cooldown; the shared `ShipPosition` no longer routes ram damage onto the wrong hull, shields
+regen per ship). **#956 E-landing hang** — `HandleRequestLandingPads` resolves the empty home-body id
+(like `HandleLeaveSpace`) and ALWAYS replies, echoing the requested id; the client resolves the empty id
+before sending and the chooser re-requests once after 5 s, then cancels with a localized error
+(`ui.space.pad_timeout`, all 14 locales) instead of freezing flight forever. **#957 ship "missing"** —
+same-body landings (`RelocateToAssignedPad`) now clear `SentChunks` (stale-world self-heal: everything
+that changed while the player was away re-streams) and send the travel path's ship placement/stations/
+combat-status/environment/doors messages, so compass + map ship markers point at the REAL pad; pads stay
+reserved while their holder is in space, and `PlayerPad` re-validates a stored in-range index against
+occupancy (a fresh joiner's default index 0 was the host's pad). **#958 frozen avatars** — remote avatars
+hide after 3 s without a presence update and despawn after 10 s (presence is a fixed ~10 Hz stream inside
+the AoI, so a live player never trips this); timed-out remotes stop offering trade/dock targeting.
+**#959 locked in own ship** — most plausible triggers removed: the stale door registry after a same-body
+landing (doors now re-sent) and the frozen avatar at the hatch; remote avatars carry no colliders, so
+they cannot physically block. New `LanPlaytestRegressionTests` (5). Playtest verify pending.
+
+---
+
+## 🔬 Analysis (2026-08-12): LAN-playtest multiplayer bugs — implemented the same day, see the entry above
+
+Two-player "Host Game" playtest (world `JustusTest`, v2026.8.11) surfaced five bugs. Root causes
+identified from code + the host-side savegame/server log; fixed in #954–#959 (kept as the analysis record).
+
+1. **Ghost ship in space (fly-through copy).** `SpaceView.OnStructureDesign` only filters
+   `Kind == "ship"`/empty — `"ship_remote"` (other players' + NPC traders' hulls) falls through and is
+   ALSO built as a static asteroid-path voxel struct: at `(0,0,0)` for player ships (server never sets a
+   position on them), unscaled (2× flight size), collider-less, and never cleaned up. The proper handler
+   in `GameBootstrap` caches the same message for the remote avatar → the hull exists twice. Fix:
+   whitelist static kinds (asteroid/station) in `OnStructureDesign` + client test. Related: `SwitchShip`
+   broadcasts the rebuilt design to everyone as kind `"ship"`, replacing other players' OWN hull.
+2. **Remote ship flickers.** Mostly the ghost from (1) interpenetrating the real remote hull. Also:
+   interpolator delay (0.15 s) < pose broadcast interval (0.2 s) → buffer underrun (hold+jump); a single
+   missing pose snapshot destroys avatar+interpolator (rebuild popping); `SpaceInstance.ShipPosition` is
+   one shared field per instance — two pilots overwrite each other (collision/weapon range/ram damage).
+3. **E-landing hangs in "Lese Landeplätze…"** The home body is registered client-side with an EMPTY id
+   ("empty = current body" convention); `HandleRequestLandingPads` does `FindBody("")` → null → silent
+   return, no reply — client waits forever (no timeout/retry; flight frozen; Esc only escape). The `L`
+   chooser sends the real id and works. Fix: resolve empty id server-side like `HandleLeaveSpace`, always
+   echo a `LandingPadList`, add a client timeout.
+4. **Joiner "lost his ship" after landing.** Savegame proves the fleet row is intact — the ship is not
+   lost, it stayed parked at its old pad ~2.4 km from where he ended up. `RelocateToAssignedPad` never
+   sends `SendShipPlacement` (travel path does) → compass/map ship markers point at the OLD pad. Pad
+   bookkeeping is unsound too: players in space count as "pad free" without releasing their
+   `AssignedPadIndex`, and `PlayerPad` never re-validates an in-range index. Joiner's saved
+   `LandingPadIndex` is 0 (int default = host's home pad) and his respawn anchor is the WORLD ORIGIN
+   (0.5, 66, 0.5) — inside the host's parked ship (#865 fixed the spawn, not the respawn anchor).
+5. **Joiner's avatar standing in the host's ship.** Presence replicates absolute world coords only, AoI
+   culling silently stops sending (no despawn message), the client never times out stale remotes, and
+   `State.Position` is never updated during space flight — the avatar freezes at the last delivered
+   position (likely his origin-anchored spot in the host's ship).
+
+Side findings: 100+ `Ghost block healed` warnings ONLY for the joiner (late-join block/stamp desync —
+needs its own analysis); anti-entomb teleported the joiner to an UNDERGROUND target (y≈45); one
+"Ship parked — 234 cells" stamp (vs. 151-cell starter) offset by one block at the host pad, unexplained.
+
+Suggested fix order (separate PRs): (1) ship_remote filter → (3) landing echo+timeout → (4)+(5) unify
+landing paths + presence despawn. Detailed notes incl. open playtest questions live in the session
+analysis; ask Marcel before implementing.
+
+---
+
+## ✅ Done (2026-08-12): join dialog shows both default ports — official servers vs. "Host Game" worlds
+
+LAN playtest trap: "Host Game" worlds listen on the bundled server's port **31550**
+(`LocalServerLauncher.DefaultPort`), but the join dialog's port field is prefilled with the official
+server default **31415** — so joining a friend's hosted world with the untouched default port silently
+times out ("Keine Verbindung zum Server möglich"). The connect dialog now shows a dim two-line hint next
+to the port field naming both defaults (`ui.menu.connect_port_hint`, localized in all 14 languages, with
+`{official}`/`{hosted}` placeholders filled from the constants — new `AppShell.DefaultServerPort`).
+Applies to every desktop client (Windows/macOS/Linux — one shared Unity UI).
+
+---
+
+## ✅ Done (2026-08-12): build your own ship on a planet — keel, hull, commissioning, geometry stats (#948, #949, #950)
+
+Players can now BUILD a brand-new ship block by block, anywhere on a planet surface, and fly it.
+**Found** — a new blueprint-gated (`ship_builder`, knowledgeCost 40) `ship_core` item: placing the keel
+never touches the world grid, it founds an un-commissioned `ShipType:"custom"` fleet entry plus a
+construction-site structure OBJECT (`shipyard:<pid>`, LandedShips key `build:<pid>`; one site per player).
+The hull's source of truth is `ShipState.BuiltCells` (the station-style cell blob, persisted with the
+fleet), so the site survives rejoins, world switches and logouts. **Build** — the on-foot structure-edit
+path grew a construction ruleset: attach-only, 15×15 footprint ×15 high cap, keel ground-level floor,
+bounds re-derive from the cells (growing to -X/-Z re-anchors the origin and re-broadcasts the object;
+client-side, aiming at a `shipyard:` structure routes out-of-bounds places to the structure edit instead
+of a world place). Door items become DOOR CELLS (opening + server slide door) — the mesher collides every
+solid cell, so a door block would wall the builder in. **Commission (#950)** — E at the new `ship_helm`
+("shipyard" station prompt) validates: ≥20 blocks, exactly one helm, ≥1 `ship_engine`, a door, and an
+AIRTIGHT interior (outside flood-fill over the bounding box; airtight full cubes + door cells seal, ≥4
+enclosed air cells, sealed standing room at the helm). On success the ship gains the baseline modules
+(cockpit/reactor/life_support/cargo_hold_basic), becomes the ACTIVE ship parked right at the build spot,
+and the helm becomes a regular cockpit station. The launch gate re-runs the same validation every
+`EnterSpace` — editing your engine away grounds the ship with the same kid-readable message. **Geometry
+stats (#949)** — hull HP from cell count, speed/handling from engines vs. mass (clamped 0.4–1.8/0.4–1.7),
+derived server-side (`RecomputeShipCombatStats`) and carried to the client in `NetOwnedShip`
+(`FlightSpeed`/`Handling`/`Commissioned` — contractless MessagePack, wire-compatible, no protocol bump);
+`ResolveShipFlight` and the fleet UI use them, the Switch button hides on un-commissioned entries.
+**Per-ship edit deltas** — structure damage deltas are now scoped per SHIP (`ship:<pid>#<shipId>`, the
+"default" ship keeps the legacy id so old saves keep their edits); previously the whole fleet shared one
+delta set. On-foot edits on a commissioned custom ship are DESIGN changes (blob-backed, repair never
+"fixes" them, stats re-derive); EVA damage + the wreck carve stay delta-backed and repairable. New blocks
+`ship_core`/`ship_helm`/`ship_engine` (machine category → airtight), items, workshop recipes, EN+DE
+locale keys (`srv.ship.*`, `ui.station.shipyard`, `ship.custom.*`). New `CustomShipTests` (8: content
+wiring, founding, adjacency+cap, negative-growth re-anchor, commission reject/accept, stat monotonicity,
+launch-gate re-check). Analysis in memory (`player-built-ships-analysis`).
+
+---
+
+## ✅ Done (2026-08-12): CodeQL follow-up on the #943 moderation logging — `LogSafe(id)` in the join gate
+
+CodeQL raised three alerts against the fresh #943 code. The two `cs/log-forging` hits (Program.cs
+join endpoint) flagged the `{id}` route parameter in the block/watch `LogWarning` lines — a false
+positive in practice (`id` is regex-validated `^[a-f0-9]{12}$` before those lines), but CodeQL
+cannot see through the bool-returning `IsValidWorldId` guard, so both occurrences now go through
+the file's existing `LogSafe()` sanitizer like every other request-derived value. The `cs/web/xss`
+(High) alert on `AdminNotifier`'s `StringContent` was dismissed as a false positive with a comment:
+that content is the body of an OUTBOUND `text/plain` POST to the operator-configured ntfy URL —
+never served to a browser — and header injection/length are already handled by `HeaderValue()`.
+Analysis: `analysis/codeql-alerts-1008-1010.md` (local).
+
+---
+
 ## ✅ Done (2026-08-12): name screening with operator flags, moderation pings, visible paint reports (#938)
 
 Kid-facing moderation, three pieces. **(1) Shared name screening** — new `Shared.Moderation.NameScreen`
@@ -7760,6 +8039,19 @@ same pattern as `/bump`; the fleet already passes the key into every world conta
 show in the inbox instead of only a per-world DB row + log line nobody reads. Docs: HOSTED_WORLDS,
 REPORT_HOST, SELF_HOSTING §12, both `.env.example`s + composes. New `NameScreenTests` (evasions,
 false-positive guards, join gate end-to-end). Chat filtering stays a separate task.
+
+---
+
+## ✅ Done (2026-08-12): the Swap panel no longer hides its last slot row under Back/Close (#953)
+
+The slot-action **Swap** panel opened a 660-px dialog, but its own content ran to y 774: the 4th
+backpack row overshot the panel bottom and the Back/Close buttons (placed at `h − 78`) sat directly
+ON slots 18/23, covering them and stealing their clicks; the stow button floated entirely below the
+panel on the scrim (dialog panels have no clipping mask). Same class of bug in the **Colour** panel
+(700 px): the own-design tiles clipped 8 px under Back, and the remove-design button (shown when the
+held stack carries a paint design) landed fully on top of it. Fix is purely geometric — Swap grows to
+1000×880, Colour to 900×780, both recentred; the Form panel (740 px) already fit. Cell sizes stay
+untouched on purpose: shrinking them would undercut the touch/pad targets #940/#942 just introduced.
 
 ---
 

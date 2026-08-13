@@ -38,10 +38,15 @@ namespace BlocksBeyondTheStars.Client
         /// Read by the persistent <see cref="ClientMusic"/> director to pick context music.</summary>
         public GameBootstrap CurrentBoot { get; private set; }
 
+        /// <summary>Default port of official/dedicated servers (the join dialog's prefill). Locally
+        /// hosted "Host Game" worlds listen on <see cref="LocalServerLauncher.DefaultPort"/> instead —
+        /// the join dialog shows both so LAN joiners know which one to enter.</summary>
+        public const int DefaultServerPort = 31415;
+
         // Join target edited on the main menu. PlayerName is loaded from / persisted to
         // ClientSettings (Awake / the connect dialog); Password is session-only.
         public string Host = "127.0.0.1";
-        public string Port = "31415";
+        public string Port = "31415"; // = DefaultServerPort; kept as a string (it is edited in the connect dialog)
         public string PlayerName = ""; // empty until chosen — the menu gates play actions on it (#221)
         public string Password = "";
 
@@ -928,13 +933,38 @@ namespace BlocksBeyondTheStars.Client
         /// creatures and the clock all kept running behind it.
         /// <para>
         /// It has to go through the server — singleplayer runs the bundled server as its own process, so
-        /// stopping the client alone would freeze the camera while the world carried on. The server declines
-        /// while more than one player is joined, and the menu then behaves exactly as it always did.
+        /// stopping the client alone would freeze the camera while the world carried on. In multiplayer the
+        /// world only actually holds once every player is in their menu (#973); until then this is just an
+        /// intent, and the dialog says who it is still waiting for.
         /// </para>
         /// Tied to <see cref="_confirmQuit"/> (the menu session), not to the dialog's visibility — opening
         /// Settings from the pause menu hides the dialog but must not resume the world.
         /// </summary>
-        private void SetWorldPaused(bool paused) => Boot()?.Network?.SendPause(paused);
+        private void SetWorldPaused(bool paused)
+        {
+            _nextPauseKeepAlive = paused ? Time.realtimeSinceStartup + PauseKeepAliveSeconds : 0f;
+            Boot()?.Network?.SendPause(paused);
+        }
+
+        /// <summary>How often the held intent is re-sent while the menu stays open. Behind an open menu the
+        /// client sends nothing else at all — no movement, no pose — so this repeat is the server's only proof
+        /// that the game is still alive, and the one thing that lets it drop a player who crashed mid-pause
+        /// instead of leaving the world frozen for everybody else (#973, heartbeat from #964).</summary>
+        private const float PauseKeepAliveSeconds = 15f;
+
+        private float _nextPauseKeepAlive;
+
+        /// <summary>Re-sends the pause intent on the keep-alive cadence for as long as the menu session lasts.</summary>
+        private void TickPauseKeepAlive()
+        {
+            if (!_confirmQuit || Time.realtimeSinceStartup < _nextPauseKeepAlive)
+            {
+                return;
+            }
+
+            _nextPauseKeepAlive = Time.realtimeSinceStartup + PauseKeepAliveSeconds;
+            Boot()?.Network?.SendPause(true);
+        }
 
         private void CancelQuit()
         {
@@ -1420,6 +1450,14 @@ namespace BlocksBeyondTheStars.Client
                 _uiSaveSelect = null;
             }
 
+            // The open pause menu keeps telling the server it is still there, and keeps its own status line in
+            // step with who else has (not) paused yet (#973). Both are no-ops outside a menu session.
+            TickPauseKeepAlive();
+            if (_confirmQuit)
+            {
+                RefreshPauseStatus();
+            }
+
             // Track chat focus across frames: an Esc that closes the chat clears ChatTyping in the SAME
             // frame (the InputField's end-edit), so by the time we read it here it may already be false.
             // Remembering the previous frame's state keeps that Esc from also popping the quit dialog.
@@ -1434,8 +1472,11 @@ namespace BlocksBeyondTheStars.Client
                 // A reason of the form "@<locale key>" is a message the SERVER wants shown in the player's
                 // language — used by the moderation kick (#497), where the text is ours, not free prose.
                 // Everything else stays verbatim: those reasons are operator- or owner-authored.
+                // Routed through the token resolver so a ":arg" tail fills the template's {name} (#964):
+                // a plain L() lookup treated "srv.join.name_online:Justus" as one key and showed the
+                // player the raw "[srv.join.name_online:Justus]" instead of a sentence.
                 string reason = igBoot.JoinRejectedReason;
-                MenuNotice = reason.Length > 1 && reason[0] == '@' ? L(reason.Substring(1)) : reason;
+                MenuNotice = igBoot.ServerTokenText(reason);
                 ReturnToMenu();
                 return;
             }
@@ -1573,6 +1614,42 @@ namespace BlocksBeyondTheStars.Client
             UiKit.AddButton(panel.transform, 90f, 88f, 300f, 56f, L("ui.pause.resume"), CancelQuit);
             UiKit.AddButton(panel.transform, 90f, 152f, 300f, 56f, L("ui.menu.settings"), OpenSettings);
             UiKit.AddButton(panel.transform, 90f, 216f, 300f, 56f, L("ui.pause.quit"), ReturnToMenu);
+
+            // In multiplayer the world only stops once everybody is in their menu (#973), so the dialog has to
+            // say which of the two it is instead of silently claiming a pause that is not running.
+            _pauseStatusText = UiKit.AddText(panel.transform, 24f, 280f, 432f, 40f,
+                string.Empty, 16, UiKit.CyanDim, TextAnchor.MiddleCenter);
+            RefreshPauseStatus();
+        }
+
+        private UnityEngine.UI.Text _pauseStatusText;
+
+        /// <summary>Keeps the pause dialog's status line in step with the server's tally: held, or still waiting
+        /// on the players who are named in it. Blank in singleplayer, where the hold is never in doubt.</summary>
+        private void RefreshPauseStatus()
+        {
+            if (_pauseStatusText == null)
+            {
+                return;
+            }
+
+            var boot = Boot();
+            if (boot == null || boot.PauseJoinedPlayers <= 1)
+            {
+                _pauseStatusText.text = string.Empty; // alone in the world — the hold always applies
+                return;
+            }
+
+            if (boot.WorldPaused)
+            {
+                _pauseStatusText.text = L("ui.pause.world_held");
+                return;
+            }
+
+            string waiting = boot.PauseWaitingFor;
+            _pauseStatusText.text = string.IsNullOrEmpty(waiting)
+                ? string.Empty
+                : string.Format(L("ui.pause.waiting_for"), boot.PauseHoldingPlayers, boot.PauseJoinedPlayers, waiting);
         }
     }
 }
