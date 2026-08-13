@@ -4,6 +4,7 @@
 
 using System.Reflection;
 using BlocksBeyondTheStars.Networking;
+using BlocksBeyondTheStars.Networking.Messages;
 using Xunit;
 
 namespace BlocksBeyondTheStars.Tests;
@@ -45,6 +46,120 @@ public sealed class NetCodecTests
                 ", ",
                 nonTopLevelRegistrations.Select(
                     entry => $"{entry.Key} -> {entry.Value.FullName}")));
+    }
+    [Fact]
+    public void EveryRegisteredMessage_RoundTripsThroughMessagePack()
+    {
+        foreach (var type in NetCodec.RegisteredMessageTags.Keys)
+        {
+            var message = Activator.CreateInstance(type);
+
+            Assert.NotNull(message);
+
+            var decoded = NetCodec.Decode(NetCodec.Encode(message));
+
+            Assert.NotNull(decoded);
+            Assert.Equal(type, decoded.GetType());
+        }
+    }
+    [Fact]
+    public void JoinRequest_PreservesFieldsThroughMessagePackRoundTrip()
+    {
+        var original = new JoinRequest
+        {
+            ProtocolVersion = 123,
+            PlayerName = "TestPlayer",
+            Password = "secret",
+            Token = "test-token",
+            HostedToken = "host-token",
+            Locale = "de",
+            ViewDistanceChunks = 12,
+        };
+
+        var decoded = Assert.IsType<JoinRequest>(
+            NetCodec.Decode(NetCodec.Encode(original)));
+
+        Assert.Equal(original.ProtocolVersion, decoded.ProtocolVersion);
+        Assert.Equal(original.PlayerName, decoded.PlayerName);
+        Assert.Equal(original.Password, decoded.Password);
+        Assert.Equal(original.Token, decoded.Token);
+        Assert.Equal(original.HostedToken, decoded.HostedToken);
+        Assert.Equal(original.Locale, decoded.Locale);
+        Assert.Equal(original.ViewDistanceChunks, decoded.ViewDistanceChunks);
+    }
+    [Fact]
+    public void EveryRegisteredMessage_RoundTripsThroughJson()
+    {
+        foreach (var type in NetCodec.RegisteredMessageTags.Keys)
+        {
+            var message = Activator.CreateInstance(type);
+
+            Assert.NotNull(message);
+
+            var payload = NetCodec.EncodeJson(message);
+            var decoded = NetCodec.Decode(payload);
+
+            Assert.NotNull(decoded);
+            Assert.Equal(type, decoded.GetType());
+        }
+    }
+    [Fact]
+    public void JoinRequest_PreservesFieldsThroughJsonRoundTrip()
+    {
+        var original = new JoinRequest
+        {
+            ProtocolVersion = 123,
+            PlayerName = "TestPlayer",
+            Password = "secret",
+            Token = "test-token",
+            HostedToken = "host-token",
+            Locale = "de",
+            ViewDistanceChunks = 12,
+        };
+
+        var decoded = Assert.IsType<JoinRequest>(
+            NetCodec.Decode(NetCodec.EncodeJson(original)));
+
+        Assert.Equal(original.ProtocolVersion, decoded.ProtocolVersion);
+        Assert.Equal(original.PlayerName, decoded.PlayerName);
+        Assert.Equal(original.Password, decoded.Password);
+        Assert.Equal(original.Token, decoded.Token);
+        Assert.Equal(original.HostedToken, decoded.HostedToken);
+        Assert.Equal(original.Locale, decoded.Locale);
+        Assert.Equal(original.ViewDistanceChunks, decoded.ViewDistanceChunks);
+    }
+    [Fact]
+    public void MutatedMessagePackPayload_NeverThrows()
+    {
+        foreach (var type in NetCodec.RegisteredMessageTags.Keys)
+        {
+            var message = Activator.CreateInstance(type);
+
+            Assert.NotNull(message);
+
+            var original = NetCodec.Encode(message);
+
+            // Truncate the payload at every possible boundary after the tag.
+            for (int length = 0; length < original.Length; length++)
+            {
+                var truncated = original[..length];
+
+                var exception = Record.Exception(() => NetCodec.Decode(truncated));
+
+                Assert.Null(exception);
+            }
+
+            // Flip each byte individually.
+            for (int index = 0; index < original.Length; index++)
+            {
+                var mutated = (byte[])original.Clone();
+                mutated[index] ^= 0xFF;
+
+                var exception = Record.Exception(() => NetCodec.Decode(mutated));
+
+                Assert.Null(exception);
+            }
+        }
     }
 
     private static HashSet<Type> GetTopLevelMessageTypes()
