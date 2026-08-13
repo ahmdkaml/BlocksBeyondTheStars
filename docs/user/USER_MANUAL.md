@@ -23,11 +23,13 @@ Last updated: 2026-08-11.
   **Official Worlds** → online multiplayer on the official servers (see below).
 - **Host Game (in-game multiplayer hosting):** the same world picker as singleplayer — *any* saved world
   can be hosted ("open to LAN" style) or a new one created — plus a host bar with **max players** (2–16)
-  and an optional **join password**. The game starts the bundled server locally and you join immediately;
+  and an optional **join password**. The host bar also shows **your address** (`ip:port`) with a **Copy**
+  button — read it out or paste it to your friends while the world is still loading; it is the address
+  they type into *Join Server*. The game starts the bundled server locally and you join immediately;
   you are the world's admin (the very first player of a fresh world is its **WorldAdmin**; the host's
-  name is additionally passed as a server admin). The address friends join is announced in chat and as a
-  HUD toast ("Hosting — friends can join at ip:port"). The session ends (and the world saves) when the
-  host quits. Friends outside your LAN need a port forward of that UDP port.
+  name is additionally passed as a server admin). The same address is announced again in chat and as a
+  HUD toast once you are in ("Hosting — friends can join at ip:port"). The session ends (and the world
+  saves) when the host quits. Friends outside your LAN need a port forward of that UDP port.
 - **Official Worlds (online multiplayer, beta):** the in-game portal for hosted worlds on the official
   servers — also available in the browser at [play.blocksbeyondthestars.de](https://play.blocksbeyondthestars.de).
   Create a free account (no email needed), then create your own world. There are **no open public
@@ -350,6 +352,22 @@ separate unlock; admins can still disable it through server world rules.
   lab, refinery, …). Modules enable on-board stations and cargo capacity. Build/expand from the Ship tab.
   Each cargo-hold module adds slots to the shared **cargo hold** (see *Inventory & cargo hold* above); the
   Cargo tab shows the current used/total capacity.
+
+### Building your own ship (keel → commissioning)
+- Unlock the **Shipwright** blueprint (Tech tab), craft a **Ship Keel** at a workshop and place it on open,
+  solid ground **anywhere on a planet** — no landing pad needed. That founds a construction site (one at a
+  time per player).
+- Build the hull straight onto the keel, block by block, up to **15×15 blocks and 15 high**. Blocks must
+  attach to the build; the hull sits on the keel's ground level. Mining a construction block gives it back;
+  taking the last block out cancels the build.
+- A flyable ship needs: at least **20 blocks**, exactly **one Ship Helm**, at least **one Ship Engine**, a
+  **door**, and an **airtight hull** — glass and doors seal fine, any open gap does not.
+- Stand at the helm and press **E** ("Commission ship"). If something is missing the message tells you what;
+  once it passes, the build becomes your **active ship**, parked right where you built it. Launch as usual
+  via menu (Tab) → Map → *Enter space*.
+- **It flies the way you built it:** hull strength grows with the hull size, speed and handling come from
+  engines versus weight — more engines fly faster, a heavy brick turns slowly. You can keep editing your
+  ship on foot afterwards; the launch check re-runs every start (no engine → grounded until you add one).
 
 ### Repairing your own ship
 - Combat dents your ship's **hull** (it never regenerates on its own), and EVA-carved hull cells stay missing
@@ -919,6 +937,12 @@ rejections) appear in the **chat scrollback**, not just the brief HUD toast.
 | `/instant` | Toggle free/instant crafting |
 | `/ai Prompt` | Generate an AI mission (content tool, not a cheat; needs the optional AI backend — see §5 → *Dynamic AI text* and [SELF_HOSTING.md](../developer/SELF_HOSTING.md) §8) |
 | `/help admin` | List the admin commands in chat (`/admin` does the same) |
+
+**Player names with spaces** work everywhere a command takes one: the name is simply the rest of the
+line, so `/tpp mincraft Fan` teleports you to *mincraft Fan*. Capitalisation does not matter, quoting
+the name is allowed (`/tpp "mincraft Fan"`) and a leading `@` is ignored. In `/give` the name comes
+last for the same reason — `/give iron_plate 5 mincraft Fan`. Don't know the exact spelling? `/players`
+lists everyone.
 
 #### Named teleport targets
 

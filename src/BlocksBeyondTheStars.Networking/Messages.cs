@@ -576,6 +576,15 @@ public sealed class TradeRespondIntent
     public bool Accept { get; set; }
 }
 
+/// <summary>Server tells a player that someone nearby wants to trade with them (#981) — the counterpart of
+/// <see cref="DockRequestNotice"/>. Before this, the invitation was only a chat/toast line, and the client
+/// had no way at all to answer it: the trade could never be opened. A pre-#981 client drops the unknown tag
+/// and still sees the accompanying <see cref="ServerMessage"/>, so no protocol bump is needed.</summary>
+public sealed class TradeRequestNotice
+{
+    public string Requester { get; set; } = string.Empty;
+}
+
 /// <summary>Client sets the items on its side of the open trade (replaces the previous offer).</summary>
 public sealed class TradeOfferIntent
 {
@@ -1925,6 +1934,14 @@ public sealed class NetOwnedShip
     public string Id { get; set; } = string.Empty;
     public string Type { get; set; } = string.Empty;
     public bool Active { get; set; }
+
+    /// <summary>Flight stats for a ship the client cannot resolve from <c>data/ships.json</c> (a self-built
+    /// "custom" ship, whose stats derive from its geometry). 0 = resolve from content as before.</summary>
+    public float FlightSpeed { get; set; }
+    public float Handling { get; set; }
+
+    /// <summary>False while a self-built ship is still under construction (not switchable/flyable yet).</summary>
+    public bool Commissioned { get; set; } = true;
 }
 
 /// <summary>The player's owned ships and which is active (sent on join and on change).</summary>

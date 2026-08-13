@@ -823,6 +823,7 @@ public sealed partial class GameServer
         SendLandingPads(session);
         SendContainers(session);
         SendStarMap(session);
+        SyncAppearance(session); // faces + body paintings both ways — appearance is per-world state (#982)
         Send(session, new ServerMessage
         {
             Text = hyperjump
@@ -1082,102 +1083,204 @@ public sealed partial class GameServer
 
     // ---------------- Tick ----------------
 
-    // --- Singleplayer pause ---------------------------------------------------------------------------
+    // --- The world pause --------------------------------------------------------------------------------
     // "Im Einzelspieler sollte das Spiel pausiert werden, wenn man in das Menü geht." The Esc dialog was
-    // already titled "Pause" with a "Resume" button but nothing ever stopped.
+    // already titled "Pause" with a "Resume" button but nothing ever stopped (#612), and the client was not
+    // told about the hold either (#908). Both only ever served a LONE player: a second joined player had the
+    // request refused outright, so two friends taking a break both watched hunger drain behind their menus.
+    //
+    // #973 makes it a group decision instead. The intent lives on each session; the world holds once EVERY
+    // joined player is asking for it, and runs again the moment one of them resumes. Nobody can freeze a
+    // world for anybody else, because everybody has to agree — which is also why no rule switches this off.
 
-    /// <summary>True while a lone player has the world held from their menu. Only the simulation stops — the
-    /// transport keeps being polled, or the unpause could never arrive.</summary>
+    /// <summary>True while the world is held. DERIVED from the players' intents by
+    /// <see cref="RecomputePause"/> — never assign it anywhere else. Only the simulation stops: the transport
+    /// keeps being polled, or the unpause could never arrive.</summary>
     private bool _paused;
 
-    /// <summary>Seconds the world has been held. A client that dies with its menu open must not leave the world
-    /// frozen forever (it would also never save), so the hold expires.</summary>
+    /// <summary>Seconds the world has been held, in real time. A client that dies with its menu open must not
+    /// leave the world frozen forever (it would also never save), so the hold expires.</summary>
     private double _pausedFor;
 
-    /// <summary>Longest a pause may last before the world resumes on its own.</summary>
+    /// <summary>What the last <see cref="PauseState"/> broadcast said. The pause dialog shows who is still
+    /// missing, so the message has to go out whenever the tally moves — but only then, not every tick.</summary>
+    private (bool Paused, int Holding, int Joined, string Waiting) _pauseBroadcast = (false, -1, -1, string.Empty);
+
+    /// <summary>Longest a lone player may hold the world before it resumes on its own.</summary>
     private const double MaxPauseSeconds = 30 * 60;
+
+    /// <summary>Longest a GROUP hold may last. Shorter than a solo hold on purpose: it suspends everyone
+    /// else's evening too, and a hold nobody is left to end costs more the more players are waiting on it.</summary>
+    private const double MaxGroupPauseSeconds = 10 * 60;
 
     /// <summary>True while the world is holding — for tests and the /status snapshot.</summary>
     public bool IsPaused => _paused;
 
-    /// <summary>Drives the pause intent for tests (the client sends it when the Esc menu opens/closes).</summary>
+    /// <summary>Drives the pause intent for tests (the client sends it when the Esc menu opens/closes, and
+    /// repeats it as a keep-alive while the menu stays open). Stamps the heartbeat the way the wire path
+    /// does — this stands in for a real payload, and a test client must not look silent for sending one.</summary>
     public void PauseForTest(PlayerSession session, bool paused)
-        => HandlePause(session, new PauseIntent { Paused = paused });
-
-    /// <summary>Number of players who have completed the join handshake. Spectators do not count (#908): an
-    /// invisible admin observing a world is not someone whose game a pause could interrupt, and counting them
-    /// silently denied a lone player their pause — or lifted one that was already running. Everywhere else in
-    /// the server draws the same line (see <c>GameServerObserver</c>).</summary>
-    private int JoinedCount
     {
-        get
-        {
-            int n = 0;
-            foreach (var s in _sessions.Values)
-            {
-                if (s.Joined && !s.Spectating)
-                {
-                    n++;
-                }
-            }
-
-            return n;
-        }
+        session.LastPayloadAt = _uptime;
+        HandlePause(session, new PauseIntent { Paused = paused });
     }
 
     /// <summary>
-    /// Honours a pause request only while the asking player is alone in the world — one player must never be
-    /// able to freeze a dedicated or hosted world under everybody else. The answer goes back either way so the
-    /// client can keep its menu honest instead of claiming a pause it did not get.
+    /// Records a player's pause intent. It is always accepted — what it means for the WORLD is decided by
+    /// <see cref="RecomputePause"/>, which holds only when everybody agrees. (Before #973 a request was
+    /// refused outright whenever a second player was joined.)
     /// </summary>
     private void HandlePause(PlayerSession session, PauseIntent intent)
     {
-        bool allowed = JoinedCount <= 1;
-        if (allowed)
+        session.PausedSilentSeconds = 0; // hearing from this client at all is what the keep-alive is for
+
+        if (!intent.Paused)
         {
-            if (intent.Paused && !_paused)
+            session.PauseHoldExpired = false; // closing the menu ends the hold — and any lockout on it
+        }
+        else
+        {
+            // A repeat while this session already wants the hold is the client's keep-alive: behind an open
+            // menu it is the only payload it sends, and the only proof that it is still alive (see
+            // SweepSilentPausedSessions). Seeing one also tells us this client is new enough to send them.
+            if (session.WantsPause)
+            {
+                session.SendsPauseKeepAlive = true;
+            }
+
+            if (session.PauseHoldExpired)
+            {
+                // The hold already ran out under this open menu. The keep-alives still prove the client is
+                // alive (stamped above), but they must not put the world straight back to sleep — that would
+                // make the ceiling meaningless. Closing and reopening the menu asks again.
+                return;
+            }
+        }
+
+        session.WantsPause = intent.Paused;
+        RecomputePause();
+    }
+
+    /// <summary>
+    /// Derives the hold from the players' intents and broadcasts it whenever the tally moves. The world holds
+    /// while at least one player is joined and EVERY joined non-spectator wants it held.
+    /// <para>
+    /// Spectators are excluded exactly as in #908: an invisible admin observing a world is not someone whose
+    /// game a pause could interrupt — counting them silently denied the actual players their pause, and would
+    /// now block it forever (an observer never opens a pause menu). Everywhere else in the server draws the
+    /// same line (see <c>GameServerObserver</c>).
+    /// </para>
+    /// </summary>
+    private void RecomputePause()
+    {
+        int joined = 0;
+        int holding = 0;
+        foreach (var s in _sessions.Values)
+        {
+            if (!s.Joined || s.Spectating)
+            {
+                continue;
+            }
+
+            joined++;
+            if (s.WantsPause)
+            {
+                holding++;
+            }
+        }
+
+        // Only worth naming names when somebody is actually waiting on somebody: this runs every tick, and
+        // while everyone is simply playing (holding == 0) nobody has a pause dialog to read them in.
+        List<string>? waitingFor = null;
+        if (holding > 0 && holding < joined)
+        {
+            foreach (var s in _sessions.Values)
+            {
+                if (s.Joined && !s.Spectating && !s.WantsPause)
+                {
+                    (waitingFor ??= new List<string>()).Add(s.State.Name);
+                }
+            }
+        }
+
+        // "Nobody joined" must not read as "everybody agrees": an empty world would hold forever, never save,
+        // and on a hosted server never idle out.
+        bool hold = joined > 0 && holding == joined;
+        if (hold != _paused)
+        {
+            if (hold)
             {
                 SaveAll(); // a held world is a natural, safe save point — and covers a client that never comes back
             }
 
-            _paused = intent.Paused;
+            _paused = hold;
             _pausedFor = 0;
+            foreach (var s in _sessions.Values)
+            {
+                s.PausedSilentSeconds = 0; // the paused-silence clock only runs while the world stands still
+            }
+
+            _log.Info(hold
+                ? $"World held — all {joined} player(s) are in the pause menu."
+                : "World resumed.");
         }
 
-        Send(session, new PauseState { Paused = _paused, Allowed = allowed });
+        string waiting = waitingFor is null ? string.Empty : string.Join(", ", waitingFor);
+        var tally = (_paused, holding, joined, waiting);
+        if (tally != _pauseBroadcast)
+        {
+            _pauseBroadcast = tally;
+
+            // Broadcast, not a reply to the asker: every client stops its OWN world clock from this message,
+            // and the pause dialog shows the tally to everyone waiting in it.
+            Broadcast(new PauseState
+            {
+                Paused = _paused,
+                Allowed = true, // the intent is always recorded now; only the world's answer can be "not yet"
+                HoldingPlayers = holding,
+                JoinedPlayers = joined,
+                WaitingFor = waiting,
+            });
+        }
     }
 
-    /// <summary>Lifts a pause that must not continue: someone else joined, or the holder has been gone too long.
-    /// Returns true when the world is (still) held after this check.</summary>
+    /// <summary>Clears every player's pause intent when the hold expires on its own, and latches the menus
+    /// that were holding it (see <see cref="PlayerSession.PauseHoldExpired"/>) — otherwise the world would
+    /// re-enter the hold on the very next recompute, with everybody still sitting in their menus.</summary>
+    private void ClearPauseIntents()
+    {
+        foreach (var s in _sessions.Values)
+        {
+            s.PauseHoldExpired |= s.WantsPause;
+            s.WantsPause = false;
+        }
+    }
+
+    /// <summary>Advances the hold and releases it when it must not continue: the last holder left, a client
+    /// died behind its menu, or the hold outlived its ceiling. Returns true while the world is (still) held.
+    /// <para>Also runs while the world is NOT held — the tally it broadcasts has to follow players joining and
+    /// leaving, not just the pause itself.</para></summary>
     private bool HoldingPause(double deltaSeconds)
     {
         if (!_paused)
         {
-            return false;
-        }
-
-        // The hold only makes sense for exactly the one player who asked for it: a second player arriving always
-        // wins over one player's menu, and a holder who disconnected (or quit to the main menu) leaves nobody to
-        // hold it for — a dedicated world must not sit frozen because someone left with the menu open.
-        if (JoinedCount != 1)
-        {
-            _paused = false;
-            _pausedFor = 0;
-            Broadcast(new PauseState { Paused = false, Allowed = false });
+            RecomputePause(); // a join/leave changes what the pause dialogs are waiting for
             return false;
         }
 
         _pausedFor += deltaSeconds;
-        if (_pausedFor >= MaxPauseSeconds)
+        double ceiling = _pauseBroadcast.Holding > 1 ? MaxGroupPauseSeconds : MaxPauseSeconds;
+        if (_pausedFor >= ceiling)
         {
-            _log.Info("Pause expired — resuming the world.");
-            _paused = false;
-            _pausedFor = 0;
-            Broadcast(new PauseState { Paused = false, Allowed = true });
+            _log.Info($"Pause expired after {ceiling / 60:0} min — resuming the world.");
+            ClearPauseIntents();
+            RecomputePause();
             return false;
         }
 
-        return true;
+        SweepSilentPausedSessions(deltaSeconds); // a client that died mid-pause must not hold the world hostage
+        RecomputePause(); // a swept session takes its intent with it — with nobody left the hold ends here
+        return _paused;
     }
 
     public void Tick(double deltaSeconds)
@@ -1190,6 +1293,11 @@ public sealed partial class GameServer
         {
             Guard("Moderation", deltaSeconds, TickModeration);
             Guard("Maintenance", deltaSeconds, TickMaintenance);
+
+            // The control plane must keep seeing a held world (#973): the /status snapshot is what the hosted
+            // fleet polls, and freezing it would report a stale player count for as long as the pause lasts.
+            // Safe to run here — with players joined it only republishes; the idle timer stays at zero.
+            Guard("HostedLifecycle", deltaSeconds, TickHostedLifecycle);
             return;
         }
         Guard("TickSpace", deltaSeconds, TickSpace); // space instances are keyed by location and handle their own players
@@ -1247,7 +1355,8 @@ public sealed partial class GameServer
             }
         }
 
-        Guard("SampleHistories", deltaSeconds, SampleHistories);
+        Guard("SampleHistories", deltaSeconds, SampleHistories); // also advances _uptime
+        Guard("SilentSessions", SweepSilentSessions); // release names/slots held by dead clients (#964)
         Guard("SweepExpiredLandedTraders", SweepExpiredLandedTraders); // P3: free pads of traders whose dwell ended on bodies nobody is on
         Guard("TickGreetings", TickGreetings); // push any LLM NPC greetings finished off-thread (item 15)
         Guard("TickMissionTexts", TickMissionTexts); // push mission-list refreshes when L3 board texts arrive
@@ -2082,15 +2191,31 @@ public sealed partial class GameServer
         }
     }
 
+    /// <summary>Seconds a chunk is exempt from a full ghost re-stream after it just had one (#965).</summary>
+    private const double GhostRestreamCooldown = 10.0;
+
     /// <summary>Heals a stale client chunk view (a "ghost" block the server no longer has): confirms the cell's
-    /// authoritative block immediately and forgets the chunk on this session so <see cref="StreamChunks"/> re-sends
-    /// the current authoritative chunk next tick — clearing every ghost in it at once.</summary>
-    private void ResyncStaleChunk(PlayerSession session, Vector3i pos)
+    /// authoritative block immediately, and — only if the same chunk ghosts REPEATEDLY — forgets the chunk on
+    /// this session so <see cref="StreamChunks"/> re-sends the whole authoritative chunk.
+    /// <para>The corrective <see cref="BlockChanged"/> fixes the normal single-cell case on its own. Re-streaming
+    /// the full chunk on EVERY ghost was a bandwidth/CPU amplifier: one ghost cost a whole chunk on the wire plus
+    /// seven chunk remeshes on the client, and a client that double-sent its mine intents (#965) produced one per
+    /// mined block. Returns whether the caller should log the ghost — the log is rate-limited with the
+    /// re-stream so a mining session can no longer spam hundreds of warnings.</para></summary>
+    private bool ResyncStaleChunk(PlayerSession session, Vector3i pos)
     {
         var (rsTint, rsGlow) = _world.GetModifier(pos);
         Send(session, new BlockChanged { X = pos.X, Y = pos.Y, Z = pos.Z, Block = _world.GetBlock(pos).Value, Tint = rsTint, Glow = rsGlow, Shape = _world.GetShape(pos) });
+
         var coord = WorldConstants.CanonicalChunk(WorldConstants.WorldToChunk(pos), _world.Circumference);
+        if (session.GhostChunkSeen.TryGetValue(coord, out double lastAt) && _uptime - lastAt < GhostRestreamCooldown)
+        {
+            return false; // already re-streamed this chunk moments ago — the BlockChanged above is enough
+        }
+
+        session.GhostChunkSeen[coord] = _uptime;
         session.SentChunks.Remove(coord); // not-sent again → StreamChunks re-streams it on the next tick
+        return true;
     }
 
     // ---------------- Connection handling ----------------
@@ -2099,6 +2224,98 @@ public sealed partial class GameServer
     {
         // Session is created on a successful JoinRequest; just note the pending connection.
         _log.Info($"Connection {connectionId} opened; awaiting join.");
+    }
+
+    /// <summary>The live session holding a player name (case-insensitive), or null. One session per name:
+    /// PlayerId == name, so two clients under one name would alias the same player state.</summary>
+    private PlayerSession? FindJoinedSessionByName(string name)
+    {
+        foreach (var s in _sessions.Values)
+        {
+            if (s.Joined && string.Equals(s.State.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                return s;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Seconds without a single payload after which a joined session is considered dead (#964).
+    /// The transport cannot see this case: a client whose game froze or whose machine died mid-frame can keep
+    /// answering pings from its network thread, so only the absence of INTENTS proves nobody is playing.
+    /// Generously above any legitimate quiet period — a playing client sends movement/pose updates
+    /// continuously, and a paused one sends the pause keep-alive (see <see cref="SweepSilentPausedSessions"/>,
+    /// which applies the same budget on a clock that keeps running while the world does not).</summary>
+    private const double SessionHeartbeatTimeout = 90.0;
+
+    /// <summary>Drops joined sessions that have gone silent (see <see cref="SessionHeartbeatTimeout"/>), so a
+    /// crashed player's name and slot are released long before the transport notices.</summary>
+    private void SweepSilentSessions()
+    {
+        List<int>? dead = null;
+        foreach (var (connectionId, session) in _sessions)
+        {
+            if (session.Joined && session.HeartbeatTracked && _uptime - session.LastPayloadAt > SessionHeartbeatTimeout)
+            {
+                (dead ??= new List<int>()).Add(connectionId);
+            }
+        }
+
+        DropSilentSessions(dead);
+    }
+
+    /// <summary>
+    /// Drops clients that fell silent WHILE THE WORLD STOOD STILL (#973). The normal sweep above cannot see
+    /// them: it ages sessions against <c>_uptime</c>, which a simulation system advances — and a held world
+    /// runs no simulation, so every heartbeat freezes along with the clock.
+    /// <para>
+    /// Two things go wrong without this pass. A player whose client crashes behind its pause menu squats
+    /// their name and slot for the whole hold — up to <see cref="MaxGroupPauseSeconds"/> — which is exactly
+    /// the rejoin lockout #964 removed for a running world. And if EVERY paused client dies (a host machine
+    /// going to sleep), nobody is left to resume: the world sits frozen, saving nothing, until the ceiling.
+    /// </para>
+    /// <para>
+    /// Only clients that have shown they send the pause keep-alive are swept. One from before #973 sends
+    /// nothing at all while its menu is open — dropping it for that would be a regression, not a fix — so a
+    /// mixed-version world simply keeps the old behaviour and waits out the ceiling.
+    /// </para>
+    /// </summary>
+    private void SweepSilentPausedSessions(double deltaSeconds)
+    {
+        List<int>? dead = null;
+        foreach (var (connectionId, session) in _sessions)
+        {
+            if (!session.Joined || !session.HeartbeatTracked || !session.SendsPauseKeepAlive)
+            {
+                continue;
+            }
+
+            session.PausedSilentSeconds += deltaSeconds;
+            if (session.PausedSilentSeconds > SessionHeartbeatTimeout)
+            {
+                (dead ??= new List<int>()).Add(connectionId);
+            }
+        }
+
+        DropSilentSessions(dead);
+    }
+
+    /// <summary>Disconnects the sessions a heartbeat sweep found dead, logging each one.</summary>
+    private void DropSilentSessions(List<int>? dead)
+    {
+        if (dead is null)
+        {
+            return;
+        }
+
+        foreach (int connectionId in dead)
+        {
+            string who = _sessions.TryGetValue(connectionId, out var s) ? s.State.Name : "?";
+            _log.Warn($"Player '{who}' sent nothing for {SessionHeartbeatTimeout:0}s — dropping the session (connection {connectionId}).");
+            _transport.DisconnectClient(connectionId);
+            OnClientDisconnected(connectionId);
+        }
     }
 
     private void OnClientDisconnected(int connectionId)
@@ -2119,6 +2336,7 @@ public sealed partial class GameServer
             ClearAlliancePending(session.State.PlayerId); // drop transient requests; refresh online allies' rosters
             SetActiveWorld(loc);
             RemoveLandedShip(session); // the parked ship object leaves with its owner (ship-as-object)
+            RemoveConstructionSite(session); // the half-built hull despawns too — it lives on in the fleet save
             BroadcastToWorld(new PlayerLeft { PlayerId = session.State.PlayerId }); // remove their avatar in-world
             if (!string.IsNullOrEmpty(loc) && loc != _meta.ActiveLocationId && !OccupiedLocations().Contains(loc))
             {
@@ -2165,7 +2383,20 @@ public sealed partial class GameServer
                 return;
             }
 
-            HandleJoin(connectionId, join);
+            // Guarded like every other handler (#964): HandleJoin registers the session BEFORE its ~40-message
+            // burst, so an exception midway used to leave a half-built session that held the player's name
+            // forever — with no way for them to get back in.
+            try
+            {
+                HandleJoin(connectionId, join);
+            }
+            catch (Exception ex)
+            {
+                _log.Error($"Join from connection {connectionId} threw: {ex}");
+                _sessions.Remove(connectionId); // never leave a half-joined session holding the name
+                SendTo(connectionId, new JoinRejected { Reason = "@srv.join.failed" });
+            }
+
             return;
         }
 
@@ -2173,6 +2404,9 @@ public sealed partial class GameServer
         {
             return; // ignore gameplay intents before joining
         }
+
+        session.LastPayloadAt = _uptime; // app-level heartbeat (#964) — see SweepSilentSessions
+        session.PausedSilentSeconds = 0; // the same signal on a clock that runs while the world is held (#973)
 
         // Per-connection flood gate: a token bucket refilled at MsgRatePerSecond, capped at MsgBurst.
         // Every joined intent costs one token; when the bucket is empty the packet is dropped. This bounds
@@ -2488,6 +2722,23 @@ public sealed partial class GameServer
         // `marcel` ≠ `Marcel` mismatch would grant nothing with no error anywhere.
         bool fleetAdmin = IsFleetAdminName(name);
 
+        var state = _repo.LoadPlayer(name) ?? CreateNewPlayer(name);
+        string tokenHash = HashNameToken(join.Token);
+
+        // Reconnect eviction (#964). A client that dies without closing its socket cleanly — PC crash, hard
+        // kill, a frozen game whose transport thread keeps answering pings — leaves a session that still
+        // looks joined. It holds the name and a player slot, so the player's OWN reconnect is refused, and
+        // nothing frees it until the transport finally gives up (22 minutes in the 2026-08-12 playtest).
+        // Whoever proves ownership of the name with the matching token is the rightful owner of that
+        // session: drop the old one and let them back in. This is exactly what the name token is for.
+        if (FindJoinedSessionByName(name) is { } stale
+            && !string.IsNullOrEmpty(state.NameTokenHash) && state.NameTokenHash == tokenHash)
+        {
+            _log.Info($"Player '{name}' reconnected — dropping their previous session (connection {stale.ConnectionId}).");
+            _transport.DisconnectClient(stale.ConnectionId);
+            OnClientDisconnected(stale.ConnectionId); // saves + tears the old session down synchronously
+        }
+
         // A fleet admin gets a reserved slot on top of MaxPlayers: they come to observe a world, and a full
         // world is exactly when moderation is most likely to be needed. Their observer session also does not
         // count toward the cap for anyone else (see JoinedPlayerCount).
@@ -2500,18 +2751,15 @@ public sealed partial class GameServer
 
         // Name reservation: one live session per name — PlayerId == name, so a second client under
         // the same name would alias (and corrupt) the same player state.
-        if (_sessions.Values.Any(s => s.Joined && string.Equals(s.State.Name, name, StringComparison.OrdinalIgnoreCase)))
+        if (FindJoinedSessionByName(name) != null)
         {
             SendTo(connectionId, new JoinRejected { Reason = "@srv.join.name_online:" + name });
             return;
         }
 
-        var state = _repo.LoadPlayer(name) ?? CreateNewPlayer(name);
-
         // Name verification: the first join under a name claims it with the client's per-install token;
         // later joins must present the matching token (protects the host/admin identity from spoofing).
         // Unclaimed records (legacy saves / tokenless clients) adopt the first token they see.
-        string tokenHash = HashNameToken(join.Token);
         if (!string.IsNullOrEmpty(state.NameTokenHash) && state.NameTokenHash != tokenHash)
         {
             SendTo(connectionId, new JoinRejected { Reason = "@srv.join.name_taken:" + name });
@@ -2556,7 +2804,10 @@ public sealed partial class GameServer
             Locale = NormalizeLocale(join.Locale),
             ViewDistance = join.ViewDistanceChunks,
             IsFleetAdmin = fleetAdmin,
+            HeartbeatTracked = true, // joined over the wire → silence is meaningful (#964)
         };
+        session.LastPayloadAt = _uptime; // start the heartbeat clock now (#964) — a client that freezes
+                                         // right after joining must age out like any other silent session
         _sessions[connectionId] = session;
         state.LastSeenUtc = UtcNowIso(); // "last seen" for the admin player list (issue #488)
         SetupPlayerShip(session); // give the player their own ship, stamped into their world
@@ -2608,7 +2859,7 @@ public sealed partial class GameServer
         SendLandingPads(session);
         SendContainers(session);
         SendExistingPresences(session); // show already-online players to the newcomer
-        SendExistingFaces(session);     // custom pixel faces of already-online players
+        SyncAppearance(session);        // custom faces + body paintings, BOTH ways (#982)
         SendPaintDesigns(session);      // paint-design registry — before any chunk with painted blocks can arrive
         SendCustomShapes(session);      // …and the form registry, for the same reason (#843)
         ShipAiOnJoin(session); // boot VEGA: onboarding intro / veteran skip / resume objective
@@ -2827,6 +3078,8 @@ public sealed partial class GameServer
             CurrentLocationId = joinBody,
             Locale = NormalizeLocale(locale),
             IsFleetAdmin = IsFleetAdminName(name), // config-only, like the network join path
+            // NOT heartbeat-tracked (#964): a locally-added player drives the server through direct calls
+            // and never sends a payload, so silence is normal rather than a sign of a dead client.
         };
         _sessions[connectionId] = session;
         state.LastSeenUtc = UtcNowIso();
@@ -2835,6 +3088,39 @@ public sealed partial class GameServer
         session.AwaitingSpawnAdopt = true; // #865: drop pre-snap position reports until the client is here
         ApplyCreativeGrants(session); // singleplayer "Creative" world: unlock-all / all-ships / starter kit
         return session;
+    }
+
+    /// <summary>Test seam: feeds a raw payload through the REAL receive path (join gate, flood gate, heartbeat
+    /// stamp, dispatch) — the only way to exercise joins and rejoins without a live socket (#964).</summary>
+    public void HandlePayloadForTest(int connectionId, byte[] payload) => OnPayload(connectionId, payload);
+
+    /// <summary>Test hook: players currently counted against the player cap.</summary>
+    public int JoinedPlayerCountForTest => JoinedPlayerCount();
+
+    /// <summary>Test hook: how many chunks this session has had fully re-streamed by the ghost heal (#965).</summary>
+    public int GhostReStreamsForTest(string playerId)
+        => FindSessionByPlayerId(playerId)?.GhostChunkSeen.Count ?? 0;
+
+    /// <summary>Test hook: an air cell just above the player, for driving the ghost-block path.</summary>
+    public Vector3i? FindAirCellForTest(string playerId)
+    {
+        if (FindSessionByPlayerId(playerId) is not { } session)
+        {
+            return null;
+        }
+
+        Serve(session);
+        var p = session.State.Position;
+        for (int dy = 2; dy < 12; dy++)
+        {
+            var cell = new Vector3i((int)System.Math.Floor(p.X), (int)System.Math.Floor(p.Y) + dy, (int)System.Math.Floor(p.Z));
+            if (WithinBuildHeight(cell.Y) && _world.GetBlock(cell).IsAir)
+            {
+                return cell;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Test seam: simulates a player's connection dropping, running the same disconnect handling a
@@ -3072,8 +3358,11 @@ public sealed partial class GameServer
             // "Block is already empty." reject read as "mining is broken" to players and added nothing — the
             // heal is the fix either way. Log the spot so the actual ghost SOURCE can be identified from
             // reports (a SetBlock somewhere that skipped its broadcast).
-            ResyncStaleChunk(session, pos);
-            _log.Warn($"Ghost block healed at {pos.X},{pos.Y},{pos.Z} for '{session.State.Name}' (client saw a block, server has air).");
+            if (ResyncStaleChunk(session, pos))
+            {
+                _log.Warn($"Ghost block healed at {pos.X},{pos.Y},{pos.Z} for '{session.State.Name}' (client saw a block, server has air).");
+            }
+
             return;
         }
 
@@ -3553,10 +3842,20 @@ public sealed partial class GameServer
             return;
         }
 
-        // No building inside the ship — the cabin is a fixed structure.
-        if (ShipInteriorContains(new Vector3f(pos.X, pos.Y, pos.Z)))
+        // No building inside the ship — the cabin is a fixed structure. The construction site (#948) is
+        // guarded the same way: its cells are structure cells, never world blocks.
+        if (ShipInteriorContains(new Vector3f(pos.X, pos.Y, pos.Z))
+            || ConstructionContains(new Vector3f(pos.X, pos.Y, pos.Z)))
         {
             Reject(session, "place", "@srv.place.no_ship_interior");
+            return;
+        }
+
+        // A ship keel founds a self-built ship (#948): it never becomes a world block — it seeds a new
+        // construction-site structure OBJECT anchored at the cell. Fully handled (incl. material cost).
+        if (blockDef.Key == ShipCoreBlock)
+        {
+            HandleShipCorePlace(session, pos, place.ItemKey);
             return;
         }
 
@@ -4496,16 +4795,22 @@ public sealed partial class GameServer
         }
     }
 
+    /// <summary>The joined session playing under <paramref name="name"/>. Matched case-insensitively and
+    /// with surrounding whitespace/quotes ignored, like every other admin-side player lookup
+    /// (<c>/where</c>, <c>/builds</c>, <c>/goto</c>, <c>/kick</c>) — an exact-case compare made
+    /// <c>/tpp marcel</c> fail for <c>Marcel</c> with a message that read like the player did not exist
+    /// (#980).</summary>
     private PlayerSession? FindSessionByName(string? name)
     {
-        if (string.IsNullOrEmpty(name))
+        string wanted = (name ?? string.Empty).Trim().Trim('"').Trim();
+        if (wanted.Length == 0)
         {
             return null;
         }
 
         foreach (var s in _sessions.Values)
         {
-            if (s.Joined && s.State.Name == name)
+            if (s.Joined && string.Equals(s.State.Name, wanted, StringComparison.OrdinalIgnoreCase))
             {
                 return s;
             }

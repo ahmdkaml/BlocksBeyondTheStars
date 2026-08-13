@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
 using System.Collections;
+using System.Collections.Generic;
 using System.IO;
 using BlocksBeyondTheStars.Shared.Content;
 using BlocksBeyondTheStars.Shared.Localization;
@@ -38,10 +39,26 @@ namespace BlocksBeyondTheStars.Client
         /// Read by the persistent <see cref="ClientMusic"/> director to pick context music.</summary>
         public GameBootstrap CurrentBoot { get; private set; }
 
-        // Join target edited on the main menu. PlayerName is loaded from / persisted to
-        // ClientSettings (Awake / the connect dialog); Password is session-only.
+        /// <summary>Default port of official/dedicated servers. Named in the join dialog's hint, but NOT its
+        /// prefill: official worlds bring their own host + port from the portal, so the only thing typed into
+        /// that dialog by hand is a friend's "Host Game" world, which listens on
+        /// <see cref="LocalServerLauncher.DefaultPort"/> (#978).</summary>
+        public const int DefaultServerPort = 31415;
+
+        // Live join target — whatever the next StartJoin dials. Written by ALL join routes: the connect
+        // dialog, the portal (official worlds), the WebGL/arcade defaults and in-game hosting.
+        // PlayerName is loaded from / persisted to ClientSettings (Awake / the connect dialog);
+        // Password is session-only.
         public string Host = "127.0.0.1";
-        public string Port = "31415";
+        public string Port = "31415"; // kept as a string (it is edited in the connect dialog)
+
+        /// <summary>What the connect dialog prefills — deliberately NOT <see cref="Host"/>/<see cref="Port"/>
+        /// (#978). Those are the live join target and get overwritten by the portal join and by in-game
+        /// hosting, so after one visit to an official world the dialog would offer that world's address back
+        /// as the "default". Only the connect dialog writes these, and the port starts on the value the
+        /// dialog is actually used for: a friend's hosted world on the LAN.</summary>
+        public string ManualJoinHost = "127.0.0.1";
+        public string ManualJoinPort = LocalServerLauncher.DefaultPort.ToString();
         public string PlayerName = ""; // empty until chosen — the menu gates play actions on it (#221)
         public string Password = "";
 
@@ -763,11 +780,15 @@ namespace BlocksBeyondTheStars.Client
             BrowserWorldBooting = false; // the wire exists — the loading screen may hand off now
         }
 
-        /// <summary>The machine's LAN IPv4 (the address friends on the same network join), or loopback.</summary>
-        private static string LocalLanIp()
+        /// <summary>The machine's LAN IPv4 (the address friends on the same network join), or loopback.
+        /// Enumeration happens here (it needs the platform); WHICH interface wins is decided by the
+        /// unit-tested <see cref="LanAddress"/> — "the first one that is up" used to hand out the
+        /// Hyper-V/VirtualBox/VPN address on any box that has one (#984).</summary>
+        public static string LocalLanIp()
         {
             try
             {
+                var candidates = new List<LanCandidate>();
                 foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
                 {
                     if (ni.OperationalStatus != System.Net.NetworkInformation.OperationalStatus.Up
@@ -776,23 +797,50 @@ namespace BlocksBeyondTheStars.Client
                         continue;
                     }
 
-                    foreach (var addr in ni.GetIPProperties().UnicastAddresses)
+                    var props = ni.GetIPProperties();
+                    bool hasGateway = false;
+                    foreach (var gw in props.GatewayAddresses)
                     {
-                        if (addr.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
-                            && !addr.Address.ToString().StartsWith("169.254.")) // skip link-local
+                        // A gateway entry of 0.0.0.0 is Windows' way of saying "none" on some adapters.
+                        if (gw?.Address != null
+                            && gw.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+                            && !System.Net.IPAddress.Any.Equals(gw.Address))
                         {
-                            return addr.Address.ToString();
+                            hasGateway = true;
+                            break;
+                        }
+                    }
+
+                    bool physical = ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Ethernet
+                        || ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Wireless80211
+                        || ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.GigabitEthernet
+                        || ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.FastEthernetT
+                        || ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.FastEthernetFx;
+
+                    foreach (var addr in props.UnicastAddresses)
+                    {
+                        if (addr.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                        {
+                            candidates.Add(new LanCandidate(addr.Address.ToString(), hasGateway, physical,
+                                ni.Name + " " + ni.Description));
                         }
                     }
                 }
+
+                return LanAddress.Pick(candidates);
             }
             catch
             {
                 // Fall through to loopback — the host can still read the port from the dialog.
+                return LanAddress.Loopback;
             }
-
-            return "127.0.0.1";
         }
+
+        /// <summary>The "ip:port" a friend on the same network types into Connect — the host screen shows
+        /// it BEFORE the world launches (#984), and <see cref="HostInfo"/> repeats it in-game. Reads the
+        /// live interface list on each call, so switching from cable to Wi-Fi is picked up.</summary>
+        public static string LanJoinAddress(int port = LocalServerLauncher.DefaultPort)
+            => LocalLanIp() + ":" + port.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         public void StartJoin()
         {
@@ -928,13 +976,38 @@ namespace BlocksBeyondTheStars.Client
         /// creatures and the clock all kept running behind it.
         /// <para>
         /// It has to go through the server — singleplayer runs the bundled server as its own process, so
-        /// stopping the client alone would freeze the camera while the world carried on. The server declines
-        /// while more than one player is joined, and the menu then behaves exactly as it always did.
+        /// stopping the client alone would freeze the camera while the world carried on. In multiplayer the
+        /// world only actually holds once every player is in their menu (#973); until then this is just an
+        /// intent, and the dialog says who it is still waiting for.
         /// </para>
         /// Tied to <see cref="_confirmQuit"/> (the menu session), not to the dialog's visibility — opening
         /// Settings from the pause menu hides the dialog but must not resume the world.
         /// </summary>
-        private void SetWorldPaused(bool paused) => Boot()?.Network?.SendPause(paused);
+        private void SetWorldPaused(bool paused)
+        {
+            _nextPauseKeepAlive = paused ? Time.realtimeSinceStartup + PauseKeepAliveSeconds : 0f;
+            Boot()?.Network?.SendPause(paused);
+        }
+
+        /// <summary>How often the held intent is re-sent while the menu stays open. Behind an open menu the
+        /// client sends nothing else at all — no movement, no pose — so this repeat is the server's only proof
+        /// that the game is still alive, and the one thing that lets it drop a player who crashed mid-pause
+        /// instead of leaving the world frozen for everybody else (#973, heartbeat from #964).</summary>
+        private const float PauseKeepAliveSeconds = 15f;
+
+        private float _nextPauseKeepAlive;
+
+        /// <summary>Re-sends the pause intent on the keep-alive cadence for as long as the menu session lasts.</summary>
+        private void TickPauseKeepAlive()
+        {
+            if (!_confirmQuit || Time.realtimeSinceStartup < _nextPauseKeepAlive)
+            {
+                return;
+            }
+
+            _nextPauseKeepAlive = Time.realtimeSinceStartup + PauseKeepAliveSeconds;
+            Boot()?.Network?.SendPause(true);
+        }
 
         private void CancelQuit()
         {
@@ -1420,6 +1493,14 @@ namespace BlocksBeyondTheStars.Client
                 _uiSaveSelect = null;
             }
 
+            // The open pause menu keeps telling the server it is still there, and keeps its own status line in
+            // step with who else has (not) paused yet (#973). Both are no-ops outside a menu session.
+            TickPauseKeepAlive();
+            if (_confirmQuit)
+            {
+                RefreshPauseStatus();
+            }
+
             // Track chat focus across frames: an Esc that closes the chat clears ChatTyping in the SAME
             // frame (the InputField's end-edit), so by the time we read it here it may already be false.
             // Remembering the previous frame's state keeps that Esc from also popping the quit dialog.
@@ -1434,8 +1515,11 @@ namespace BlocksBeyondTheStars.Client
                 // A reason of the form "@<locale key>" is a message the SERVER wants shown in the player's
                 // language — used by the moderation kick (#497), where the text is ours, not free prose.
                 // Everything else stays verbatim: those reasons are operator- or owner-authored.
+                // Routed through the token resolver so a ":arg" tail fills the template's {name} (#964):
+                // a plain L() lookup treated "srv.join.name_online:Justus" as one key and showed the
+                // player the raw "[srv.join.name_online:Justus]" instead of a sentence.
                 string reason = igBoot.JoinRejectedReason;
-                MenuNotice = reason.Length > 1 && reason[0] == '@' ? L(reason.Substring(1)) : reason;
+                MenuNotice = igBoot.ServerTokenText(reason);
                 ReturnToMenu();
                 return;
             }
@@ -1573,6 +1657,42 @@ namespace BlocksBeyondTheStars.Client
             UiKit.AddButton(panel.transform, 90f, 88f, 300f, 56f, L("ui.pause.resume"), CancelQuit);
             UiKit.AddButton(panel.transform, 90f, 152f, 300f, 56f, L("ui.menu.settings"), OpenSettings);
             UiKit.AddButton(panel.transform, 90f, 216f, 300f, 56f, L("ui.pause.quit"), ReturnToMenu);
+
+            // In multiplayer the world only stops once everybody is in their menu (#973), so the dialog has to
+            // say which of the two it is instead of silently claiming a pause that is not running.
+            _pauseStatusText = UiKit.AddText(panel.transform, 24f, 280f, 432f, 40f,
+                string.Empty, 16, UiKit.CyanDim, TextAnchor.MiddleCenter);
+            RefreshPauseStatus();
+        }
+
+        private UnityEngine.UI.Text _pauseStatusText;
+
+        /// <summary>Keeps the pause dialog's status line in step with the server's tally: held, or still waiting
+        /// on the players who are named in it. Blank in singleplayer, where the hold is never in doubt.</summary>
+        private void RefreshPauseStatus()
+        {
+            if (_pauseStatusText == null)
+            {
+                return;
+            }
+
+            var boot = Boot();
+            if (boot == null || boot.PauseJoinedPlayers <= 1)
+            {
+                _pauseStatusText.text = string.Empty; // alone in the world — the hold always applies
+                return;
+            }
+
+            if (boot.WorldPaused)
+            {
+                _pauseStatusText.text = L("ui.pause.world_held");
+                return;
+            }
+
+            string waiting = boot.PauseWaitingFor;
+            _pauseStatusText.text = string.IsNullOrEmpty(waiting)
+                ? string.Empty
+                : string.Format(L("ui.pause.waiting_for"), boot.PauseHoldingPlayers, boot.PauseJoinedPlayers, waiting);
         }
     }
 }

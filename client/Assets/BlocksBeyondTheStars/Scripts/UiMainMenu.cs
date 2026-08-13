@@ -257,8 +257,8 @@ namespace BlocksBeyondTheStars.Client
 
             // --- Connect-to-server dialog (added last so it draws on top; hidden until JOIN is pressed) ---
             string[] name = { shell.PlayerName };
-            string[] host = { shell.Host };
-            string[] port = { shell.Port };
+            string[] host = { shell.ManualJoinHost };
+            string[] port = { shell.ManualJoinPort };
             string[] pass = { "" };
             var (connectOverlay, dlg) = UiKit.AddModalOverlay(root, 660f, 280f, 600f, 520f);
             connect = connectOverlay;
@@ -269,6 +269,15 @@ namespace BlocksBeyondTheStars.Client
             UiKit.AddInput(dlg, 30f, 186f, 540f, 38f, host[0], v => host[0] = v);
             UiKit.AddText(dlg, 30f, 240f, 540f, 22f, shell.L("ui.menu.connect_port"), 15, UiKit.TextCol, TextAnchor.MiddleLeft);
             UiKit.AddInput(dlg, 30f, 266f, 260f, 38f, port[0], v => port[0] = v);
+            // Both well-known defaults next to the port field. The field itself prefills the "Host Game"
+            // port (#978) because that is what this dialog is for — official worlds arrive with their own
+            // host + port from the portal — and the hint still names the dedicated-server port for anyone
+            // typing in a server address by hand (#960).
+            UiKit.AddText(dlg, 306f, 258f, 264f, 54f,
+                shell.L("ui.menu.connect_port_hint")
+                    .Replace("{official}", AppShell.DefaultServerPort.ToString())
+                    .Replace("{hosted}", LocalServerLauncher.DefaultPort.ToString()),
+                13, UiKit.CyanDim, TextAnchor.MiddleLeft);
             UiKit.AddText(dlg, 30f, 320f, 540f, 22f, shell.L("ui.menu.connect_password"), 15, UiKit.TextCol, TextAnchor.MiddleLeft);
             var passInput = UiKit.AddInput(dlg, 30f, 346f, 540f, 38f, pass[0], v => pass[0] = v);
             passInput.contentType = InputField.ContentType.Password; // mask it like the portal login field
@@ -289,8 +298,12 @@ namespace BlocksBeyondTheStars.Client
                 shell.Settings.PlayerName = shell.PlayerName; // remember the identity across sessions
                 shell.Settings.Save();
 
-                shell.Host = string.IsNullOrWhiteSpace(host[0]) ? "127.0.0.1" : host[0].Trim();
-                shell.Port = string.IsNullOrWhiteSpace(port[0]) ? shell.Port : port[0].Trim();
+                // Remember what was typed for the next time this dialog opens, then dial it. The prefill is
+                // kept apart from the live join target (#978) — the portal join overwrites the latter.
+                shell.ManualJoinHost = string.IsNullOrWhiteSpace(host[0]) ? "127.0.0.1" : host[0].Trim();
+                shell.ManualJoinPort = string.IsNullOrWhiteSpace(port[0]) ? shell.ManualJoinPort : port[0].Trim();
+                shell.Host = shell.ManualJoinHost;
+                shell.Port = shell.ManualJoinPort;
                 shell.Password = pass[0] ?? "";
                 shell.HostedToken = ""; // manual join: no official-worlds grant
                 shell.HostedWorldId = "";
@@ -622,6 +635,7 @@ namespace BlocksBeyondTheStars.Client
 
             // Secondary portal dialogs (#268-#270).
             PortalTermsResult cachedTerms = null; // rules text+version change per deployment — fetch once
+            string cachedTermsLang = null;        // …but re-fetch after the player switched language (#970)
             string saveBackupDir = System.IO.Path.Combine(Application.persistentDataPath, "portal_saves");
             var warnCol = new Color(1f, 0.55f, 0.4f);
 
@@ -666,16 +680,18 @@ namespace BlocksBeyondTheStars.Client
 
             async void LoadTerms(System.Action<PortalTermsResult> done)
             {
-                if (cachedTerms != null && cachedTerms.Ok)
+                string lang = shell.Settings.Language;
+                if (cachedTerms != null && cachedTerms.Ok && cachedTermsLang == lang)
                 {
                     done(cachedTerms);
                     return;
                 }
 
                 var portal = new PortalClient(PortalBase());
-                var r = await Task.Run(() => portal.GetTerms());
+                var r = await Task.Run(() => portal.GetTerms(lang));
                 if (official == null) { return; }
                 cachedTerms = r;
+                cachedTermsLang = lang;
                 done(r);
             }
 
@@ -708,7 +724,11 @@ namespace BlocksBeyondTheStars.Client
                         }
 
                         rTitle.text = shell.L("ui.portal.rules_title") + " (v" + terms.Version + ")";
-                        rBody.text = shell.Settings.Language == "de" ? terms.TextDe : terms.TextEn;
+                        // `Text` is the portal's answer in the player's own language (#970); a portal
+                        // that predates it leaves the field empty and we fall back to the DE/EN pair.
+                        rBody.text = !string.IsNullOrEmpty(terms.Text)
+                            ? terms.Text
+                            : (shell.Settings.Language == "de" ? terms.TextDe : terms.TextEn);
                     });
                 }
 

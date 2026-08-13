@@ -256,7 +256,7 @@ namespace BlocksBeyondTheStars.Client
         private readonly List<string> _entityRemove = new List<string>();
 
         // Other players sharing this space instance, drawn as a ship or a floating EVA suit (R2 visibility).
-        private sealed class RemoteAvatar { public GameObject Root; public GameObject Ship; public GameObject Suit; public Material HullMat; public bool Voxel; public int HullRgb = -1; public string Name = string.Empty; }
+        private sealed class RemoteAvatar { public GameObject Root; public GameObject Ship; public GameObject Suit; public Material HullMat; public bool Voxel; public int HullRgb = -1; public string Name = string.Empty; public double LastSeen; }
         private readonly Dictionary<string, RemoteAvatar> _remotePlayers = new Dictionary<string, RemoteAvatar>();
         private readonly HashSet<string> _remoteSeen = new HashSet<string>();
         private readonly List<string> _remoteRemove = new List<string>();
@@ -296,6 +296,8 @@ namespace BlocksBeyondTheStars.Client
 
         private bool _confirmLand;        // a landing prompt is up — the pad chooser map (item 38)
         private string _choosePadBody;    // body whose pads the chooser is showing (null = no chooser)
+        private float _padRequestAt;      // when the pad list was requested — drives the no-reply timeout (#956)
+        private bool _padRequestRetried;  // one silent re-request before giving up
         private string _landDestBody;     // confirmed landing destination of the in-flight descent (survives until
                                           // the animation reads it; "" = home body, null = no landing committed).
                                           // Separate from _choosePadBody, which is cleared the moment a pad is picked
@@ -1059,6 +1061,24 @@ namespace BlocksBeyondTheStars.Client
                 }
 
                 var pads = Game.LandingPadsBody == _choosePadBody ? Game.LandingPads : null;
+                if (pads == null && Time.time - _padRequestAt > 5f)
+                {
+                    // No reply — one silent re-request, then give control back instead of freezing
+                    // the flight on "Reading landing pads…" forever (#956).
+                    if (!_padRequestRetried)
+                    {
+                        _padRequestRetried = true;
+                        _padRequestAt = Time.time;
+                        Game.Network?.SendRequestLandingPads(_choosePadBody);
+                    }
+                    else
+                    {
+                        Game.ShowMessage(Loc("ui.space.pad_timeout", "No landing data from the server - please try again."));
+                        CancelLandChooser();
+                        return;
+                    }
+                }
+
                 if (pads != null)
                 {
                     // Show the planet map with the landing pads on it; the player clicks a free pad to touch down
@@ -1320,7 +1340,16 @@ namespace BlocksBeyondTheStars.Client
         private void OpenPadChooser(string bodyId)
         {
             _confirmLand = true;
+            // Resolve the "" home-body shorthand to the real id before asking (#956): released servers
+            // silently drop an empty-id request, and the reply echoes the id the chooser gates on.
+            if (string.IsNullOrEmpty(bodyId) && Game.StarMap != null)
+            {
+                bodyId = Game.StarMap.ActiveLocationId;
+            }
+
             _choosePadBody = bodyId ?? string.Empty;
+            _padRequestAt = Time.time;
+            _padRequestRetried = false;
             Game.Network?.SendRequestLandingPads(_choosePadBody);
         }
 
@@ -1428,6 +1457,9 @@ namespace BlocksBeyondTheStars.Client
                 mx = Mathf.Clamp(mx, pad, pad + mapW - marker);
                 my = Mathf.Clamp(my, mapTop, mapTop + mapH - marker);
 
+                // Your OWN pad is selectable (#977): you keep it reserved while you are up in space, and it is
+                // the pad your ship is parked on — the one you most likely want to come back down to. It is
+                // drawn cyan and captioned with your name, so it reads as yours rather than as just free.
                 bool free = !p.Occupied;
                 var col = free ? new Color(0.16f, 0.55f, 0.30f, 0.98f) : new Color(0.45f, 0.12f, 0.12f, 0.98f);
                 int padIndex = p.Index;
@@ -1436,6 +1468,12 @@ namespace BlocksBeyondTheStars.Client
                 {
                     UiKit.AddButton(panel.transform, mx, my, marker, marker, label, () => LandOnPad(padIndex));
                     _captureFreePads.Add((new Vector2(mx + marker * 0.5f, my + marker * 0.5f), padIndex));
+                    if (p.Mine)
+                    {
+                        UiKit.AddText(panel.transform, mx - 30, my + marker, marker + 60, 18,
+                            string.IsNullOrEmpty(p.Occupant) ? Loc("ui.space.pad_yours", "your pad") : p.Occupant,
+                            12, UiKit.Cyan, TextAnchor.UpperCenter);
+                    }
                 }
                 else
                 {
@@ -2160,7 +2198,10 @@ namespace BlocksBeyondTheStars.Client
         /// handled via Game.ShipDesign; other kinds become static voxel bodies at their world position.</summary>
         private void OnStructureDesign(BlocksBeyondTheStars.Networking.Messages.SpaceShipDesign m)
         {
-            if (m.Kind == "ship" || string.IsNullOrEmpty(m.Kind))
+            // Whitelist, not blacklist (#954): "ship" is the own hull (Game.ShipDesign), "ship_remote"
+            // only feeds the remote avatar's hull — building either here spawned a static, unscaled,
+            // collider-less ghost copy at the design position (players: the scene origin).
+            if (m.Kind != "asteroid" && m.Kind != "station")
             {
                 return;
             }
@@ -2591,6 +2632,15 @@ namespace BlocksBeyondTheStars.Client
                 {
                     if (s.Active)
                     {
+                        // A self-built ship has no data/ships.json entry — its geometry-derived stats ride
+                        // the fleet message instead (#949).
+                        if (s.FlightSpeed > 0f || s.Handling > 0f)
+                        {
+                            _shipSpeedMul = s.FlightSpeed > 0f ? s.FlightSpeed : 1f;
+                            _shipTurnMul = s.Handling > 0f ? s.Handling : 1f;
+                            return;
+                        }
+
                         type = s.Type;
                         break;
                     }
@@ -3552,9 +3602,13 @@ namespace BlocksBeyondTheStars.Client
                     av.Name = rp.Name ?? string.Empty; // shown as a floating nameplate (item 385); NPC traders arrive with an empty name and get no plate
                     if (fresh)
                     {
+                        av.LastSeen = now;
                         if (!_remoteLerp.TryGetValue(rp.PlayerId, out var push))
                         {
-                            _remoteLerp[rp.PlayerId] = push = new RemoteEntityInterpolator();
+                            // Pilot poses are broadcast every 0.2 s — the delay must exceed that
+                            // (interpolator doc), or the buffer starves every cycle: hold-then-snap
+                            // jitter, the "flickering" remote ship of #955.
+                            _remoteLerp[rp.PlayerId] = push = new RemoteEntityInterpolator(0.3);
                         }
 
                         push.Push(now, new Vector3f(rp.X, rp.Y, rp.Z), rp.Yaw);
@@ -3604,7 +3658,10 @@ namespace BlocksBeyondTheStars.Client
                 _remoteRemove.Clear();
                 foreach (var kv in _remotePlayers)
                 {
-                    if (!_remoteSeen.Contains(kv.Key))
+                    // Grace period (#955): poses are only written by ShipMove, so a player can drop out
+                    // of a single snapshot without having left — destroying instantly caused visible
+                    // avatar popping (rebuilt as a generic cube ship first). 2 s ≈ ten missed snapshots.
+                    if (!_remoteSeen.Contains(kv.Key) && now - kv.Value.LastSeen > 2.0)
                     {
                         _remoteRemove.Add(kv.Key);
                     }
@@ -3696,7 +3753,9 @@ namespace BlocksBeyondTheStars.Client
                         {
                             if (!_entityLerp.TryGetValue(e.Id, out var push))
                             {
-                                _entityLerp[e.Id] = push = new RemoteEntityInterpolator();
+                                // Hostile poses arrive every 0.15 s — render behind that interval so the
+                                // buffer never starves (#955); the default 0.15 delay sat exactly on it.
+                                _entityLerp[e.Id] = push = new RemoteEntityInterpolator(0.25);
                             }
 
                             push.Push(now, new Vector3f(e.X, e.Y, e.Z), 0f);

@@ -177,9 +177,19 @@ namespace BlocksBeyondTheStars.Client
         // everything it animates itself kept running behind the dialog. Fed from the server's PauseState.
         private readonly BlocksBeyondTheStars.Client.WorldClock _worldClock = new BlocksBeyondTheStars.Client.WorldClock();
 
-        /// <summary>True while the server is holding the world for our pause menu. False whenever the server
-        /// declined the hold (more than one player joined) — the world really is still running then.</summary>
+        /// <summary>True while the server is holding the world for our pause menu. False while somebody else is
+        /// still playing (#973: the world only holds once every player is in their menu) — it really is still
+        /// running then.</summary>
         public bool WorldPaused => _worldClock.Paused;
+
+        /// <summary>How many joined players are asking for the hold, and how many there are — the "2 of 3 ready"
+        /// the pause dialog shows. Both 0 until the first <c>PauseState</c> arrives.</summary>
+        public int PauseHoldingPlayers { get; private set; }
+        public int PauseJoinedPlayers { get; private set; }
+
+        /// <summary>The players the hold is still waiting for, comma-separated (empty while it is running or
+        /// while nobody is waiting on anybody).</summary>
+        public string PauseWaitingFor { get; private set; } = string.Empty;
 
         /// <summary>Seconds to advance CLIENT-SIDE world simulation by this frame — <c>Time.deltaTime</c> while
         /// the world runs, 0 while it is held. Deliberately derived from the live frame rather than from the
@@ -725,6 +735,9 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>A player who has asked to dock with us (awaiting our accept/decline), or empty.</summary>
         public string PendingDockFrom { get; set; } = string.Empty;
 
+        /// <summary>A player who has asked to trade with us (awaiting our accept/decline), or empty (#981).</summary>
+        public string PendingTradeFrom { get; set; } = string.Empty;
+
         /// <summary>Latest authoritative docking state (partner + docked flag), or null.</summary>
         public DockStatus Dock { get; private set; }
 
@@ -1002,6 +1015,11 @@ namespace BlocksBeyondTheStars.Client
 
             LastMessage = sb.ToString();
         }
+
+        /// <summary>Localizes a server-authored token for a screen outside the in-game HUD (the menu's join
+        /// rejection, #964). Returns the text unchanged when it is not an "@srv.*" token — operator-authored
+        /// reasons must stay verbatim.</summary>
+        public string ServerTokenText(string text) => ResolveServerToken(text) ?? text;
 
         /// <summary>Generic resolution for "@srv.*" tokens: the token (minus '@') IS the locale key, an
         /// optional ":arg" tail fills the template's {name} placeholder. New server messages use this
@@ -1650,7 +1668,13 @@ namespace BlocksBeyondTheStars.Client
             };
             // The server's answer to our pause intent (#908). Honours Allowed implicitly: a declined hold comes
             // back with Paused = false, so the client keeps simulating exactly as it did before.
-            Network.PauseStateReceived += m => _worldClock.SetPaused(m.Paused);
+            Network.PauseStateReceived += m =>
+            {
+                _worldClock.SetPaused(m.Paused);
+                PauseHoldingPlayers = m.HoldingPlayers;
+                PauseJoinedPlayers = m.JoinedPlayers;
+                PauseWaitingFor = m.WaitingFor ?? string.Empty;
+            };
             Network.ShipPlacementReceived += m => ShipPosition = new Vector3(m.X, m.Y, m.Z);
             Network.ShipStationsReceived += m => Stations = m.Stations;
             Network.PlanetPoisReceived += m => PlanetPois = m.Pois;
@@ -1900,11 +1924,16 @@ namespace BlocksBeyondTheStars.Client
             };
             Network.WreckRepairStatusChanged += m => Wreck = m.Claimed ? null : m;
             Network.ShipRepairStatusChanged += m => ShipRepair = m.NeedsRepair ? m : null;
-            Network.TradeUpdated += m => { Trade = m; TradeActive = true; };
+            // An incoming trade invitation (#981) needs an answer, so it is held as state — a toast alone
+            // could not be acted on. It clears the moment the trade opens or the invitation is answered.
+            // The toast comes with the ServerMessage the server sends alongside it.
+            Network.TradeRequested += m => PendingTradeFrom = m.Requester;
+            Network.TradeUpdated += m => { Trade = m; TradeActive = true; PendingTradeFrom = string.Empty; };
             Network.TradeClosedReceived += m =>
             {
                 TradeActive = false;
                 Trade = null;
+                PendingTradeFrom = string.Empty;
                 LastMessage = m.Completed ? "Trade complete." : ServerMessageText(m.Reason);
             };
             Network.DockRequested += m => { PendingDockFrom = m.Requester; LastMessage = $"{m.Requester} requests docking."; };
@@ -2072,11 +2101,17 @@ namespace BlocksBeyondTheStars.Client
             int chunkAnchorX = Mathf.FloorToInt(PlayerPosition.x);
             int chunkAnchorY = Mathf.FloorToInt(PlayerPosition.y);
             int chunkAnchorZ = Mathf.FloorToInt(PlayerPosition.z);
-            if (chunkAnchorX != _lastReposX || chunkAnchorY != _lastReposY || chunkAnchorZ != _lastReposZ)
+            // …plus a slow heartbeat, because this pass is also the ONLY thing that unloads far chunks
+            // (#966): a player who stands still — parked at a station, stuck, AFK — never released a single
+            // chunk, however much the world streamed to them while they stood there.
+            _sinceReposTick += Time.deltaTime;
+            bool moved = chunkAnchorX != _lastReposX || chunkAnchorY != _lastReposY || chunkAnchorZ != _lastReposZ;
+            if (moved || _sinceReposTick >= ReposIdleInterval)
             {
                 _lastReposX = chunkAnchorX;
                 _lastReposY = chunkAnchorY;
                 _lastReposZ = chunkAnchorZ;
+                _sinceReposTick = 0f;
                 RepositionChunks();
             }
         }
@@ -2084,6 +2119,10 @@ namespace BlocksBeyondTheStars.Client
         private int _lastReposX = int.MinValue;
         private int _lastReposY = int.MinValue;
         private int _lastReposZ = int.MinValue;
+
+        /// <summary>Seconds between reposition/unload passes while the player does not move (#966).</summary>
+        private const float ReposIdleInterval = 5f;
+        private float _sinceReposTick;
 
         /// <summary>Re-places every loaded chunk GameObject at the seam-aware scene position for the player's
         /// current longitude AND latitude (see <see cref="SceneX"/>/<see cref="SceneZ"/>), and distance-culls
@@ -2693,11 +2732,11 @@ namespace BlocksBeyondTheStars.Client
         /// collider bake (P2). A null collider (only fluids/air) clears the collider immediately.</summary>
         private void ApplyChunkMesh(ChunkCoord coord, ChunkMeshData data)
         {
-            // Reuse this chunk's existing render mesh on a rebuild (A3) — avoids a per-remesh Mesh allocation and
-            // the leak of the previous one (A2 raises the rebuild rate, which would otherwise grow that leak).
+            // The render mesh is uploaded non-readable (#966), which rules out the old Clear()+refill reuse — a
+            // non-readable mesh cannot be rewritten. So every rebuild gets a fresh mesh and the outgoing one is
+            // destroyed below; Unity never collects Mesh objects, and A2's rebuild rate would grow that leak fast.
             bool exists = _chunkObjects.TryGetValue(coord, out var view) && view?.Go != null;
-            var reuse = exists ? view!.Filter.sharedMesh : null;
-            var (mesh, collider) = data.ToMeshes(reuse);
+            var (mesh, collider) = data.ToMeshes();
 
             if (!exists)
             {
@@ -2719,7 +2758,12 @@ namespace BlocksBeyondTheStars.Client
                 _chunkObjects[coord] = view;
             }
 
-            view!.Filter.sharedMesh = mesh;
+            var staleMesh = view!.Filter.sharedMesh; // the mesh this rebuild replaces (null on the first build)
+            view.Filter.sharedMesh = mesh;
+            if (staleMesh != null && staleMesh != mesh)
+            {
+                Destroy(staleMesh);
+            }
 
             // Ground-detail scatter (T0): (re)build this chunk's instanced tuft/pebble decoration. Render-only,
             // distance-culled + quality-gated inside the component; a chunk with no scatter points disables it.
@@ -2858,6 +2902,7 @@ namespace BlocksBeyondTheStars.Client
             // what a live static reference still pins (#901).
             SampleKit.ClearCache();
             CreatureVoiceBank.Clear();
+            WorldMinimap.ClearCache(); // baked body previews — same static-cache trap (#966)
 
             if (ChunkMaterial != null)
             {
