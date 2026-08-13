@@ -402,10 +402,17 @@ public static class NetCodec
 
     private static void Register(byte tag, Type type)
     {
+        if (TagToType.TryGetValue(tag, out var existingType))
+            throw new InvalidOperationException(
+                $"NetCodec tag {tag} is already registered to {existingType.FullName}");
+
+        if (TypeToTag.TryGetValue(type, out var existingTag))
+            throw new InvalidOperationException(
+                $"NetCodec type {type.FullName} is already registered to tag {existingTag}");
+
         TagToType[tag] = type;
         TypeToTag[type] = tag;
     }
-
     public static byte[] Encode(object message)
         => UseJsonEncoding ? EncodeJson(message) : EncodeMessagePack(message);
 
