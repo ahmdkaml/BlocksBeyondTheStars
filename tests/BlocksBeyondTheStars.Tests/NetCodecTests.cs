@@ -3,6 +3,7 @@
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
 
 using System.Reflection;
+using System.Text;
 using BlocksBeyondTheStars.Networking;
 using BlocksBeyondTheStars.Networking.Messages;
 using Xunit;
@@ -29,6 +30,7 @@ public sealed class NetCodecTests
             "Top-level messages without a NetCodec tag: " +
             string.Join(", ", missing.Select(type => type.FullName)));
     }
+
     [Fact]
     public void EveryNetCodecTag_MapsToATopLevelMessage()
     {
@@ -162,6 +164,134 @@ public sealed class NetCodecTests
         }
     }
 
+    [Fact]
+    public void TruncatedJsonEnvelope_NeverThrows()
+    {
+        var original = NetCodec.EncodeJson(
+            new JoinRequest
+            {
+                ProtocolVersion = 123,
+                PlayerName = "TestPlayer",
+                Locale = "en",
+            });
+
+        // JSON envelope uses the dedicated tag 255.
+        Assert.Equal(255, original[0]);
+
+        // Try every truncated prefix, including the tag-only payload.
+        for (int length = 0; length < original.Length; length++)
+        {
+            var truncated = original[..length];
+
+            var exception = Record.Exception(() => NetCodec.Decode(truncated));
+
+            Assert.Null(exception);
+        }
+    }
+
+    [Fact]
+    public void MalformedJsonEnvelopes_AreRejectedWithoutThrowing()
+    {
+        var malformedPayloads = new[]
+        {
+            new byte[] { 255 },
+            JsonPayload("{"),
+            JsonPayload("{\"body\":{}}"),
+            JsonPayload("{\"tag\":1}"),
+            JsonPayload("{\"tag\":\"not-a-number\",\"body\":{}}"),
+            JsonPayload("{\"tag\":256,\"body\":{}}"),
+            JsonPayload("{\"tag\":254,\"body\":{}}"),
+            JsonPayload("{\"tag\":1,\"body\":{"),
+        };
+
+        foreach (var payload in malformedPayloads)
+        {
+            var exception = Record.Exception(() => NetCodec.Decode(payload));
+
+            Assert.Null(exception);
+            Assert.Null(NetCodec.Decode(payload));
+        }
+    }
+
+    private static byte[] JsonPayload(string json)
+    {
+        var body = Encoding.UTF8.GetBytes(json);
+        var payload = new byte[body.Length + 1];
+        payload[0] = 255;
+        Buffer.BlockCopy(body, 0, payload, 1, body.Length);
+        return payload;
+    }
+
+    [Fact]
+    public void DeeplyNestedJsonBody_IsRejectedWithoutThrowing()
+    {
+        const int depth = 100;
+
+        var body = new StringBuilder();
+
+        for (int i = 0; i < depth; i++)
+        {
+            body.Append("{\"nested\":");
+        }
+
+        body.Append("{}");
+
+        for (int i = 0; i < depth; i++)
+        {
+            body.Append('}');
+        }
+
+        var json =
+            "{\"tag\":1,\"body\":" +
+            body +
+            "}";
+
+        var jsonBytes = Encoding.UTF8.GetBytes(json);
+        var payload = new byte[jsonBytes.Length + 1];
+
+        payload[0] = 255;
+        Buffer.BlockCopy(jsonBytes, 0, payload, 1, jsonBytes.Length);
+
+        var exception = Record.Exception(() => NetCodec.Decode(payload));
+
+        Assert.Null(exception);
+        Assert.Null(NetCodec.Decode(payload));
+    }
+
+    [Fact]
+    public void MutatedJsonPayload_NeverThrows()
+    {
+        var original = NetCodec.EncodeJson(
+            new JoinRequest
+            {
+                ProtocolVersion = 123,
+                PlayerName = "TestPlayer",
+                Locale = "en",
+            });
+
+        Assert.Equal(255, original[0]);
+
+        // Truncate at every possible boundary.
+        for (int length = 0; length < original.Length; length++)
+        {
+            var truncated = original[..length];
+
+            var exception = Record.Exception(() => NetCodec.Decode(truncated));
+
+            Assert.Null(exception);
+        }
+
+        // Flip every byte individually.
+        for (int index = 0; index < original.Length; index++)
+        {
+            var mutated = (byte[])original.Clone();
+            mutated[index] ^= 0xFF;
+
+            var exception = Record.Exception(() => NetCodec.Decode(mutated));
+
+            Assert.Null(exception);
+        }
+    }
     private static HashSet<Type> GetTopLevelMessageTypes()
     {
         var messageTypes = GetMessageTypes();
