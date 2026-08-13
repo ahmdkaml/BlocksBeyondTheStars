@@ -823,6 +823,7 @@ public sealed partial class GameServer
         SendLandingPads(session);
         SendContainers(session);
         SendStarMap(session);
+        SyncAppearance(session); // faces + body paintings both ways — appearance is per-world state (#982)
         Send(session, new ServerMessage
         {
             Text = hyperjump
@@ -2858,7 +2859,7 @@ public sealed partial class GameServer
         SendLandingPads(session);
         SendContainers(session);
         SendExistingPresences(session); // show already-online players to the newcomer
-        SendExistingFaces(session);     // custom pixel faces of already-online players
+        SyncAppearance(session);        // custom faces + body paintings, BOTH ways (#982)
         SendPaintDesigns(session);      // paint-design registry — before any chunk with painted blocks can arrive
         SendCustomShapes(session);      // …and the form registry, for the same reason (#843)
         ShipAiOnJoin(session); // boot VEGA: onboarding intro / veteran skip / resume objective
@@ -4794,16 +4795,22 @@ public sealed partial class GameServer
         }
     }
 
+    /// <summary>The joined session playing under <paramref name="name"/>. Matched case-insensitively and
+    /// with surrounding whitespace/quotes ignored, like every other admin-side player lookup
+    /// (<c>/where</c>, <c>/builds</c>, <c>/goto</c>, <c>/kick</c>) — an exact-case compare made
+    /// <c>/tpp marcel</c> fail for <c>Marcel</c> with a message that read like the player did not exist
+    /// (#980).</summary>
     private PlayerSession? FindSessionByName(string? name)
     {
-        if (string.IsNullOrEmpty(name))
+        string wanted = (name ?? string.Empty).Trim().Trim('"').Trim();
+        if (wanted.Length == 0)
         {
             return null;
         }
 
         foreach (var s in _sessions.Values)
         {
-            if (s.Joined && s.State.Name == name)
+            if (s.Joined && string.Equals(s.State.Name, wanted, StringComparison.OrdinalIgnoreCase))
             {
                 return s;
             }

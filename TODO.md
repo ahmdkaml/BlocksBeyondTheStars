@@ -105,6 +105,55 @@ Per-item detail lives in the dated work log below. **Since 2026-07 versions are 
 
 ---
 
+### ★ LAN playtest follow-ups: own pad, join port, trade handshake, painted avatars (#977, #978, #981, #982, 2026-08-13, branch fix/977-978-own-pad-and-join-port)
+Four findings from the LAN playtest of v2026.8.12 (a fifth, "my ship is not on the pad I landed on", was
+already fixed by #971 — that fix simply landed *after* the release tag and needs a new build, not code).
+
+**#981 — a trade request could never be accepted.** `PlayerInteractions` sends `TradeRequestIntent` on T,
+the server records it and tells the target with a `ServerMessage`… and there it ended:
+`NetworkClient.SendTradeRespond` had **no caller anywhere in the client** — no key, no panel, no command.
+Docking, in the same file, has the full path (`DockRequestNotice` → `PendingDockFrom` → modal panel), so
+trade got the same shape: a new `TradeRequestNotice` (NetCodec **203**; an older client drops the unknown
+tag and still sees the chat line, so no protocol bump), `GameBootstrap.PendingTradeFrom`, and an
+Accept/Decline window that clears when the trade opens, is declined or closes. The asker now also gets a
+`@srv.trade.request_sent` confirmation — pressing T produced literally nothing on the requesting side,
+which is indistinguishable from a dead key. `InteractRange` 6 m → 8 m to match the server's `TradeRange`:
+the client used to swallow the keypress in the two-metre gap between the two ranges. ⚠ K (dock) is a
+different story and stays as it is: it legitimately needs a built `docking_module` (a 65-knowledge
+blueprint), and refuses with a localized reason — which is now reliably reachable since the range matches.
+
+**#982 — other players wore a blank avatar.** Faces and body paintings (#874) ride out-of-band one-shot
+messages; presence carries only the colour scheme. They were sent in exactly two places: `SendExistingFaces`
+on join (**pull only** — the newcomer learns what everyone looks like, nobody learns what the newcomer
+looks like) and the change broadcasts, which is why the paint appeared the moment its owner repainted.
+Both broadcasts filter on `CurrentLocationId` and nothing re-ran them on a world change, so travel,
+same-body landing and station boarding left both directions stale. New `SyncAppearance(session)` does the
+exchange both ways (skipping observers, who must stay invisible, #487) and is called from the join
+handshake, `HandleTravel`, `RelocateToAssignedPad` and `EnterBoardedStation`. The observer-off path had
+already patched its own corner of this by hand — the comment there ("the face is out-of-band and would
+otherwise stay missing") described the whole bug.
+
+**#977 — the chooser locked you out of your own pad.** Since #957 a pilot keeps `AssignedPadIndex` while
+they are up in space, which is what stops a second ship being stamped on their origin. But `PadOccupantName`
+and both senders (`SendLandingPads`, `HandleRequestLandingPads`) computed occupancy without knowing who the
+list was *for*, so the reserving pilot got their own pad back as `Occupied` with their own name on it — and
+`SpaceView` only builds buttons for free pads (the 1–9 shortcuts are gated on `!Occupied` too). The landing
+itself would have been accepted: `TryClaimPad` excludes `session.State.PlayerId`. Occupancy is now derived
+per receiver in `PadStatusFor`, using the very same `PadOccupiedByOther` check the landing uses, and the new
+`NetLandingPad.Mine` flag carries "this one is yours" to the client (appended field on contractless
+MessagePack → **no protocol bump**; an older client just sees a free pad, which is the behaviour it needs).
+Chooser and world map draw a `Mine` pad in cyan with the owner caption. Two regression tests: the reserving
+pilot sees it as selectable and can land back on it, while a second player still sees it as taken.
+
+**#978 — the join dialog prefilled the wrong port.** `AppShell.Host`/`Port` were two things at once: the
+live join target *and* the connect dialog's prefill. The portal join, the WebGL defaults and in-game hosting
+all write those fields, so the "default" drifted to whatever was joined last, and the shipped default (31415)
+belonged to dedicated servers — which are never dialled by hand, since Official Worlds fills host and port in
+automatically. The prefill moved to its own `ManualJoinHost`/`ManualJoinPort` pair that only the dialog
+writes, starting at `LocalServerLauncher.DefaultPort` (31550), and `WorldRig`'s unparseable-port fallback
+follows. The #960 hint stays as it is — it already names both ports, and it is the wording the other twelve
+locales were translated from.
+
 ### ★ Multiplayer pauses too — once everybody is in the pause menu (#973, 2026-08-13, branch feat/973-multiplayer-pause)
 The Esc hold from #612/#908 only ever served a **lone** player: `HandlePause` refused the request outright
 while a second player was joined, and `HoldingPause` lifted a running hold the moment that count moved. Two
@@ -7781,6 +7830,35 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
    footprint so nothing seeps up. Leave landing at the seabed (so it *can* land underwater) unless the user
    prefers dry-land preference (see questions). Tests: collider excludes fluids; fluid won't enter a stamped
    ship interior; ship interior is water-free after landing in a sea.
+
+---
+
+## ✅ Done (2026-08-13): admin commands accept player names with spaces — and any capitalisation (#980)
+
+Reported from a hosted world: teleporting to the player `mincraft Fan` was impossible. `/tpp mincraft Fan`
+answered *"target player not found"*, which reads like the player does not exist rather than like the name
+got cut in half.
+
+`ChatUi.TryAdminCommand` splits the typed line on whitespace and passed only `p[1]` on — so the server
+received `mincraft`. The same truncation hit `/where`, `/builds`, `/kick`, `/paintwipe` and the target
+of `/give` (`p[3]`), where the miss is silent: `give_item` falls back to the admin's own inventory when
+the target does not resolve. `/tp` and `/goto` were already right (they forward the whole rest of the
+line), which is why `/goto mincraft Fan` was the only way in — fleet-admin only.
+
+Fix: the parsing moved into `AdminChatCommand` in **Client.Core** (Unity-free, like `ReportChatCommand`
+for `/report`, so the headless suite covers it). `PlayerArgument(line, skipTokens)` returns everything
+after the verb — `skipTokens: 3` for `/give <item> <count> <name…>` — and strips surrounding quotes plus
+a leading `@`. `/spectate` deliberately keeps taking one token: its argument is `on|off`, not a name.
+
+Second, smaller defect in the same path: `GameServer.FindSessionByName` (backing `teleport_to_player`
+and `give_item`) compared names with `==`, so `/tpp marcel` missed the player `Marcel` — while every
+other admin lookup (`/where`, `/builds`, `/goto`, `/kick`, `/paintwipe`) has always been
+`OrdinalIgnoreCase`. Now it trims and matches case-insensitively like the rest, and an empty target
+still resolves to nobody instead of to "some session".
+
+New tests: `AdminChatCommandTests` (client, 18 cases incl. `#designId` passing through untouched) and
+three additions to `AdminCheatTests` — spaced/differently-cased/quoted teleport targets, unknown targets
+still rejected, and `/give` to a spaced name landing in *that* player's inventory. No protocol change.
 
 ---
 
