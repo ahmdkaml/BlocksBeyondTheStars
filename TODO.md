@@ -105,6 +105,18 @@ Per-item detail lives in the dated work log below. **Since 2026-07 versions are 
 
 ---
 
+### ★ Empty hotbar slot shows the player's hand (#1033, 2026-08-15, branch fix/empty-slot-hand-viewmodel)
+Selecting an empty hotbar slot rendered nothing at all in first person: `HeldItem.For` mapped the empty
+item key to `Kind.None`, so the viewmodel holder was deactivated entirely — no feedback that the slot
+switch happened. New `HeldItem.Kind.Hand`: a gloved fist + forearm from the same procedural cubes as
+every other held item, resolved for empty keys and tinted with the player's suit `ArmColor` via a
+`HandTintResolver` wired in `GameBootstrap` (same pattern as `BlockTileResolver`, default suit blue as
+fallback). The third-person avatar treats `Hand` like `None` — it already has a real hand mesh — so
+remote players and third person are unchanged; the existing generic jab swing doubles as the punch, and
+EVA gets the hand too via the viewmodel's self-refresh. Raw materials still show nothing (follow-up
+candidate on top of `Kind.Hand`). Client-only, no protocol change; 4 new `HeldItemEditModeTests` pin
+the mapping.
+
 ### ★ Wooden door on a self-built ship swings by hand again (#1021, 2026-08-14, branch fix/ship-door-kind)
 LAN playtest: "the wooden door can't be opened." A door block built into a self-built ship (#948) was
 collapsed into a position-only `DoorCells` entry, and `RegisterDoors` hard-coded every landed-ship door
