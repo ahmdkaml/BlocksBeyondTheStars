@@ -122,6 +122,18 @@ call that container the backpack. The sidebar now reads **Backpack / Cargo Hold*
 Frachtraum) via a new `ui.inventory.backpack` key added to all 14 locales, wordings reused from the
 already-translated `ui.avatar.pack`. Client-only label change, no protocol impact.
 
+### ★ Browsing a menu no longer gets you kicked after 90 s (#1008, 2026-08-14, branch fix/menu-heartbeat-keepalive)
+Tonight's 3-player LAN session dropped every player repeatedly — seven `sent nothing for 90s — dropping
+the session` kicks in ~80 minutes in the host's log. The #964 heartbeat assumes "a playing client sends
+movement updates continuously", but the client went completely silent in several alive states: on foot
+with any UI panel open (crafting, map, inventory, paint editor, chat, cinematic —
+`PlayerController.Update` returned before `SendMovement()`), in space behind the star map / pad chooser /
+ship-destruction prompt (`UpdateCruise` early-outs before the 12 Hz `SendShipMove`), and on EVA with a
+menu open. Only the Esc pause menu had a keep-alive (#973). The position streams now keep flowing
+(position simply frozen) in all those states — sent before the early-outs — so the sweep only catches
+actually-dead clients. No protocol change; the server side is untouched. Cosmetic side-finding logged in
+#1008: a heartbeat kick logs `Connection N closed.` twice.
+
 ### ★ Scanner: aim-gated targeting + feedback for empty/rejected scans (#1005, 2026-08-14, branch fix/scanner-stuck-1005)
 Playtest report: the scanner sometimes "sticks" — it keeps showing the last scanned subject until the
 player walks away and does something else. Root cause was proximity-only target selection:
