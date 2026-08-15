@@ -11,8 +11,10 @@ namespace BlocksBeyondTheStars.Client
     /// <summary>
     /// The HUD companion panel for the ship AI "VEGA": shows her lines with a typewriter effect (queued,
     /// radio blip per line) and a persistent objective chip while the onboarding chain is active, with a
-    /// skip button. Lines arrive as locale KEYS (<see cref="ShipAiLine"/>) and are localized here, so the
-    /// companion is fully bilingual and offline-safe. Advisor hints (Kind 1) respect the settings mute.
+    /// skip button. A revealed page stays until the player presses the continue key — there is no
+    /// auto-dismiss timeout (#1011). Lines arrive as locale KEYS (<see cref="ShipAiLine"/>) and are
+    /// localized here, so the companion is fully bilingual and offline-safe. Advisor hints (Kind 1)
+    /// respect the settings mute.
     /// </summary>
     public sealed class VegaPanel : MonoBehaviour
     {
@@ -28,8 +30,6 @@ namespace BlocksBeyondTheStars.Client
         public MemoryFlashback Flashback;
 
         private const float CharsPerSecond = 42f;
-        private const float AutoAdvanceSeconds = 25f; // fallback so an unattended line never blocks forever
-        private const KeyCode ContinueKey = KeyCode.N;
 
         // Left-column layout in HUD reference units (1536×864). The column is full: vitals end at y 260,
         // the toast sits at 268, the scan panel starts at 650 and the hotbar backplate owns y 742…834 /
@@ -51,7 +51,6 @@ namespace BlocksBeyondTheStars.Client
         private readonly Queue<(string Text, bool Prologue)> _queue = new Queue<(string, bool)>();
         private string _current = string.Empty;  // the page being typed/read (not the whole line)
         private float _shown;     // characters revealed so far
-        private float _holdLeft;  // auto-advance fallback once fully revealed
 
         // Long lines are split into panel-sized pages, advanced with the same continue key (#736). German
         // runs 12–20 % longer than English, so the bandit briefing and several hints exceed the ~4 visible
@@ -338,11 +337,27 @@ namespace BlocksBeyondTheStars.Client
             _queue.Enqueue((L(key), false)); // shows via the normal typewriter path; bypasses the VegaHints mute by design
         }
 
-        /// <summary>True when the continue key should be ignored: the in-game menu is open, or a text
-        /// field (chat, beacon label) currently has keyboard focus.</summary>
+        /// <summary>True when the continue control should be ignored: the in-game menu is open, or a text
+        /// field (chat, beacon label) currently has keyboard focus. Only a focused INPUT FIELD counts —
+        /// uGUI also leaves an ordinary Button selected after any click, and with pad focus
+        /// (<see cref="UiNavFocus"/>) something is selected most of the time; treating that as "captured"
+        /// left the panel stuck after the first HUD click / on a pad (#1041).</summary>
         private bool InputCaptured()
-            => (Game != null && Game.MenuOpen)
-               || UnityEngine.EventSystems.EventSystem.current?.currentSelectedGameObject != null;
+        {
+            if (Game != null && Game.MenuOpen)
+            {
+                return true;
+            }
+
+            var selected = UnityEngine.EventSystems.EventSystem.current?.currentSelectedGameObject;
+            return selected != null && selected.GetComponent<InputField>() != null;
+        }
+
+        /// <summary>True while a VEGA line is on screen (typing or waiting for continue) — gates the touch
+        /// NEXT button and the context-actions entry (#1041); the panel itself stays non-modal.</summary>
+        public bool LineShowing => _speechText != null && _current.Length > 0;
+
+        private InputDeviceKind _hintDevice = (InputDeviceKind)(-1);
 
         private void Update()
         {
@@ -356,7 +371,7 @@ namespace BlocksBeyondTheStars.Client
             if (_current.Length == 0 && _queue.Count > 0)
             {
                 // No line starts behind the loading curtain (#760/#761): a page typing into blackness
-                // is inaudible-invisible and burns its auto-advance window. Bounded inside HoldQueue.
+                // is inaudible-invisible. Bounded inside HoldQueue.
                 if (Cinematic != null && Cinematic.HoldQueue)
                 {
                     return;
@@ -459,7 +474,17 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
-            bool pressed = Input.GetKeyDown(ContinueKey) && !InputCaptured();
+            // Continue is a rebindable action (#1041): the bound key (default N), the pad's Back button, the
+            // touch NEXT button and the context-actions list all land here — the panel used to poll the
+            // raw N key, which no pad or touch device could ever press.
+            bool pressed = InputMap.Down(InputAction.VegaContinue) && !InputCaptured();
+
+            // The hint names the control for the device in hand; re-render it when the player switches
+            // device mid-line (picks up the pad, taps the screen).
+            if (_continueHint.gameObject.activeSelf && InputMap.ActiveDevice != _hintDevice)
+            {
+                ShowContinueHint();
+            }
 
             if (_shown < _current.Length)
             {
@@ -479,10 +504,11 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
-            // Fully revealed: wait for the continue key (the lines used to run into each other —
-            // unreadable); a generous timeout still auto-advances an unattended panel.
-            _holdLeft -= Time.deltaTime;
-            if (pressed || _holdLeft <= 0f)
+            // Fully revealed: wait for the continue key — and ONLY the key (#1011). The old 25 s
+            // auto-advance made hints and story pages vanish before slow readers got through them;
+            // nothing gameplay-critical blocks on the panel (later lines just queue), and unattended
+            // capture runs clear it via DismissSpeechForCapture.
+            if (pressed)
             {
                 if (_page < _pages.Count - 1)
                 {
@@ -503,20 +529,30 @@ namespace BlocksBeyondTheStars.Client
             _page = index;
             _current = _pages.Count > 0 ? _pages[index] : string.Empty;
             _shown = 0f;
-            _holdLeft = AutoAdvanceSeconds;
             _speechText.text = string.Empty;
             _continueHint.gameObject.SetActive(false);
         }
 
         private void ShowContinueHint()
         {
+            // The control name follows the active device (#1041): the bound key on keyboard, the pad glyph
+            // on a gamepad, the on-screen NEXT button on touch. "ui.vega.next" (the old fixed "[N]" text)
+            // stays in the locale files for community locales that still carry it.
+            _hintDevice = InputMap.ActiveDevice;
+            string next = _hintDevice switch
+            {
+                InputDeviceKind.Touch => L("ui.vega.next_touch"),
+                InputDeviceKind.Gamepad => string.Format(L("ui.vega.next_pad"), InputMap.Glyph(InputAction.VegaContinue)),
+                _ => string.Format(L("ui.vega.next_key"), InputMap.Key(InputAction.VegaContinue)),
+            };
+
             // Multi-page lines get a page indicator so "Continue" visibly means "next page", not "dismiss".
             string hint = _pages.Count > 1
-                ? L("ui.vega.next") + "  " + string.Format(L("ui.vega.page"), _page + 1, _pages.Count)
-                : L("ui.vega.next");
-            if (_currentIsPrologue)
+                ? next + "  " + string.Format(L("ui.vega.page"), _page + 1, _pages.Count)
+                : next;
+            if (_currentIsPrologue && _hintDevice == InputDeviceKind.KeyboardMouse)
             {
-                hint += "      " + L("ui.vega.prologue.skip"); // Esc skips the narration (#754)
+                hint += "      " + L("ui.vega.prologue.skip"); // Esc skips the narration (#754) — keyboard only
             }
 
             _continueHint.text = hint;

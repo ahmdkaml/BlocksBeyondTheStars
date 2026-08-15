@@ -170,6 +170,10 @@ namespace BlocksBeyondTheStars.Client
             var beaconLabel = root.AddComponent<BeaconLabelUi>();
             beaconLabel.Game = boot;
 
+            // Crate stash filter (#1032): opens on E at a storage crate — pick what belongs in it.
+            var containerFilter = root.AddComponent<ContainerFilterUi>();
+            containerFilter.Game = boot;
+
             // Block-paint editor host (#818): opens when using the paint tool on a placed block.
             var paintTool = root.AddComponent<PaintToolUi>();
             paintTool.Game = boot;
@@ -251,6 +255,8 @@ namespace BlocksBeyondTheStars.Client
             touch.Game = boot;
             touch.Menu = menu;
             touch.Chat = chat;
+            touch.Player = pc;   // contextual ROTATE / ATTACK probes (#1042)
+            touch.Vega = vega;   // NEXT while a line is up (#1041)
 
             // Render other players (multiplayer presence).
             var remotes = root.AddComponent<RemotePlayers>();
@@ -316,6 +322,14 @@ namespace BlocksBeyondTheStars.Client
             var interactions = root.AddComponent<PlayerInteractions>();
             interactions.Game = boot;
             interactions.Remotes = remotes;
+
+            // Context-actions list (#1042/#1043): the touch ACT button / pad LS opens every verb that applies
+            // right now; a pick injects the InputAction so the existing poll sites fire unchanged.
+            var contextActions = root.AddComponent<ContextActionsUi>();
+            contextActions.Game = boot;
+            contextActions.Player = pc;
+            contextActions.Interactions = interactions;
+            contextActions.Vega = vega;
 
             // Render planet enemies (M25).
             var entities = root.AddComponent<WorldEntities>();

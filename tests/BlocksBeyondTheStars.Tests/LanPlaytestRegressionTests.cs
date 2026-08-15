@@ -11,7 +11,10 @@ using BlocksBeyondTheStars.Networking.Transport;
 using BlocksBeyondTheStars.Persistence;
 using BlocksBeyondTheStars.Shared.Configuration;
 using BlocksBeyondTheStars.Shared.Content;
+using BlocksBeyondTheStars.Shared.Geometry;
+using BlocksBeyondTheStars.Shared.Primitives;
 using BlocksBeyondTheStars.Shared.State;
+using BlocksBeyondTheStars.Shared.World;
 using Xunit;
 using SvGameServer = BlocksBeyondTheStars.GameServer.GameServer;
 
@@ -377,6 +380,203 @@ public sealed class LanPlaytestRegressionTests : IDisposable
             && x.Msg is SpaceShipDesign d && d.Id == "ship:Ann" && d.Kind == "ship_remote");
         Assert.DoesNotContain(transport.Sent, x => x.Conn == ben.ConnectionId
             && x.Msg is SpaceShipDesign d && d.Id == "ship:Ann" && d.Kind == "ship");
+    }
+
+    // ---------------- 2026-08-13 audit follow-ups (#996/#997/#999) ----------------
+
+    [Fact]
+    public void TheStarMapsFreePadCount_DoesNotCountYourOwnReservationAgainstYou()
+    {
+        // #999: a pilot in space keeps their pad reserved (#957) and the chooser already excludes that
+        // reservation for its holder (#977) — but the star map's free-pad count did not, so the last pad
+        // being your OWN made the map say "pads full" one screen before the chooser happily offered it.
+        var transport = new RecordingTransport();
+        var server = NewServer("pad_count", transport);
+
+        var ann = server.AddLocalPlayer("Ann");
+        Assert.True(ann.AssignedPadIndex >= 0);
+        int freeBefore = server.FreePadCountForTest();
+        server.EnterSpace("Ann"); // the reservation is held while she is up in space (#957)
+
+        Assert.Equal(freeBefore, server.FreePadCountForTest());        // neutral: still reserved
+        Assert.Equal(freeBefore + 1, server.FreePadCountForTest("Ann")); // as seen by the holder (#999)
+    }
+
+    [Fact]
+    public void AnObserverLandingBackOnTheSameBody_ClaimsNoPadAndNoAnchor()
+    {
+        // #996: HandleTravel has exempted spectators from the pad/ship half of a landing since #487 —
+        // the same-body path did not: it claimed a communal pad for the invisible observer and set
+        // AboardShip/RespawnPoint as if they had a ship parked there.
+        var transport = new RecordingTransport();
+        var server = NewServer("observer_land", transport, placeShip: false);
+
+        var watcher = server.AddLocalPlayer("Watcher");
+        watcher.Spectating = true;
+        watcher.State.AboardShip = false;
+        var anchorBefore = watcher.State.RespawnPoint;
+        server.EnterSpace("Watcher");
+        int freeBefore = server.FreePadCountForTest();
+
+        server.LandOnCurrentBodyForTest(watcher, 1); // an explicit pad pick, like the chooser sends
+
+        Assert.Equal(freeBefore, server.FreePadCountForTest()); // no pad claimed by the observer
+        Assert.False(watcher.State.AboardShip);
+        Assert.Equal(anchorBefore.X, watcher.State.RespawnPoint.X); // anchor untouched
+        Assert.Equal(anchorBefore.Z, watcher.State.RespawnPoint.Z);
+    }
+
+    [Fact]
+    public void ANewPlayersRespawnAnchor_IsTheirOwnSpawn_NotTheLastServedShips()
+    {
+        // #997: CreateNewPlayer runs BEFORE the new session exists, so _shipPlaced/_healTank still
+        // resolve under the last served player's ship cursor. With PlaceStarterShip=false nothing
+        // overwrites the anchor afterwards — a brand-new player persisted the HOST's heal tank and
+        // respawned inside the host's ship.
+        var transport = new RecordingTransport();
+        var repo = new SqliteWorldRepository(new SaveGamePaths(_root, "respawn_anchor"));
+        _repos.Add(repo);
+        var config = new ServerConfig
+        {
+            WorldName = "respawn_anchor",
+            Seed = 1,
+            StartPlanet = "rocky",
+            AutoSaveIntervalMinutes = 9999,
+            PlaceStarterShip = true,
+        };
+        config.Rules.FreeSpaceFlight = true;
+        var server = new SvGameServer(config, _content, transport, repo);
+        server.Start();
+
+        var host = server.AddLocalPlayer("Host"); // ship parked → cursor + heal tank point at the host
+        config.PlaceStarterShip = false;          // a shipwright world for everyone joining after (#949)
+        var newbie = server.AddLocalPlayer("Newbie");
+
+        // The newbie's anchor is at their own pad, not at the host's heal tank (pads sit far apart).
+        Assert.InRange(newbie.State.RespawnPoint.X, newbie.State.Position.X - 8, newbie.State.Position.X + 8);
+        Assert.InRange(newbie.State.RespawnPoint.Z, newbie.State.Position.Z - 8, newbie.State.Position.Z + 8);
+        Assert.True(
+            System.Math.Abs(newbie.State.RespawnPoint.X - host.State.RespawnPoint.X) > 8
+            || System.Math.Abs(newbie.State.RespawnPoint.Z - host.State.RespawnPoint.Z) > 8,
+            "the new player's respawn anchor must not be the host's heal tank");
+    }
+
+    // ---------------- #1020: dying to an AI tick respawned you inside ANOTHER player's ship ----------------
+
+    [Fact]
+    public void DyingToAnAiTick_RecoversToYourOwnShipsWorld_NotTheLastServedOnes()
+    {
+        // The AI damage ticks (creatures/bandits/machines/speeders) call RespawnPlayer with the ship cursor
+        // still on whoever the server served last. RecoverToShip read THAT player's ship to pick the
+        // recovery world (and could even re-home that ship there) — the host died and came back at the
+        // OTHER player's ship instead of his own.
+        var transport = new RecordingTransport();
+        var server = NewServer("death_cursor", transport);
+        var host = server.AddLocalPlayer("Host");
+        var mary = server.AddLocalPlayer("Mary");
+        server.SetInstantTravelForTest(true);
+
+        // Park the two ships on two DIFFERENT galaxy bodies (real travels, so both ship records carry a
+        // proper body id — the fresh start world still runs under its legacy planet-type key).
+        var planets = server.Galaxy.AllBodies().Where(b =>
+                b.Kind == CelestialKind.Planet
+                && !string.IsNullOrEmpty(b.PlanetType)
+                && _content.GetPlanet(b.PlanetType!) is not null
+                && b.Id != host.CurrentLocationId)
+            .Take(2).ToArray();
+        var (hostBody, maryBody) = (planets[0], planets[1]);
+
+        server.RequestLandingPadsForTest(host, host.CurrentLocationId); // serves the host → server.Ship is his
+        server.Ship.Modules.Add("jump_generator"); // the destinations may sit in another system (as in TravelTests)
+        Assert.True(server.QuickTravelForTest("Host", hostBody.Id));
+
+        server.EnterSpace("Host"); // die away from the surface → the RecoverToShip (world-transition) path
+
+        server.RequestLandingPadsForTest(mary, mary.CurrentLocationId); // serves Mary → server.Ship is hers
+        server.Ship.Modules.Add("jump_generator");
+        Assert.True(server.QuickTravelForTest("Mary", maryBody.Id)); // the travel serves her → cursor on Mary
+
+        server.KillPlayerForTest(host, "@srv.death.wildlife");
+
+        // The host must recover to HIS ship's world and heal tank — not to the body Mary's ship parks on.
+        Assert.Equal(hostBody.Id, host.CurrentLocationId);
+        Assert.True(server.HasShip, "the victim's own ship must be re-parked for the respawn");
+        Assert.Equal(server.HealTank.X, host.State.Position.X);
+        Assert.Equal(server.HealTank.Z, host.State.Position.Z);
+        Assert.Equal(maryBody.Id, mary.CurrentLocationId); // and Mary was not dragged anywhere either
+    }
+
+    [Fact]
+    public void VoidRescue_RecoversToYourOwnShip_NotTheLastServedOnes()
+    {
+        // SafeSpawnPoint took a playerId and ignored it in the ship branch (_shipPlaced/_healTank = the
+        // cursor): the void-rescue tick, which never pins the cursor, teleported a falling player into
+        // whichever ship the server touched last.
+        var transport = new RecordingTransport();
+        var server = NewServer("void_cursor", transport);
+        var host = server.AddLocalPlayer("Host");
+        var mary = server.AddLocalPlayer("Mary");
+        var hostAnchor = host.State.RespawnPoint;
+        var maryAnchor = mary.State.RespawnPoint;
+
+        server.RequestLandingPadsForTest(mary, mary.CurrentLocationId); // serves Mary → the ship cursor points at her
+
+        // Carve a deep air shaft below the host and drop him in (the world has a bedrock floor, so the
+        // void has to be made, not found) — the same setup SpawnSafetyTests uses.
+        int bx = (int)System.Math.Floor(host.State.Position.X), bz = (int)System.Math.Floor(host.State.Position.Z);
+        int top = (int)host.State.Position.Y;
+        for (int y = top; y > top - 160; y--)
+        {
+            server.World.SetBlock(new Vector3i(bx, y, bz), BlockId.Air);
+        }
+
+        host.State.Position = new Vector3f(bx + 0.5f, top - 50, bz + 0.5f);
+        Assert.True(server.IsInVoidForTest(host.State.Position), "the host must start in the void for the rescue to fire");
+
+        server.RunVoidRescueForTest();
+
+        Assert.InRange(host.State.Position.X, hostAnchor.X - 8, hostAnchor.X + 8);
+        Assert.InRange(host.State.Position.Z, hostAnchor.Z - 8, hostAnchor.Z + 8);
+        Assert.True(
+            System.Math.Abs(host.State.Position.X - maryAnchor.X) > 8
+            || System.Math.Abs(host.State.Position.Z - maryAnchor.Z) > 8,
+            "the rescued player must not be teleported into the other player's ship");
+    }
+
+    // ---------------- #1020: a pad claimed after your arrival never showed as occupied ----------------
+
+    [Fact]
+    public void ALandingClaimingAPad_RepublishesOccupancyToPlayersAlreadyOnTheBody()
+    {
+        // LandingPadList was a world-entry snapshot: whoever was already on the body kept seeing a later
+        // lander's pad as free/anonymous forever ("we couldn't see her landing pad").
+        var transport = new RecordingTransport();
+        var server = NewServer("pad_republish", transport);
+        var host = server.AddLocalPlayer("Host");
+        var justus = server.AddLocalPlayer("Justus");
+        var mary = server.AddLocalPlayer("Mary");
+
+        server.EnterSpace("Mary");
+        transport.Sent.Clear();
+        server.LandOnCurrentBodyForTest(mary, 3); // an explicit free pad pick, like the chooser sends
+
+        foreach (var bystander in new[] { host, justus })
+        {
+            var list = transport.Sent
+                .Where(x => x.Conn == bystander.ConnectionId)
+                .Select(x => x.Msg).OfType<LandingPadList>().LastOrDefault();
+            Assert.NotNull(list);
+            var pad = list!.Pads.Single(p => p.Index == 3);
+            Assert.True(pad.Occupied, "the freshly claimed pad must be published as occupied");
+            Assert.Equal("Mary", pad.Occupant);
+        }
+
+        // The lander's own list marks the pad as hers (receiver-relative Mine, #977).
+        var maryList = transport.Sent
+            .Where(x => x.Conn == mary.ConnectionId)
+            .Select(x => x.Msg).OfType<LandingPadList>().LastOrDefault();
+        Assert.NotNull(maryList);
+        Assert.True(maryList!.Pads.Single(p => p.Index == 3).Mine);
     }
 
     public void Dispose()

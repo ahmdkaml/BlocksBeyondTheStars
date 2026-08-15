@@ -105,6 +105,212 @@ Per-item detail lives in the dated work log below. **Since 2026-07 versions are 
 
 ---
 
+### ★ The wall behind a placed torch is no longer see-through (#1031, 2026-08-15, branch fix/torch-xray-neighbor-cull)
+Placing a torch on a wall opened an x-ray hole: `ChunkMesher`'s neighbour-culling only kept an opaque
+face toward air / transparent / flora / foliage cells, and a torch cell is none of those — it meshes
+its own slim cross-billboard and never fills the cell, yet it *sealed* the wall face behind it (render
+AND collider face, same loop). The lantern shared the bug, and the ladder too (mostly masked by its
+wall plate leaning against that very face). A new `IsSlimPropBlock` set (torch/lantern/ladder) is now
+treated like air in all three places that must stay in sync: the opaque `drawFace` branch, the AO
+corner occluder, and the placed-light BFS (a slim prop no longer blocks light or stamps a full-cell
+contact shadow onto its wall). The other `solid:false` blocks (water/fire/energy_gate) were already
+covered via `IsTransparent`. Client-only, no protocol change.
+
+### ★ Empty hotbar slot shows the player's hand (#1033, 2026-08-15, branch fix/empty-slot-hand-viewmodel)
+Selecting an empty hotbar slot rendered nothing at all in first person: `HeldItem.For` mapped the empty
+item key to `Kind.None`, so the viewmodel holder was deactivated entirely — no feedback that the slot
+switch happened. New `HeldItem.Kind.Hand`: a gloved fist + forearm from the same procedural cubes as
+every other held item, resolved for empty keys and tinted with the player's suit `ArmColor` via a
+`HandTintResolver` wired in `GameBootstrap` (same pattern as `BlockTileResolver`, default suit blue as
+fallback). The third-person avatar treats `Hand` like `None` — it already has a real hand mesh — so
+remote players and third person are unchanged; the existing generic jab swing doubles as the punch, and
+EVA gets the hand too via the viewmodel's self-refresh. Raw materials still show nothing (follow-up
+candidate on top of `Kind.Hand`). Client-only, no protocol change; 4 new `HeldItemEditModeTests` pin
+the mapping.
+
+### ★ Touch + gamepad reach every verb again (#1041–#1044, 2026-08-15, branch feat/touch-pad-coverage)
+Audit of the two non-keyboard backends against the 23 `InputAction`s: touch mapped 9 of them, the pad
+had stock buttons for 3, and several verbs bypassed `InputMap` entirely — `VegaPanel` polled the raw
+**N** key (since #1011 removed the auto-advance, a tablet or pad-only player was stuck on the first
+VEGA page forever), `WorldMap` polled **M**, `FinaleView` polled **F**, the ship-systems bar and the
+pad chooser took only number keys. Fix, in layers: (1) three new rebindable actions —
+`VegaContinue` (N / pad Back / touch NEXT ▶), `PlanetMap` (M / touch MAP), `ContextActions` (pad L3 /
+touch ACT, no key). (2) `ContextActionsUi`: a stick-navigable / tappable list of every verb whose
+applicability probe is true right now (rotate, trade, dock, undock, loot, stash, repair, stow, attack,
+thermal, lamp, maps, EVA deploy, speeder exit/refuel, VEGA next); a pick calls
+`InputMap.InjectNextFrame(action)`, so the existing poll sites fire unchanged — one mechanism covers
+both devices' long tail. Probes sit beside the handlers (`PlayerController.HeldRotatable / NearContainer /
+NearCrate / NearWreck / NearOwnParkedSpeeder / HoldsWeapon / BinocularsRaised`,
+`PlayerInteractions.CanRequestTradeOrDock / CanDisembark`, `VegaPanel.LineShowing`, `FinaleView.BreachAvailable`).
+(3) Touch: direct contextual buttons for the frequent verbs — ROTATE (rotatable block held), ATTACK
+(weapon held / Guardian core; tap swings, hold breaches), VIEW + MAP on foot, MAP at the helm, and in EVA
+PLACE + DEPLOY replace LAND / SHIP / AUTO (EVA building was impossible by touch: `PlaceDown` only read the
+on-foot button); any tap now flips the HUD to touch glyphs. (4) Pad: `UiNav.Enable` + **B**-close on the
+land map (a pad-only pilot could not land), trade / dock prompts + trade panel, bandit demand, planet
+map, flight chart; `HadActivityThisFrame` sees Back / Start / L3 / R3. (5) `SpaceView` cycles the
+systems bar on `HotbarScroll` (wheel / d-pad / touch ◄►), wrapping. Hints follow the device (`ui.vega.next_*`,
+`ui.*_actions`, the finale `[F]` token, `ui.hud.hint_pad` + flight/EVA pad hints). Locales: 16 new keys
+EN + DE, all 12 community locales topped up via `translate_locale.py` (26 keys each incl. earlier lag);
+`InputMap.LabelKey` is the single action→`ui.key.*` table (settings rows + list). Client-only, no protocol
+change; 4 new `InputAbstractionEditModeTests`. Still keyboard-only by design: chat typing on a pad,
+push-to-talk, the finale duel's IMGUI choices on a pad, map *markers* on a pad; on-device feel is #201/#202.
+
+### ★ Wooden door on a self-built ship swings by hand again (#1021, 2026-08-14, branch fix/ship-door-kind)
+LAN playtest: "the wooden door can't be opened." A door block built into a self-built ship (#948) was
+collapsed into a position-only `DoorCells` entry, and `RegisterDoors` hard-coded every landed-ship door
+to the authored ships' auto-sliding **energy** hatch (item 35) — `HandleDoorInteract` only serves
+hand-operated kinds and the client's `NearestHinge` skips non-hinged kinds, so E did nothing and no
+"E: Door" hint showed. The structure now records the door KIND per doorway cell
+(`SpaceStructure.DoorKinds`, carried through `LandedShip.Doors`): self-built ships register the door
+the player actually placed (wood/hinge swing on E; slide/energy keep proximity auto-open + the forced
+rear-hatch axis), authored ships keep their all-energy doors unchanged. Ground-placed doors were always
+fine (`PlaceableDoorTests`); new regression test `WoodenDoor_OnASelfBuiltShip_StaysHandOperated`.
+Server-only, no protocol change (`NetDoor.Kind` already carried the string).
+
+### ★ VEGA introduces the menu and the Codex on first boot (#1015, 2026-08-14, branch feat/vega-codex-craft-hints)
+New players were never told two fundamental things: that the Tab menu exists (only mentioned in passing
+by onboarding stages 2–3) and that the Codex — the in-game wiki with 24 guide articles — exists at all
+(no VEGA line anywhere pointed at it). Two new Kind-0 onboarding lines, `vega.intro.menu` and
+`vega.intro.codex`, now follow `vega.intro.2` in `ShipAiOnJoin`, before the first mining task. Covered
+by the existing `vega:intro` milestone (veteran skip and tutorial restart unaffected), added to the
+`VegaText` journal reconstruction so they stay re-readable in the Story-tab tips log, localized in all
+14 languages. Join-sequence ordering asserted in `ShipAiTests`.
+
+### ★ Crafting: ingredients say whether you craft them or find them (#1016, 2026-08-14, branch feat/vega-codex-craft-hints)
+Every have/need ingredient row (recipe detail, tech unlock cost, ship cost block — now one shared
+`IngredientRow` helper) carries a source tag: *craftable* (`GameContent.CraftDepth > 0`, the precomputed
+raw-vs-crafted discriminator; barter excluded) or *raw resource*. A craftable ingredient you are still
+short of also lists what crafting the missing amount takes — its producing recipe's inputs scaled to the
+missing count, indented beneath, one recipe level deep, each again tagged craftable/raw. All data is
+client-side (`Game.Content`), no protocol change; new keys `ui.craft.src_craftable`/`ui.craft.src_raw`
+in all 14 locales.
+
+### ★ Blocks can be placed on the ground beside a parked ship again (#1023, 2026-08-14, branch fix/ship-box-place-redirect)
+LAN playtest: "sand and dirt can't be placed" — the materials were innocent. The client rerouted ANY
+place whose target cell fell inside a landed ship's bounding box to a structure edit, even when the
+player aimed at the ground: the box test (`LandedShipBoundsAt`, `dy 0..Height` inclusive over the full
+Width×Length rectangle) also covers the ground-level air ring around the hull. Beside another pilot's
+ship the server answered `none_here` ("No such structure here."), beside your own `no_anchor` — or,
+hull-adjacent, the block silently became part of the ship. Since you spawn next to your ship, freshly
+mined dirt/sand was the typical victim. `PlayerController` now reroutes only when the aim ray actually
+hit that ship (`boundsShip == aimedShip`); aiming at a world block always sends a world place, and the
+server keeps guarding the real interior (`ShipInteriorContains`). Cabin furnishing and roof building
+still target ship cells, so they keep working. Client-only, no protocol change. Likely the same root
+cause as the "painted block won't place" LAN report.
+
+### ★ Returning to an area a partner kept loaded no longer shows void terrain (#1030, 2026-08-15, branch fix/tpp-void-terrain)
+F1 report from tonight's LAN session: after `/tpp` to a player 1.7 km away, "I only see space" — the
+target's ship and the animals rendered, the terrain did not, while the server's bump snapshot showed
+solid forest all around. Multiplayer-only bookkeeping gap: since #966 the client unloads chunks
+farther than ~384 blocks (block data included), but the server only forgot a session's `SentChunks`
+via the sweep's far-from-EVERY-player eviction. With a partner camping in an area its chunks stayed
+cached — and stayed "already sent" for the returning player, so `StreamChunks` skipped them forever
+and missing chunks render as air. The sweep now ALSO prunes each session's sent-set by that session's
+OWN anchor (view radius + 4, seam-aware on both wrap axes, capped safely below the client's 24-chunk
+unload distance); anything pruned while the client still holds it merely re-streams idempotently on
+return. `/tpp` itself hardened for parity with `/tp`: it now refreshes the aboard state after the
+snap and refuses targets in a space instance or on another body (new `srv.tpp.not_here` key, EN+DE)
+instead of copying coordinates across scenes. Server-only fix — a host update suffices, no protocol
+bump. Regression tests: two-player sweep round-trip (red before the fix), cross-body reject, aboard
+refresh.
+
+### ★ VEGA hints and story pages stay until the player continues (#1011, 2026-08-14, branch fix/vega-lines-persist)
+Every line in VEGA's speech panel — advisor hints, story/memory beats, onboarding, prologue pages —
+was auto-dismissed 25 s after it finished typing (`AutoAdvanceSeconds` in `VegaPanel`), so slow
+readers (and long German lines) lost hints before finishing them. The timeout is gone: a fully
+revealed page now stays until **[N]** is pressed; later lines simply wait in the queue, exactly as
+before. All the escape hatches are untouched — Esc still skips the whole prologue, the
+`VegaHints` settings mute still suppresses advisor lines, and unattended screenshot runs still
+clear the panel via `DismissSpeechForCapture()` (that hook is why the "unattended panel" fallback
+the timeout was built for is no longer needed). Client-only change, no protocol/locale impact.
+
+### ★ Crafting menu says "no room for the result" up front instead of a missable toast (#1010, 2026-08-14, branch fix/craft-ui-inventory-full)
+LAN playtest: a player had unlocked the paint-tool blueprint and owned every ingredient, yet the craft
+kept failing — the backpack was full (24/24 slots), the inputs only shrink existing stacks without
+freeing one, and the new tool needs a fresh slot. The server refused correctly (`MaterialPool.CanFit`,
+the #600 protection) but the crafting UI still presented the recipe as craftable: green card, live
+button, and the only feedback was the post-click toast. `CraftingTechShipUI.CanCraft` now runs a
+client-side dry-run mirroring the server's fit check (stack top-up at max-stack, then free slots,
+cargo-hold spill only while aboard), disables the craft button and shows the existing localized
+`ui.craft.inventory_full` line in the detail pane. Client-only; the server check stays authoritative.
+
+### ★ Inventory tab: the personal-inventory sidebar entry is now "Backpack" (#1012, 2026-08-14, branch fix/inventory-backpack-label)
+The in-game menu's Inventory tab showed "Inventory" twice — as the tab label and again as the first
+sidebar entry (the `personal` category reused `ui.inventory.title`), even though other strings already
+call that container the backpack. The sidebar now reads **Backpack / Cargo Hold** (DE: Rucksack /
+Frachtraum) via a new `ui.inventory.backpack` key added to all 14 locales, wordings reused from the
+already-translated `ui.avatar.pack`. Client-only label change, no protocol impact.
+
+### ★ Browsing a menu no longer gets you kicked after 90 s (#1008, 2026-08-14, branch fix/menu-heartbeat-keepalive)
+Tonight's 3-player LAN session dropped every player repeatedly — seven `sent nothing for 90s — dropping
+the session` kicks in ~80 minutes in the host's log. The #964 heartbeat assumes "a playing client sends
+movement updates continuously", but the client went completely silent in several alive states: on foot
+with any UI panel open (crafting, map, inventory, paint editor, chat, cinematic —
+`PlayerController.Update` returned before `SendMovement()`), in space behind the star map / pad chooser /
+ship-destruction prompt (`UpdateCruise` early-outs before the 12 Hz `SendShipMove`), and on EVA with a
+menu open. Only the Esc pause menu had a keep-alive (#973). The position streams now keep flowing
+(position simply frozen) in all those states — sent before the early-outs — so the sweep only catches
+actually-dead clients. No protocol change; the server side is untouched. Cosmetic side-finding logged in
+#1008: a heartbeat kick logs `Connection N closed.` twice.
+
+### ★ Scanner: aim-gated targeting + feedback for empty/rejected scans (#1005, 2026-08-14, branch fix/scanner-stuck-1005)
+Playtest report: the scanner sometimes "sticks" — it keeps showing the last scanned subject until the
+player walks away and does something else. Root cause was proximity-only target selection:
+`ScanTarget()` picked the nearest creature within reach (8 m) with no aim or line check, so a creature
+idling anywhere nearby — behind the player, through a wall — captured every scan press; micro-fauna
+(5 m) behaved the same. Every miss was silent on top: the client sent nothing on an empty aim and the
+server built rejections but never sent them (`Rejected(...)` was returned, `HandleScan` discarded it),
+while the scan panel stays pinned on the last readout for as long as the scanner is held (#482). Now:
+creature/critter targets must sit inside a 25° aim cone (point-blank ≤ 2 m always passes), an empty
+scan shows "Scanner: no target in view." (new `ui.scan.no_target`, all 14 locales), and the server
+sends rejected scans over the existing `ScanResult` message — no protocol bump; an old client shows the
+legacy English info string. New regression test `RejectedScan_IsSentToTheClient`.
+
+### ★ Ship function blocks now look like function blocks (#1009, 2026-08-14, branch fix/1009-station-marker-blocks)
+The station marker blocks aboard ships stamped as generic world blocks — workshop as `stone`, quarters
+as `carbon`, medbay as `ice`, and the cargo hold as plain `iron_wall` (invisible against the hull) — so
+nothing in a room read as "the thing you press E on". `StationBlockKey` now maps each station to the
+existing themed machine block whose *world* function already matches the station's: medbay → `heal_tank`
+(emissive tank), workshop → `workbench`, quarters → `bed`, cargo → `crate`. No new blocks, textures or
+protocol; both the authored-layout path and the code-box starter hull share the one mapping, station
+cells stay baseline-protected (never minable), and existing saves pick the new markers up on the next
+structure rebuild. `lab`/`console` markers still default to `iron_wall` (no matching textured block yet)
+— left as a follow-up.
+
+### ★ Scan-drones no longer visibly shoot through solid terrain (#1004, 2026-08-14, branch fix/drone-fire-los)
+Playtest report: hiding in a cave, a guard scan-drone hovering outside appeared to fire at the player
+straight through the rock. The shooting was cosmetic — the server gates both the hunt lock and the
+proximity damage on `HasLineOfSight`, so no health ever moved — but the client played the laser beam +
+attack zap on `Hostile` + range alone (`DroneFireRange` 16), and `WeaponFx.Shoot` draws the beam
+unclipped, so the bolt visibly penetrated the cave wall. Ranged attack effects (scan-drone laser AND the
+bandit gunner tracer) are now gated on a render-side sight march that mirrors the server's rule:
+solid-or-fluid cells occlude, endpoints skipped, unloaded chunks read as clear. The march lives in
+`Client.Core` (`SightLine`, CinematicStageScan pattern) with five unit tests.
+
+### ★ Multiplayer-audit follow-ups: per-pilot space actions, a real pause, observer + join hygiene (#994–#999, 2026-08-14, branch fix/mp-audit-findings)
+A code audit of every multiplayer fix shipped since v2026.8.12 confirmed all of them — and surfaced six
+new findings, fixed together here. **#994 (the real gameplay bug):** space instances are shared per body
+and `instance.ShipPosition` is last-writer-wins across pilots; #955 moved collision/incoming fire to
+per-pilot `PilotSims` but left the *player-triggered* actions on the shared field — weapon range + aim,
+salvage auto-collect, tractor reach, station boarding, structure-edit range, EVA dock/interior return
+spots. All of those now read the acting pilot's own pose (`PilotPositionIn`, falls back to the shared
+field until the first pose arrives); the passive tractor tick collects per pilot into their own cargo.
+**#995:** the all-players pause froze the simulation but the dispatcher kept serving gameplay intents —
+a modified client could mine/build/move for the whole hold with every threat suspended. `PausedMayHandle`
+now gates dispatch while held (resume/chat/saves/read-only/admin stay live; spectators exempt).
+**#996:** observers got no chunks during a group pause (streaming lived below the paused early-return —
+they flew into void) and the same-body landing path claimed a communal pad + set AboardShip/RespawnPoint
+for them; both now mirror HandleTravel's #487 exemptions, and `StreamChunksToSpectators` runs in the held
+tick. **#997:** `CreateNewPlayer` read `_shipPlaced`/`_healTank` under the stale ship cursor — with
+`PlaceStarterShip=false` a brand-new player persisted the *host's* heal tank as respawn anchor. **#998:**
+the #964 join-failure guard removed only the session; it now also tears down the freshly parked ship (no
+save — half-restored state must not clobber the real one). **#999 polish:** stale-avatar nameplates now
+hide with the body (3 s, #958), the star map's free-pad count excludes your own reservation (matching
+#977), pad number keys select by pad *label* not array slot, and `ChunkStreamPerTick` clamps to a shared
+ceiling (20) so an operator config can't out-send the client's 24/frame receive budget (#963). Seven new
+regression tests across `WorldPauseTests`, `LanPlaytestRegressionTests`, `SpaceCombatTests`,
+`ReceiveBudgetTests`.
+
 ### ★ No more water surfaces hanging in mid-water in the distance (#987, 2026-08-13, branch fix/987-water-lod-fake-surfaces)
 Diving in an ocean showed flat water planes floating at chunk-boundary heights far away, joined by thin
 bright vertical strips. Two bugs, one on each side. **Server:** the distance-based vertical LOD anchors a far
@@ -7884,6 +8090,50 @@ is **pre-approved** (keys in `tools/ai-assets/.env`, run via `uv`).
 
 ---
 
+## ✅ Done (2026-08-15): storage crates take a per-crate item filter — the player decides what belongs in (#1032)
+
+Feature wish: dedicate crates to specific contents (an ore crate, a food crate) so the bulk **H** stash
+sorts itself instead of dumping everything everywhere. Aim at a placed crate / wood box and press **E**:
+a modal grid (current whitelist + the stashable items you carry) toggles what the crate accepts; *Allow
+everything* clears it. Server-authoritative: `DepositToContainer` skips non-whitelisted stacks (matched on
+`ItemKey.Base`, so dyed/re-formed variants of an allowed material still fit) and a fully-filtered stash
+answers with its own reject (`srv.loot.filter_blocked`) instead of the misleading "box is full". The
+filter persists (`container.filter` column, idempotent `ALTER TABLE` migration on SQLite + Postgres;
+the in-memory WebGL repo needed nothing) and rides `NetContainer.Filter` on the existing container
+broadcast — new intent `SetContainerFilterIntent` (tag 204), **no protocol bump** (additive). Station-
+derived runtime crates deliberately aren't persisted by the filter handler. HUD prompt at a crate now
+shows **Filter on** plus the E hint; USER_MANUAL documents the workflow (and the previously missing
+**H** key row). New `ContainerFilterTests` cover whitelist enforcement, dyed-variant matching, clearing,
+input sanitising and the persistence roundtrip.
+
+---
+
+## ✅ Done (2026-08-14): shallow ore veins split across two noise scales — the ore lottery is over (#1024)
+
+Player report (LAN playtest): *"copper is too rare — and the deposits are gigantic, but which ore you
+find is pure luck."* Measurement (a sim replicating `SelectOre` + the #472 CDF calibration 1:1) proved
+the *shape* wrong, not the amount: copper was 1.9–3.1 % of all rock, but 93–96 % of it sat in deposits
+of ≥ 64 blocks (largest ~5,000), so the first *any* ore was visible after a median 0–9 m of tunnelling
+while the first *copper* took a median ~90 m — and 14–25 % of 256 m tunnels never met any. Root cause:
+a quantile threshold over ONE smooth 9-block-scale field necessarily concentrates a vein's whole kept
+fraction into few huge blobs around rare field maxima; deposit count/size was not a knob at all.
+
+Fix in `SelectOre` (#1024): shallow starter veins (`minDepth ≤ 8`) now spend **half their budget on the
+coarse 9-block field** (mother-lode strikes stay worth prospecting for) and **half on a new fine
+4.5-block sprinkle field** (own seed offset + own per-world CDF in the calibration), so small veins turn
+up regularly wherever a player digs. Deep rarities keep the single coarse field — a rare strike should
+be a find. Both ore CDFs now sample 16,384 field points (up from 4,096): the thresholds sit at 98.5+ %
+quantiles where the smaller sample drifted a vein's kept fraction by up to ±25 % between worlds.
+
+Measured after the split (same sim): median tunnel distance to first copper 25–41 m (p90 91–169 m),
+"no copper in 256 m" tunnels 2–4 % (was 14–25 %), 16³ deep-rock pockets without copper ≤ 1 % (was
+22–29 %) — total per-ore fractions unchanged within calibration accuracy. New regression test
+`ShallowOres_TurnUpInNearlyEveryPocket_NotOnlyInRareGiantStrikes` (two seeds; verified to FAIL on the
+old distribution). No protocol change (chunks are server-streamed); like every worldgen field change,
+ore shifts inside *unmodified* terrain of existing saves.
+
+---
+
 ## ✅ Done (2026-08-13): admin commands accept player names with spaces — and any capitalisation (#980)
 
 Reported from a hosted world: teleporting to the player `mincraft Fan` was impossible. `/tpp mincraft Fan`
@@ -7910,6 +8160,31 @@ still resolves to nobody instead of to "some session".
 New tests: `AdminChatCommandTests` (client, 18 cases incl. `#designId` passing through untouched) and
 three additions to `AdminCheatTests` — spaced/differently-cased/quoted teleport targets, unknown targets
 still rejected, and `/give` to a spaced name landing in *that* player's inventory. No protocol change.
+
+---
+
+## ✅ Done (2026-08-14): dying no longer respawns you in another player's ship; pad occupancy live for everyone (#1020)
+
+From the 3-player LAN playtest: the host died and woke up in a joiner's ship, and two of the three
+players never saw the third player's landing pad as occupied on their world maps.
+
+**Respawn:** the AI damage ticks (creatures, guardian machines, bandits, destroyed speeders) call
+`RespawnPlayer` without pinning the per-player ship cursor, which still pointed at whoever the server
+served last — `RecoverToShip` then read (and even re-homed) *that* player's ship and dropped the victim
+at their heal tank. Same class as #997, which fixed it for `CreateNewPlayer` only. Fix: pin the cursor
+at the top of `RespawnPlayer` **and** `RecoverToShip` (before the first `_ship` read), and make
+`SafeSpawnPoint` resolve the ship by its `playerId` argument (`LandedFor(playerId)`) instead of the
+cursor — the void-rescue tick used it unpinned and teleported rescued players into foreign hulls too.
+
+**Pads:** `LandingPadList` was a world-entry snapshot, sent only to the arriving player. New
+`BroadcastLandingPads()` republishes it (per session — `Mine` is receiver-relative) on every occupancy
+change: landing/relocate, join, disconnect, observer on/off. Players up in space are skipped (their pad
+chooser owns the client's single pad-list slot) except the lander themselves. Server-only, existing
+message, no protocol bump — effective via the host's bundled server even for older clients.
+
+Three new `LanPlaytestRegressionTests`; `KillPlayerForTest` mirrors the unpinned AI-tick call. Follow-up
+noted in #1020: the client keeps one global pad-list slot and the world map doesn't gate on its body id,
+so a chooser reply for a padless body wipes the map's markers until re-entry.
 
 ---
 

@@ -54,6 +54,10 @@ namespace BlocksBeyondTheStars.Client
         // Quick-bar = the first N personal-inventory slots (must match the server's HotbarSlots / HudUi Slots).
         private const int QuickSlots = 9;
 
+        // The personal inventory's fixed size (quick-bar 0..8 + backpack 9..23) — must match the server's
+        // PlayerState inventory; the snapshot only carries occupied slots, so free slots derive from this.
+        private const int PersonalSlotTotal = 24;
+
         private Canvas _canvas;
         private RectTransform _sidebar, _listContent, _detail, _header;
         private Text _footer, _hint, _feedback;
@@ -635,7 +639,7 @@ namespace BlocksBeyondTheStars.Client
                     break;
                 case Mode.Inventory:
                     list.Clear();
-                    list.Add(("personal", L("ui.inventory.title"), "cat_inventory"));
+                    list.Add(("personal", L("ui.inventory.backpack"), "cat_inventory"));
                     list.Add(("cargo", L("ui.cargo.title"), "cat_cargo"));
                     break;
                 case Mode.Missions:
@@ -2649,11 +2653,7 @@ namespace BlocksBeyondTheStars.Client
             y += 34f;
             foreach (var inp in r.Inputs)
             {
-                int have = Owned(inp.Item);
-                bool ok = have >= inp.Count;
-                UiKit.AddText(_detail, 20, y, 620, 28, $"{(ok ? "✓" : "✗")} {ItemName(inp.Item)}  {have}/{inp.Count}", 20,
-                    ok ? UiKit.Ok : new Color(1f, 0.5f, 0.5f), TextAnchor.UpperLeft);
-                y += 30f;
+                y = IngredientRow(inp, y, 20);
             }
 
             y += 8f;
@@ -2770,11 +2770,7 @@ namespace BlocksBeyondTheStars.Client
 
                 foreach (var c in bp.UnlockCost)
                 {
-                    int have = Owned(c.Item);
-                    bool ok = have >= c.Count;
-                    UiKit.AddText(_detail, 20, y, 620, 26, $"{(ok ? "✓" : "✗")} {ItemName(c.Item)}  {have}/{c.Count}", 18,
-                        ok ? UiKit.Ok : new Color(1f, 0.5f, 0.5f), TextAnchor.UpperLeft);
-                    y += 28f;
+                    y = IngredientRow(c, y, 18);
                 }
             }
 
@@ -3325,17 +3321,54 @@ namespace BlocksBeyondTheStars.Client
             return y;
         }
 
+        /// <summary>One ✓/✗ have/need ingredient row plus a source tag (#1016): tells the player whether the
+        /// material is itself craftable or a raw resource to find in the world. A craftable ingredient the
+        /// player is still short of also lists what crafting the missing amount takes, indented beneath —
+        /// one recipe level deep, enough to see what to actually gather without rendering a whole tree.</summary>
+        private float IngredientRow(ItemAmount inp, float y, int size)
+        {
+            int have = Owned(inp.Item);
+            bool ok = have >= inp.Count;
+            bool craftable = Game.Content.CraftDepth(inp.Item) > 0;
+            UiKit.AddText(_detail, 20, y, 620, size + 8, $"{(ok ? "✓" : "✗")} {ItemName(inp.Item)}  {have}/{inp.Count}", size,
+                ok ? UiKit.Ok : new Color(1f, 0.5f, 0.5f), TextAnchor.UpperLeft);
+            UiKit.AddText(_detail, 20, y, 620, size + 8, L(craftable ? "ui.craft.src_craftable" : "ui.craft.src_raw"),
+                size - 4, UiKit.CyanDim, TextAnchor.UpperRight);
+            y += size + 10f;
+            if (!craftable || ok)
+            {
+                return y;
+            }
+
+            var (sub, perCraft) = DisassembleRecipe(inp.Item);
+            if (sub == null)
+            {
+                return y; // craftable per CraftDepth, but its recipe has no inputs — nothing to break down
+            }
+
+            int crafts = (inp.Count - have + perCraft - 1) / perCraft;
+            foreach (var si in sub.Inputs)
+            {
+                int need = si.Count * crafts;
+                int subHave = Owned(si.Item);
+                bool subOk = subHave >= need;
+                bool subCraftable = Game.Content.CraftDepth(si.Item) > 0;
+                UiKit.AddText(_detail, 44, y, 596, size + 4,
+                    $"{(subOk ? "✓" : "✗")} {ItemName(si.Item)}  {subHave}/{need} · {L(subCraftable ? "ui.craft.src_craftable" : "ui.craft.src_raw")}",
+                    size - 4, UiKit.CyanDim, TextAnchor.UpperLeft);
+                y += size + 6f;
+            }
+
+            return y;
+        }
+
         private float CostBlock(IEnumerable<ItemAmount> cost, string blueprint, float y)
         {
             UiKit.AddText(_detail, 8, y, 620, 26, L("ui.craft.needs"), 20, UiKit.Cyan, TextAnchor.UpperLeft, FontStyle.Bold);
             y += 32f;
             foreach (var c in cost)
             {
-                int have = Owned(c.Item);
-                bool ok = have >= c.Count;
-                UiKit.AddText(_detail, 20, y, 620, 26, $"{(ok ? "✓" : "✗")} {ItemName(c.Item)}  {have}/{c.Count}", 18,
-                    ok ? UiKit.Ok : new Color(1f, 0.5f, 0.5f), TextAnchor.UpperLeft);
-                y += 28f;
+                y = IngredientRow(c, y, 18);
             }
 
             if (!string.IsNullOrEmpty(blueprint))
@@ -3436,8 +3469,107 @@ namespace BlocksBeyondTheStars.Client
                 return false;
             }
 
+            // The result must also FIT somewhere (server: MaterialPool.CanFit, #600) — otherwise the card
+            // reads "craftable" and the button is live, but the server refuses with @inventory_full and the
+            // only feedback is an easy-to-miss toast (LAN playtest: full 24-slot backpack, the inputs only
+            // shrink stacks without freeing a slot, and the new tool needs a fresh one).
+            if (!ResultFits(r))
+            {
+                reason = L("ui.craft.inventory_full");
+                return false;
+            }
+
             reason = string.Empty;
             return true;
+        }
+
+        /// <summary>Client-side dry-run of the server's <c>MaterialPool.CanFit</c> for a single craft:
+        /// every output must fit on top of what is held right now — stack top-up first, then free slots,
+        /// spilling into the ship's cargo hold only while aboard (the exact pool the server hands the
+        /// crafted items to). Deliberately as pessimistic as the server: inputs are NOT removed first, so
+        /// a craft whose inputs would free a slot still reads as blocked — the server refuses it too.</summary>
+        private bool ResultFits(RecipeDefinition r)
+        {
+            var personal = SimStacks(Game.Personal);
+            var cargo = Game.Aboard ? SimStacks(Game.Cargo) : null;
+            int freePersonal = Mathf.Max(0, PersonalSlotTotal - personal.Count);
+            int freeCargo = cargo != null ? Mathf.Max(0, Game.CargoSlots - cargo.Count) : 0;
+
+            foreach (var output in r.Outputs)
+            {
+                if (output.Count <= 0)
+                {
+                    continue;
+                }
+
+                int maxStack = Game.Content.MaxStackOf(output.Item);
+                int remaining = SimAdd(personal, ref freePersonal, output.Item, output.Count, maxStack);
+                if (remaining > 0 && cargo != null)
+                {
+                    remaining = SimAdd(cargo, ref freeCargo, output.Item, remaining, maxStack);
+                }
+
+                if (remaining > 0)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>Mutable copy of an inventory snapshot for the fit dry-run (occupied slots only).</summary>
+        private sealed class SimStack
+        {
+            public string Item = string.Empty;
+            public int Count;
+        }
+
+        private static List<SimStack> SimStacks(BlocksBeyondTheStars.Networking.Messages.NetItemStack[] slots)
+        {
+            var list = new List<SimStack>();
+            if (slots != null)
+            {
+                foreach (var s in slots)
+                {
+                    list.Add(new SimStack { Item = s.Item, Count = s.Count });
+                }
+            }
+
+            return list;
+        }
+
+        /// <summary>Adds <paramref name="count"/> of an item to the simulated stacks the way the server's
+        /// <c>Inventory.Add</c> does (top up same-item stacks, then open new stacks in free slots) and
+        /// returns what found no room. Outputs of one recipe compete for the same free slots.</summary>
+        private static int SimAdd(List<SimStack> stacks, ref int freeSlots, string item, int count, int maxStack)
+        {
+            foreach (var s in stacks)
+            {
+                if (count <= 0)
+                {
+                    break;
+                }
+
+                if (s.Item != item || s.Count >= maxStack)
+                {
+                    continue;
+                }
+
+                int put = System.Math.Min(maxStack - s.Count, count);
+                s.Count += put;
+                count -= put;
+            }
+
+            while (count > 0 && freeSlots > 0)
+            {
+                int put = System.Math.Min(maxStack, count);
+                stacks.Add(new SimStack { Item = item, Count = put });
+                freeSlots--;
+                count -= put;
+            }
+
+            return count;
         }
 
         /// <summary>Reachability tier for the list ordering (#826): 0 = craftable now (blueprint unlocked +

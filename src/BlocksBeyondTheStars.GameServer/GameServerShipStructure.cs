@@ -97,8 +97,11 @@ public sealed partial class GameServer
         rec.Doors.Clear();
         foreach (var cell in s.DoorCells)
         {
-            rec.Doors.Add(new Vector3f(
-                rec.Origin.X + cell.X + 0.5f, rec.Origin.Y + cell.Y, rec.Origin.Z + cell.Z + 0.5f));
+            // No recorded kind (authored ships) → energy door, the sealing auto-door every authored ship
+            // uses (item 35). Self-built ships record the placed door block's kind per cell (#1021).
+            rec.Doors.Add((
+                s.DoorKinds.TryGetValue(cell, out var kind) ? kind : "energy",
+                new Vector3f(rec.Origin.X + cell.X + 0.5f, rec.Origin.Y + cell.Y, rec.Origin.Z + cell.Z + 0.5f)));
         }
 
         rec.HealTank = s.MedbayCell is { } mb
@@ -233,12 +236,18 @@ public sealed partial class GameServer
         }
     }
 
+    /// <summary>The block a station cell stamps as (#1009). Each marker is the themed machine block whose
+    /// WORLD function matches the station's — heal tank heals/anchors spawn like the medbay, the workbench
+    /// crafts like the workshop, the bed is the home-spawn quarters analogue, the crate the storage box —
+    /// so the rooms read at a glance instead of stamping as generic stone/carbon/ice. Station cells sit in
+    /// the structure baseline (never minable), so the blocks' hardness/drops/flammability never apply.</summary>
     private static string StationBlockKey(string station) => station switch
     {
-        "medbay" => "ice",
+        "medbay" => "heal_tank",
         "cockpit" => "data_cache",
-        "workshop" => "stone",
-        "quarters" => "carbon",
+        "workshop" => "workbench",
+        "quarters" => "bed",
+        "cargo" => "crate",
         _ => "iron_wall",
     };
 

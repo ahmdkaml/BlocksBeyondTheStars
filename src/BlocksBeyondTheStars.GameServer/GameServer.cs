@@ -820,7 +820,7 @@ public sealed partial class GameServer
         SendBeacons(session);
         SendBeams(session); // placed beam blocks (teleporter pads) on this body
         SendBases(session); // player-founded bases on this body (Grundstein markers)
-        SendLandingPads(session);
+        BroadcastLandingPads(session); // the arrival claimed a pad — everyone's map must show it (#1020)
         SendContainers(session);
         SendStarMap(session);
         SyncAppearance(session); // faces + body paintings both ways — appearance is per-world state (#982)
@@ -1298,6 +1298,10 @@ public sealed partial class GameServer
             // fleet polls, and freezing it would report a stale player count for as long as the pause lasts.
             // Safe to run here — with players joined it only republishes; the idle timer stays at zero.
             Guard("HostedLifecycle", deltaSeconds, TickHostedLifecycle);
+
+            // #996: an observer neither holds nor counts toward the pause (#973) and keeps flying — without
+            // streaming they run off the already-sent chunks into void until somebody resumes the world.
+            Guard("SpectatorChunks", StreamChunksToSpectators);
             return;
         }
         Guard("TickSpace", deltaSeconds, TickSpace); // space instances are keyed by location and handle their own players
@@ -1412,6 +1416,11 @@ public sealed partial class GameServer
 
     /// <summary>Test helper kept explicit so tests can drive one authoritative server tick.</summary>
     public void TickForTest(double deltaSeconds) => Tick(deltaSeconds);
+
+    /// <summary>Test entrypoint mirroring the AI damage ticks (creatures/bandits/machines/speeders): a direct
+    /// <see cref="RespawnPlayer"/> call, deliberately WITHOUT serving the victim first — those ticks run with
+    /// the ship cursor on whoever was served last, which is exactly the #1020 death-in-a-foreign-ship setup.</summary>
+    public void KillPlayerForTest(PlayerSession session, string reason) => RespawnPlayer(session, reason);
 
     /// <summary>Saves everything durably NOW, outside the autosave cadence — the same guarded path the
     /// periodic autosave takes. The browser singleplayer host calls this when the tab loses focus
@@ -1732,6 +1741,12 @@ public sealed partial class GameServer
     /// </summary>
     private void RespawnPlayer(PlayerSession session, string reason)
     {
+        // Deaths dealt by AI ticks (creatures, guardians, bandits, speeder crashes) arrive here with the
+        // ship cursor still on whoever the server served last — everything downstream (_ship/_shipPlaced/
+        // _healTank) would resolve to THAT player's ship, respawning the victim inside someone else's hull
+        // (#1020, same class as #997). Pin the cursor to the dying player before any of it is read.
+        SetCurrent(session);
+
         var p = session.State;
         bool dropSalvage = !Rules.KeepInventoryOnDeath &&
                            Rules.DeathPenalty is DeathPenalty.Normal or DeathPenalty.Hard;
@@ -1891,8 +1906,10 @@ public sealed partial class GameServer
     private void RecoverToShip(PlayerSession session, string reason, bool salvaged)
     {
         var p = session.State;
-        // The cursor is already on this session (set by the per-player tick / Serve), so _ship is this
-        // player's ship — recover to the world it's parked on.
+        // Pin the ship cursor BEFORE the first _ship read: this runs from death paths where the cursor may
+        // still point at another player (#1020) — reading (or re-homing, below) _ship then targets the
+        // wrong player's ship and recovers the victim to the world THAT ship is parked on.
+        SetCurrent(session);
         string shipHome = !string.IsNullOrEmpty(_ship?.CurrentLocationId) ? _ship.CurrentLocationId : _meta.ActiveLocationId;
 
         // Finale rule (P6): a death inside the Guardian system must not respawn the clone in the boss arena —
@@ -1995,7 +2012,29 @@ public sealed partial class GameServer
             ? System.Math.Clamp(session.ViewDistance, 1, MaxClientViewDistanceChunks)
             : System.Math.Max(1, _config.ViewDistanceChunks);
 
-    private void StreamChunks()
+    private void StreamChunks() => StreamChunks(spectatorsOnly: false);
+
+    /// <summary>Chunk streaming for observers while the world is held paused (#996): spectators don't hold
+    /// the pause and keep moving, but the paused tick skips the per-world simulation loop (and with it
+    /// <see cref="StreamChunks()"/>) entirely. Non-spectators sit in their pause menus and have no use for
+    /// chunks until the world resumes.</summary>
+    private void StreamChunksToSpectators()
+    {
+        if (!_sessions.Values.Any(s => s.Joined && s.Spectating))
+        {
+            return; // the common case — nobody is observing
+        }
+
+        foreach (var locId in OccupiedLocations())
+        {
+            if (SetActiveWorld(locId))
+            {
+                StreamChunks(spectatorsOnly: true);
+            }
+        }
+    }
+
+    private void StreamChunks(bool spectatorsOnly)
     {
         int perTickBudget = System.Math.Max(1, _config.ChunkStreamPerTick);
 
@@ -2013,6 +2052,11 @@ public sealed partial class GameServer
 
         foreach (var session in JoinedInActiveWorld())
         {
+            if (spectatorsOnly && !session.Spectating)
+            {
+                continue; // paused-world streaming (#996) serves only the observers
+            }
+
             int radius = EffectiveViewRadius(session); // per-player: honour the client's View Distance slider
             int streamRadius = radius + LoadAheadRings; // load one hazed ring past the fog edge so it fades in, not pops (#388)
             var center = WorldConstants.WorldToChunk(session.State.Position.ToBlock());
@@ -2135,8 +2179,10 @@ public sealed partial class GameServer
     /// <summary>Evicts cached chunks in the active world that fall outside the keep-range of every joined player,
     /// bounding server memory on long exploration (the cache otherwise only ever grew). The keep radius sits a
     /// few chunks beyond the streaming radius so a chunk the player can currently see is never dropped; chunks
-    /// regenerate on demand (with persisted edits re-applied) if the player returns, and the client keeps its own
-    /// copy regardless (it never unloads), so eviction is invisible. Honours <see cref="ServerConfig.MaxLoadedChunksPerPlayer"/>
+    /// regenerate on demand (with persisted edits re-applied) if the player returns. The client unloads its own
+    /// far chunks too (~384 blocks, #966), so each session's sent-set is also pruned by that session's OWN
+    /// distance below — the cache eviction alone only forgets chunks far from EVERY player, which left a
+    /// returning player's sent-set stale wherever another player kept the area alive (#1030). Honours <see cref="ServerConfig.MaxLoadedChunksPerPlayer"/>
     /// in spirit by keeping the resident set proportional to the view, not the distance travelled.</summary>
     private void SweepFarChunks()
     {
@@ -2172,6 +2218,42 @@ public sealed partial class GameServer
                 }
             }
         }
+
+        // The eviction above only forgets chunks that are far from EVERY player — but the client unloads by its
+        // own distance alone (RepositionChunks, ~384 blocks = 24 chunks). So while another player camped in an
+        // area, its chunks stayed cached AND stayed in a departed player's sent-set even though that player's
+        // client had long discarded them; on return, StreamChunks skipped them as "already sent" and the
+        // returner stood in void terrain the server actually had ("/tpp … I only see space", #1030). Prune each
+        // sent-set by ITS OWN session's anchor too. The prune radius must stay below the client's 24-chunk
+        // unload distance (or a client-unloaded chunk could survive in the sent-set); a chunk pruned while the
+        // client still holds it merely re-streams when it re-enters the view, which is idempotent.
+        foreach (var session in JoinedInActiveWorld())
+        {
+            var anchor = WorldConstants.WorldToChunk(session.State.Position.ToBlock());
+            int pruneRadius = System.Math.Min(EffectiveViewRadius(session) + 4, 20);
+            int pruneSq = pruneRadius * pruneRadius;
+            int circumference = _world.Circumference;
+            session.SentChunks.RemoveWhere(c => WrappedChunkDistanceSquared(c, anchor, circumference) > pruneSq);
+        }
+    }
+
+    /// <summary>Squared chunk-grid distance measured the short way round BOTH seams (X wraps at the chunk
+    /// circumference, Z at the latitude chunk band; Y is linear). The sent-set prune must not read a chunk just
+    /// across a seam as "far", or a player standing near a seam would re-stream half their view every sweep.</summary>
+    private static int WrappedChunkDistanceSquared(ChunkCoord a, ChunkCoord b, int circumference)
+    {
+        int dx = WrapChunkDelta(a.X - b.X, WorldConstants.ChunksAroundOf(circumference));
+        int dy = a.Y - b.Y;
+        int dz = WrapChunkDelta(a.Z - b.Z, WorldConstants.LatitudePeriodFor(circumference) / WorldConstants.ChunkSize);
+        return dx * dx + dy * dy + dz * dz;
+    }
+
+    /// <summary>Shortest signed delta on a wrapping chunk axis with the given period (chunk-unit twin of
+    /// <see cref="WorldConstants.WrapDeltaX(int,int)"/>, whose parameter is a BLOCK circumference).</summary>
+    private static int WrapChunkDelta(int delta, int period)
+    {
+        int m = ((delta % period) + period) % period;
+        return m > period / 2 ? m - period : m;
     }
 
     /// <summary>Fills a chunk message's sparse colour-modifier + shape arrays from the chunk's dyed/glowing/
@@ -2365,6 +2447,7 @@ public sealed partial class GameServer
             RemoveLandedShip(session); // the parked ship object leaves with its owner (ship-as-object)
             RemoveConstructionSite(session); // the half-built hull despawns too — it lives on in the fleet save
             BroadcastToWorld(new PlayerLeft { PlayerId = session.State.PlayerId }); // remove their avatar in-world
+            BroadcastLandingPads(); // the leaver's pad is free again — everyone's map must show it (#1020)
             if (!string.IsNullOrEmpty(loc) && loc != _meta.ActiveLocationId && !OccupiedLocations().Contains(loc))
             {
                 // Move the cursor off the world we're about to drop, back to the (always-resident) default
@@ -2420,6 +2503,29 @@ public sealed partial class GameServer
             catch (Exception ex)
             {
                 _log.Error($"Join from connection {connectionId} threw: {ex}");
+                try
+                {
+                    // #998: the join burst may already have parked the player's ship object
+                    // (SetupPlayerShip) — plain session removal left it orphaned in the world with no
+                    // owner to ever clean it up. Tear the world half down, but deliberately do NOT
+                    // save: the session may be half-restored, and persisting partial state could
+                    // clobber the real save the retry-join is about to load.
+                    if (_sessions.TryGetValue(connectionId, out var half))
+                    {
+                        LeaveSpace(half.State.PlayerId);
+                        if (SetActiveWorld(half.CurrentLocationId))
+                        {
+                            RemoveLandedShip(half);
+                            RemoveConstructionSite(half);
+                            BroadcastToWorld(new PlayerLeft { PlayerId = half.State.PlayerId });
+                        }
+                    }
+                }
+                catch (Exception cleanupEx)
+                {
+                    _log.Error($"Join-failure cleanup for connection {connectionId} threw: {cleanupEx}");
+                }
+
                 _sessions.Remove(connectionId); // never leave a half-joined session holding the name
                 SendTo(connectionId, new JoinRejected { Reason = "@srv.join.failed" });
             }
@@ -2530,12 +2636,35 @@ public sealed partial class GameServer
         return true;
     }
 
+    /// <summary>Messages still served while the world is held paused (#995): the resume path itself, chat
+    /// and voice (players coordinating the resume), diagnostics, explicit saves, harmless UI state,
+    /// read-only requests and admin commands. Everything else — movement, mining, building, crafting,
+    /// combat, trading — would mutate a world whose simulation (threats, hunger, clock) is frozen.</summary>
+    private static bool PausedMayHandle(object message) => message switch
+    {
+        PauseIntent or ChatIntent or VoiceFrame or BumpReport or SaveGameIntent
+            or SelectHotbarIntent or AdminCommandIntent => true,
+        RequestStarMap or RequestMissions or RequestCompanionsIntent
+            or RequestAllianceListIntent or RequestLandingPadsIntent => true,
+        _ => false,
+    };
+
     private void Dispatch(PlayerSession session, object message)
     {
         // Observer mode is read-only apart from block removal (issue #487): an invisible admin who could
         // craft, loot, trade or shoot would change a world nobody can see them in. Dropped silently — the
         // client already hides the affordances, so a rejection toast would just be noise.
         if (session.Spectating && !SpectatorMayHandle(message))
+        {
+            return;
+        }
+
+        // #995: while every player holds the world paused, the simulation is frozen — so gameplay intents
+        // must not mutate the frozen world either. A stock client sends nothing from its pause menu, so this
+        // only stops a modified client from mining/building/moving while everyone else's clock stands still.
+        // Control-plane traffic stays live (the resume path, chat, saves, read-only requests, admin
+        // commands), and spectators are exempt: they never hold the pause and keep moving (#996).
+        if (_paused && !session.Spectating && !PausedMayHandle(message))
         {
             return;
         }
@@ -2611,6 +2740,7 @@ public sealed partial class GameServer
             case RequestLandingPadsIntent reqPads: HandleRequestLandingPads(session, reqPads); break;
             case LootContainerIntent loot: HandleLootContainer(session, loot); break;
             case DepositContainerIntent dep: HandleDepositContainer(session, dep); break;
+            case SetContainerFilterIntent filter: HandleSetContainerFilter(session, filter); break;
             case MoveCargoItemIntent moveCargo: HandleMoveCargoItem(session, moveCargo); break;
             case ShipMoveIntent shipMove: HandleShipMove(session, shipMove); break;
             case DisassembleIntent disassemble: HandleDisassemble(session, disassemble); break;
@@ -2883,7 +3013,7 @@ public sealed partial class GameServer
         SendBases(session); // player-founded bases on the join world (Grundstein markers)
         SendAllianceList(session); // the player's alliance roster (shared station/base access + Funk tab)
         SendStoryStateOnJoin(session); // story meter + per-player beat catch-up (P0)
-        SendLandingPads(session);
+        BroadcastLandingPads(session); // the join claimed a pad — everyone's map must show it (#1020)
         SendContainers(session);
         SendExistingPresences(session); // show already-online players to the newcomer
         SyncAppearance(session);        // custom faces + body paintings, BOTH ways (#982)
@@ -2952,7 +3082,11 @@ public sealed partial class GameServer
             PlayerId = name,
             Name = name,
             Position = spawn,
-            RespawnPoint = _shipPlaced ? _healTank : spawn, // the heal-tank in the ship's Medbay
+            // #997: this runs BEFORE the new session exists, so the per-player ship cursor (_shipPlaced /
+            // _healTank) still points at whoever the server processed last — with PlaceStarterShip=false
+            // the HOST's heal tank persisted as a brand-new player's respawn anchor. The pad spawn is the
+            // only anchor that is truly theirs here; SetupPlayerShip re-anchors to their own heal tank.
+            RespawnPoint = spawn,
             AboardShip = true,
             // The very first player to join becomes the world admin (world creator).
             Role = _repo.ListPlayerIds().Count == 0
@@ -3940,13 +4074,7 @@ public sealed partial class GameServer
         // A door isn't a voxel block — it fills the (air) cell as a server door entity (Task 5 Stage 3c).
         if (IsDoorBlock(blockDef.Key))
         {
-            PlaceDoor(session, pos, blockDef.Key switch
-            {
-                "door_slide" => "slide",
-                "door_wood" => "wood", // cheap early-game hinge door, swings by hand like the metal one
-                "door_energy" => "energy", // walk-through air curtain — the door that seals a base room (#793)
-                _ => "hinge",
-            });
+            PlaceDoor(session, pos, DoorKindForBlock(blockDef.Key));
             SendInventory(session);
             return;
         }
@@ -4696,10 +4824,28 @@ public sealed partial class GameServer
                         return;
                     }
 
+                    // A position is only meaningful inside its own scene: while flying a space instance the
+                    // snap channel would fight the flight scene (same guard as /tp), and a target who is in
+                    // space or on another body has coordinates that mean nothing on the admin's body — copying
+                    // them raw dropped the admin at a spot picked from the wrong scene (#1030).
+                    if (InSpace(p.PlayerId))
+                    {
+                        Reject(session, "admin", "@srv.tp.no_surface_targets");
+                        return;
+                    }
+
+                    if (InSpace(target.State.PlayerId)
+                        || !string.Equals(target.CurrentLocationId, session.CurrentLocationId, System.StringComparison.Ordinal))
+                    {
+                        Reject(session, "admin", "@srv.tpp.not_here:" + target.State.Name);
+                        return;
+                    }
+
                     p.Position = target.State.Position;
                     // Same snap-channel rule as teleport_to_location (#414 M7).
                     Send(session, new RespawnNotice { X = p.Position.X, Y = p.Position.Y, Z = p.Position.Z, Reason = "@srv.tp.to:" + target.State.Name });
                     SendPlayerState(session);
+                    UpdateAboard(session); // jumping onto/off a ship must flip the aboard state now, not on the next move (parity with /tp)
                     CheatLog(p, $"teleported to player {target.State.Name}");
                     break;
                 }
@@ -5238,7 +5384,7 @@ public sealed partial class GameServer
             Name = sys.Name,
             MapX = sys.MapX,
             MapY = sys.MapY,
-            Bodies = sys.Bodies.Select(ToNetBody).ToArray(),
+            Bodies = sys.Bodies.Select(b => ToNetBody(b, session)).ToArray(),
         }).ToArray();
 
         var players = _sessions.Values
@@ -5314,8 +5460,10 @@ public sealed partial class GameServer
     }
 
     /// <summary>Projects a galaxy body to its network form, including its fixed-landing-pad capacity + how many
-    /// pads are currently free (item 38) so the star map can flag a full body. Non-surface bodies have 0 pads.</summary>
-    private NetBody ToNetBody(BlocksBeyondTheStars.Shared.World.CelestialBody b)
+    /// pads are currently free (item 38) so the star map can flag a full body. Non-surface bodies have 0 pads.
+    /// The free count is AS SEEN BY the receiver (#999): their own in-space reservation doesn't count against
+    /// them, matching the pad chooser (#977) and the landing itself.</summary>
+    private NetBody ToNetBody(BlocksBeyondTheStars.Shared.World.CelestialBody b, PlayerSession receiver)
     {
         int total = string.IsNullOrEmpty(b.PlanetType) ? 0 : PadCountFor(b.Id, b.PlanetType!, b.Kind);
         return new NetBody
@@ -5334,7 +5482,7 @@ public sealed partial class GameServer
             SizeBias = b.SizeBias, // #549: the client sizes this body with the same bias the server does
             RingSeed = b.RingSeed, // #596: 0 = no rings; the client renders the ring system from this
             PadsTotal = total,
-            PadsFree = total > 0 ? FreePadCount(b.Id, total) : 0,
+            PadsFree = total > 0 ? FreePadCount(b.Id, total, receiver.State.PlayerId) : 0,
         };
     }
 

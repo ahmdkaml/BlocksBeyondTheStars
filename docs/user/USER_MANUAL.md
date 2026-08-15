@@ -82,16 +82,17 @@ Last updated: 2026-08-11.
 | **R** | Repair the targeted wreck breach with the selected hotbar block (see §5 → Wrecks); with a **shaped block, furniture, ladder or stairs** selected: rotate its placement orientation (**Shift+R** cycles backwards — see §5 → Craftable block shapes) |
 | **L** | Toggle the suit headlamp (requires a `suit_lamp`) |
 | **G** | Loot the nearest container |
-| **E** | Use a nearby ship/station tile (cockpit, workshop, cargo, medbay, …); **trade with a vendor** (opens the Market); **board your hover speeder**; **beam** from a teleporter pad you're standing on |
+| **H** | Store your loose materials in the nearest storage crate / wood box (tools, weapons and equipment stay with you) |
+| **E** | Use a nearby ship/station tile (cockpit, workshop, cargo, medbay, …); **trade with a vendor** (opens the Market); **board your hover speeder**; **beam** from a teleporter pad you're standing on; **choose what belongs in a storage crate** you're aiming at (see §5 → Storage crates) |
 | **X** | Pack up (stow) a nearby deployed hover speeder back into its item |
 | **T** | Send a trade request to a nearby player |
 | **K** | Send a dock request to a nearby player |
 | **U** | Undock from a player / leave a boarded space station |
 | **V** | Toggle first / third-person camera |
 | **I** | Toggle **thermal vision** while looking through the thermal binoculars (see §5 → Binoculars) |
-| **N** | Advance the current **VEGA** dialogue line (also fast-completes the typewriter) |
+| **N** | Advance the current **VEGA** dialogue line (also fast-completes the typewriter) — rebindable; gamepad **Back**, touch **NEXT ▶** |
 | **Tab** | Open / close the gameplay menu (Inventory, Crafting, Tech, Ship, Map, Missions, Character); also closes full-screen menu screens such as the Codex |
-| **M** | Toggle the world map (top-down planet view; click to set a waypoint) |
+| **M** | Toggle the world map (top-down planet view; click to set a waypoint) — rebindable; touch **MAP** |
 | **Enter** | Open the chat box (Esc cancels) |
 | **J** | Hide / show the chat scrollback for this session (rebindable; see also Settings → Comfort → Chat display) |
 | **V** (hold) | Push-to-talk voice (if the server enabled voice; needs a radio; key is configurable) |
@@ -117,10 +118,16 @@ buttons — retuning is tracked in issue #195):
 | **(X)** | Use / board / interact |
 | **(Y)** | Toggle first / third-person camera |
 | **R3** (click the right stick) | **Hotbar slot actions** on the selected slot (see §5) — stick navigates the menu, **(A)** picks, **(B)** closes |
+| **L3** (click the left stick) | **Actions** — a list of everything you can do right now (rotate the held block, trade / dock with the player beside you, undock, loot / stash, repair, lamp, thermal vision, deploy a station in EVA, leave / refuel the speeder, …); stick navigates, **(A)** picks, **(B)** closes |
+| **Back / View** | **VEGA: continue** — advance or dismiss the ship AI's line (the same as **N** on the keyboard) |
 | **Start** | Open / close the gameplay menu |
 
-In menus, the left stick / d-pad navigates, **(A)** confirms and **(B)** goes back. The right stick also
-steers the ship in flight. Direct hotbar number-key picks remain keyboard-only.
+In menus, the left stick / d-pad navigates, **(A)** confirms and **(B)** goes back — that includes the
+landing-pad chooser (pick a pad with the stick, **(A)** lands, **(B)** cancels), trade and docking
+requests, the bandit demand, and both maps. The right stick also steers the ship in flight; the d-pad
+cycles the **ship-systems bar** (laser ↔ tractor beam) at the helm. Direct hotbar number-key picks remain
+keyboard-only. Verbs without a face button — everything in the **L3 Actions** list — can also be given
+their own button in Settings.
 
 **Rebinding:** every control row in **Settings** has two buttons — the keyboard key and the pad button.
 Tap the pad button and press any controller button to rebind it (actions marked **—** have no pad button
@@ -135,11 +142,15 @@ buttons swap with what you're doing:
 |---|---|
 | **Left stick** (bottom-left) | Move / thrust / steer |
 | **Drag** anywhere on the right | Look / steer the ship |
-| **◄ ►** | Cycle hotbar slot (ship-systems bar in flight) |
+| **◄ ►** | Cycle hotbar slot (ship-systems bar — laser ↔ tractor beam — at the helm) |
 | **…** (beside ►) | **Hotbar slot actions** on the selected slot (see §5); shown only when the menu can open |
+| **ACT** (beside ◄) | **Actions** — a list of everything you can do right now: rotate the held block, trade / dock with the player beside you, undock, loot / stash, repair a wreck, lamp, thermal vision, deploy a station in EVA, leave / refuel the speeder, … Tap an entry to do it. Shown only when something applies |
+| **NEXT ▶** (top-centre) | **VEGA: continue** — advance or dismiss the ship AI's line; shown only while a line is up |
 | **≡** (top-right) | Open / close the gameplay menu |
-| *On foot:* **JUMP · MINE (hold) · PLACE · USE · DOWN · CHAT** | Jump · mine · place · use/board · descend · open chat |
-| *Flying / EVA:* **FIRE (hold) · LAND · SHIP · AUTO · VIEW · USE · UP · DOWN** | Fire · landing pads · walk the ship · autopilot · camera · dock/board · float up/down |
+| *On foot:* **JUMP · MINE (hold) · PLACE · USE · DOWN · CHAT · VIEW · MAP** | Jump · mine · place · use/board · descend · open chat · camera · planet map |
+| *On foot, when it applies:* **ROTATE · ATTACK** | Rotate the held block's placement (appears while a rotatable block is selected) · swing / fire the held weapon (hold on the Guardian core to breach it) |
+| *Flying:* **FIRE (hold) · LAND · SHIP · AUTO · MAP · VIEW · USE · UP · DOWN** | Fire · landing pads · walk the ship · autopilot · system chart · camera · dock/board · float up/down |
+| *EVA (spacewalk):* **FIRE (hold) · PLACE · DEPLOY · VIEW · USE · UP · DOWN** | Mine · place the selected block · deploy a station core · camera · board · float up/down |
 | *Speeder:* **BOOST (hold) · JUMP · EXIT · FUEL** | Boost · hop · dismount · refuel |
 
 Menus are tapped directly. Text entry (your name, chat): on a native tablet the on-screen keyboard opens
@@ -188,7 +199,8 @@ separate unlock; admins can still disable it through server world rules.
 - **HUD** — health/oxygen/hunger/energy, hotbar, location, compass, scan readout (bottom-left), and the
   wreck panel (right) when near a repairable wreck.
 - **VEGA panel** — the ship AI speaks through a typewriter speech panel with a persistent **objective
-  chip** (live progress, e.g. "mine 1/3") during onboarding. Advance lines with **N**. Advisor hints can
+  chip** (live progress, e.g. "mine 1/3") during onboarding. Advance lines with **N** — a line stays on
+  screen until you do (no auto-dismiss), and further lines wait in the queue. Advisor hints can
   be muted (Settings → VEGA hints); the tutorial can be skipped or **restarted** from the Settings tab.
 
 ---
@@ -234,6 +246,11 @@ separate unlock; admins can still disable it through server world rules.
   pockets, craft **cooked meat** at the fire (far more filling than raw, and it heals).
 - **Wood box** (hand-crafted from logs): early-game storage sharing the crate's stash/loot keys, but it
   only holds a few kinds of material (8 stacks) — the workshop's iron crate stores everything.
+- **Storage crates — choose what goes in:** aim at a placed crate or wood box and press **E** to pick
+  which items belong in it (an ore crate, a food crate, …). From then on **H** only stores the chosen
+  items there — walk your loot past a row of dedicated crates and it sorts itself. The HUD prompt shows
+  **Filter on** at such a crate; select nothing in the dialog (or hit *Allow everything*) to go back to
+  accepting it all. Dyed or re-formed variants of a chosen material count as that material.
 - **Armor**: each piece (chest/legs/helmet) adds resistance, summed and capped (~75%).
 
 ### Fire

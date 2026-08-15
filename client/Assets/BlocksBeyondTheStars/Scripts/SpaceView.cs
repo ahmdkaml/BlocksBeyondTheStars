@@ -1041,6 +1041,19 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
+            // Report our position so the server runs authoritative collisions against asteroids/entities and
+            // the other players in this instance can see our ship. Sent BEFORE the menu/prompt early-outs
+            // below: behind the star map, the pad chooser or the destruction prompt this is the client's only
+            // payload, and the server drops sessions silent for 90 s (#964/#1008). After the ship was
+            // destroyed the server has already removed us from the instance and ignores the intent — but
+            // receiving it still stamps the heartbeat.
+            _moveSendTimer -= Time.deltaTime;
+            if (_moveSendTimer <= 0f)
+            {
+                _moveSendTimer = 0.08f; // ~12 Hz
+                Game.Network?.SendShipMove(_ship.transform.localPosition, _yaw);
+            }
+
             // Hold position while a menu is open (e.g. the Tab star map, used to hyperspace-jump to another
             // system), or while the ship-destruction "Weiter" prompt is up, so flight input doesn't fight
             // the UI / swing the camera behind the modal.
@@ -1053,7 +1066,8 @@ namespace BlocksBeyondTheStars.Client
             // No accidental drop to the surface — you choose where you touch down.
             if (_confirmLand)
             {
-                if (Input.GetKeyDown(KeyCode.Escape))
+                // Esc — or pad B (#1043): the land map is stick-navigable, so the pad needs a back-out too.
+                if (Input.GetKeyDown(KeyCode.Escape) || Input.GetKeyDown(KeyCode.JoystickButton1))
                 {
                     Game.MarkMenuInputHandled(); // this Esc is consumed — don't also pop the quit prompt (#413 N1)
                     CancelLandChooser();
@@ -1086,9 +1100,13 @@ namespace BlocksBeyondTheStars.Client
                     ShowLandMap(pads);
                     for (int i = 0; i < pads.Length && i < 9; i++)
                     {
-                        if ((Input.GetKeyDown(KeyCode.Alpha1 + i) || Input.GetKeyDown(KeyCode.Keypad1 + i)) && !pads[i].Occupied)
+                        // #999: key N selects the pad LABELLED N (Index + 1), not array slot N — today the
+                        // server sends pads in index order so both agree, but any reordered/filtered list
+                        // would silently land the ship on the wrong pad.
+                        var pad = System.Array.Find(pads, p => p.Index == i);
+                        if (pad != null && (Input.GetKeyDown(KeyCode.Alpha1 + i) || Input.GetKeyDown(KeyCode.Keypad1 + i)) && !pad.Occupied)
                         {
-                            LandOnPad(pads[i].Index);
+                            LandOnPad(pad.Index);
                             break;
                         }
                     }
@@ -1240,15 +1258,6 @@ namespace BlocksBeyondTheStars.Client
                 }
             }
 
-            // Report our position so the server runs authoritative collisions against asteroids/entities and
-            // the other players in this instance can see our ship.
-            _moveSendTimer -= Time.deltaTime;
-            if (_moveSendTimer <= 0f)
-            {
-                _moveSendTimer = 0.08f; // ~12 Hz
-                Game.Network?.SendShipMove(_ship.transform.localPosition, _yaw);
-            }
-
             // Boarding: find the nearest station in range; E boards it (the server validates the range).
             _nearStationId = null;
             _nearStationSq = float.MaxValue;
@@ -1306,6 +1315,22 @@ namespace BlocksBeyondTheStars.Client
                 if (Input.GetKeyDown(KeyCode.Alpha1 + n))
                 {
                     _selectedSystem = n;
+                }
+            }
+
+            // Device-neutral cycle (#1044): the hotbar scroll — mouse wheel, pad d-pad ◄►, touch ◄► — steps
+            // through the systems, wrapping. Neither pad nor touch has number keys, and the wheel is
+            // otherwise idle while piloting; the EVA hotbar already accepts the same scroll.
+            if (_systems.Count > 1)
+            {
+                float step = InputMap.HotbarScroll();
+                if (step > 0f)
+                {
+                    _selectedSystem = (_selectedSystem + _systems.Count - 1) % _systems.Count;
+                }
+                else if (step < 0f)
+                {
+                    _selectedSystem = (_selectedSystem + 1) % _systems.Count;
                 }
             }
 
@@ -1401,6 +1426,7 @@ namespace BlocksBeyondTheStars.Client
             var panel = UiKit.AddPanel(_ui.transform, px, py, pw, ph, new Color(0.03f, 0.07f, 0.13f, 0.97f));
             panel.raycastTarget = true; // eat clicks behind the map
             _landMapGo = panel.gameObject;
+            UiNav.Enable(_landMapGo); // pad: the stick walks the pad markers + Cancel, A lands (#1043) — no number keys on a pad
 
             string title = loc != null ? loc.Get("ui.space.pad_choose") : "Choose a landing pad";
             string bodyName = string.IsNullOrEmpty(_landTargetName) ? string.Empty : $" — {_landTargetName}";
@@ -1780,7 +1806,22 @@ namespace BlocksBeyondTheStars.Client
         /// Float up to the parked ship (or a station) and press E to board — no take-off animation.</summary>
         private void UpdateEva()
         {
-            if (_ship == null || Game.MenuOpen)
+            if (_ship == null)
+            {
+                return;
+            }
+
+            // Report the suit's pose so the other players in this instance see us floating (the server tags
+            // it as an EVA from our InEva state). Sent BEFORE the menu early-out below — behind an open panel
+            // this is the client's only payload, and the server drops sessions silent for 90 s (#964/#1008).
+            _moveSendTimer -= Time.deltaTime;
+            if (_moveSendTimer <= 0f)
+            {
+                _moveSendTimer = 0.08f;
+                Game.Network?.SendShipMove(_evaPos, _evaYaw);
+            }
+
+            if (Game.MenuOpen)
             {
                 return;
             }
@@ -1841,15 +1882,6 @@ namespace BlocksBeyondTheStars.Client
             if (!Game.MenuOpen && InputMap.Down(InputAction.EvaDeployStation))
             {
                 Game.Network?.SendDeployStationCore();
-            }
-
-            // Report the suit's pose so the other players in this instance see us floating (the server tags it
-            // as an EVA from our InEva state).
-            _moveSendTimer -= Time.deltaTime;
-            if (_moveSendTimer <= 0f)
-            {
-                _moveSendTimer = 0.08f;
-                Game.Network?.SendShipMove(_evaPos, _evaYaw);
             }
 
             // Board targets: the parked ship, or the nearest station in range (whichever is closer wins on E).

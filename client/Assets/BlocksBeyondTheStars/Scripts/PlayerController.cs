@@ -76,6 +76,82 @@ namespace BlocksBeyondTheStars.Client
 
         private const int HotbarSlots = 9;
 
+        // ---- Applicability probes for device-neutral UI (#1042/#1043) --------------------------------
+        // The touch layer and the context-actions list show a verb only while it would do something. Each
+        // probe mirrors the precondition its verb's handler checks, so a button never offers a dead action.
+        // They are cheap (a few list scans) and are polled once per frame at most.
+
+        /// <summary>The selected hotbar item has a placement orientation to cycle (RotateShape applies).</summary>
+        public bool HeldRotatable => Game != null && HeldPlaceShape(Game.ItemInSlot(Game.SelectedHotbarSlot), out _) > 0;
+
+        /// <summary>The selected hotbar item is a weapon (PrimaryFire has something better than fists to swing).</summary>
+        public bool HoldsWeapon =>
+            Game?.Content?.GetItem(Game.ItemInSlot(Game.SelectedHotbarSlot))?.Tool?.Kind
+                == BlocksBeyondTheStars.Shared.Definitions.ToolKind.Weapon;
+
+        /// <summary>A lootable container is within loot reach (LootContainer applies).</summary>
+        public bool NearContainer => NearestContainerId(crateOnly: false) != null;
+
+        /// <summary>A storage crate is within reach (DepositToCrate applies).</summary>
+        public bool NearCrate => NearestContainerId(crateOnly: true) != null;
+
+        /// <summary>A parked speeder of ours is within stow range (StowVehicle applies).</summary>
+        public bool NearOwnParkedSpeeder
+        {
+            get
+            {
+                if (Game?.Speeders == null)
+                {
+                    return false;
+                }
+
+                float rangeSq = SpeederStowRange * SpeederStowRange;
+                foreach (var s in Game.Speeders)
+                {
+                    if (s != null && s.OwnerId == Game.LocalPlayerId && string.IsNullOrEmpty(s.DriverId)
+                        && (Game.ScenePos(s.X, s.Y, s.Z) - transform.position).sqrMagnitude < rangeSq)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
+
+        /// <summary>The binoculars are raised (ToggleThermal applies).</summary>
+        public bool BinocularsRaised => _optic != null && _optic.Raised;
+
+        /// <summary>A wreck is registered for repair (RepairWreck applies — the aim check happens on press).</summary>
+        public bool NearWreck => Game != null && Game.Wreck != null;
+
+        private string NearestContainerId(bool crateOnly)
+        {
+            if (Game?.Containers == null)
+            {
+                return null;
+            }
+
+            string nearest = null;
+            float bestSq = 6f * 6f; // loot / deposit reach — same radius the handlers use
+            foreach (var c in Game.Containers)
+            {
+                if (crateOnly && c.Kind != "crate")
+                {
+                    continue;
+                }
+
+                float d = (Game.ScenePos(c.X + 0.5f, c.Y + 0.5f, c.Z + 0.5f) - transform.position).sqrMagnitude; // seam-aware
+                if (d < bestSq)
+                {
+                    bestSq = d;
+                    nearest = c.Id;
+                }
+            }
+
+            return nearest;
+        }
+
         private static readonly Vector3 FirstPersonEye = new Vector3(0f, 1.6f, 0f);
         private static readonly Vector3 ThirdPersonEye = new Vector3(0f, 1.9f, -3.5f);
 
@@ -362,6 +438,10 @@ namespace BlocksBeyondTheStars.Client
                     ApplyGravityOnly(); // seated: the controller is disabled and the chair holds us anyway
                 }
 
+                // Keep the position stream flowing (position simply frozen): behind an open panel this is
+                // the client's ONLY payload, and the server drops sessions silent for 90 s (#964) — browsing
+                // the crafting menu or painting an avatar must not read as a dead client (#1008).
+                SendMovement();
                 return;
             }
 
@@ -808,18 +888,7 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
-            string nearest = null;
-            float bestSq = 6f * 6f; // loot reach
-            foreach (var c in Game.Containers)
-            {
-                float d = (Game.ScenePos(c.X + 0.5f, c.Y + 0.5f, c.Z + 0.5f) - transform.position).sqrMagnitude; // seam-aware
-                if (d < bestSq)
-                {
-                    bestSq = d;
-                    nearest = c.Id;
-                }
-            }
-
+            string nearest = NearestContainerId(crateOnly: false);
             if (nearest != null)
             {
                 // Success cue moved to the container-broadcast diff (#751): playing it here, before the
@@ -837,23 +906,7 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
-            string nearest = null;
-            float bestSq = 6f * 6f;
-            foreach (var c in Game.Containers)
-            {
-                if (c.Kind != "crate")
-                {
-                    continue;
-                }
-
-                float d = (Game.ScenePos(c.X + 0.5f, c.Y + 0.5f, c.Z + 0.5f) - transform.position).sqrMagnitude;
-                if (d < bestSq)
-                {
-                    bestSq = d;
-                    nearest = c.Id;
-                }
-            }
-
+            string nearest = NearestContainerId(crateOnly: true);
             if (nearest != null)
             {
                 ClientAudio.Instance?.Cue("loot");
@@ -1117,13 +1170,29 @@ namespace BlocksBeyondTheStars.Client
             return true;
         }
 
-        /// <summary>Scans the nearest creature (threat assessment) or, failing that, the block in view.</summary>
+        private const float ScanConeDegrees = 25f;      // generous — creatures move; still excludes behind/beside
+        private const float ScanPointBlankSq = 2f * 2f; // this close the angle test degenerates — always scannable
+
+        /// <summary>Whether a scan target is inside the aim cone around the view direction, or point-blank
+        /// (standing on it). Proximity alone must not qualify a target: a creature idling anywhere within
+        /// reach — behind the player, through a wall — used to capture every scan press, which read as
+        /// "the scanner is stuck on the last readout" (#1005).</summary>
+        private static bool InScanCone(Vector3 eye, Vector3 fwd, Vector3 at)
+        {
+            var to = at - eye;
+            return to.sqrMagnitude <= ScanPointBlankSq || Vector3.Angle(fwd, to) <= ScanConeDegrees;
+        }
+
+        /// <summary>Scans the aimed-at creature (threat assessment) or, failing that, the block in view.</summary>
         private void ScanTarget()
         {
             if (Game?.Network == null || Camera == null)
             {
                 return;
             }
+
+            Vector3 eye = Camera.transform.position;
+            Vector3 fwd = Camera.transform.forward;
 
             string speciesId = null;
             Vector3 scanPos = default;
@@ -1132,7 +1201,7 @@ namespace BlocksBeyondTheStars.Client
             {
                 var cp = Game.ScenePos(c.X, c.Y, c.Z); // seam-aware (longitude wraps)
                 float d = (cp - transform.position).sqrMagnitude;
-                if (d < bestSq)
+                if (d < bestSq && InScanCone(eye, fwd, cp))
                 {
                     bestSq = d;
                     speciesId = c.SpeciesId;
@@ -1147,11 +1216,12 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
-            // Micro-fauna (#757): when no real creature is in reach, the nearest ambient critter answers.
+            // Micro-fauna (#757): when no real creature is in view, the nearest aimed-at critter answers.
             // Critters are client-local, so the kind is resolved here and the server only validates that it
             // exists (same trust level as the creature scan above). Shorter reach — they're tiny.
             if (MicroFaunaView.Instance != null
-                && MicroFaunaView.Instance.NearestCritter(Game.PlayerPosition, 5f, out string critterKey, out var critterAt))
+                && MicroFaunaView.Instance.NearestCritter(Game.PlayerPosition, 5f, out string critterKey, out var critterAt,
+                    world => InScanCone(eye, fwd, Game.ScenePos(world.x, world.y, world.z))))
             {
                 Game.Network.SendScan("microfauna", critterKey);
                 Weapons?.Pulse(Game.ScenePos(critterAt.x, critterAt.y, critterAt.z), new Color(0.4f, 0.85f, 1f));
@@ -1160,17 +1230,17 @@ namespace BlocksBeyondTheStars.Client
 
             // Voxel ray-march INCLUDING fluids, so you can scan a water/lava block too (they have no collider, so
             // a Physics.Raycast passes straight through them — that's why water "couldn't be scanned", B26).
-            if (!AimBlock(out var b, out _, includeFluids: true))
-            {
-                return;
-            }
-
-            var def = Game.Content?.BlockById(Game.World.GetBlock(b.x, b.y, b.z));
-            if (def != null)
+            if (AimBlock(out var b, out _, includeFluids: true)
+                && Game.Content?.BlockById(Game.World.GetBlock(b.x, b.y, b.z)) is { } def)
             {
                 Game.Network.SendScan("block", def.Key);
                 Weapons?.Pulse(new Vector3(b.x + 0.5f, b.y + 0.5f, b.z + 0.5f), new Color(0.4f, 0.85f, 1f));
+                return;
             }
+
+            // Nothing scannable in view — say so. The scan panel stays pinned on the previous readout while
+            // the scanner is held, so a silent miss looks like the scanner stopped working (#1005).
+            Game.ShowMessage(Game.Localizer?.Get("ui.scan.no_target") ?? "Scanner: no target in view.");
         }
 
         private BinocularOptic _optic;
@@ -1319,6 +1389,21 @@ namespace BlocksBeyondTheStars.Client
                     Game.StationName,
                     name => Game.Network?.SendSetStationName(stationId, name));
                 return;
+            }
+
+            // A storage crate you're aiming at → choose what belongs in it (#1032). Matched by the
+            // container list, not the block alone, so a crate block that hasn't registered yet no-ops.
+            if (AimBlock(out var crateHit, out _)
+                && Game.Content?.BlockById(Game.World.GetBlock(crateHit.x, crateHit.y, crateHit.z))?.Key is "crate" or "wood_crate")
+            {
+                foreach (var c in Game.Containers)
+                {
+                    if (c.Kind == "crate" && (int)c.X == crateHit.x && (int)c.Y == crateHit.y && (int)c.Z == crateHit.z)
+                    {
+                        ContainerFilterUi.Instance?.Open(c.Id, c.Filter);
+                        return;
+                    }
+                }
             }
 
             // A heal tank — or its low-tech precursor, the bed (#804) — you're aiming at → make it your
@@ -2827,9 +2912,14 @@ namespace BlocksBeyondTheStars.Client
                 if (def != null && !string.IsNullOrEmpty(def.PlacesBlock))
                 {
                     // Placing INSIDE a parked ship furnishes the cabin: route to a structure edit (the
-                    // block becomes part of the ship and persists with it), not a world place.
+                    // block becomes part of the ship and persists with it), not a world place. Only when the
+                    // aim ray hit THAT ship, though — the bounding box also covers the ground-level air ring
+                    // around the hull, and rerouting a place that targets a world block (the ground beside a
+                    // parked ship) made any block "unplaceable" there: a foreign ship answers none_here, the
+                    // own hull no_anchor (#1023). Aiming at the ground → world place; the server still guards
+                    // the real interior authoritatively.
                     var boundsShip = Game.LandedShipBoundsAt(placeCell.x, placeCell.y, placeCell.z, out var lp);
-                    if (boundsShip != null)
+                    if (boundsShip != null && boundsShip == aimedShip)
                     {
                         Game.Network.SendStructureEdit(boundsShip.StructureId, lp.X, lp.Y, lp.Z, mine: false, item);
                         TriggerSwing();
