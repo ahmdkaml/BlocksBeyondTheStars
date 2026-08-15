@@ -2,20 +2,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
 
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
+
 using BlocksBeyondTheStars.Networking;
 using BlocksBeyondTheStars.Networking.Messages;
 using BlocksBeyondTheStars.Networking.Transport;
 using BlocksBeyondTheStars.Persistence;
 using BlocksBeyondTheStars.Shared.Configuration;
 using BlocksBeyondTheStars.Shared.Content;
-using BlocksBeyondTheStars.Shared.Security;
-using BlocksBeyondTheStars.Shared.World;
-using BlocksBeyondTheStars.WorldGeneration;
-using BlocksBeyondTheStars.WorldHost;
 using Xunit;
 using SvGameServer = BlocksBeyondTheStars.GameServer.GameServer;
 
@@ -65,12 +58,12 @@ public sealed class NetCodecServerHardeningTests : IDisposable
 
         public void Send(int connectionId, byte[] payload, DeliveryMode mode)
         {
-            if (NetCodec.Decode(payload) is { } message) {Sent.Add((connectionId, message));}
+            if (NetCodec.Decode(payload) is { } message) { Sent.Add((connectionId, message)); }
         }
 
         public void Broadcast(byte[] payload, DeliveryMode mode)
         {
-            if (NetCodec.Decode(payload) is { } message) {Sent.Add((int.MinValue, message));}
+            if (NetCodec.Decode(payload) is { } message) { Sent.Add((int.MinValue, message)); }
         }
     }
 
