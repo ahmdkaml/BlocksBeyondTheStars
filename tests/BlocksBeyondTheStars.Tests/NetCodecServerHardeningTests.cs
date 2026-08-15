@@ -218,9 +218,12 @@ public sealed class NetCodecServerHardeningTests : IDisposable
             Assert.Contains(transport.Sent, entry => entry.Conn == 1 && entry.Msg is JoinAccepted);
             transport.Sent.Clear();
 
-            // -1 explicitly means "stow into backpack"; verify it survives dispatch without crashing.
+            // -1 explicitly means "stow into backpack"; verify it processes an inventory update.
             transport.Receive(1, new MoveItemIntent { FromSlot = 0, ToSlot = -1 });
+            Assert.Contains(transport.Sent, entry => entry.Conn == 1 && entry.Msg is InventoryUpdate);
+            transport.Sent.Clear();
 
+            // Server remains functional after the stow.
             transport.Receive(1, new RequestStarMap());
             Assert.Contains(transport.Sent, entry => entry.Conn == 1 && entry.Msg is StarMapData);
         }
