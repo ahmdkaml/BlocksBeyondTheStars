@@ -259,6 +259,7 @@ public sealed class NetCodecTests
         [206] = typeof(StationsInReach),
         [207] = typeof(LocateStationIntent),
         [208] = typeof(StationLocation),
+        [209] = typeof(SetLampIntent),
     };
 
     [Fact]

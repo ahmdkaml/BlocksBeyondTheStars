@@ -412,6 +412,10 @@ public static class NetCodec
         Register(206, typeof(StationsInReach));          // Server -> Client
         Register(207, typeof(LocateStationIntent));      // Client -> Server
         Register(208, typeof(StationLocation));          // Server -> Client
+
+        // Suit lamp state (#1077): lets VEGA's context tips know the lamp is off in the dark. Informational
+        // only — a server without this tag drops the message and simply never gives that tip.
+        Register(209, typeof(SetLampIntent));            // Client -> Server
     }
 
     private static void Register(byte tag, Type type)
