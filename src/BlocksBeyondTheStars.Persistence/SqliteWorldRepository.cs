@@ -511,6 +511,7 @@ public sealed class SqliteWorldRepository : IWorldRepository
 
     // --- Players ---
 
+
     public PlayerState? LoadPlayer(string playerId)
     {
         lock (_gate)
@@ -523,10 +524,26 @@ public sealed class SqliteWorldRepository : IWorldRepository
             {
                 return null;
             }
+            PlayerSnapshot snapshot;
+            try
+            {
+                snapshot = JsonSerializer.Deserialize<PlayerSnapshot>(json, JsonOptions)
+                    ?? throw new JsonException("Player JSON deserialized to null.");
 
-            var snapshot = JsonSerializer.Deserialize<PlayerSnapshot>(json, JsonOptions)!;
+                if (string.IsNullOrWhiteSpace(snapshot.Name))
+                {
+                    throw new JsonException("Player JSON is missing a player name.");
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidDataException(
+                    $"Failed to load player '{playerId}': persisted player JSON is invalid.",
+                    ex);
+            }
+
             return StateMapper.FromSnapshot(snapshot);
-        }
+            }
     }
 
     public void SavePlayer(PlayerState player)
