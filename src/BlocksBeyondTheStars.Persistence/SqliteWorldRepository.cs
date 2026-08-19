@@ -543,7 +543,7 @@ public sealed class SqliteWorldRepository : IWorldRepository
             }
 
             return StateMapper.FromSnapshot(snapshot);
-            }
+        }
     }
 
     public void SavePlayer(PlayerState player)

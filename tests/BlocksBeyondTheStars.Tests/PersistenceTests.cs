@@ -346,12 +346,12 @@ public sealed class PersistenceTests : IDisposable
                 break;
 
             case "truncated":
-            {
-                byte[] bytes = File.ReadAllBytes(dbPath);
-                int newLength = Math.Max(1, bytes.Length / 2);
-                File.WriteAllBytes(dbPath, bytes[..newLength]);
-                break;
-            }
+                {
+                    byte[] bytes = File.ReadAllBytes(dbPath);
+                    int newLength = Math.Max(1, bytes.Length / 2);
+                    File.WriteAllBytes(dbPath, bytes[..newLength]);
+                    break;
+                }
 
             default:
                 throw new ArgumentOutOfRangeException(nameof(corruption), corruption, null);
