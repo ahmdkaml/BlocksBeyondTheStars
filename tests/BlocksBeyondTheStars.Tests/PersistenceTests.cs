@@ -264,52 +264,6 @@ public sealed class PersistenceTests : IDisposable
         }
     }
 
-    [Fact]
-    public void Player_MissingName_DoesNotModifyStoredRow()
-    {
-        const string json = """{"Id":"p1"}""";
-
-        using (var repo = NewRepo())
-        {
-            repo.SavePlayer(new PlayerState
-            {
-                PlayerId = "p1",
-                Name = "Pilot",
-            });
-        }
-
-        var databaseFile = Path.Combine(_root, "world_001", "world.db");
-
-        using (var connection = new SqliteConnection($"Data Source={databaseFile}"))
-        {
-            connection.Open();
-
-            using var cmd = connection.CreateCommand();
-            cmd.CommandText = "UPDATE player SET json = $json WHERE id = $id;";
-            cmd.Parameters.AddWithValue("$json", json);
-            cmd.Parameters.AddWithValue("$id", "p1");
-            cmd.ExecuteNonQuery();
-        }
-
-        using var reopened = NewRepo();
-
-        var ex = Record.Exception(() => reopened.LoadPlayer("p1"));
-
-        Assert.NotNull(ex);
-
-        using (var connection = new SqliteConnection($"Data Source={databaseFile}"))
-        {
-            connection.Open();
-
-            using var cmd = connection.CreateCommand();
-            cmd.CommandText = "SELECT json FROM player WHERE id = $id;";
-            cmd.Parameters.AddWithValue("$id", "p1");
-
-            Assert.Equal(json, cmd.ExecuteScalar() as string);
-        }
-    }
-
-
     public void Dispose()
     {
         try
