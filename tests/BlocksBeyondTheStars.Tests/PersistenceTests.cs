@@ -219,10 +219,11 @@ public sealed class PersistenceTests : IDisposable
         Assert.Equal((ushort)5, reopened.LoadChunkEdits("rocky", new ChunkCoord(0, 0, 0)).Single().Block);
     }
     [Theory]
-    [InlineData("null")]
     [InlineData("invalid json")]
+    [InlineData("null")]
     [InlineData("""{"Id":"p1","Name":"Pilot","Health":"lots"}""")]
-    public void Player_CorruptJson_DoesNotModifyStoredRow(string json)
+    [InlineData("""{"Id":"p1"}""")]
+    public void Player_DamagedJson_DoesNotModifyStoredRow(string json)
     {
         using (var repo = NewRepo())
         {
@@ -260,10 +261,143 @@ public sealed class PersistenceTests : IDisposable
             cmd.CommandText = "SELECT json FROM player WHERE id = $id;";
             cmd.Parameters.AddWithValue("$id", "p1");
 
-            Assert.Equal(json, cmd.ExecuteScalar() as string);
+            var storedJson = cmd.ExecuteScalar() as string;
+
+            Assert.Equal(json, storedJson);
         }
     }
+    [Theory]
+    [InlineData("non-sqlite")]
+    [InlineData("truncated")]
+    public void Initialize_WithCorruptedDatabase_ThrowsWithoutOverwritingFile(string corruption)
+    {
+        string dbPath;
 
+        using (var repo = NewRepo())
+        {
+            repo.SaveMetadata(new WorldMetadata
+            {
+                WorldName = "Alpha",
+                Seed = 42,
+            });
+
+            dbPath = Path.Combine(_root, "world_001", "world.db");
+        } // SQLite connection is definitely closed here
+
+        ApplyCorruption(dbPath, corruption);
+
+        var before = File.ReadAllBytes(dbPath);
+
+        using (var reopened = new SqliteWorldRepository(
+            new SaveGamePaths(_root, "world_001")))
+        {
+            Assert.ThrowsAny<Exception>(() => reopened.Initialize());
+        }
+
+        var after = File.ReadAllBytes(dbPath);
+
+        Assert.Equal(before, after);
+    }
+
+    [Fact]
+    public void Initialize_WithMultipleFlippedDatabaseBytes_PreservesFile()
+    {
+        string dbPath;
+
+        using (var repo = NewRepo())
+        {
+            repo.SaveMetadata(new WorldMetadata
+            {
+                WorldName = "Alpha",
+                Seed = 42,
+            });
+
+            dbPath = Path.Combine(_root, "world_001", "world.db");
+        }
+
+        byte[] bytes = File.ReadAllBytes(dbPath);
+        Assert.True(bytes.Length > 50);
+
+        bytes[50] ^= 0xFF;
+        bytes[60] ^= 0xFF;
+        bytes[65] ^= 0xFF;
+        bytes[6] ^= 0xFF;
+        File.WriteAllBytes(dbPath, bytes);
+
+        var before = File.ReadAllBytes(dbPath);
+
+        using (var reopened = new SqliteWorldRepository(
+            new SaveGamePaths(_root, "world_001")))
+        {
+            Record.Exception(() => reopened.Initialize());
+        }
+
+        var after = File.ReadAllBytes(dbPath);
+
+        Assert.Equal(before, after);
+    }
+
+    private static void ApplyCorruption(string dbPath, string corruption)
+    {
+        switch (corruption)
+        {
+            case "non-sqlite":
+                File.WriteAllText(dbPath, "this is not a sqlite database");
+                break;
+
+            case "truncated":
+            {
+                byte[] bytes = File.ReadAllBytes(dbPath);
+                int newLength = Math.Max(1, bytes.Length / 2);
+                File.WriteAllBytes(dbPath, bytes[..newLength]);
+                break;
+            }
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(corruption), corruption, null);
+        }
+    }
+    [Theory]
+    [InlineData(0, true)]  // SQLite rejects this corruption and throws an exception.
+    [InlineData(50, false)] // SQLite accepts this corruption and it's harmless.
+    public void Initialize_WithFlippedDatabaseByte_ReportsBehavior(
+        int offset,
+        bool shouldThrow)
+    {
+        string dbPath;
+
+        using (var repo = NewRepo())
+        {
+            repo.SaveMetadata(new WorldMetadata
+            {
+                WorldName = "Alpha",
+                Seed = 42,
+            });
+
+            dbPath = Path.Combine(_root, "world_001", "world.db");
+        }
+
+        byte[] bytes = File.ReadAllBytes(dbPath);
+        Assert.InRange(offset, 0, bytes.Length - 1);
+
+        bytes[offset] ^= 0xFF;
+        File.WriteAllBytes(dbPath, bytes);
+
+        var before = File.ReadAllBytes(dbPath);
+
+        Exception? exception;
+
+        using (var reopened = new SqliteWorldRepository(
+            new SaveGamePaths(_root, "world_001")))
+        {
+            exception = Record.Exception(() => reopened.Initialize());
+        }
+
+        var after = File.ReadAllBytes(dbPath);
+
+        Assert.Equal(before, after);
+        Assert.Equal(shouldThrow, exception is not null);
+    }
     public void Dispose()
     {
         try
