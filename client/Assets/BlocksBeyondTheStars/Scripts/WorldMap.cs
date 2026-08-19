@@ -151,6 +151,7 @@ namespace BlocksBeyondTheStars.Client
                     ("map_ruin", "ui.map.ruin", new Color(0.65f, 0.6f, 0.55f)),
                     ("map_wreck", "ui.map.wreck", new Color(1f, 0.55f, 0.3f)),
                     ("map_station", "ui.map.other", new Color(0.8f, 0.8f, 0.9f)),
+                    (null, "poi.fragment", new Color(0.45f, 0.95f, 1f)), // glyph-only legend row (⦿)
                 };
                 const int perRow = 5;
                 const float slotW = 168f, rowH = 34f;
@@ -158,7 +159,7 @@ namespace BlocksBeyondTheStars.Client
                 {
                     float lx = ix + (li % perRow) * slotW;
                     float ly = 795f + (li / perRow) * rowH;
-                    var sprite = UiKit.Icon(entries[li].icon);
+                    var sprite = entries[li].icon != null ? UiKit.Icon(entries[li].icon) : null;
                     if (sprite != null)
                     {
                         UiKit.AddImage(root, lx, ly + 2f, 26, 26, UiKit.DiscSprite, DiscCol);
@@ -166,7 +167,8 @@ namespace BlocksBeyondTheStars.Client
                         lx += 32f;
                     }
 
-                    UiKit.AddText(root, lx, ly, slotW - 36f, 30, L(entries[li].key), 15, UiKit.CyanDim, TextAnchor.MiddleLeft);
+                    string legendLabel = entries[li].icon == null ? "⦿ " + L(entries[li].key) : L(entries[li].key);
+                    UiKit.AddText(root, lx, ly, slotW - 36f, 30, legendLabel, 15, UiKit.CyanDim, TextAnchor.MiddleLeft);
                 }
             }
 
@@ -239,11 +241,37 @@ namespace BlocksBeyondTheStars.Client
             var tex = new Texture2D(size, size, TextureFormat.RGBA32, false) { filterMode = FilterMode.Point, wrapMode = TextureWrapMode.Clamp };
             var px2 = new Color[size * size];
             var fog = new Color(0.06f, 0.09f, 0.16f, 1f);
+
+            // #1113: where the player HAS been but no chunk is loaded any more, the fog lifts to a
+            // "remembered" tone instead of going dark — from the server's persisted bitmap (survives a
+            // reload) plus the cells streamed live this session (chunks unload behind the player).
+            var exploredFog = new Color(0.14f, 0.19f, 0.28f, 1f);
+            int circ = Game.Circumference;
+            BlocksBeyondTheStars.Networking.Messages.ExploredMapData explored = null;
+            if (Game.StarMap != null && !string.IsNullOrEmpty(Game.StarMap.ActiveLocationId))
+            {
+                Game.ExploredMaps.TryGetValue(Game.StarMap.ActiveLocationId, out explored);
+            }
+
             for (int i = 0; i < px2.Length; i++)
             {
                 if (height[i] == int.MinValue)
                 {
-                    px2[i] = fog;
+                    int cell = -1;
+                    if (circ > 0)
+                    {
+                        float wx = _ox + ((i % size) + 0.5f) * step;
+                        float wz = _oz + ((i / size) + 0.5f) * step;
+                        cell = BlocksBeyondTheStars.Shared.World.ExploredMap.CellIndex(
+                            WorldConstants.CanonicalChunkX(Mathf.FloorToInt(wx / WorldConstants.ChunkSize), circ),
+                            WorldConstants.CanonicalChunkZ(Mathf.FloorToInt(wz / WorldConstants.ChunkSize), circ),
+                            circ);
+                    }
+
+                    bool seen = cell >= 0
+                        && (Game.SessionExploredCells.Contains(cell)
+                            || (explored != null && BlocksBeyondTheStars.Shared.World.ExploredMap.GetBit(explored.Cells, cell)));
+                    px2[i] = seen ? exploredFog : fog;
                     continue;
                 }
 
@@ -399,6 +427,7 @@ namespace BlocksBeyondTheStars.Client
             "vault_ruin" => ("◆", new Color(0.8f, 0.7f, 0.95f), "map_ruin"),
             "wreck" => ("✖", new Color(1f, 0.55f, 0.3f), "map_wreck"),
             "treasure" => ("◈", new Color(1f, 0.8f, 0.25f), null), // NPC-hint reveal; no icon yet → glyph renders
+            "fragment_signal" => ("⦿", new Color(0.45f, 0.95f, 1f), null), // VEGA's net-fragment signal (#1109); glyph fallback
             "bandit_camp" => ("⚑", new Color(1f, 0.45f, 0.35f), null), // bounty-mission reveal (#730); glyph fallback
             "factory" => ("⚒", new Color(1f, 0.7f, 0.45f), "map_station"), // no map_factory art yet — the station icon reads industrial
             "landing" => ("⊕", new Color(0.5f, 0.85f, 1f), "map_pad"),

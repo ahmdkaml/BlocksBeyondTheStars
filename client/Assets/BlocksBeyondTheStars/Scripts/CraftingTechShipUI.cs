@@ -193,6 +193,7 @@ namespace BlocksBeyondTheStars.Client
                     + StationsSig() * 3
                     + (Game.StarMap?.Systems.Length ?? 0) * 211 + (Game.StarMap?.ActiveLocationId?.GetHashCode() ?? 0)
                     + (Game.Missions?.Available.Length ?? 0) * 307 + (Game.Missions?.Active.Length ?? 0) * 401
+                    + (Game.KnownNpcs?.Length ?? 0) * 503 // #1118: the roster arrives async
                     + (Game.Space?.Entities.Length ?? 0) * 503 + (Game.InSpace ? 7777 : 0)
                     // Aboard / ship-interior state drives the Map tab dimming + travel-button gating, so a change
                     // (board/leave the ship with the menu open) must rebuild the header + map buttons.
@@ -651,6 +652,19 @@ namespace BlocksBeyondTheStars.Client
             return map.Systems.FirstOrDefault(s => s.Id == curId) ?? map.Systems[0];
         }
 
+        /// <summary>A never-entered system's name reads "Unknown system" (#1113) — the galaxy is discovered,
+        /// not read off a chart. A fitted radar array decodes the beacon signals and shows real names.</summary>
+        private string SystemDisplayName(NetStarSystem sys)
+            => sys == null ? string.Empty
+                : Game.KnowsSystem(sys.Id) || sys.Id == CurrentSystemId() || HasRadarArray()
+                    ? sys.Name
+                    : L("ui.map.system_unknown");
+
+        /// <summary>True when the active ship carries a radar_array module (server-reported fit).</summary>
+        private bool HasRadarArray()
+            => Game?.ShipCombat?.Modules != null
+                && System.Array.IndexOf(Game.ShipCombat.Modules, "radar_array") >= 0;
+
         private List<(string key, string label, string icon)> Categories()
         {
             var list = new List<(string, string, string)> { ("all", L("ui.craft.cat_all"), "cat_all") };
@@ -714,7 +728,9 @@ namespace BlocksBeyondTheStars.Client
                         }
 
                         // Distant systems under a Hyperspace heading. Unknown ones read as a single
-                        // "unexplored" entry (their bodies stay hidden until you hyperjump there).
+                        // "unexplored" entry (their bodies stay hidden until you hyperjump there); their
+                        // NAME shows only once entered — or with a radar array fitted (#1113). The sidebar
+                        // key stays the real name either way (it is never displayed).
                         if (distant.Count > 0)
                         {
                             list.Add(("head:hyper", L("ui.map.hyperspace"), string.Empty));
@@ -722,7 +738,7 @@ namespace BlocksBeyondTheStars.Client
                             {
                                 string label = Game.KnowsSystem(sys.Id)
                                     ? "★ " + sys.Name
-                                    : sys.Name + "  ·  " + L("ui.map.unexplored");
+                                    : SystemDisplayName(sys) + "  ·  " + L("ui.map.unexplored");
                                 list.Add(("sys:" + sys.Name, label, "cat_planet"));
                             }
                         }
@@ -732,6 +748,7 @@ namespace BlocksBeyondTheStars.Client
                 case Mode.Character:
                     list.Clear();
                     list.Add(("appearance", L("ui.settings.character"), "cat_suit"));
+                    list.Add(("people", L("ui.character.people"), "cat_mission")); // #1118: who you know
                     break;
                 case Mode.Alliances:
                     list.Clear();
@@ -789,7 +806,7 @@ namespace BlocksBeyondTheStars.Client
                 case Mode.Inventory: y = BuildInventoryList(); break;
                 case Mode.Map: y = BuildMapList(); break;
                 case Mode.Missions: y = BuildMissionsList(); break;
-                case Mode.Character: y = BuildCharacterList(); break;
+                case Mode.Character: y = _category == "people" ? BuildPeopleList() : BuildCharacterList(); break;
                 case Mode.Alliances: y = BuildAlliancesList(); break;
                 case Mode.Story: y = BuildStoryList(); break;
                 case Mode.Companions: y = BuildCompanionsList(); break;
@@ -1234,6 +1251,39 @@ namespace BlocksBeyondTheStars.Client
                 .ToList();
 
             float y = 0f;
+
+            // Header (#1103): how much of the tree is done and what the player could research next — the
+            // "how far am I" line the tab never had. Counts the whole tree, not the current filter.
+            {
+                int total = Game.Content.Blueprints.Count;
+                int done = 0;
+                BlueprintDefinition next = null;
+                foreach (var bp in Game.Content.Blueprints.Values)
+                {
+                    if (Game.UnlockedBlueprints.Contains(bp.Key))
+                    {
+                        done++;
+                        continue;
+                    }
+
+                    if (bp.Prerequisites.All(Game.UnlockedBlueprints.Contains) && HasAll(bp.UnlockCost) && Game.Knowledge >= bp.KnowledgeCost
+                        && (next == null || bp.KnowledgeCost < next.KnowledgeCost))
+                    {
+                        next = bp; // the cheapest researchable one is the natural "next"
+                    }
+                }
+
+                UiKit.AddText(_listContent, 0, y, 760, 28,
+                    L("ui.tech.progress").Replace("{done}", Mathf.Min(done, total).ToString()).Replace("{total}", total.ToString()),
+                    20, UiKit.Cyan, TextAnchor.MiddleLeft, FontStyle.Bold);
+                y += 28f;
+                string nextLine = next != null
+                    ? L("ui.tech.next").Replace("{name}", L($"blueprint.{next.Key}.name"))
+                    : L("ui.tech.next_none");
+                UiKit.AddText(_listContent, 0, y, 760, 24, nextLine, 16, next != null ? UiKit.TextCol : UiKit.CyanDim, TextAnchor.MiddleLeft);
+                y += 34f;
+            }
+
             int lastTier = -1;
             foreach (var bp in shown)
             {
@@ -1613,6 +1663,39 @@ namespace BlocksBeyondTheStars.Client
             RebuildSidebar();
         }
 
+        /// <summary>"People you know" (#1118): everyone with a standing, friendliest first, straight from
+        /// the server's persisted NPC memory. Requested lazily (rate-limited) — the refresh hash rebuilds
+        /// the list when the roster lands.</summary>
+        private float BuildPeopleList()
+        {
+            if (Game?.Network != null && Time.unscaledTime - _peopleRequestedAt > 5f)
+            {
+                _peopleRequestedAt = Time.unscaledTime;
+                Game.Network.SendRequestKnownNpcs();
+            }
+
+            float y = 8f;
+            var people = Game?.KnownNpcs;
+            if (people == null || people.Length == 0)
+            {
+                var empty = UiKit.AddText(_listContent, 16, y, 740, 60, L("ui.character.people_empty"), 17, UiKit.CyanDim, TextAnchor.UpperLeft);
+                empty.horizontalOverflow = HorizontalWrapMode.Wrap;
+                return y + 70f;
+            }
+
+            foreach (var person in people)
+            {
+                UiKit.AddText(_listContent, 8, y + 4, 700, 30, person.Name, 22, UiKit.TextCol, TextAnchor.MiddleLeft, FontStyle.Bold);
+                string place = string.IsNullOrEmpty(person.Place) ? string.Empty : $"  ·  {person.Place}";
+                UiKit.AddText(_listContent, 28, y + 34, 720, 24, $"{L(person.RoleKey)}  ·  {L(person.StageKey)}{place}", 15, UiKit.CyanDim, TextAnchor.MiddleLeft);
+                y += 68f;
+            }
+
+            return y + 8f;
+        }
+
+        private float _peopleRequestedAt = -999f;
+
         private float BuildCharacterList()
         {
             float y = 0f;
@@ -1758,6 +1841,27 @@ namespace BlocksBeyondTheStars.Client
             UiKit.AddText(starterTpBtn.transform, 560, 0, 200, 78, starterTp ? L("ui.toggle.on") : L("ui.toggle.off"), 22,
                 starterTp ? UiKit.Ok : UiKit.CyanDim, TextAnchor.MiddleLeft, FontStyle.Bold);
             y += 96f;
+
+            // Per-player mode overrides (#1121): one row per online player, cycling World / Survival /
+            // Creative. The server fills the roster ONLY for world admins, so the section simply is not
+            // there for everyone else — same admin gating as the rule rows above, but without the noise.
+            var modeNames = rules?.PlayerModeNames;
+            if (modeNames != null && modeNames.Length > 0)
+            {
+                UiKit.AddText(_listContent, 16, y, 760, 30, L("ui.worldopt.player_modes"), 22, UiKit.Cyan, TextAnchor.MiddleLeft, FontStyle.Bold);
+                y += 40f;
+                string[] modeSteps = { "None", "Survival", "Creative" };
+                for (int i = 0; i < modeNames.Length; i++)
+                {
+                    string playerName = modeNames[i];
+                    string current = rules.PlayerModeValues != null && i < rules.PlayerModeValues.Length
+                        ? rules.PlayerModeValues[i] : "None";
+                    StepRow(playerName, modeSteps, "ui.worldopt.pmode.", current,
+                        v => Game?.Network?.SendAdminCommand("set_mode",
+                            stringArg: v == "None" ? "world" : v.ToLowerInvariant(), targetPlayer: playerName));
+                }
+            }
+
             y += 16f;
 
             // VEGA advisor hints on/off — mutes the ship AI's optional coaching (onboarding chip stays).
@@ -2371,6 +2475,11 @@ namespace BlocksBeyondTheStars.Client
         {
             float y = 8f;
             var all = Game?.Achievements;
+
+            // The page opens with a Progress block (#1103): the whole-game "how far am I" that used to exist
+            // nowhere — research, discoveries, story and the raw journey counters — before the goal list.
+            y = BuildProgressBlock(y);
+
             if (all == null || all.Length == 0)
             {
                 UiKit.AddText(_listContent, 8, y, 760, 34, L("ui.achv.none"), 20, UiKit.CyanDim, TextAnchor.MiddleLeft);
@@ -2415,6 +2524,88 @@ namespace BlocksBeyondTheStars.Client
 
             return y + 12f;
         }
+
+        /// <summary>The Progress block (#1103): research N of M, discoveries, story %, achievements done — one line
+        /// each — then the raw lifetime counters as a two-column "Journey" grid. Everything here is data the
+        /// server already sends; the block just puts it in one place. Absolute rows, no LayoutGroup.</summary>
+        private float BuildProgressBlock(float y)
+        {
+            const float RowW = 760f;
+            UiKit.AddText(_listContent, 8, y, RowW, 36, L("ui.progress.title"), 24, UiKit.Cyan, TextAnchor.MiddleLeft, FontStyle.Bold);
+            y += 42f;
+
+            int bpTotal = Game?.Content?.Blueprints?.Count ?? 0;
+            int bpDone = Game?.UnlockedBlueprints?.Count ?? 0;
+            var lines = new List<string>
+            {
+                L("ui.progress.research").Replace("{done}", Mathf.Min(bpDone, bpTotal).ToString()).Replace("{total}", bpTotal.ToString()),
+                L("ui.progress.discoveries").Replace("{count}", (Game?.Discoveries?.Count ?? 0).ToString()),
+            };
+
+            var story = Game?.Story;
+            if (story != null && story.Active)
+            {
+                int pct = story.ProgressTarget > 0 ? Mathf.Clamp(Mathf.RoundToInt(100f * story.Progress / story.ProgressTarget), 0, 100) : 0;
+                lines.Add(L("ui.progress.story").Replace("{pct}", pct.ToString()));
+            }
+
+            var all = Game?.Achievements;
+            if (all != null && all.Length > 0)
+            {
+                int done = 0;
+                for (int i = 0; i < all.Length; i++)
+                {
+                    if (all[i].Earned) done++;
+                }
+
+                lines.Add(L("ui.progress.achievements").Replace("{done}", done.ToString()).Replace("{total}", all.Length.ToString()));
+            }
+
+            foreach (var line in lines)
+            {
+                UiKit.AddText(_listContent, 20, y, RowW - 28f, 26, line, 18, UiKit.TextCol, TextAnchor.MiddleLeft);
+                y += 28f;
+            }
+
+            // Journey: the raw counters, two per row. Only counters the server has actually reported show up,
+            // so a fresh save reads short rather than as a wall of zeros.
+            var counters = Game?.AchievementCounters;
+            if (counters != null && counters.Count > 0)
+            {
+                y += 6f;
+                UiKit.AddText(_listContent, 8, y, RowW, 30, L("ui.progress.journey"), 20, UiKit.Cyan, TextAnchor.MiddleLeft, FontStyle.Bold);
+                y += 34f;
+
+                var cells = new List<string>();
+                foreach (var counter in JourneyCounters)
+                {
+                    if (counters.TryGetValue(counter, out int n) && n > 0)
+                    {
+                        cells.Add(L("ui.progress.stat." + counter.Replace(':', '_')) + ": " + n.ToString("N0"));
+                    }
+                }
+
+                for (int i = 0; i < cells.Count; i += 2)
+                {
+                    UiKit.AddText(_listContent, 20, y, 360, 26, cells[i], 17, UiKit.TextCol, TextAnchor.MiddleLeft);
+                    if (i + 1 < cells.Count)
+                    {
+                        UiKit.AddText(_listContent, 400, y, 360, 26, cells[i + 1], 17, UiKit.TextCol, TextAnchor.MiddleLeft);
+                    }
+
+                    y += 26f;
+                }
+            }
+
+            return y + 14f;
+        }
+
+        /// <summary>The counters the Journey grid shows, in display order (keys as the server names them).</summary>
+        private static readonly string[] JourneyCounters =
+        {
+            "visit:body", "visit:system", "hyperjump:any", "mine:any", "build:any", "craft:any",
+            "scan:any", "research:any", "defeat:any", "tame:any", "mission:completed", "loot:any",
+        };
 
         /// <summary>One achievement row: name, description, a filled bar and the tally (or "Done").</summary>
         private float AchievementRow(float y, BlocksBeyondTheStars.Networking.Messages.NetAchievement a)
@@ -2483,13 +2674,39 @@ namespace BlocksBeyondTheStars.Client
                 {
                     foreach (var (cat, key) in Game.StoryLogFragments)
                     {
-                        y = StoryEntry(y, "[" + IdLabel("lore.cat.", cat) + "] " + L(key));
+                        y = StoryReadableEntry(y, L("ui.reader.fragment"), IdLabel("lore.cat.", cat), key);
                     }
                 }
 
                 y += 10f;
                 y = AllianceSection(L("ui.story.memories"), y);
-                y = StoryEntries(y, Game.StoryLogMemories);
+                if (Game.StoryLogMemories == null || Game.StoryLogMemories.Count == 0)
+                {
+                    y = StoryEmpty(y);
+                }
+                else
+                {
+                    foreach (var key in Game.StoryLogMemories)
+                    {
+                        y = StoryReadableEntry(y, L("ui.reader.memory"), string.Empty, key);
+                    }
+                }
+
+                // Field records (#1111): rune inscriptions, wreck logs, ruin notes — what the world itself
+                // told this player. Re-readable like the fragments.
+                y += 10f;
+                y = AllianceSection(L("ui.story.lore"), y);
+                if (Game.StoryLogLore == null || Game.StoryLogLore.Count == 0)
+                {
+                    y = StoryEmpty(y);
+                }
+                else
+                {
+                    foreach (var (site, key) in Game.StoryLogLore)
+                    {
+                        y = StoryReadableEntry(y, L("ui.lore.site." + site), string.Empty, key);
+                    }
+                }
             }
             else
             {
@@ -2543,7 +2760,7 @@ namespace BlocksBeyondTheStars.Client
 
         private static readonly TextGenerator StoryMeasurer = new TextGenerator();
 
-        private float StoryEntry(float y, string text)
+        private float StoryEntry(float y, string text, float width = 756f)
         {
             // Measured height instead of the old length/64 guess (which underestimated long German lines),
             // and wrap actually enabled — the UiKit default (Overflow) let a long entry run past the pane.
@@ -2558,15 +2775,30 @@ namespace BlocksBeyondTheStars.Client
                 lineSpacing = 1f,
                 horizontalOverflow = HorizontalWrapMode.Wrap,
                 verticalOverflow = VerticalWrapMode.Overflow,
-                generationExtents = new Vector2(756f, 0f),
+                generationExtents = new Vector2(width, 0f),
                 textAnchor = TextAnchor.UpperLeft,
                 pivot = new Vector2(0f, 1f),
                 color = Color.white,
             };
             float h = 8f + StoryMeasurer.GetPreferredHeight(row, settings);
-            var t = UiKit.AddText(_listContent, 12, y, 756, h, row, 17, UiKit.TextCol, TextAnchor.UpperLeft);
+            var t = UiKit.AddText(_listContent, 12, y, width, h, row, 17, UiKit.TextCol, TextAnchor.UpperLeft);
             t.horizontalOverflow = HorizontalWrapMode.Wrap;
             return y + h + 6f;
+        }
+
+        /// <summary>A story-log row with a Read button (#1110): the bullet text as before, plus the reader —
+        /// long archive texts get a real page instead of squinting at a list row.</summary>
+        private float StoryReadableEntry(float y, string title, string label, string textKey)
+        {
+            string text = string.IsNullOrEmpty(label) ? L(textKey) : "[" + label + "] " + L(textKey);
+            float rowTop = y;
+            y = StoryEntry(y, text, 660f); // keep clear of the Read button's lane
+
+            UiKit.AddButton(_listContent, 688, rowTop, 92, 30, L("ui.story.read"), () =>
+            {
+                StoryReaderUi.Instance?.OpenOverMenu(title, label, L(textKey));
+            });
+            return y;
         }
 
         private float StoryEmpty(float y)

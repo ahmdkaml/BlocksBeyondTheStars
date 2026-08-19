@@ -89,6 +89,16 @@ public sealed class PlayerSnapshot
     /// <summary>Star systems this player has entered (reveals their bodies + mini map on the travel screen).</summary>
     public List<string> KnownSystems { get; set; } = new();
 
+    /// <summary>Explored-map bitmaps per body (#1113; body id → cell bits, base64 in the JSON). Absent in
+    /// older saves — the map then starts fogged, exactly as before, and nothing else is lost.</summary>
+    public Dictionary<string, byte[]> ExploredCells { get; set; } = new();
+
+    /// <summary>NPC radio-call preference (#1119): 0 All · 1 MissionsOnly · 2 Off. Absent in older saves ⇒ All.</summary>
+    public int NpcCallsMode { get; set; }
+
+    /// <summary>Per-player mode override (#1121): 0 None · 1 Survival · 2 Creative. Absent in older saves ⇒ None.</summary>
+    public int ModeOverride { get; set; }
+
     /// <summary>Tamed creatures (companions) — named, bound to their home world. Persisted so they survive a
     /// reload (the wild fauna they came from does not — it is regenerated per visit).</summary>
     public List<TamedCreature> TamedCreatures { get; set; } = new();
@@ -204,6 +214,8 @@ public static class StateMapper
         KnowledgePoints = p.KnowledgePoints,
         KnowledgeGivenTo = new Dictionary<string, int>(p.KnowledgeGivenTo),
         NpcMemory = CloneNpcMemory(p.NpcMemory),
+        NpcCallsMode = (int)p.NpcCallsMode,
+        ModeOverride = (int)p.ModeOverride,
         Scanned = p.Scanned.ToList(),
         ScannedNames = new Dictionary<string, string>(p.ScannedNames),
         RationStore = DumpInventory(p.RationStore),
@@ -213,6 +225,7 @@ public static class StateMapper
         UnlockedGames = p.UnlockedGames.ToList(),
         LandedBodies = p.LandedBodies.ToList(),
         KnownSystems = p.KnownSystems.ToList(),
+        ExploredCells = CloneExploredCells(p.ExploredCells),
         TamedCreatures = p.TamedCreatures.Select(CloneTamed).ToList(),
         TamedSpecies = p.TamedSpecies.ToList(),
         DeployedSpeeders = p.DeployedSpeeders.Select(CloneSpeeder).ToList(),
@@ -225,6 +238,28 @@ public static class StateMapper
         LegPixels = p.LegPixels,
         HelmetPixels = p.HelmetPixels,
     };
+
+    /// <summary>Copies the explored-map bitmaps so a snapshot doesn't alias the live arrays, dropping
+    /// null/oversized entries (a tampered save can then never balloon the player blob, #1113).</summary>
+    private static Dictionary<string, byte[]> CloneExploredCells(Dictionary<string, byte[]>? cells)
+    {
+        var copy = new Dictionary<string, byte[]>();
+        if (cells == null)
+        {
+            return copy;
+        }
+
+        foreach (var kv in cells)
+        {
+            if (!string.IsNullOrEmpty(kv.Key) && kv.Value is { Length: > 0 }
+                && kv.Value.Length <= BlocksBeyondTheStars.Shared.World.ExploredMap.MaxBytesPerBody)
+            {
+                copy[kv.Key] = (byte[])kv.Value.Clone();
+            }
+        }
+
+        return copy;
+    }
 
     /// <summary>Copies a deployed speeder record so a snapshot doesn't alias the live list.</summary>
     private static DeployedSpeeder CloneSpeeder(DeployedSpeeder s) => new()
@@ -278,6 +313,7 @@ public static class StateMapper
             {
                 Name = rel.Name,
                 Role = rel.Role,
+                Place = rel.Place,
                 Value = rel.Value,
                 Log = rel.Log.Select(i => new NpcInteraction { Kind = i.Kind }).ToList(),
             };
@@ -315,6 +351,10 @@ public static class StateMapper
         KnowledgePoints = s.KnowledgePoints,
         KnowledgeGivenTo = new Dictionary<string, int>(s.KnowledgeGivenTo ?? new Dictionary<string, int>()),
         NpcMemory = CloneNpcMemory(s.NpcMemory),
+        NpcCallsMode = System.Enum.IsDefined(typeof(NpcCallsMode), s.NpcCallsMode) ? (NpcCallsMode)s.NpcCallsMode : NpcCallsMode.All,
+        ModeOverride = System.Enum.IsDefined(typeof(Shared.Configuration.PlayerModeOverride), s.ModeOverride)
+            ? (Shared.Configuration.PlayerModeOverride)s.ModeOverride
+            : Shared.Configuration.PlayerModeOverride.None,
         Scanned = new HashSet<string>(s.Scanned ?? new List<string>()),
         ScannedNames = new Dictionary<string, string>(s.ScannedNames ?? new Dictionary<string, string>()),
         RationStore = RestoreInventory(BlocksBeyondTheStars.Shared.State.PlayerState.RationStoreSlots, s.RationStore ?? new List<InventorySlotDto>()),
@@ -323,6 +363,7 @@ public static class StateMapper
         UnlockedGames = new HashSet<string>(s.UnlockedGames ?? new List<string>()),
         LandedBodies = new HashSet<string>(s.LandedBodies ?? new List<string>()),
         KnownSystems = new HashSet<string>(s.KnownSystems ?? new List<string>()),
+        ExploredCells = CloneExploredCells(s.ExploredCells),
         TamedCreatures = (s.TamedCreatures ?? new List<TamedCreature>()).Select(CloneTamed).ToList(),
         TamedSpecies = new HashSet<string>(s.TamedSpecies ?? new List<string>()),
         DeployedSpeeders = (s.DeployedSpeeders ?? new List<DeployedSpeeder>()).Select(CloneSpeeder).ToList(),

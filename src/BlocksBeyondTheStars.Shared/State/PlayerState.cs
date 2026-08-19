@@ -94,6 +94,11 @@ public sealed class PlayerState
     /// interaction log. Persisted; feeds item 15's dialog backend.</summary>
     public Dictionary<string, NpcRelationship> NpcMemory { get; set; } = new();
 
+    /// <summary>How much the world may call this player over the radio (#1119) — a player PREFERENCE the
+    /// server persists (the server initiates the calls, so a client-only setting could not silence them).
+    /// Defaults to All; set via <c>SetNpcCallsIntent</c> from the client's Comfort settings.</summary>
+    public NpcCallsMode NpcCallsMode { get; set; } = NpcCallsMode.All;
+
     /// <summary>Subjects already scanned (e.g. "creature:sp0", "block:iron_ore") — only new scans pay knowledge.</summary>
     public HashSet<string> Scanned { get; set; } = new();
 
@@ -169,6 +174,17 @@ public sealed class PlayerState
     public bool Fly { get; set; }
     public bool InstantBuild { get; set; }
 
+    /// <summary>Per-player mode override (#1121), set by the world admin (<c>/mode</c> or the Settings tab):
+    /// this player plays Creative or Survival regardless of the world's mode — the rule getters consult it
+    /// via the <c>GameRules.*For</c> twins. None = the world's mode. Persisted, so the kid's creative
+    /// override survives a rejoin without the admin re-issuing it.</summary>
+    public Configuration.PlayerModeOverride ModeOverride { get; set; } = Configuration.PlayerModeOverride.None;
+
+    /// <summary>Hostiles (machines, bandits, aggressive fauna) treat this player as not there: god mode,
+    /// cloak — or a per-player Creative override (#1121), mirroring a creative world, where they never
+    /// spawn at all.</summary>
+    public bool IgnoredByHostiles => GodMode || Stealthed || ModeOverride == Configuration.PlayerModeOverride.Creative;
+
     public bool IsAdmin => Role is PlayerRole.Admin or PlayerRole.WorldAdmin;
 
     /// <summary>Accepted missions and their progress.</summary>
@@ -189,6 +205,13 @@ public sealed class PlayerState
     /// A known system reveals its bodies + mini star map on the travel screen; an unknown one is a single
     /// "jump here" entry until visited. Server-authoritative, persisted. The current system always counts.</summary>
     public HashSet<string> KnownSystems { get; set; } = new();
+
+    /// <summary>Coarse explored-map cells per celestial body (#1113): body id → bitmap, one bit per
+    /// <see cref="BlocksBeyondTheStars.Shared.World.ExploredMap.CellChunks"/>²-chunk cell (dimensions derive
+    /// from the body's circumference — see <c>ExploredMap.GridFor</c>). A cell is set when its terrain was
+    /// ever streamed to this player, so the planet map's fog stays lifted across sessions. Server-
+    /// authoritative, persisted; never cleared. Bounded: ≤ ~1 KB even for the largest body.</summary>
+    public Dictionary<string, byte[]> ExploredCells { get; set; } = new();
 
     /// <summary>Minigame keys the player has "downloaded" from data cubes found on planets — their personal
     /// arcade collection, playable from the in-game menu. Server-authoritative, persisted; never removed once

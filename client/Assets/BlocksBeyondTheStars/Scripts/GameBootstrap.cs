@@ -286,6 +286,10 @@ namespace BlocksBeyondTheStars.Client
         /// the client never counts anything itself). Empty until the join snapshot arrives.</summary>
         public NetAchievement[] Achievements { get; private set; } = System.Array.Empty<NetAchievement>();
 
+        /// <summary>The player's raw lifetime counters (blocks mined, worlds visited, blueprints researched …)
+        /// as last sent with the achievement list — the "Journey" figures on the Progress page (#1103).</summary>
+        public System.Collections.Generic.Dictionary<string, int> AchievementCounters { get; private set; } = new();
+
         /// <summary>An optional space-flight nav waypoint (#597), set on the system chart while flying:
         /// either the id of a landable body / space station (snap-to-marker; <see cref="SpaceView"/>
         /// resolves it to a live position) or a free scene-space point. The space radar shows it and the
@@ -595,6 +599,15 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>Settlement / station NPCs (vendors, quartermasters, settlers) near the player.</summary>
         public NetNpc[] Npcs { get; private set; } = System.Array.Empty<NetNpc>();
 
+        /// <summary>Relationship stage per live NPC id (#1118, locale keys like <c>npc.stage.known</c>) —
+        /// per receiver, absent = stranger. Nameplates append it so a known face reads as one.</summary>
+        public readonly System.Collections.Generic.Dictionary<int, string> NpcStandings
+            = new System.Collections.Generic.Dictionary<int, string>();
+
+        /// <summary>The "People you know" roster (#1118), friendliest first — filled on request
+        /// (<c>SendRequestKnownNpcs</c>) for the Character tab.</summary>
+        public NetKnownNpc[] KnownNpcs { get; private set; } = System.Array.Empty<NetKnownNpc>();
+
         /// <summary>True when a settlement/station vendor stands within trading reach — enables market
         /// barter at their stall (the server also allows it aboard your ship).</summary>
         public bool NearVendor
@@ -748,6 +761,18 @@ namespace BlocksBeyondTheStars.Client
         /// before that the ledger never left the server, so a scan left no permanent record in the UI.</summary>
         public readonly System.Collections.Generic.Dictionary<string, string> Discoveries
             = new System.Collections.Generic.Dictionary<string, string>();
+
+        /// <summary>Persisted explored-map cells per body (#1113), as the server sent them on arrival —
+        /// the planet map draws these as "remembered" ground under its live fog. Keyed by body id so an
+        /// out-of-order WorldReset can never show another body's fog.</summary>
+        public readonly System.Collections.Generic.Dictionary<string, ExploredMapData> ExploredMaps
+            = new System.Collections.Generic.Dictionary<string, ExploredMapData>();
+
+        /// <summary>Explored cells seen live THIS session on the current body (cell indices, see
+        /// <c>ExploredMap.CellIndex</c>) — chunks unload again behind the player, but a cell once streamed
+        /// stays lifted on the map even before the server's next snapshot. Cleared on world change.</summary>
+        public readonly System.Collections.Generic.HashSet<int> SessionExploredCells
+            = new System.Collections.Generic.HashSet<int>();
 
         /// <summary>Repair progress of the wreck the player is standing in (null until a wreck reports it).</summary>
         public WreckRepairStatus Wreck { get; private set; }
@@ -905,6 +930,10 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>Story Log: unlocked personal-memory locale keys.</summary>
         public readonly System.Collections.Generic.List<string> StoryLogMemories = new();
 
+        /// <summary>Story Log: found environmental lore texts (site kind + locale key, #1111) — rune
+        /// inscriptions, wreck logs, ruin notes. Per player; re-readable in the Story tab + Codex.</summary>
+        public readonly System.Collections.Generic.List<(string Site, string TextKey)> StoryLogLore = new();
+
         /// <summary>Story Log: the VEGA story-beat lines heard so far (locale keys, ShipAiLine kind 2 = memory/story).</summary>
         public readonly System.Collections.Generic.List<string> StoryLogBeats = new();
 
@@ -1017,6 +1046,20 @@ namespace BlocksBeyondTheStars.Client
 
         /// <summary>Shows a transient HUD message from a client-side system (e.g. the VEGA autopilot).</summary>
         public void ShowMessage(string text) => LastMessage = text ?? string.Empty;
+
+        /// <summary>Opens the story reader panel (#1110) with a localized title/label + text key — or falls
+        /// back to the message toast when no reader exists (headless/degraded rigs stay functional).</summary>
+        private void OpenReader(string title, string label, string textKey)
+        {
+            if (StoryReaderUi.Instance != null)
+            {
+                StoryReaderUi.Instance.Open(title, label, Localizer?.Get(textKey) ?? textKey);
+            }
+            else
+            {
+                ShowMessage(Localizer?.Get(textKey) ?? textKey);
+            }
+        }
 
         /// <summary>
         /// Renders a weather-scanner reading (#900) as a short, localized block: what the sky is doing here
@@ -1738,6 +1781,7 @@ namespace BlocksBeyondTheStars.Client
             Network.FactoriesReceived += m => Factories = m.Factories ?? System.Array.Empty<NetFactory>();
             Network.LandingPadsReceived += m => { LandingPads = m.Pads ?? System.Array.Empty<NetLandingPad>(); LandingPadsBody = m.BodyId ?? string.Empty; LandingPadsTimeOfDay = m.TimeOfDay; };
             Network.StarMapReceived += m => { StarMap = m; RebuildWikiState(); };
+            Network.ExploredMapReceived += m => { if (!string.IsNullOrEmpty(m.BodyId)) ExploredMaps[m.BodyId] = m; };
             Network.DataCubesReceived += m => DataCubes = m.Cubes ?? System.Array.Empty<NetDataCube>();
             Network.GameUnlocksReceived += m =>
             {
@@ -1882,6 +1926,15 @@ namespace BlocksBeyondTheStars.Client
             Network.PlanetEnemiesReceived += m => PlanetEnemies = m.Enemies;
             Network.CreaturesReceived += m => Creatures = m.Creatures;
             Network.NpcsReceived += m => Npcs = m.Npcs;
+            Network.NpcStandingsReceived += m =>
+            {
+                NpcStandings.Clear();
+                for (int i = 0; i < m.NpcIds.Length && i < m.StageKeys.Length; i++)
+                {
+                    NpcStandings[m.NpcIds[i]] = m.StageKeys[i];
+                }
+            };
+            Network.KnownNpcsReceived += m => KnownNpcs = m.People ?? System.Array.Empty<NetKnownNpc>();
             Network.ContainersReceived += m => OnContainers(m);
             Network.OwnedShipsReceived += m => OwnedShips = m.Ships;
             Network.WorldEnvironmentReceived += m =>
@@ -1899,7 +1952,10 @@ namespace BlocksBeyondTheStars.Client
             Network.WorldResetReceived += OnWorldReset;
             Network.ShipAiLineReceived += m =>
             {
-                OnboardingActive = !string.IsNullOrEmpty(m.ObjectiveKey);
+                // The post-tutorial story objective (#1110) rides the same chip — it must not read as an
+                // active tutorial (the settings button offers "restart" only while truly onboarding).
+                OnboardingActive = !string.IsNullOrEmpty(m.ObjectiveKey)
+                    && !m.ObjectiveKey.StartsWith("story.obj.", System.StringComparison.Ordinal);
                 if (m.Kind == 2 && !string.IsNullOrEmpty(m.LineKey)) { StoryLogBeats.Add(m.LineKey); NewStoryUnseen = true; } // a story beat
                 // Tips log (#737): onboarding (0), advisor (1) and system (3) lines become re-readable the
                 // moment they arrive. Kind 2 is the story log's, Kind 4 (prologue) is intro-only by design.
@@ -1914,19 +1970,53 @@ namespace BlocksBeyondTheStars.Client
                 VegaLogKeys.Clear();
                 VegaLogKeys.AddRange(VegaText.JournalKeys(m.Milestones));
             };
-            Network.StoryStateReceived += m => Story = m;
+            Network.StoryStateReceived += m =>
+            {
+                Story = m;
+                // Rejoin-proof logs (#1110/#1111): the snapshot carries the found KEYS; texts resolve from
+                // the pack. Replaces the live-collected lists — the server is authoritative.
+                if (Content is not null && Content.TryGetStory(m.StoryId, out var pack))
+                {
+                    StoryLogFragments.Clear();
+                    StoryLogFragments.AddRange(BlocksBeyondTheStars.Client.Core.StoryLog.Fragments(pack, m.FoundFragmentKeys));
+                    StoryLogMemories.Clear();
+                    StoryLogMemories.AddRange(BlocksBeyondTheStars.Client.Core.StoryLog.Memories(pack, m.PlayerMemoryKeys));
+                    StoryLogLore.Clear();
+                    StoryLogLore.AddRange(BlocksBeyondTheStars.Client.Core.StoryLog.Lore(pack, m.FoundLoreKeys));
+                }
+            };
             Network.NetFragmentsReceived += m => NetFragments = m.Fragments;
             Network.NetFragmentRevealedReceived += m =>
             {
-                StoryLogFragments.Add((m.Category, m.TextKey));
+                if (!StoryLogFragments.Contains((m.Category, m.TextKey)))
+                {
+                    StoryLogFragments.Add((m.Category, m.TextKey));
+                }
+
                 NewStoryUnseen = true; // badge the Story menu entry until the player reads it
-                ShowMessage(Localizer?.Get(m.TextKey) ?? m.TextKey); // the archive text (Story Log keeps it to re-read)
+                // The reader panel (#1110) replaces the old toast; the Story Log keeps the text to re-read.
+                OpenReader(Localizer?.Get("ui.reader.fragment") ?? "Net fragment",
+                    Localizer?.Get("lore.cat." + m.Category) ?? m.Category, m.TextKey);
             };
             Network.PlayerMemoryReceived += m =>
             {
-                StoryLogMemories.Add(m.TextKey);
+                if (!StoryLogMemories.Contains(m.TextKey))
+                {
+                    StoryLogMemories.Add(m.TextKey);
+                }
+
                 NewStoryUnseen = true;
-                ShowMessage(Localizer?.Get(m.TextKey) ?? m.TextKey);
+                OpenReader(Localizer?.Get("ui.reader.memory") ?? "Memory", string.Empty, m.TextKey);
+            };
+            Network.LoreTextRevealedReceived += m =>
+            {
+                if (!StoryLogLore.Contains((m.Site, m.TextKey)))
+                {
+                    StoryLogLore.Add((m.Site, m.TextKey));
+                }
+
+                NewStoryUnseen = true;
+                OpenReader(Localizer?.Get("ui.lore.site." + m.Site) ?? m.Site, string.Empty, m.TextKey);
             };
             Network.ScanResultReceived += m =>
             {
@@ -1945,6 +2035,7 @@ namespace BlocksBeyondTheStars.Client
             Network.AchievementsReceived += m =>
             {
                 Achievements = m?.Items?.ToArray() ?? System.Array.Empty<NetAchievement>();
+                AchievementCounters = m?.Counters ?? new System.Collections.Generic.Dictionary<string, int>();
             };
             Network.AchievementUnlockedReceived += m =>
             {
@@ -2066,6 +2157,7 @@ namespace BlocksBeyondTheStars.Client
                             string.IsNullOrEmpty(Token) ? null : Token, ViewDistanceChunks,
                             string.IsNullOrEmpty(HostedToken) ? null : HostedToken);
                         Network.SendAppearance(SkinRgb, TorsoRgb, ArmRgb, LegRgb, HullRgb);
+                        Network.SendSetNpcCalls(Settings?.NpcCalls ?? 0); // #1119: the server initiates NPC calls, so it must know the preference
                         if (!string.IsNullOrEmpty(FacePixels))
                         {
                             Network.SendFace(FacePixels); // tell others our custom face (server persists + relays)
@@ -2277,6 +2369,14 @@ namespace BlocksBeyondTheStars.Client
             World.StoreChunk(coord, blocks, m.ModIndex, m.ModTint, m.ModGlow, m.ShapeIndex, m.ShapeData);
             MarkChunkAndNeighborsDirty(coord);
             _lastChunkArrivalTime = Time.time; // feed the view-settle gate (#390)
+
+            // #1113: remember this chunk's map cell for the session — the chunk itself may unload again
+            // behind the player, but the planet map's fog stays lifted where they have already been.
+            int cell = BlocksBeyondTheStars.Shared.World.ExploredMap.CellIndex(coord.X, coord.Z, Circumference);
+            if (cell >= 0)
+            {
+                SessionExploredCells.Add(cell);
+            }
         }
 
         /// <summary>Marks a chunk AND its six neighbours for re-meshing. A freshly stored/resynced chunk
@@ -2355,6 +2455,7 @@ namespace BlocksBeyondTheStars.Client
         {
             LocationName = string.IsNullOrEmpty(m.SystemName) ? m.PlanetName : $"{m.SystemName} · {m.PlanetName}";
             RebuildFloraTints(); // a new world ⇒ its own per-species flora colours
+            SessionExploredCells.Clear(); // #1113: live-explored cells are per body
 
             // Parked ship objects belong to the world we just left; the new world re-sends its own.
             LandedShips.Clear();
@@ -2368,6 +2469,7 @@ namespace BlocksBeyondTheStars.Client
             PlanetEnemies = System.Array.Empty<NetCombatEntity>();
             Creatures = System.Array.Empty<NetCreature>();
             Npcs = System.Array.Empty<NetNpc>();
+            NpcStandings.Clear(); // #1118: per-world NPC ids — the new world re-sends its own standings
             Containers = System.Array.Empty<NetContainer>();
             Beacons = System.Array.Empty<NetBeacon>();
             Beams = System.Array.Empty<NetBeam>();

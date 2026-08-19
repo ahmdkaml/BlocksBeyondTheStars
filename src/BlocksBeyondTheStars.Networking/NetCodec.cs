@@ -416,6 +416,26 @@ public static class NetCodec
         // Suit lamp state (#1077): lets VEGA's context tips know the lamp is off in the dark. Informational
         // only — a server without this tag drops the message and simply never gives that tip.
         Register(209, typeof(SetLampIntent));            // Client -> Server
+
+        // Environmental lore texts (#1111): a rune inscription / wreck log / ruin note found at a site.
+        Register(210, typeof(LoreTextRevealed));         // Server -> Client
+
+        // Persisted exploration (#1113): the receiver's explored-map cells for the body just arrived on,
+        // so the planet map's fog stays lifted across sessions.
+        Register(211, typeof(ExploredMapData));          // Server -> Client
+
+        // Whole-build share codes (#1117): copy a region to a BBTS1-B code, paste it back block by block.
+        Register(212, typeof(CopyBuildIntent));          // Client -> Server
+        Register(213, typeof(BuildCodeResult));          // Server -> Client
+        Register(214, typeof(PasteBuildIntent));         // Client -> Server
+        Register(215, typeof(BuildPasteResult));         // Server -> Client
+
+        // Living NPCs (#1118/#1119): per-player relationship stages for nameplates, the "People you know"
+        // roster, and the NPC radio-call preference.
+        Register(216, typeof(NpcStandingList));          // Server -> Client
+        Register(217, typeof(RequestKnownNpcsIntent));   // Client -> Server
+        Register(218, typeof(KnownNpcList));             // Server -> Client
+        Register(219, typeof(SetNpcCallsIntent));        // Client -> Server
     }
 
     private static void Register(byte tag, Type type)

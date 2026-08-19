@@ -760,6 +760,12 @@ public sealed partial class GameServer
 
         LoadWorld(body.PlanetType, body.Id); // loads/initialises the destination + sets the Active cursor
         session.CurrentLocationId = body.Id;
+        if (hyperjump && !session.Spectating)
+        {
+            OnAchievementHyperjump(session);        // "Jump Pilot" (#1102)
+            RecordStoryMilestone("hyperjump:first"); // the save's first jump between stars advances the arc (#1105)
+        }
+
         MarkArrivedOnBody(session, body.Id); // landed here → a quick-travel target + its system now known
 
         // Park this player's own ship object on the destination world before placing them.
@@ -817,6 +823,7 @@ public sealed partial class GameServer
         SendDoors(session);
         SendDataCubes(session); // minigame download cubes on this body
         SendNetFragments(session); // story net fragments on this body (P2)
+        SendVegaObjective(session); // the story objective is per body — "a fragment is HERE" (#1110)
         SendFactories(session); // factories on this body (animated machines + production terminals)
         SendBeacons(session);
         SendBeams(session); // placed beam blocks (teleporter pads) on this body
@@ -1365,6 +1372,8 @@ public sealed partial class GameServer
         Guard("SilentSessions", SweepSilentSessions); // release names/slots held by dead clients (#964)
         Guard("SweepExpiredLandedTraders", SweepExpiredLandedTraders); // P3: free pads of traders whose dwell ended on bodies nobody is on
         Guard("TickGreetings", TickGreetings); // push any LLM NPC greetings finished off-thread (item 15)
+        Guard("TickNpcRadio", TickNpcRadio);   // NPC radio calls (#1119): per-player 30 s trigger scans
+        Guard("TickBaseLife", TickBaseLife);   // the world notices your base (#1120): settlers move in
         Guard("TickMissionTexts", TickMissionTexts); // push mission-list refreshes when L3 board texts arrive
         Guard("TickAiMissions", TickAiMissions); // publish /ai_mission generations finished off-thread
         Guard("TickVegaBanter", TickVegaBanter); // push VEGA's LLM banter lines finished off-thread
@@ -1503,7 +1512,8 @@ public sealed partial class GameServer
             var playerCell = new Vector3i(
                 (int)System.Math.Floor(p.Position.X), (int)System.Math.Floor(p.Position.Y), (int)System.Math.Floor(p.Position.Z));
             bool atBase = !p.InEva && (InAnyBaseZone(playerCell) || InSealedBaseRoom(playerCell));
-            bool lifeSupport = !p.InEva && (p.AboardShip || insideShip || atBase || InStation(p.PlayerId) || !Rules.OxygenEnabled);
+            bool lifeSupport = !p.InEva && (p.AboardShip || insideShip || atBase || InStation(p.PlayerId)
+                || !Rules.OxygenEnabledFor(p.ModeOverride));
             // Which source keeps this player breathing — sent to the client so the HUD can name it
             // (0 none, 1 ship cabin/aboard, 2 station, 3 base zone or sealed room). Base ranks last so
             // the label only claims the base when nothing closer (ship/station) already covers you.
@@ -1573,7 +1583,7 @@ public sealed partial class GameServer
 
             // Hunger (survival): aboard the ship, boarded on a station (both have life support), or when
             // disabled, sate; otherwise drain and, once empty, starve (health loss until the player eats).
-            if (p.AboardShip || InStation(p.PlayerId) || !Rules.HungerEnabled)
+            if (p.AboardShip || InStation(p.PlayerId) || !Rules.HungerEnabledFor(p.ModeOverride))
             {
                 p.Hunger = System.Math.Min(100f, p.Hunger + (float)(dt * 10));
             }
@@ -2168,6 +2178,7 @@ public sealed partial class GameServer
                 PackChunkModifiers(chunk, msg); // dyed-block / coloured-light cells, if any
                 Send(session, msg);
                 session.SentChunks.Add(coord);
+                MarkExploredCell(session, coord); // #1113: the planet map remembers this across sessions
                 sent++;
             }
         }
@@ -2450,6 +2461,14 @@ public sealed partial class GameServer
             RemoveConstructionSite(session); // the half-built hull despawns too — it lives on in the fleet save
             BroadcastToWorld(new PlayerLeft { PlayerId = session.State.PlayerId }); // remove their avatar in-world
             BroadcastLandingPads(); // the leaver's pad is free again — everyone's map must show it (#1020)
+            foreach (var other in _sessions.Values)
+            {
+                if (other.Joined && other.State.IsAdmin)
+                {
+                    SendRules(other); // the admins' player-mode roster (#1121) loses this player
+                }
+            }
+
             if (!string.IsNullOrEmpty(loc) && loc != _meta.ActiveLocationId && !OccupiedLocations().Contains(loc))
             {
                 // Move the cursor off the world we're about to drop, back to the (always-resident) default
@@ -2762,6 +2781,10 @@ public sealed partial class GameServer
             case ToggleStealthIntent: HandleToggleStealth(session); break;
             case SetJetpackIntent sj: HandleSetJetpack(session, sj); break;
             case SetLampIntent sl: HandleSetLamp(session, sl); break;
+            case CopyBuildIntent cb: HandleCopyBuild(session, cb); break;    // #1117: region → share code
+            case PasteBuildIntent pb: HandlePasteBuild(session, pb); break;  // #1117: share code → blocks
+            case RequestKnownNpcsIntent: HandleRequestKnownNpcs(session); break;  // #1118: "People you know"
+            case SetNpcCallsIntent nc: HandleSetNpcCalls(session, nc); break;     // #1119: call preference
             case SetSeatedIntent seat: HandleSetSeated(session, seat); break;
             case SetEvaIntent eva: HandleSetEva(session, eva); break;
             case StructureEditIntent structureEdit: HandleStructureEdit(session, structureEdit); break;
@@ -2992,6 +3015,16 @@ public sealed partial class GameServer
         SendInventory(session);
         SendPlayerState(session);
         SendRules(session);
+        // Online admins carry a player-mode roster in their rule set (#1121) — refresh it now that this
+        // player is on it.
+        foreach (var other in _sessions.Values)
+        {
+            if (other.Joined && other != session && other.State.IsAdmin)
+            {
+                SendRules(other);
+            }
+        }
+
         SendShipCombatStatus(session);
         SendLandedShips(session); // every parked ship object on the join world
         SendShipPlacement(session);
@@ -3010,6 +3043,7 @@ public sealed partial class GameServer
         SendNetFragments(session); // story net fragments on the join world (P2)
         SendFactories(session);   // factories on the join world (animated machines + production terminals)
         SendGameUnlocks(session); // the player's downloaded-games collection (per-player, persisted)
+        BackfillPlaceDiscoveries(session); // pre-#1113 saves: mirror already-landed bodies into "Places" first
         SendDiscoveryLog(session); // the first-scan ledger, for the Codex "Discoveries" chapter (#484)
 
         // Achievements: settle anything that came due while a reward had nowhere to go, retro-award entries that
@@ -3020,6 +3054,7 @@ public sealed partial class GameServer
         SendBases(session); // player-founded bases on the join world (Grundstein markers)
         SendAllianceList(session); // the player's alliance roster (shared station/base access + Funk tab)
         SendStoryStateOnJoin(session); // story meter + per-player beat catch-up (P0)
+        ArmNpcRadioOnJoin(session); // NPC calls (#1119): quiet period first; the join scan then catches up
         BroadcastLandingPads(session); // the join claimed a pad — everyone's map must show it (#1020)
         SendContainers(session);
         SendExistingPresences(session); // show already-online players to the newcomer
@@ -4067,7 +4102,7 @@ public sealed partial class GameServer
         }
 
         // Creative mode and admin instant-build place without consuming materials.
-        bool free = !Rules.CraftingCostsMaterials || session.State.InstantBuild;
+        bool free = !Rules.CraftingCostsMaterialsFor(session.State.ModeOverride) || session.State.InstantBuild;
         var pool = new MaterialPool(_content, session.State, _ship);
         if (!free)
         {
@@ -4183,6 +4218,7 @@ public sealed partial class GameServer
 
         SendInventory(session);
         OnAchievementBuild(session);
+        OnBlockPlaced(session, blockDef, pos); // #1116: advance any matching Build mission objectives
     }
 
     private void HandleCraft(PlayerSession session, CraftIntent craft)
@@ -4198,7 +4234,7 @@ public sealed partial class GameServer
         int count = System.Math.Clamp(craft.Count, 1, ItemDefinition.DefaultMaxStack);
 
         // Creative mode: no material/blueprint/station cost — just produce the output.
-        if (!Rules.CraftingCostsMaterials)
+        if (!Rules.CraftingCostsMaterialsFor(session.State.ModeOverride))
         {
             var freePool = new MaterialPool(_content, session.State, _ship);
             foreach (var output in recipe.Outputs)
@@ -4284,6 +4320,7 @@ public sealed partial class GameServer
         if (recipe.Station == Shared.Definitions.CraftingStation.Market && !session.State.AboardShip)
         {
             RecordVendorTrade(session.State);
+            SendNpcStandings(session); // #1118: the vendor's nameplate stage may just have risen
             ShipAiOnTradeOrMission(session); // VEGA onboarding: a vendor barter counts as the first trade
         }
 
@@ -4332,7 +4369,7 @@ public sealed partial class GameServer
             ItemKey.Shape(intent.SourceItemKey), ItemKey.Design(intent.SourceItemKey));
 
         // Creative mode: no material cost — just produce the coloured material.
-        if (!Rules.CraftingCostsMaterials)
+        if (!Rules.CraftingCostsMaterialsFor(session.State.ModeOverride))
         {
             var freeTintPool = new MaterialPool(_content, session.State, _ship);
             AddCraftOutput(session, freeTintPool, output, count, intent.Slot);
@@ -4476,7 +4513,7 @@ public sealed partial class GameServer
             shape, ItemKey.Design(sourceItemKey));
 
         // Creative mode: no material cost — just produce the shaped material.
-        if (!Rules.CraftingCostsMaterials)
+        if (!Rules.CraftingCostsMaterialsFor(session.State.ModeOverride))
         {
             var freeShapePool = new MaterialPool(_content, session.State, _ship);
             AddCraftOutput(session, freeShapePool, output, count, slot);
@@ -4616,7 +4653,7 @@ public sealed partial class GameServer
 
         // Research is location-bound to the cockpit (#1074) — the Tech tab used to claim a "lab" that no
         // ship ever had while this handler enforced nothing at all. Free-crafting (Creative) worlds skip it, like crafting does.
-        if (Rules.CraftingCostsMaterials && !ResearchAvailable(session))
+        if (Rules.CraftingCostsMaterialsFor(session.State.ModeOverride) && !ResearchAvailable(session))
         {
             Reject(session, "unlock", "@srv.unlock.cockpit");
             return;
@@ -4648,6 +4685,7 @@ public sealed partial class GameServer
         // research materials are consumed. (Knowledge can also be taught to others without losing any.)
         pool.Remove(bp.UnlockCost);
         session.State.UnlockedBlueprints.Add(bp.Key);
+        OnAchievementResearch(session); // "Researcher" ladder (#1102)
 
         // Localized frame + the blueprint's own localized display name (falls back to the raw key).
         Send(session, new ServerMessage
@@ -4765,6 +4803,12 @@ public sealed partial class GameServer
 
             case "where":
                 AdminWhere(session, cmd.StringArg ?? cmd.TargetPlayer);
+                return;
+
+            // Per-player mode override (#1121) — world management, not a cheat: family worlds keep
+            // AdminCheats off, and exactly there a parent needs to hand the kid Creative. The role is the gate.
+            case "set_mode":
+                AdminSetPlayerMode(session, cmd.TargetPlayer, cmd.StringArg);
                 return;
 
             // Observer mode + its jump command are fleet-admin only: they reach into worlds other people own,
@@ -5012,6 +5056,64 @@ public sealed partial class GameServer
 
     private void CheatLog(PlayerState admin, string message)
         => _log.Info($"[CHEAT] Admin {admin.Name} {message}.");
+
+    /// <summary>Per-player mode override (#1121): <c>/mode &lt;player&gt; survival|creative|world</c> — the
+    /// world admin lets one player play by another mode's rules than the world's (kid = creative flight +
+    /// free crafting, parent unchanged). "world" clears the override. Online players only: the override is
+    /// applied to the live session and persisted with it.</summary>
+    private void AdminSetPlayerMode(PlayerSession session, string? targetName, string? modeArg)
+    {
+        var target = FindSessionByName(targetName);
+        if (target is null)
+        {
+            Reject(session, "admin", "@srv.mode.usage");
+            return;
+        }
+
+        PlayerModeOverride? over = (modeArg ?? string.Empty).Trim().ToLowerInvariant() switch
+        {
+            "survival" => PlayerModeOverride.Survival,
+            "creative" => PlayerModeOverride.Creative,
+            "world" or "none" or "clear" => PlayerModeOverride.None,
+            _ => null,
+        };
+        if (over is null)
+        {
+            Reject(session, "admin", "@srv.mode.usage");
+            return;
+        }
+
+        target.State.ModeOverride = over.Value;
+        _repo.SavePlayer(target.State);
+        CheatLog(session.State, $"set {target.State.Name}'s mode override to {over.Value}");
+
+        // The target's client re-reads its effective rules (mode label, O2 bar, flight) right away; every
+        // admin's Settings tab re-renders its player-mode rows from the re-broadcast roster.
+        foreach (var s in _sessions.Values)
+        {
+            if (s.Joined && (s == target || s.State.IsAdmin))
+            {
+                SendRules(s);
+            }
+        }
+
+        SendPlayerState(target); // CanFly follows the override
+        string modeName = Rules.ModeFor(over.Value).ToString();
+        Send(target, new ServerMessage
+        {
+            Text = Localize(target.Locale, over.Value == PlayerModeOverride.None ? "srv.mode.cleared_you" : "srv.mode.set_you")
+                .Replace("{mode}", modeName),
+        });
+        if (target != session)
+        {
+            Send(session, new ServerMessage
+            {
+                Text = Localize(session.Locale, "srv.mode.set_admin")
+                    .Replace("{player}", target.State.Name)
+                    .Replace("{mode}", over.Value == PlayerModeOverride.None ? Rules.GameMode.ToString() : modeName),
+            });
+        }
+    }
 
     // ---------------- Helpers ----------------
 
@@ -5374,8 +5476,9 @@ public sealed partial class GameServer
             AiCoreTier = VegaCoreTier(session),
             InSpeeder = p.InSpeeder,
             Spectating = session.Spectating,
-            // A creative world lets everybody fly; /fly keeps working as the per-player admin cheat.
-            CanFly = Rules.CreativeFlight || p.Fly,
+            // A creative world lets everybody fly; a per-player Creative override (#1121) grants it too;
+            // /fly keeps working as the per-player admin cheat.
+            CanFly = Rules.CreativeFlightFor(p.ModeOverride) || p.Fly,
         });
     }
 
@@ -5463,12 +5566,16 @@ public sealed partial class GameServer
         if (session.State.LandedBodies.Add(body.Id))
         {
             OnAchievementVisit(session);
+            RecordPlaceDiscovery(session, body); // #1113: a "Places" Codex entry + the knowledge grant
         }
 
         if (!string.IsNullOrEmpty(body.SystemId) && session.State.KnownSystems.Add(body.SystemId))
         {
+            OnAchievementVisitSystem(session); // "System Hopper" / "Starfarer" (#1102)
             RecordStoryMilestone(); // a new star system mapped → story milestone (P3)
         }
+
+        SendExploredMap(session, body.Id); // #1113: the remembered fog for this body's planet map
     }
 
     /// <summary>Records that a player has entered a star system in flight (a hyperjump arrival) — reveals
@@ -5477,6 +5584,7 @@ public sealed partial class GameServer
     {
         if (!string.IsNullOrEmpty(systemId) && session.State.KnownSystems.Add(systemId))
         {
+            OnAchievementVisitSystem(session); // "System Hopper" / "Starfarer" (#1102)
             RecordStoryMilestone(); // a new star system mapped → story milestone (P3)
         }
     }
@@ -5511,9 +5619,22 @@ public sealed partial class GameServer
     private void SendRules(PlayerSession session)
     {
         var r = Rules;
+        // The mode + its derived switches are the receiver's EFFECTIVE ones (#1121): a per-player override
+        // makes the kid's client read "Creative" (and hide the O2 bar) while the world stays Survival.
+        var over = session.State.ModeOverride;
+        // World admins additionally get the online players' overrides, feeding the Settings-tab rows.
+        string[] modeNames = System.Array.Empty<string>();
+        string[] modeValues = System.Array.Empty<string>();
+        if (session.State.IsAdmin)
+        {
+            var online = _sessions.Values.Where(s => s.Joined).OrderBy(s => s.State.Name).Take(24).ToList();
+            modeNames = online.Select(s => s.State.Name).ToArray();
+            modeValues = online.Select(s => s.State.ModeOverride.ToString()).ToArray();
+        }
+
         Send(session, new ServerRules
         {
-            GameMode = r.GameMode.ToString(),
+            GameMode = r.ModeFor(over).ToString(),
             Pvp = r.Pvp.ToString(),
             WeaponMode = r.WeaponMode.ToString(),
             AggressiveAliens = r.AggressiveAliens.ToString(),
@@ -5521,7 +5642,7 @@ public sealed partial class GameServer
             DeathPenalty = r.DeathPenalty.ToString(),
             KeepInventoryOnDeath = r.KeepInventoryOnDeath,
             KeepShipOnDeath = r.KeepShipOnDeath,
-            OxygenEnabled = r.OxygenEnabled,
+            OxygenEnabled = r.OxygenEnabledFor(over),
             AdminCheatsActive = r.CheatsAllowed,
             CreatureAbundance = r.CreatureAbundance.ToString(),
             PlanetEnemies = r.PlanetEnemies.ToString(),
@@ -5532,6 +5653,8 @@ public sealed partial class GameServer
             AutoAim = r.AutoAim,
             StarterTeleporter = r.StarterTeleporter,
             VoiceChatEnabled = _config.VoiceChatEnabled,
+            PlayerModeNames = modeNames,
+            PlayerModeValues = modeValues,
         });
     }
 

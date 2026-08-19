@@ -33,7 +33,13 @@ crosses a threshold (not on a specific find), so a linear arc works in a random 
 - **Machine kills** — defeating a Guardian machine (planet enemies + space drones/UFOs; organic fauna
   excluded) advances the story and has a chance to drop a **player memory** (a per-player, non-contradictory
   personal unlock; each player is a different imprint).
-- **Milestones** — mission turn-in (settlement helped) and first-discovery system mapping.
+- **Milestones** — repeatable: mission turn-in (settlement helped) and first-discovery system mapping;
+  **once per save** (#1105, `RecordStoryMilestone(onceKey)`, keys persisted in `StoryState.MilestoneKeys`):
+  first base founded, first player station commissioned, first self-built ship commissioned, first companion
+  tamed, first hyperjump, first monument scanned per world (`monument:<body>`). Pacing note: fragments cap
+  at 6 (18 pts) and kills at 40, so before #1105 the remaining ~130 of the 204 needed came almost entirely
+  from delivery turn-ins; the once-firsts add roughly 10–20 pts per playthrough from building, taming and
+  exploring — they widen the arc's inputs without making any of them farmable.
 
 **Beats** are spoken through the existing VEGA narrator pipeline (`ShipAiLine`); the speaker identity is a
 pack field, so no new beat UI. Per-player "seen beats" reuse `PlayerState.Milestones` (`story:<id>:beat:N`)
@@ -101,8 +107,19 @@ fragments, memories, flavour and `coreArguments` are authored + translated (DE+E
 
 - Client/world-gen: the two physical finale routes + in-world core console, and bespoke boss/core visuals
   (the voxel chamber already reads well) are follow-ups.
-- A proper re-readable Fragment/Memory reader panel (today: a toast + the Story Log tab list).
-- Pity/budget + structure-placed fragments (combat already de-risks soft-lock).
+- ~~A proper re-readable Fragment/Memory reader panel~~ — shipped with #1110: `StoryReaderUi` (modal,
+  chunked via `UiTextChunks`), Read buttons in the Story tab, and a rejoin-proof snapshot on
+  `StoryStateMessage` (`FoundFragmentKeys` / `PlayerMemoryKeys` / `FoundLoreKeys`, built per receiver).
+- ~~Pity/budget + structure-placed fragments~~ — shipped with #1109: `StoryState.BodiesWithoutFragment`
+  (persisted; after two dry bodies the third guarantees a fragment, any find resets it), and
+  `data_terminal`/`relic_cache` markers roll a fragment per residency (`TryPlaceStructureFragment` —
+  deterministic from the marker position, found keys never return). VEGA's `fragment_signal` context tip
+  gives a bearing and reveals a `fragment_signal` map POI; after the tutorial the objective chip carries
+  a `story.obj.*` line (gated client-side by the VEGA-hints setting).
+- Environmental lore (#1111): `data/stories/<pack>/lore_sites.json` — weighted, knowledge-gated texts per
+  site kind (monument scan / structure loot), revealed once per player (`PlayerState.Milestones`
+  `lore:<key>`), listed in the Codex "Lore" chapter. NPC story threads (#1112): `npcThreads[]` in the
+  pack — role + relationship stage + knowledge gate, once per player, may hand over a fragment.
 - Numeric tuning (`Wf/Wk/Wm`, kill cap, thresholds, memory-drop chance, gauntlet HP) stays data-driven.
 
 ## Appendix — boss/finale music

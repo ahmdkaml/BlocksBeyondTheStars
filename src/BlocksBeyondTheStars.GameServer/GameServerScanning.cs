@@ -247,6 +247,13 @@ public sealed partial class GameServer
                 Names = new[] { readout.Display },
                 Full = false,
             });
+
+            OnAchievementScan(session, readout.Kind); // "Scholar" / "Archaeologist" and friends (#1102)
+            if (readout.Kind == "monument")
+            {
+                RecordStoryMilestone("monument:" + _world.LocationId); // first rune read on this world (#1105)
+                TryRevealLoreText(session, "monument"); // the runes' inscription opens in the reader (#1111)
+            }
         }
 
         ShipAiOnScan(session); // VEGA onboarding: first scan (any subject counts)

@@ -1041,6 +1041,15 @@ public sealed class ServerRules
     /// <summary>Whether the server accepts/relays live voice chat (opt-in; default off on dedicated servers).
     /// When false the client keeps voice capture disabled and shows voice comms as unavailable.</summary>
     public bool VoiceChatEnabled { get; set; }
+
+    /// <summary>Per-player mode overrides (#1121), parallel to <see cref="PlayerModeValues"/> — the online
+    /// players' names, filled only when the RECEIVER is a world admin (they feed the Settings-tab
+    /// "player modes" rows). Empty for everyone else. Note <see cref="GameMode"/> above is already the
+    /// receiver's EFFECTIVE mode, override included.</summary>
+    public string[] PlayerModeNames { get; set; } = System.Array.Empty<string>();
+
+    /// <summary>Current override per player in <see cref="PlayerModeNames"/>: "None", "Survival" or "Creative".</summary>
+    public string[] PlayerModeValues { get; set; } = System.Array.Empty<string>();
 }
 
 /// <summary>Client → server (world admin only): live-edits the gameplay world options — creature
@@ -1224,6 +1233,18 @@ public sealed class NetMapBase
 {
     public string BodyId { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+}
+
+/// <summary>Server → client on arriving on a body (#1113): the receiver's PERSISTED explored-map cells
+/// for that body, so the planet map's fog stays lifted across sessions. One bit per 8×8-chunk cell
+/// (<c>ExploredMap</c> in Shared derives the grid from the circumference on both sides); the client
+/// overlays it with the live-streamed chunks. Empty <see cref="Cells"/> = nothing explored yet.</summary>
+public sealed class ExploredMapData
+{
+    public string BodyId { get; set; } = string.Empty;
+    public int Cols { get; set; }
+    public int Rows { get; set; }
+    public byte[] Cells { get; set; } = System.Array.Empty<byte>();
 }
 
 /// <summary>Client → server: hyperjump into a (possibly never-visited) star system, arriving in FLIGHT mode

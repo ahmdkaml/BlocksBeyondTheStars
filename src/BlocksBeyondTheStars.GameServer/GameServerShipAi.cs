@@ -7,6 +7,7 @@ using System.Linq;
 using BlocksBeyondTheStars.Networking.Messages;
 using BlocksBeyondTheStars.Shared.Configuration;
 using BlocksBeyondTheStars.Shared.State;
+using BlocksBeyondTheStars.Shared.Story;
 using BlocksBeyondTheStars.Shared.World;
 
 namespace BlocksBeyondTheStars.GameServer;
@@ -89,24 +90,69 @@ public sealed partial class GameServer
     private void SendVegaObjective(PlayerSession session)
         => SendVegaLine(session, string.Empty, 0);
 
-    private static string VegaObjectiveKey(PlayerState p)
+    private string VegaObjectiveKey(PlayerState p)
     {
         int i = VegaStageIndex(p);
-        return i < VegaStages.Length ? "vega.obj." + VegaStages[i].Id : string.Empty;
+        return i < VegaStages.Length ? "vega.obj." + VegaStages[i].Id : StoryObjectiveKey(p);
     }
 
-    private static int VegaObjectiveTarget(PlayerState p)
+    private int VegaObjectiveTarget(PlayerState p)
     {
         int i = VegaStageIndex(p);
-        return i < VegaStages.Length ? VegaStages[i].Target : 0;
+        if (i < VegaStages.Length)
+        {
+            return VegaStages[i].Target;
+        }
+
+        // Story objective (#1110): the chip shows the arc's score as its counter ("(128/204)").
+        return StoryObjectiveKey(p).Length > 0 && _story is { Beats.Count: > 0 } d
+            ? d.Beats[d.Beats.Count - 1].Threshold
+            : 0;
     }
 
     private int VegaObjectiveProgress(PlayerSession session)
     {
         var p = session.State;
         int i = VegaStageIndex(p);
-        return i < VegaStages.Length && VegaStages[i].Id == "mine" ? session.VegaMineCount : 0;
+        if (i < VegaStages.Length)
+        {
+            return VegaStages[i].Id == "mine" ? session.VegaMineCount : 0;
+        }
+
+        return StoryObjectiveKey(p).Length > 0 && _story is not null
+            ? StoryEngine.Progress(_story, _storyState, Rules.StoryProgressScale)
+            : 0;
     }
+
+    /// <summary>The post-tutorial story objective on the HUD chip (#1110): once VEGA's onboarding is done the
+    /// chip no longer goes blank — it says what the story wants next. Keys use the <c>story.obj.</c> prefix so
+    /// the client can gate them behind the hints setting (the tutorial chip always shows). Empty when no story
+    /// is active or the finale is won (the chip then clears, as before).</summary>
+    private string StoryObjectiveKey(PlayerState p)
+    {
+        if (!StoryActive || _story is null || _storyState.GuardianDefeated)
+        {
+            return string.Empty;
+        }
+
+        if (_storyState.GuardianSystemRevealed)
+        {
+            return "story.obj.finale"; // confront the Guardian core
+        }
+
+        if (p.CurrentLocationId == _worlds.Active.LocationId && _netFragments.Count > 0)
+        {
+            return "story.obj.fragment_here"; // a net fragment is on THIS world — follow the signal
+        }
+
+        return _story.Fragments.Any(f => !_storyState.FoundFragmentKeys.Contains(f.Key))
+            ? "story.obj.search"  // ruins, wrecks and terminals still hold fragments somewhere
+            : "story.obj.help";   // fragments done — settlements, systems and kills carry the rest
+    }
+
+    /// <summary>Test seam: the objective-chip key this player would be sent right now (#1110).</summary>
+    public string? ObjectiveKeyForTest(string playerId)
+        => FindSessionByPlayerId(playerId) is { } session ? VegaObjectiveKey(session.State) : null;
 
     /// <summary>Join hook: boots VEGA for new players (prologue + intro + first objective), auto-grants the
     /// chain for veteran saves, and re-shows the current objective on a mid-onboarding rejoin. Always ends
@@ -153,6 +199,10 @@ public sealed partial class GameServer
         else if (!VegaOnboardingDone(p))
         {
             SendVegaLine(session, "vega.resume", 0);
+        }
+        else
+        {
+            SendVegaObjective(session); // story objective (#1110): the chip survives a rejoin
         }
 
         SendVegaJournal(session);
@@ -398,7 +448,9 @@ public sealed partial class GameServer
 
     // --- Memory fragments (Phase C story arc): found in wreck/vault data terminals and data caches,
     // redeemed one at a time when the player is back aboard the ship — VEGA "reads" them and recovers
-    // a beat of her past. Completing the arc teaches the Mk3 core blueprint. ---
+    // a beat of her past. Completing the arc hands over the Mk3 core's research materials (#1104): the
+    // blueprint itself still has to be researched at the cockpit behind its knowledge threshold — the arc
+    // used to add it straight to the archive, which made the tree's second-most-expensive unlock free. ---
 
     private void TickVegaMemory(PlayerSession session)
     {
@@ -410,14 +462,42 @@ public sealed partial class GameServer
 
         int restored = p.Milestones.Count(m => m.StartsWith("vega:mem:", System.StringComparison.Ordinal));
         int beat = restored + 1;
+
+        // The final beat comes with the Mk3 parts list stowed in the hold; if there is no room for them the
+        // fragment simply waits — nothing is consumed and nothing is lost (the same rule the achievement
+        // rewards follow). Cargo counts because the player is aboard by definition here.
+        MaterialPool? pool = null;
+        var mk3Cost = beat == VegaMemoryBeats ? _content.GetBlueprint(VegaMk3Blueprint)?.UnlockCost : null;
+        if (mk3Cost is { Count: > 0 })
+        {
+            session.Ships.TryGetValue(session.ActiveShipId, out var ownShip); // this player's ship, not the cursor's
+            pool = new MaterialPool(_content, p, ownShip ?? _ship);
+            if (!pool.CanFit(mk3Cost))
+            {
+                if (session.VegaMemoryHoldFullWarned)
+                {
+                    return;
+                }
+
+                session.VegaMemoryHoldFullWarned = true;
+                SendVegaLine(session, "vega.sys.mk3parts_full", 3);
+                return;
+            }
+        }
+
         p.Inventory.Remove(VegaMemoryItem, 1);
         p.Milestones.Add("vega:mem:" + beat);
         p.KnowledgePoints += VegaMemoryKnowledge;
         session.VegaMemoryReadyAt = _uptime + 6.0; // space multiple fragments out so the lines can be read
 
         SendVegaLine(session, beat <= VegaMemoryBeats ? "vega.mem." + beat : "vega.mem.more", 2);
-        if (beat == VegaMemoryBeats && p.UnlockedBlueprints.Add(VegaMk3Blueprint))
+        if (mk3Cost is { Count: > 0 } && pool is not null && p.Milestones.Add("vega:mem:mk3parts"))
         {
+            foreach (var part in mk3Cost)
+            {
+                pool.Add(part.Item, part.Count);
+            }
+
             SendVegaLine(session, "vega.sys.mk3bp", 3);
         }
 

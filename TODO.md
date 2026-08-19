@@ -105,6 +105,257 @@ Per-item detail lives in the dated work log below. **Since 2026-07 versions are 
 
 ---
 
+### ★ Per-player mode — one family world, mixed Survival/Creative (#1121, 2026-08-19, branch feat/progression-pr7-per-player-mode)
+PR 7 of the progression package (epic #1101), first non-core PR. The problem: `GameRules` derived every
+mode switch from the world's `GameMode` — one family world, one ruleset; a parent wanting survival and a
+kid wanting creative could not share a world.
+**Rules refactor:** new `PlayerModeOverride` (None/Survival/Creative) on `PlayerState` (persisted via the
+snapshot int + `Enum.IsDefined` guard, like `NpcCallsMode`); every mode-derived getter gained a `…For(override)`
+twin (`ModeFor`, `CraftingCostsMaterialsFor`, `OxygenEnabledFor`, `HungerEnabledFor`,
+`TemperatureHazardsEnabledFor`, `CreativeFlightFor`) — the parameterless originals delegate to `…For(None)`,
+so world-level callers (spawning, presets, base-air warnings) are untouched. All ~25 per-player consumption
+sites (crafting/research/build/repair/paint/blueprint-paste `free` checks, oxygen/hunger/temperature/weather
+ticks, `CanFly`) now pass the session's override. `CheatsAllowed` deliberately stays world-level.
+**Hostiles:** new `PlayerState.IgnoredByHostiles` (god mode ∨ cloak ∨ creative override) replaces the
+scattered `GodMode || Stealthed` checks in machine/bandit/fauna targeting + ambush scheduling — a
+creative-override player is invisible to hostiles, mirroring a creative world where they never spawn.
+**Admin surface:** `set_mode` admin command in the MODERATION switch (role is the gate, NOT `CheatsAllowed` —
+family worlds keep cheats off, and exactly there a parent needs it); `/mode Player survival|creative|world`
+in chat (last token = mode, rest = name, #980-safe); Settings tab gained **Player modes** rows — the server
+fills a name/override roster into `ServerRules` (contractless MessagePack, field add is codec-safe) only for
+admin receivers, so the section simply doesn't render for others. `/players` shows the override.
+**Client truth:** `SendRules` now sends the receiver's EFFECTIVE mode + `OxygenEnabledFor` (kid's client
+reads "Creative", hides the O2 pressure) and `SendPlayerState.CanFly` follows the override; on `set_mode`
+the target gets rules+state+toast immediately and all admins get the refreshed roster.
+Locales: 10 new keys EN+DE by hand, 12 community locales MT'd. Tests: `PlayerModeOverrideTests` (5) —
+getter matrix, snapshot round-trip + unknown-value guard, admin command incl. non-admin refusal +
+spaced names, live effective-rules/CanFly/free-craft flow, SQLite restart persistence.
+
+### ★ Living NPCs — identity + stages, radio calls, the world notices your base (#1118, #1119, #1120, 2026-08-18, branch feat/progression-pr6-living-npcs)
+PR 6 of the progression package (epic #1101) — the last core PR. The audit: NPC memory existed but nothing
+showed it; the radio only ever carried players; bases had zero systemic feedback.
+**Identity (#1118):** the greeting-tone thresholds (`RelationshipTier`: hostile/stranger/known/trusted)
+are now player-visible — localized as Distrustful/Stranger/Acquaintance/Friend (`npc.stage.*`). Nameplates
+append the stage (per-receiver `NpcStandingList`, msg 216 — deliberately NOT on the 0.2 s NPC position
+broadcast; sent with `SendNpcs` + after trades/mission-accepts). Character tab gained **People you know**
+(`KnownNpcList` 218 on request 217, from the persisted `NpcMemory`; new `NpcRelationship.Place` captured
+at interaction time — reversing the location-key hash is impossible). Stages rise via the existing weights.
+**Radio calls (#1119):** `GameServerNpcRadio.cs` — an NPC the player KNOWS calls them: "📻 Name (Place)"
+as a targeted `ChatMessage` (first server-originated chat line in the codebase). Triggers: uncleared camp
+→ quartermaster points at the bounty (mission-category); board refill after a turn-in (hint); trader
+landed near a base (#1120, hint, no acquaintance needed — it's an advert). Gates: radio tier reaches the
+location (comm/system/galaxy items), relationship ≥ known, ≤1 call/10 min (VEGA-style), 1 h per-call
+cooldown, 90 s join quiet. Preference `PlayerState.NpcCallsMode` (All/MissionsOnly/Off, msg 219) — server-
+persisted because the SERVER initiates calls; client row in Settings→Comfort (ChatVisibility cycle
+pattern), mirrored on join. "Queued while offline" = the repo's recompute-on-join pattern: the first scan
+after the quiet period announces whatever is still true. Family/peaceful: no camps → no such calls.
+**Base life (#1120 stages 1–2):** traders 70 %-prefer landing on worlds with a founded base and hail its
+owner on touchdown; `GameServerBaseLife.cs` round-robin-scans bases (10 s, one 17³ zone per tick) and
+moves a **settler** in at ≥3 machine-category blocks (deterministic look per base id, `MakeNpc` like the
+landed-trader pilots, seeded at KNOWN standing for the owner, announced by call). Dissolved base → settler
+leaves. Stage 3 (opt-in bandit scouting) rides with D4/#1122 as planned; no NPC ever touches a block.
+Tests: `NpcRadioTests` (camp call + cooldown; no-radio/stranger/opt-out gates; preference + roster intents),
+`BaseLifeTests` (no settler on a bare claim, moves in at 3 machines + known to owner, never doubles),
+NetCodec golden 216–219. Locales: 15 keys EN+DE hand-written, 12 community locales MT'd.
+
+### ★ Builder goals — Build missions on settlement boards, whole-build share codes (#1116, #1117, 2026-08-18, branch feat/progression-pr5-builder-goals)
+PR 5 of the progression package (epic #1101). The audit: building had three achievements and zero
+assignments, and nothing a builder makes could leave the world (forms/paint share via BBTS1 codes,
+structures didn't).
+**Build missions (#1116):** settlement boards offer ONE build job beside the 3-slot gather window — own
+deterministic slot sequence (id "…b<slot>", `BuildBoardBuildMission`) so the existing gather rolls stay
+byte-identical (regenerating a HELD board mission with a changed template pool would morph it on reload).
+Templates: raise a shelter (any ×~20), light the camp (category-`light` ×~6 — a glowing forge does NOT
+count), raise a beacon (radio_beacon ×1), build on home ground (own-base zone ×~15, new
+`InOwnBaseZone`). `MissionObjectiveType.Build` existed as a "later" stub; progress now advances in
+`OnBlockPlaced` (hooked beside `OnAchievementBuild`), is increment-only (mining never regresses), and
+turn-in/`BuildNetMission` handle it generically. Matcher is pure/static (`BuildObjectiveMatches`).
+**Whole-build share codes (#1117):** `BlueprintCode` in Shared — region ≤16³ → palette (block KEYS, not
+save-local ids) + RLE cells + per-cell shape/tint/glow, Deflate → `BBTS1-B-…` (paint-design bits stripped
+on encode; custom-form descriptors fall back to cubes in a save that lacks them). New `blueprint_tool`
+item (gadget, cheap workshop recipe) + `BlueprintToolUi` modal (corner A/B → name → code to clipboard;
+clipboard code → paste at aim, `ui.blueprint.*`). Server `GameServerBlueprints.cs`: copy needs proximity
+(48), paste has a 3 s cooldown and re-validates EVERY cell like a hand-placed block (build height, air
+only, pads/stations/factories/foreign bases, ship interiors), pays base items from the inventory
+(creative/instant-build free), skips entity-founding blocks (doors/containers/base_core/beacons/beam/keel)
+and credits the author in the result toast. Msgs 212–215 + golden list. Pasted blocks advance build
+missions + achievements.
+Tests: `BuildMissionTests` (board offers the job, advance/no-regress/turn-in, pure matcher),
+`BlueprintTests` (lossless round-trip, design-bit strip, tampered/oversized codes, clipboard-friendly
+length, live copy→paste with material payment, foreign-base protection). Locales: 33 keys EN+DE
+hand-written, 12 community locales MT'd. USER_MANUAL: build jobs + blueprint tool sections.
+
+### ★ Explorer discovery — the map remembers, unknown systems, Places + knowledge, worldgen defaults (#1113, #1114, 2026-08-18, branch feat/progression-pr4-explorer-discovery)
+PR 4 of the progression package (epic #1101). The audit: mapping a world left no trace after a reload
+(fog = streamed chunks only), the star map named every system from minute one, and landing on a new world
+granted nothing but an achievement tick.
+**Persisted exploration (#1113):** per-player, per-body explored-cell bitmap (`ExploredMap` in Shared —
+one bit per 8×8-chunk cell, grid derived from the circumference on BOTH sides, ≤ ~1 KB even for a 16000
+body; `PlayerState.ExploredCells`, size-capped in the snapshot mapper). Server marks cells as chunks
+stream (`MarkExploredCell` in `GameServerExploration.cs`), sends the bitmap on every arrival
+(`ExploredMapData`, NetCodec id 211 + golden list). Client: `SessionExploredCells` keeps
+live-streamed cells lifted after far-chunk unload; `WorldMap.BuildTexture` draws remembered cells in a
+lighter "explored" fog tone. Star map: never-entered systems read **"Unknown system"** (`SystemDisplayName`
+in CraftingTechShipUI) — a fitted `radar_array` reveals real names (its second use, #1107 spirit). First
+landing per body → Codex **Discoveries → Places** (`place:<bodyId>` ledger entry) **+5 knowledge**
+(`RecordPlaceDiscovery`) — EXCEPT the spawn world, which records the entry but pays nothing (a join-time
+grant flips `VegaIsVeteran`, KnowledgePoints > 0, and would skip onboarding for every fresh save);
+pre-#1113 saves backfill landed bodies silently on join (no windfall).
+Optional body NAMING deliberately skipped — it needs a world-level custom-name store; noted in #1113.
+**Worldgen defaults (#1114):** the three regimes (SystemVariance/AsteroidBelts/TerrainContinents) were
+already creation-default ON — the real deltas: `SpaceStations` Rare→**Normal** for NEW saves (ServerConfig
+initializer; the WorldDescription type default stays Rare so legacy metadata loads unchanged — golden test
+in WorldOptionsTests), the creation panel's Stations slider default follows, and three **opt-out toggles**
+("Galaxy & terrain") on the world-options structures page (`--variance/--belts/--continents false`).
+**D3 (#1115) not here:** template authoring belongs in the in-game editors (Justus / community #96/#97) —
+raising the use frequency with one template would just stamp the same layout more often.
+Tests: `ExplorationTests` (grid bounds, canonical-domain rejection, stream→bitmap→reload round-trip,
+place-once + knowledge, backfill), NetCodec golden 211, `WorldOptionsTests` creation-vs-legacy defaults.
+Locales: 6 new keys, EN+DE hand-written, 12 community locales MT'd.
+
+### ★ Story findable on purpose — structure fragments + pity, reader panel + story objective, environmental lore, NPC threads (#1109–#1112, 2026-08-18, branch feat/progression-pr3-story-findable)
+PR 3 of the progression package (epic #1101). The audit found the story arc carried by ~65 delivery
+turn-ins: fragments spawned only on random surface spots (50 % of bodies none), arrived as a vanishing
+toast, the objective chip went blank after the tutorial, the world carried zero readable lore, and NPCs
+knew nothing. The Voidcraft start-pad fragment (#1087) stays open pending its author's CLA — the pity
+budget covers the early game without it.
+**Fragments findable (#1109):** `data_terminal` and `relic_cache` markers roll a net fragment per residency
+(`TryPlaceStructureFragment`, deterministic from the marker position; unread ones survive a reload, found
+keys never return — VEGA's onboarding line about ruins holding her memory is true now). Pity budget: after
+two zero-fragment bodies the third guarantees one (`StoryState.BodiesWithoutFragment`, persisted; any find
+resets it; `RollNetFragmentCount` is pure and simulation-tested: ≥6 fragments over any 20-body journey).
+The old "list non-empty" stamp guard became a real `NetFragmentsStamped` flag so dry worlds don't re-roll
+the pity counter. Signal: VEGA context tip `fragment_signal` (bearing + distance, tip table) which also
+reveals a `fragment_signal` map POI (drops off on pickup); world-map glyph + legend row.
+**Story objective + reader (#1110):** after the tutorial the chip carries `story.obj.fragment_here/search/
+help/finale` with the arc's score as counter (server-side in `VegaObjectiveKey`; per-body update on landing,
+per-advance via `BroadcastStoryState`; client gates `story.obj.*` behind the VEGA-hints setting, and
+`OnboardingActive` no longer misreads a story objective as a running tutorial). New modal `StoryReaderUi`
+(TeleporterUi skeleton, `UiTextChunks`-chunked, queues while another menu is open): fragments, memories and
+lore open there instead of a toast. Story tab rows got Read buttons + a *Field records* section; Codex got
+a **Lore** chapter (found texts full, sealed count for the rest). Rejoin-proof: `StoryStateMessage` now
+carries `FoundFragmentKeys` (per save) + `PlayerMemoryKeys`/`FoundLoreKeys` (per player, message built per
+receiver); `Client.Core.StoryLog` rebuilds the logs in pack order (headless-tested).
+**Environmental lore (#1111):** `data/stories/<pack>/lore_sites.json` — 26 texts across 9 site kinds
+(monument, wreck, data_terminal, ruin, vault, bandit_camp, chest, settlement, factory), weighted and
+knowledge-gated (spoilers stay locked until the arc is far enough). Revealed on monument scan
+(`TryRevealLoreText` beside the #1105 milestone) and on looting a structure container (site derived from
+the loot id — `LoreSiteOfContainer`); once per player per text (`Milestones` `lore:<key>`), new
+`LoreTextRevealed` message (id 210, golden list). EN+DE hand-written, 12 community locales MT'd.
+**NPC threads (#1112):** `npcThreads[]` in the story pack — (role, minStage known/trusted, minKnowledge,
+textKey, optional fragmentKey). On greeting, the first eligible unfired thread speaks (before treasure
+hints, deterministic, works with `AiLevel Off`) and a carried fragment is recorded + revealed. Three
+threads shipped: the settler legend (vendor, hands over `frag_settler_legend`), the Guardian rumour
+(quartermaster, k3), the network-hope line (trusted vendor, k4).
+**Fixes along the way:** `ResetStoryState` now clears `MilestoneKeys` (pack switch left old once-per-save
+firsts blocking the new pack) and the pity counter; `story.json` beat `knowledgeReward` back to 1 (#767
+had decided 1, the data pack silently still paid 3 — the no-drift test now compares the field).
+**Tests:** `StoryFindabilityTests` (pity simulation + persistence, structure placement/idempotence/no-revive,
+story objective key, rejoin snapshot, lore gating/dedupe/derivation, ≥20 texts EN+DE, new-key locale guard),
+`NpcThreadTests` (fires once at known standing + hands over the fragment, stranger gets nothing, pack
+declares threads), `StoryLogTests` (client, pack-order rebuild), golden list [210]. USER_MANUAL §5,
+STORY_IMPLEMENTATION.md gaps struck.
+
+### ★ Material economy — reactor fuel as a build cost, every metal with ≥3 uses, the interior-decor blocks craftable (#1106–#1108, 2026-08-18, branch feat/progression-pr2-h2-materials)
+PR 2 of the progression package (epic #1101) — pure content: JSON + locales + one test file, no C#. The audit
+found `reactor_fuel` feeding one jump generator and nothing else, five materials with a single use and nine
+ingots with two, and the game's best-looking blocks (the ship-interior lights and panels, the factory guts)
+being exactly the ones a player could never build with.
+**Reactor fuel (#1106, decided variant A — no power system, no consumption):** fuel is the **one-time build cost**
+of the big things — Thunderbolt 2, Hammerhead 3, Deathblock 4 (`ships.json` craftCost), the heavy laser cannon 1
+and the jump generator 1 (`ship_modules.json` buildCost, the generator also takes 2 neodymium for its field
+coils). No recipe consumes it and nothing burns it while running — every device carries its own energy cell;
+big reactors need fuel to *start*. The issue's "station-core upgrade" sink has no code counterpart (there is no
+station upgrade), and `station_core` must stay pre-refinery (RefineryProgressionTests), so the fifth sink is
+the cannon instead. Item text rewritten EN/DE, one manual line under *Ship, modules, building*.
+**Every metal earns its keep (#1107):** each H2 metal (aluminium, tin, nickel, cobalt, platinum, lead, zinc,
+tungsten, lithium, neodymium, light alloy, biofuel, magnet) now has ≥3 uses across ≥2 stations, counting recipe
+inputs + ship craft costs (shipyard) + module build costs (module bay). Ten new recipes: refinery variants that
+follow the efficiency-smelt rule (better yield, workshop fallback stays) — `refine_bronze` (tin), `refine_brass`
+(zinc), `refine_steel` (nickel), `refine_light_alloy` (3 aluminium + titanium ore → 2), `magnet_sintered`
+(neodymium → 4), `carbide_cobalt` (tungsten + cobalt binder, no platinum), `power_cell_refined` (2 cells +
+lithium + cobalt → 2, no sulfur); `energy_cell_lithium` (workshop, a cell batch of 3); `torch_oil` and
+`lantern_oil` (hand, biofuel — light where no tree grows). Two existing recipes gained a part in-theme:
+`speeder` +2 light alloy (frame), `mining_beam` +1 magnet (confinement); `hull_plating` +4 lead (shielding).
+**Interior decor craftable (#1108):** the 14 worldgen-only blocks — `light_white/red/green`, `strip_light_cyan/warm`,
+`force_field`, `medbay_panel`, `lab_panel`, `cargo_floor`, `engine_panel`, `engine_nozzle`, `factory_terminal`,
+`factory_pipe`, `machine_block` — have an item (`placesBlock`), drop themselves and a workshop recipe: lights are a
+crystal in a glass housing with an aluminium reflector (berries tint the port lens, fibre the starboard one,
+cobalt the cyan strip, brass the warm one), panels are plated `metal_panel` + polymer with one metal each (tin,
+nickel, zinc, tungsten), nozzle steel + tungsten + carbide, machine housing gear + magnet + circuit, the force
+field a platinum emitter behind the **energy-door blueprint**. `force_field` lost `mineable: false` (hardness 5,
+drill T1) so a placed one comes back — worldgen hangar fields are protected by the station rules anyway. A placed
+`factory_terminal` is decoration: the factory tab still keys off a real `FactoryInstance` (server roster check +
+client `PlayerAtTerminal`), the item text says so. `data_cache` stays loot-only. Item names in EN/DE + the 12
+community locales (item name = the language's block name), descs machine-translated.
+**Tests:** `MaterialEconomyTests` — every H2 metal ≥3 uses / ≥2 stations, refinery variants out-yield the
+workshop per metal, reactor fuel ≥4 build-cost sinks and never a recipe input, every decor block mineable +
+self-drop + item + recipe (+ `data_cache` has no item), decor items named in both languages.
+
+### ★ Progress & economy — late-game achievements, progress figures, the last knowledge faucets, story milestones (#1102–#1105, 2026-08-17, branch feat/progression-pr1-progress-economy)
+PR 1 of the progression package (epic #1101). The audit behind the epic found the game well served for its first
+~5 hours and then pulling on nothing: 15 achievements that all end by "1 000 blocks / 8 bodies", no single place
+that says how far along you are, two knowledge faucets that still let a child out-earn the whole tech tree from
+the arcade, and a story arc that ~65 delivery turn-ins had to carry alone.
+**Achievements (#1102):** eleven new lifetime counters at existing gameplay events — `scan:any` / `scan:monument`
+(first-time scan), `research:any` (blueprint researched), `station:commissioned`, `ship:commissioned`, `tame:any`,
+`loot:any` (a find looted empty), `visit:system`, `mission:completed`, `hyperjump:any`, `story:finale` (every
+player aboard for the won duel) — and 24 new goals in `data/achievements.json` across the old categories plus
+two new ones (*Research*, *Story*): Excavator 5 000 / Deep Delver 50 000 blocks, Master Builder 10 000,
+Shipwright, Station Master, Manufacturer 500, Researcher 10 / Engineer 35 / Polymath (the whole tree — a test
+pins its target to the blueprint count), Scholar 25 / Naturalist 100 scans, Archaeologist 5 monuments, Voyager
+20 / Pathfinder 40 worlds, System Hopper 3 / Starfarer 8 systems, Jump Pilot, Treasure Hunter 10, Guardian of the
+Colony 100, Beast Friend / Tamer 5, Helping Hand 5 / Quartermaster's Friend 25 missions, The Verdict Overturned.
+Rewards are late materials (titanium plates, circuit boards, energy/power cells, panels, medpacks) — never
+knowledge. EN+DE by hand, 12 community locales via the translate tool.
+**Progress figures (#1103):** `AchievementList` now carries the raw `Counters` (additive field on the
+contractless MessagePack body — old clients ignore it, no new tag). The Achievements tab opens with a **Progress**
+block — research N of 72, Codex discoveries, story %, achievements done — and a two-column **Journey** grid of the
+lifetime tallies; the Tech tab has a header line ("Researched N of M · Next affordable: …", cheapest researchable
+blueprint by knowledge); the Codex Discoveries sections show per-kind counts.
+**Knowledge faucets (#1104):** the arcade now pays on a global diminishing curve over the games a player starts —
+5/4/3/2 KP per star for the first four games, 1 thereafter; a game's rank is fixed when its first star is banked
+(`arcade:<key>:rank:<n>`) so later stars of the same game pay the same rate, legacy saves get ranked on next
+play, and a full 20-game clear is ≈ 90 KP instead of the 300 that beat every threshold in the tree. The VEGA
+memory arc's tenth fragment hands over the **Mk3 core's research materials** (10 fragments, 8 titanium plates,
+12 cable) into pack/hold instead of adding the blueprint to the archive; the 200-KP threshold and the cockpit
+stay. No room → the fragment waits (nothing consumed), VEGA says so once (`vega.sys.mk3parts_full`).
+**Story milestones (#1105):** `RecordStoryMilestone(onceKey)` with a persisted `StoryState.MilestoneKeys` set
+(JSON blob, additive) — the first base founded, first station and first self-built ship commissioned, first
+companion tamed, first hyperjump and the first rune read per world (`monument:<body>`) each advance the arc once
+per save; the doc comment that promised "first base or station built" is true now. New tests: research/scan
+counters, raw counters on the list, research targets ≤ blueprint count + category keys, arcade curve + legacy
+ranking, Mk3 parts hand-over + hold-full wait, once-milestones across a reload. USER_MANUAL §4/§5 and
+`docs/developer/STORY_IMPLEMENTATION.md` updated.
+
+### ★ SRP Batcher: the URP shaders declare their material properties where the batcher can see them (#573, 2026-08-17, branch perf/573-srp-batcher-cbuffers)
+The SRP Batcher has been enabled in the URP asset all along, but almost none of our own shaders qualified for
+it: a shader is only batched when **every per-material property sits in one `CBUFFER_START(UnityPerMaterial)`
+block, with the same layout in every pass** of the SubShader — and ours declared them bare, which silently
+costs one SetPass call per material. Eleven URP SubShaders now declare them properly: `LitColor` (the real
+prize — avatars, held items, doors, ship previews, station/structure models are many distinct materials on one
+shader), `BlockAtlas` + `BlockAtlasTransparent`, `SkyBodyPhase` (one material per planet/moon), `Atmosphere`,
+`Aurora`, `Nebula`, `SunRays`, `PlanetRing`, `Particle`, `ParticleAlpha`. `LitColor` and `BlockAtlas` repeat the
+identical block in their ShadowCaster pass, because a layout that differs between passes disqualifies the whole
+shader. **The `_Sc_*` / `_HeatAmp` / `_ThermalAmt` globals stay OUTSIDE the cbuffer on purpose** — they are
+per-frame `Shader.SetGlobal*` values (sun, sky, fog, headlamp), and inside `UnityPerMaterial` the batcher would
+serve each material's own stale copy of them instead. Deliberately unchanged, all verified compatible or out of
+scope: `ScatterLit`, `VertexColorOpaque`, `HeatHaze`, `Thermal` (no material properties at all — nothing to
+wrap), `Visor` (a render-graph blit; the batcher only ever sees `DrawRenderers`), `VisorGlass` (Built-in-RP
+overlay quad, no URP SubShader), and `Cloud`/`Starfield`/`SunGlow`/`ThermalMarker` (already correct).
+No visual change is intended — this moves declarations, not maths. New `ShaderSrpBatcherEditModeTests` keeps it
+that way: the shaders compile, Unity itself reports every URP SubShader as batcher-compatible (through the same
+internal API the Material Inspector's "SRP Batcher: compatible" line uses, with `VisorGlass` explicitly waived),
+and a source-level check fails any future property declared outside the cbuffer. Frame-time effect not measured
+yet — the win is fewer SetPass calls, best seen in the Frame Debugger. Ask 2 of #573 (the WebGL startup
+`ERROR: Shader` lines) is untouched and now tracked on its own as #1099.
+
+One thing the work turned up for anyone reaching for the same check: Unity's own compatibility API
+(`ShaderUtil.GetSRPBatcherCompatibilityCode`, what the Shader Inspector's "SRP Batcher" line shows) can only
+answer for a SubShader that has actually been compiled. In a headless `-nographics` batch run every URP
+SubShader — URP's own `Lit` included — answers `Not initialized ()`, so that check skips itself there and the
+source-level one carries CI.
+
 ### ★ Codex Guide + Items chapters render again — one uGUI Text hit the 65 000-vertex limit (#1097, 2026-08-16, branch fix/codex-guide-blank-1097)
 Codex → Guide ("Anleitung") and Items showed a completely empty pane. `WikiUI.RenderChapter` put the whole
 chapter into ONE `UnityEngine.UI.Text`; uGUI builds 4 vertices per glyph and `VertexHelper.FillMesh` throws

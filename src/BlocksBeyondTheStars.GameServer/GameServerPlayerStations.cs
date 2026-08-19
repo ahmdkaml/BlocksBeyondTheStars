@@ -66,7 +66,7 @@ public sealed partial class GameServer
             return;
         }
 
-        bool free = !Rules.CraftingCostsMaterials || session.State.InstantBuild;
+        bool free = !Rules.CraftingCostsMaterialsFor(session.State.ModeOverride) || session.State.InstantBuild;
         var pool = new MaterialPool(_content, session.State, _ship);
         if (!free)
         {
@@ -177,8 +177,10 @@ public sealed partial class GameServer
         if (owner is not null)
         {
             Send(owner, new ServerMessage { Text = "@srv.station.commissioned:" + s.Name });
+            OnAchievementStationCommissioned(owner); // "Station Master" (#1102)
         }
 
+        RecordStoryMilestone("station:first"); // the first station of the save advances the arc (#1105)
         _log.Info($"Player station '{s.Name}' ({s.Id}) commissioned with {s.Cells.Count} blocks.");
     }
 

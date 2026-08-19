@@ -185,8 +185,13 @@ separate unlock; admins can still disable it through server world rules.
 ## 4. Menus & HUD
 
 - **Tab menu** — tabs for Inventory, Crafting, Tech (blueprints), Ship (modules/build), Map, Missions,
-  Character (appearance), plus **Story**, **Companions** (tamed creatures, see §5) and **Alliances** (see §5),
-  with **Settings** pinned far right. Crafting/Tech/Ship are **location-bound**: Crafting to a station **block**
+  Character (appearance), plus **Story**, **Companions** (tamed creatures, see §5), **Alliances** (see §5) and
+  **Achievements**, with **Settings** pinned far right. The **Achievements** tab opens with a **Progress** block —
+  research N of M blueprints, Codex discoveries, story %, achievements done — and a **Journey** grid of your
+  lifetime tallies (worlds visited, systems entered, blocks mined/placed, subjects scanned, missions …); the
+  goals below run from the first blocks to the late game (thousands of blocks, dozens of worlds, the whole
+  tech tree, your own station or ship, the Guardian finale) and each pays an item reward. The **Tech** tab
+  header shows how much of the tree you have researched and which blueprint you could research next. Crafting/Tech/Ship are **location-bound**: Crafting to a station **block**
   (workbench, forge, …), Tech to your ship's **cockpit**, Ship to the **workshop module** aboard. The **gate row**
   above the list names the block you need (with its icon), how far away the nearest one is and in which
   direction; **Show** marks it on your compass, **Craft one →** jumps to its recipe when you don't own one yet.
@@ -200,7 +205,8 @@ separate unlock; admins can still disable it through server world rules.
   the Map's travel buttons are also disabled (the world is shown but you can't quick-travel from on foot), and
   the Inventory's **Cargo Hold** transfer controls are hidden (the hold is only reachable from aboard the ship).
 - **World map (M)** — top-down view of explored terrain (fog-of-war), with player/ship/station markers and
-  click-to-set waypoints.
+  click-to-set waypoints. The map **remembers where you have been**: ground you explored earlier — even in a
+  previous session — stays lifted in a lighter tone, while live terrain around you draws in full colour.
 - **HUD** — health/oxygen/hunger/energy, hotbar, location, compass, scan readout (bottom-left), and the
   wreck panel (right) when near a repairable wreck.
 - **VEGA panel** — the ship AI speaks through a typewriter speech panel with a persistent **objective
@@ -360,6 +366,14 @@ separate unlock; admins can still disable it through server world rules.
   platinum, uranium, neodymium) and refines diamond, carbide and reactor fuel. It also offers **higher-yield
   smelts** of the common ores (e.g. iron and copper) than the workshop — handy for bulk metalwork. You can
   never need it before you can build it: its metals are also the ones that need a titanium-tier drill to mine.
+- **Every metal has a job:** each ore family (aluminium, tin, nickel, cobalt, platinum, lead, zinc, tungsten,
+  lithium, neodymium, plus light alloy, biofuel and magnets) feeds at least three recipes across two stations —
+  refinery variants of bronze, brass, steel, carbide, power cells and magnets out-yield the workshop ones, lithium
+  triples a cell batch, and biofuel makes torches and lanterns where no tree grows.
+- **Interior decor is craftable:** the lights, light strips, force field, medbay/lab/cargo/engine panels, engine
+  nozzle, factory terminal, pipe and machine housing that ship interiors, stations and factories are built from all
+  have workshop recipes (lights: crystal in a glass housing — no power needed; the force field needs the energy-door
+  blueprint). Only the data cache stays loot-only.
 - The **transmuter** (the *matter forge* block or ship module, unlocked via Tech) compacts spare terrain
   (sand, dirt, stone, …) into *matter dust* and synthesises it back into ore — a sink for surplus digging.
 - **Blueprints** gate advanced recipes — research them at your ship's **cockpit** (Tech tab; the helm counts
@@ -380,6 +394,9 @@ separate unlock; admins can still disable it through server world rules.
   Ship tab — aboard, at the workshop module.
   Each cargo-hold module adds slots to the shared **cargo hold** (see *Inventory & cargo hold* above); the
   Cargo tab shows the current used/total capacity.
+- **Reactor fuel** (uranium + lead at the refinery) is a **one-time build cost** of the big things: the three
+  capital ships (Thunderbolt 2, Hammerhead 3, Deathblock 4), the heavy laser cannon and the jump generator ignite
+  their reactors with it once. Nothing burns fuel while running — every device carries its own energy cell.
 
 ### Building your own ship (keel → commissioning)
 - Unlock the **Shipwright** blueprint (Tech tab), craft a **Ship Keel** at a workshop and place it on open,
@@ -424,7 +441,9 @@ separate unlock; admins can still disable it through server world rules.
 - **AI-core modules:** `ai_core_mk2` adds +6 terrain-scanner radius, hostile-contact callouts in space and
   the **autopilot** (press **P** in flight); `ai_core_mk3` adds a 12 % evasive-manoeuvre damage negation.
 - **Memory fragments:** data terminals in wrecks and vaults drop `ai_memory_fragment`s — VEGA redeems them
-  aboard (+3 knowledge each) and tells her backstory over 10 beats; the final beat teaches the Mk3 blueprint.
+  aboard (+3 knowledge each) and tells her backstory over 10 beats; the final beat hands over the **research
+  materials** for the AI Core Mk3 (stowed in your pack/hold — VEGA waits until there is room), which you then
+  research at the cockpit like any other blueprint once you have the knowledge for it.
 
 ### Dynamic AI text (optional LLM backend)
 - A server can enable an optional AI text service that makes some flavour text dynamic: **NPC greeting
@@ -585,6 +604,11 @@ separate unlock; admins can still disable it through server world rules.
   half-standing tower, and rubble overgrown by flora. Unlike bases and stations they are **not protected**:
   every block is **freely mineable**, and what you clear stays cleared. VEGA may hint at *"structural
   echoes nearby — ruins or wreckage"*; bring a scanner, there's often something worth digging out.
+- **Field records:** ruins, wrecks, buried vaults and data terminals carry **readable texts** — logs,
+  notes and plaques that surface while you scavenge them. Each opens in a reader panel, is kept in the
+  Story tab (*Field records*) and the Codex **Lore** chapter, and some only appear once the story has
+  come far enough. Data terminals and monument relic caches may also hold a **net fragment** of the
+  story itself — VEGA occasionally picks up a **fragment signal** and marks it on your map.
 - **Treasure chests** are standalone lootable caches scattered away from settlements. Each is looted
   **once** and holds richer salvage than ordinary drops — and they are the main world source of a rare
   **SPS access code**.
@@ -640,6 +664,23 @@ separate unlock; admins can still disable it through server world rules.
 - **Raider bounty:** station mission boards in **pirate systems** put a price on the raider ship prowling
   the sector. While you hold the bounty, the raider *will* show up on your next flight — destroy it and
   report back. Bounties follow the world's **Bandits** option: no bandits, no bounty missions.
+- **Build jobs:** settlement boards also offer one **building assignment** — raise a shelter, light the
+  camp, raise a beacon, or extend your own base. Progress counts as you **place** blocks (mining them back
+  out never loses credit) and the job turns in at the board like any other.
+
+### People you know & NPC radio calls
+- **NPCs remember you.** Trading at a stall or taking a board job raises your standing with that vendor or
+  quartermaster: **Stranger → Acquaintance → Friend**. The stage shows on their **nameplate** when you walk
+  up, and everyone you know is listed under **Tab → Character → People you know** (name, role, stage, where
+  they live).
+- **The world calls you.** People you know reach out over the radio — "📻 Name (Place)" in chat: a
+  quartermaster with bandits nearby points you at the bounty, a refilled mission board gets a mention, a
+  trader landing near your base hails you. Calls need a **radio you carry** (comm = same world, system =
+  same system, galaxy = anywhere), come at most every few minutes, and never repeat themselves. The
+  **Settings → Comfort → NPC radio calls** option switches them to *missions only* or *off*.
+- **Your base attracts life.** Trader ships prefer worlds with a founded base. Once your base holds a few
+  machines (workbench, forge, …), a **settler moves in** — they know you from day one and count toward your
+  people. No visitor ever damages a block.
 
 ### Trade
 - **Player ↔ player:** press **T** near a player (pad/touch: **Actions → trade**) to send a request; the
@@ -653,6 +694,15 @@ separate unlock; admins can still disable it through server world rules.
   (the gameplay menu's Crafting tab on the *Market* category). Barter recipes there trade your raw
   resources for goods. The market is also available **aboard your ship** (Tab → Crafting → Market), via the
   ship's trade console — so you can trade without a vendor too.
+
+### Story: finding the thread
+- After the tutorial the **objective chip** keeps a quiet story pointer ("a net fragment is on this
+  world", "search ruins and wrecks", …) with the arc's progress as its counter. It respects the
+  **VEGA hints** setting — turn hints off and the chip clears once the tutorial is done.
+- Net fragments, personal memories and field records open in a **reader panel** and stay re-readable in
+  the Story tab (Read buttons) — and they survive rejoining a server.
+- Scanning **runes** at a monument now also reveals their inscription. Settlement folk who know you
+  (trade with them!) may share what they know — one of them keeps a page of the settler legend.
 
 ### Scanning & knowledge
 - With a scanner selected, **left-click** a creature or block to scan it. Scans award **knowledge points**
@@ -716,6 +766,19 @@ separate unlock; admins can still disable it through server world rules.
   type **`/reportpaint`** in chat — the world operator gets the details (`/report Player` stays the separate
   player report). Operators can remove a player's designs everywhere at once with `/paintwipe` (see §Commands).
 
+### Blueprint tool — share whole builds
+- Craft a **Blueprint Tool** (`blueprint_tool`, cheap workshop recipe). It shares **whole builds** the way
+  forms and paint designs already share: as a **`BBTS1-B-…` code** you can paste into chat, a forum post or
+  a message.
+- **Copy:** use the tool on a block to mark **corner A**, then on a second block for **corner B** (up to
+  **16×16×16**). Name the build in the dialog — the code lands in your **clipboard** and credits you as the
+  author.
+- **Paste:** with a build code in the clipboard, use the tool on the ground where the build should stand
+  and confirm. Blocks are **paid from your inventory** (free in Creative); cells that are occupied,
+  protected (someone else's base) or unaffordable are skipped and tallied honestly — nothing is ever forced
+  into another player's build. Doors, chests, beacons and other "living" blocks don't travel in a blueprint;
+  shapes and dye do (custom forms fall back to plain cubes in a world that doesn't know them).
+
 ### Travel & the star map
 - Open **Tab → Map**. The system list is grouped: **Current system** at the top (its reachable worlds, plus
   the **Launch into space / Leave space** button), then **Hyperspace** for the other systems. Selecting a
@@ -728,6 +791,11 @@ separate unlock; admins can still disable it through server world rules.
     you fly to its worlds and land. Once you've been somewhere, quick-travel to it works from then on.
   - **On:** quick-travel works for any world/system immediately, visited or not.
 - Jumping to **another star system** always requires a fitted **`jump_generator`** module.
+- A star system you have **never entered** shows as **"Unknown system"** — its name is part of what you
+  discover. A fitted **`radar_array`** module decodes the beacon signals and reveals all system names.
+- Your **first landing on a world** records it in the Codex under **Discoveries → Places** and pays
+  **+5 knowledge** — exploring the galaxy is itself a way to learn. (Your starting world gets its Places
+  entry too, but pays nothing — home isn't a discovery.)
 - **Space stations** appear in the world list too (yours show their owner; others show *"Station of …"*).
   Selecting one offers **Board** — but only if you've **docked there at least once** before (just like landing
   gates worlds); a never-visited station shows *"visit it once to unlock"*. Boarding takes you straight inside.
@@ -1049,6 +1117,21 @@ and that option is off by default on hosted worlds.
 | `/where Player` | One player's body, position and last-seen time — works while they are offline |
 | `/kick Player` | Ends that player's session right now. **Momentary** — they can come back; to keep someone out for good, block them in *Manage world → Manage players* (below) |
 | `/paintwipe Player` (or `#designId`) | Removes that player's painted block designs **everywhere at once** (or a single design by id, taken from the report log). Wiped designs stay wiped across restarts |
+| `/mode Player survival\|creative\|world` | Per-player game mode — see *Per-player mode* below |
+
+#### Per-player mode — one world, mixed Survival and Creative
+
+A shared world normally has ONE mode. As **world admin** you can give a single player their own: with
+`/mode Player creative` (or the **Player modes** rows on the Settings tab, listed there only for admins)
+that player plays **Creative** — free crafting and research, creative flight (double-tap **Space**), no
+oxygen/hunger/temperature, and machines, bandits and aggressive creatures ignore them — while everyone
+else keeps playing the world as it is. The classic family setup: the kid builds carefree in the shared
+survival world, the parent keeps the survival challenge. It also works the other way round
+(`/mode Player survival` in a creative world), `/mode Player world` puts them back on the world's mode,
+and the setting **persists** — it survives rejoins and restarts until an admin changes it. Like the other
+tools in this section it is moderation, not a cheat: it works even when admin cheats are off. The world's
+own difficulty sliders (oxygen/hunger rates, hazards) still apply to a survival-playing player, and world
+options like PvP or structure damage are never per-player.
 
 #### Blocking players from your own hosted world
 

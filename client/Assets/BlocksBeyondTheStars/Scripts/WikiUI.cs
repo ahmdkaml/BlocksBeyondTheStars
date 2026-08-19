@@ -56,6 +56,7 @@ namespace BlocksBeyondTheStars.Client
             ("modules", "ui.wiki.modules"),
             ("planets", "ui.wiki.planets"),
             ("discoveries", "ui.wiki.discoveries"), // what THIS player has scanned (#484)
+            ("lore", "ui.wiki.lore"),               // found story texts: fragments, memories, field records (#1111)
         };
 
         public void Show()
@@ -212,8 +213,81 @@ namespace BlocksBeyondTheStars.Client
             "modules" => BuildEntries(L("ui.wiki.modules"), Entries(Game?.Content?.ShipModules?.Values, d => d.NameKey, d => d.DescriptionKey)),
             "planets" => BuildEntries(L("ui.wiki.planets"), Entries(Game?.Content?.Planets?.Values, d => d.NameKey, d => ToDescKey(d.NameKey))),
             "discoveries" => BuildDiscoveries(),
+            "lore" => BuildLore(),
             _ => string.Empty,
         };
+
+        /// <summary>Found story texts (#1111): the save's net fragments, this player's memories and field
+        /// records — full text for what was found, a sealed "???" line for what is still out there. Per-player
+        /// progress like Discoveries; the logs rebuild from the join snapshot, so this survives a rejoin.</summary>
+        private string BuildLore()
+        {
+            var sb = new StringBuilder();
+            sb.Append("<b><size=24>").Append(L("ui.wiki.lore")).Append("</size></b>\n\n");
+
+            var fragments = Game?.StoryLogFragments;
+            var memories = Game?.StoryLogMemories;
+            var lore = Game?.StoryLogLore;
+            int found = (fragments?.Count ?? 0) + (memories?.Count ?? 0) + (lore?.Count ?? 0);
+            if (found == 0)
+            {
+                sb.Append(L("ui.wiki.lore.empty"));
+                return sb.ToString();
+            }
+
+            Shared.Story.StoryDefinition pack = null;
+            if (Game?.Content != null && Game.Story != null)
+            {
+                Game.Content.TryGetStory(Game.Story.StoryId, out pack);
+            }
+
+            int total = (pack?.Fragments.Count ?? 0) + (pack?.Memories.Count ?? 0) + (pack?.LoreSites.Count ?? 0);
+            if (total > 0)
+            {
+                sb.Append(string.Format(L("ui.wiki.lore.found"), found, total)).Append("\n\n");
+            }
+
+            if (fragments is { Count: > 0 })
+            {
+                sb.Append("<b>").Append(L("ui.story.fragments")).Append(" (").Append(fragments.Count).Append(")</b>\n");
+                foreach (var (cat, key) in fragments)
+                {
+                    sb.Append("  • <b>[").Append(L("lore.cat." + cat)).Append("]</b> ").Append(L(key)).Append('\n');
+                }
+
+                sb.Append('\n');
+            }
+
+            if (memories is { Count: > 0 })
+            {
+                sb.Append("<b>").Append(L("ui.story.memories")).Append(" (").Append(memories.Count).Append(")</b>\n");
+                foreach (var key in memories)
+                {
+                    sb.Append("  • ").Append(L(key)).Append('\n');
+                }
+
+                sb.Append('\n');
+            }
+
+            if (lore is { Count: > 0 })
+            {
+                sb.Append("<b>").Append(L("ui.story.lore")).Append(" (").Append(lore.Count).Append(")</b>\n");
+                foreach (var (site, key) in lore)
+                {
+                    sb.Append("  • <b>").Append(L("ui.lore.site." + site)).Append(":</b> ").Append(L(key)).Append('\n');
+                }
+
+                sb.Append('\n');
+            }
+
+            int missing = total - found;
+            if (missing > 0)
+            {
+                sb.Append("<color=#9fb4c8>").Append(new string('?', 3)).Append(" × ").Append(missing).Append("</color>\n");
+            }
+
+            return sb.ToString();
+        }
 
         /// <summary>The player's own scan log (#484): every first-time scan, grouped by kind. Unlike the other
         /// chapters this is per-player progress, not static content — before this the first-scan ledger never
@@ -235,7 +309,7 @@ namespace BlocksBeyondTheStars.Client
             // Ledger keys are "kind:key" ("asteroid" has no colon); group so creatures/plants/materials read apart.
             // A monument's key carries the body id too ("monument:<location>:<archetype>"), so the same relic
             // found on another planet lists as its own discovery — which is exactly what it is.
-            foreach (var kind in new[] { "creature", "microfauna", "tree", "flora", "block", "monument", "asteroid" })
+            foreach (var kind in new[] { "place", "creature", "microfauna", "tree", "flora", "block", "monument", "asteroid" })
             {
                 var names = new List<string>();
                 foreach (var pair in log)
@@ -259,7 +333,7 @@ namespace BlocksBeyondTheStars.Client
                 }
 
                 names.Sort((a, b) => string.Compare(a, b, StringComparison.CurrentCultureIgnoreCase));
-                sb.Append("<b>").Append(L("ui.wiki.discoveries." + kind)).Append("</b>\n");
+                sb.Append("<b>").Append(L("ui.wiki.discoveries." + kind)).Append(" (").Append(names.Count).Append(")</b>\n"); // per-kind tally (#1103)
                 foreach (var name in names)
                 {
                     sb.Append("  • ").Append(name).Append('\n');

@@ -170,6 +170,10 @@ namespace BlocksBeyondTheStars.Client
             var beaconLabel = root.AddComponent<BeaconLabelUi>();
             beaconLabel.Game = boot;
 
+            // Blueprint tool overlay (#1117): corner marking + export/paste dialogs for build share codes.
+            var blueprintTool = root.AddComponent<BlueprintToolUi>();
+            blueprintTool.Game = boot;
+
             // Crate stash filter (#1032): opens on E at a storage crate — pick what belongs in it.
             var containerFilter = root.AddComponent<ContainerFilterUi>();
             containerFilter.Game = boot;
@@ -198,6 +202,11 @@ namespace BlocksBeyondTheStars.Client
             // Transporter panel: opens on E at a beam pad (destinations: own + allied pads on this world).
             var beamPad = root.AddComponent<BeamPadUi>();
             beamPad.Game = boot;
+
+            // Story reader (#1110): fragments, memories and lore texts open in a modal reader, re-readable
+            // from the Story tab. Must exist before the network handlers fire their first reveal.
+            var reader = root.AddComponent<StoryReaderUi>();
+            reader.Game = boot;
 
             // Ship AI companion "VEGA": onboarding lines, objective chip, advisor hints, story beats.
             var vega = root.AddComponent<VegaPanel>();

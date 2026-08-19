@@ -114,6 +114,7 @@ public sealed partial class GameServer
         {
             _containers.Remove(container);
             _repo.DeleteContainer(container.Id);
+            OnAchievementLoot(session); // "Treasure Hunter": a find looted empty (#1102)
         }
         else
         {
@@ -123,6 +124,14 @@ public sealed partial class GameServer
         if (took)
         {
             SendInventory(session);
+
+            // Environmental lore (#1111): scavenging a lore-bearing site (wreck log, ruin note, vault plaque,
+            // terminal record) may surface a readable text — once per player per text, knowledge-gated.
+            var site = LoreSiteOfContainer(container.Id);
+            if (site.Length > 0)
+            {
+                TryRevealLoreText(session, site);
+            }
         }
 
         BroadcastContainers();

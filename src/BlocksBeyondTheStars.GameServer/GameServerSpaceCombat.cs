@@ -383,7 +383,7 @@ public sealed partial class GameServer
             return;
         }
 
-        bool free = !Rules.CraftingCostsMaterials || p.InstantBuild;
+        bool free = !Rules.CraftingCostsMaterialsFor(p.ModeOverride) || p.InstantBuild;
         var pool = new MaterialPool(_content, p, _ship);
         if (!free)
         {
@@ -2117,6 +2117,8 @@ public sealed partial class GameServer
 
         session.State.AboardShip = true; // you arrive piloting the ship
         session.State.InEva = false;
+        OnAchievementHyperjump(session);        // "Jump Pilot" (#1102)
+        RecordStoryMilestone("hyperjump:first"); // the save's first jump between stars advances the arc (#1105)
         MarkSystemKnown(session, system.Id); // its bodies + mini map are now revealed on the travel screen
 
         // Finale (P6): remember the world we jumped FROM so a death in the boss arena returns us there (no loop).
