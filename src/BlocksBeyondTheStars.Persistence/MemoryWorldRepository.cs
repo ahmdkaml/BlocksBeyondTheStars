@@ -738,9 +738,30 @@ public sealed class MemoryWorldRepository : IWorldRepository
     {
         lock (_gate)
         {
-            return _players.TryGetValue(playerId, out var json)
-                ? StateMapper.FromSnapshot(JsonSerializer.Deserialize<PlayerSnapshot>(json, JsonOptions)!)
-                : null;
+            if (!_players.TryGetValue(playerId, out var json))
+            {
+                return null;
+            }
+
+            PlayerSnapshot snapshot;
+            try
+            {
+                snapshot = JsonSerializer.Deserialize<PlayerSnapshot>(json, JsonOptions)
+                    ?? throw new JsonException("Player JSON deserialized to null.");
+
+                if (string.IsNullOrWhiteSpace(snapshot.Name))
+                {
+                    throw new JsonException("Player JSON is missing a player name.");
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidDataException(
+                    $"Failed to load player '{playerId}': persisted player JSON is invalid.",
+                    ex);
+            }
+
+            return StateMapper.FromSnapshot(snapshot);
         }
     }
 

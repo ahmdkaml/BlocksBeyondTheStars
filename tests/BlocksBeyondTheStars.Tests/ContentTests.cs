@@ -235,4 +235,81 @@ public class ContentTests
     {
         Assert.Empty(ContentLoader.ParseLocaleTable("{}"));
     }
+
+    [Fact]
+    public void Validation_AllowsRecipeInputToAlsoBeOutput()
+    {
+        var content = new GameContent(
+            blocks: Array.Empty<BlockDefinition>(),
+            items: new[]
+            {
+            new ItemDefinition { Key = "iron" },
+            },
+            recipes: new[]
+            {
+            new RecipeDefinition
+            {
+                Key = "iron_recipe",
+                Inputs = { new ItemAmount("iron", 1) },
+                Outputs = { new ItemAmount("iron", 1) },
+            },
+            },
+            blueprints: Array.Empty<BlueprintDefinition>(),
+            shipModules: Array.Empty<ShipModuleDefinition>(),
+            locales: new Dictionary<GameLocale, Dictionary<string, string>>());
+
+        // Investigation test: currently accepted by Validate().
+        content.Validate();
+    }
+
+    [Fact]
+    public void Validation_AllowsNegativeItemAmount()
+    {
+        var content = new GameContent(
+            blocks: new[]
+            {
+            new BlockDefinition
+            {
+                Key = "stone",
+                Drops = { new ItemAmount("stone", -1) },
+            },
+            },
+            items: new[]
+            {
+            new ItemDefinition { Key = "stone" },
+            },
+            recipes: Array.Empty<RecipeDefinition>(),
+            blueprints: Array.Empty<BlueprintDefinition>(),
+            shipModules: Array.Empty<ShipModuleDefinition>(),
+            locales: new Dictionary<GameLocale, Dictionary<string, string>>());
+
+        // Investigation test: currently accepted by Validate().
+        content.Validate();
+    }
+
+    [Fact]
+    public void Validation_AllowsZeroItemAmount()
+    {
+        var content = new GameContent(
+            blocks: new[]
+            {
+            new BlockDefinition
+            {
+                Key = "stone",
+                Drops = { new ItemAmount("stone", 0) },
+            },
+            },
+            items: new[]
+            {
+            new ItemDefinition { Key = "stone" },
+            },
+            recipes: Array.Empty<RecipeDefinition>(),
+            blueprints: Array.Empty<BlueprintDefinition>(),
+            shipModules: Array.Empty<ShipModuleDefinition>(),
+            locales: new Dictionary<GameLocale, Dictionary<string, string>>());
+
+        // Investigation test: currently accepted by Validate().
+        content.Validate();
+    }
+
 }
