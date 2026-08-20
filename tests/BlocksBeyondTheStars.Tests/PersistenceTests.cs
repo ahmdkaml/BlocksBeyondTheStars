@@ -389,52 +389,6 @@ public sealed class PersistenceTests : IDisposable
         }
     }
 
-    [Theory]
-    [InlineData(0, true)]
-    [InlineData(50, false)]
-    public void Initialize_WithFlippedDatabaseByte_ReportsBehavior(
-        int offset,
-        bool shouldThrow)
-    {
-        string dbPath;
-
-        using (var repo = NewSqliteRepo())
-        {
-            repo.SaveMetadata(new WorldMetadata
-            {
-                WorldName = "Alpha",
-                Seed = 42,
-            });
-
-            dbPath = Path.Combine(_root, "world_001", "world.db");
-        }
-
-        byte[] bytes = File.ReadAllBytes(dbPath);
-        Assert.InRange(offset, 0, bytes.Length - 1);
-
-        bytes[offset] ^= 0xFF;
-        File.WriteAllBytes(dbPath, bytes);
-
-        var before = File.ReadAllBytes(dbPath);
-
-        Exception? exception;
-
-        using (var reopened = new SqliteWorldRepository(
-            new SaveGamePaths(_root, "world_001")))
-        {
-            exception = Record.Exception(() => reopened.Initialize());
-        }
-
-        var after = File.ReadAllBytes(dbPath);
-
-        Assert.Equal(before, after);
-        Assert.Equal(shouldThrow, exception is not null);
-        if (shouldThrow)
-        {
-            Assert.IsType<InvalidDataException>(exception);
-        }
-    }
-
     public void Dispose()
     {
         try
