@@ -743,25 +743,7 @@ public sealed class MemoryWorldRepository : IWorldRepository
                 return null;
             }
 
-            PlayerSnapshot snapshot;
-            try
-            {
-                snapshot = JsonSerializer.Deserialize<PlayerSnapshot>(json, JsonOptions)
-                    ?? throw new JsonException("Player JSON deserialized to null.");
-
-                if (string.IsNullOrWhiteSpace(snapshot.Name))
-                {
-                    throw new JsonException("Player JSON is missing a player name.");
-                }
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidDataException(
-                    $"Failed to load player '{playerId}': persisted player JSON is invalid.",
-                    ex);
-            }
-
-            return StateMapper.FromSnapshot(snapshot);
+            return StateMapper.PlayerFromJson(json, playerId, JsonOptions);
         }
     }
 
@@ -1208,7 +1190,7 @@ public sealed class MemoryWorldRepository : IWorldRepository
         return path;
     }
 
-    // for test purposes
+    // Test-only hooks: inject/inspect a raw player row to exercise the corruption contract.
     internal void SetRawPlayerJson(string playerId, string json)
     {
         lock (_gate)
@@ -1216,6 +1198,7 @@ public sealed class MemoryWorldRepository : IWorldRepository
             _players[playerId] = json;
         }
     }
+
     internal string? GetRawPlayerJson(string playerId)
     {
         lock (_gate)
@@ -1223,6 +1206,7 @@ public sealed class MemoryWorldRepository : IWorldRepository
             return _players.GetValueOrDefault(playerId);
         }
     }
+
     public void Dispose()
     {
         // Nothing unmanaged to release; the host owns blob persistence via Flushed/ExportSnapshotBlob.

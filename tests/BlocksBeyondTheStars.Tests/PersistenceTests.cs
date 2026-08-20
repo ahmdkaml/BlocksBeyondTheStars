@@ -1,7 +1,6 @@
 // Blocks Beyond the Stars — Copyright (c) 2026 Justus Dütscher & Marcel Dütscher (JuMaVe Games)
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
-
 using BlocksBeyondTheStars.Persistence;
 using BlocksBeyondTheStars.Shared.Geometry;
 using BlocksBeyondTheStars.Shared.State;
@@ -32,7 +31,6 @@ public sealed class PersistenceTests : IDisposable
         repo.Initialize();
         return repo;
     }
-
 
     [Fact]
     public void Metadata_RoundTrips()
@@ -226,7 +224,6 @@ public sealed class PersistenceTests : IDisposable
         using var reopened = NewSqliteRepo();
         Assert.Equal((ushort)5, reopened.LoadChunkEdits("rocky", new ChunkCoord(0, 0, 0)).Single().Block);
     }
-
 
     // --- SQLite Player JSON Corruption Tests ---
 

@@ -1,6 +1,7 @@
 // Blocks Beyond the Stars — Copyright (c) 2026 Justus Dütscher & Marcel Dütscher (JuMaVe Games)
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
+using System.Text.Json;
 using BlocksBeyondTheStars.Shared.Geometry;
 using BlocksBeyondTheStars.Shared.Missions;
 using BlocksBeyondTheStars.Shared.State;
@@ -320,6 +321,35 @@ public static class StateMapper
         }
 
         return clone;
+    }
+
+    /// <summary>
+    /// Deserializes and validates a persisted player JSON row, then maps it to runtime state.
+    /// Malformed JSON, a null payload, wrong property types, and a missing/empty Name are all
+    /// corruption: they throw <see cref="InvalidDataException"/> so callers reject the load
+    /// instead of replacing the damaged row with a fresh player.
+    /// </summary>
+    public static PlayerState PlayerFromJson(string json, string playerId, JsonSerializerOptions options)
+    {
+        PlayerSnapshot snapshot;
+        try
+        {
+            snapshot = JsonSerializer.Deserialize<PlayerSnapshot>(json, options)
+                ?? throw new JsonException("Player JSON deserialized to null.");
+
+            if (string.IsNullOrWhiteSpace(snapshot.Name))
+            {
+                throw new JsonException("Player JSON is missing a player name.");
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidDataException(
+                $"Failed to load player '{playerId}': persisted player JSON is invalid.",
+                ex);
+        }
+
+        return FromSnapshot(snapshot);
     }
 
     public static PlayerState FromSnapshot(PlayerSnapshot s) => new()
