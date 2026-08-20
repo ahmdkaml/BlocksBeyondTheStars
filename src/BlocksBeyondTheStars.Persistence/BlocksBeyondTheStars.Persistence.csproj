@@ -20,6 +20,10 @@
     <Compile Remove="WorldRepositoryFactory.cs" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="BlocksBeyondTheStars.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFrameworks>net10.0;netstandard2.1</TargetFrameworks>
     <LangVersion>latest</LangVersion>

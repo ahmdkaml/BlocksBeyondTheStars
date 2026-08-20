@@ -1,12 +1,12 @@
 // Blocks Beyond the Stars — Copyright (c) 2026 Justus Dütscher & Marcel Dütscher (JuMaVe Games)
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
+
 using BlocksBeyondTheStars.Persistence;
 using BlocksBeyondTheStars.Shared.Geometry;
 using BlocksBeyondTheStars.Shared.State;
 using BlocksBeyondTheStars.Shared.World;
 using Microsoft.Data.Sqlite;
-using Xunit;
 
 namespace BlocksBeyondTheStars.Tests;
 
@@ -25,6 +25,7 @@ public sealed class PersistenceTests : IDisposable
         repo.Initialize();
         return repo;
     }
+
     private MemoryWorldRepository NewMemoryRepo(string world = "world_001")
     {
         var repo = new MemoryWorldRepository(new SaveGamePaths(_root, world));
@@ -32,33 +33,6 @@ public sealed class PersistenceTests : IDisposable
         return repo;
     }
 
-    private PostgreSqlWorldRepository NewPostgresRepo(string world)
-    {
-        string? connectionString =
-            Environment.GetEnvironmentVariable("BBS_POSTGRES_TEST_CONNECTION_STRING");
-
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            throw new InvalidOperationException(
-                "BBS_POSTGRES_TEST_CONNECTION_STRING is required for PostgreSQL tests.");
-        }
-
-        var repo = new PostgreSqlWorldRepository(
-            new SaveGamePaths(_root, world),
-            connectionString);
-
-        repo.Initialize();
-        return repo;
-    }
-    private IEnumerable<(string Name, IWorldRepository Repo)> NewRepos()
-    {
-        yield return ("SQLite", NewSqliteRepo());
-
-        yield return ("Memory", NewMemoryRepo());
-
-        string world = "pg_" + Guid.NewGuid().ToString("N");
-        yield return ("PostgreSQL", NewPostgresRepo(world));
-    }
 
     [Fact]
     public void Metadata_RoundTrips()
@@ -252,12 +226,16 @@ public sealed class PersistenceTests : IDisposable
         using var reopened = NewSqliteRepo();
         Assert.Equal((ushort)5, reopened.LoadChunkEdits("rocky", new ChunkCoord(0, 0, 0)).Single().Block);
     }
+
+
+    // --- SQLite Player JSON Corruption Tests ---
+
     [Theory]
     [InlineData("invalid json")]
     [InlineData("null")]
     [InlineData("""{"Id":"p1","Name":"Pilot","Health":"lots"}""")]
     [InlineData("""{"Id":"p1"}""")]
-    public void Player_DamagedJson_DoesNotModifyStoredRow(string json)
+    public void Sqlite_Player_DamagedJson_ThrowsInvalidDataExceptionAndPreservesRow(string json)
     {
         using (var repo = NewSqliteRepo())
         {
@@ -273,7 +251,6 @@ public sealed class PersistenceTests : IDisposable
         using (var connection = new SqliteConnection($"Data Source={databaseFile}"))
         {
             connection.Open();
-
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "UPDATE player SET json = $json WHERE id = $id;";
             cmd.Parameters.AddWithValue("$json", json);
@@ -281,25 +258,48 @@ public sealed class PersistenceTests : IDisposable
             cmd.ExecuteNonQuery();
         }
 
-        using var reopened = NewSqliteRepo();
-
-        var ex = Record.Exception(() => reopened.LoadPlayer("p1"));
-
-        Assert.NotNull(ex);
+        using (var reopened = NewSqliteRepo())
+        {
+            Assert.Throws<InvalidDataException>(() => reopened.LoadPlayer("p1"));
+        }
 
         using (var connection = new SqliteConnection($"Data Source={databaseFile}"))
         {
             connection.Open();
-
             using var cmd = connection.CreateCommand();
             cmd.CommandText = "SELECT json FROM player WHERE id = $id;";
             cmd.Parameters.AddWithValue("$id", "p1");
 
             var storedJson = cmd.ExecuteScalar() as string;
-
             Assert.Equal(json, storedJson);
         }
     }
+
+    // --- Memory Player JSON Corruption Tests ---
+
+    [Theory]
+    [InlineData("invalid json")]
+    [InlineData("null")]
+    [InlineData("""{"Id":"p1","Name":"Pilot","Health":"lots"}""")]
+    [InlineData("""{"Id":"p1"}""")]
+    public void Memory_Player_DamagedJson_ThrowsInvalidDataExceptionAndPreservesState(string json)
+    {
+        using var repo = NewMemoryRepo();
+
+        repo.SavePlayer(new PlayerState
+        {
+            PlayerId = "p1",
+            Name = "Pilot",
+        });
+
+        repo.SetRawPlayerJson("p1", json);
+
+        Assert.Throws<InvalidDataException>(() => repo.LoadPlayer("p1"));
+        Assert.Equal(json, repo.GetRawPlayerJson("p1"));
+    }
+
+    // --- SQLite File-Level Integrity Tests ---
+
     [Theory]
     [InlineData("non-sqlite")]
     [InlineData("truncated")]
@@ -316,7 +316,7 @@ public sealed class PersistenceTests : IDisposable
             });
 
             dbPath = Path.Combine(_root, "world_001", "world.db");
-        } // SQLite connection is definitely closed here
+        }
 
         ApplyCorruption(dbPath, corruption);
 
@@ -391,9 +391,10 @@ public sealed class PersistenceTests : IDisposable
                 throw new ArgumentOutOfRangeException(nameof(corruption), corruption, null);
         }
     }
+
     [Theory]
-    [InlineData(0, true)]  // SQLite rejects this corruption and throws an exception.
-    [InlineData(50, false)] // SQLite accepts this corruption and it's harmless.
+    [InlineData(0, true)]
+    [InlineData(50, false)]
     public void Initialize_WithFlippedDatabaseByte_ReportsBehavior(
         int offset,
         bool shouldThrow)
@@ -432,6 +433,7 @@ public sealed class PersistenceTests : IDisposable
         Assert.Equal(before, after);
         Assert.Equal(shouldThrow, exception is not null);
     }
+
     public void Dispose()
     {
         try

@@ -1208,6 +1208,21 @@ public sealed class MemoryWorldRepository : IWorldRepository
         return path;
     }
 
+    // for test purposes
+    internal void SetRawPlayerJson(string playerId, string json)
+    {
+        lock (_gate)
+        {
+            _players[playerId] = json;
+        }
+    }
+    internal string? GetRawPlayerJson(string playerId)
+    {
+        lock (_gate)
+        {
+            return _players.GetValueOrDefault(playerId);
+        }
+    }
     public void Dispose()
     {
         // Nothing unmanaged to release; the host owns blob persistence via Flushed/ExportSnapshotBlob.
