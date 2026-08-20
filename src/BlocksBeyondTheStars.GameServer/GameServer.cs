@@ -3313,7 +3313,6 @@ public sealed partial class GameServer
         var (joinBody, joinBodyType) = RestoreJoinBody(state);
         LoadWorld(joinBodyType, joinBody);
 
-        // ... rest of setup
         var session = new PlayerSession(connectionId, state)
         {
             Joined = true,

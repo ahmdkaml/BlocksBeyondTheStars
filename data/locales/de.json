@@ -3138,6 +3138,7 @@
   "srv.join.failed": "Der Beitritt ist auf dem Server fehlgeschlagen. Bitte versuch es noch einmal.",
   "srv.join.token_required": "Dieser Server verlangt ein gültiges Join-Token. Bitte über das Weltenportal beitreten.",
   "srv.join.welcome": "Willkommen! Diese Welt ist Teil eines Familien-Projekts — sei nett zu anderen. Keine Hetze, kein Mobbing, kein Rassismus (führt zum Bann). Beta: Welten können verloren gehen — lade im Portal Sicherungen herunter!",
+  "srv.join.data_corrupted": "Deine Spielerdaten auf diesem Server sind beschädigt und konnten nicht geladen werden. Bitte melde dich beim Server-Admin.",
   "srv.land.full": "Alle Landezonen sind belegt.",
   "srv.land.no_pad": "Diesen Landeplatz gibt es nicht.",
   "srv.land.pad_taken": "Dieser Landeplatz ist schon belegt.",
