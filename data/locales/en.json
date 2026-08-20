@@ -3144,6 +3144,7 @@
   "srv.join.failed": "Joining failed on the server. Please try again.",
   "srv.join.token_required": "This server requires a valid join token. Please join through the worlds portal.",
   "srv.join.welcome": "Welcome! This world is part of a family project — be kind to others. No hate, bullying or racism (leads to a ban). Beta: worlds can be lost — download backups on the portal!",
+  "srv.join.data_corrupted": "Your player data on this server is damaged and could not be loaded. Please contact the server admin.",
   "srv.land.full": "All landing zones are taken.",
   "srv.land.no_pad": "That landing pad doesn't exist.",
   "srv.land.pad_taken": "That landing pad is already taken.",
