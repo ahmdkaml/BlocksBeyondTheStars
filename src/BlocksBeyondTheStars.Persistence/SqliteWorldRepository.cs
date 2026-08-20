@@ -44,23 +44,26 @@ public sealed class SqliteWorldRepository : IWorldRepository
 
     public void Initialize()
     {
-        _paths.EnsureDirectories();
-
-        var connectionString = new SqliteConnectionStringBuilder
+        try
         {
-            DataSource = _paths.DatabaseFile,
-            Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Private,
-        }.ToString();
 
-        _connection = new SqliteConnection(connectionString);
-        _connection.Open();
+            _paths.EnsureDirectories();
 
-        Execute("PRAGMA journal_mode=WAL;");
-        Execute("PRAGMA synchronous=NORMAL;");
-        Execute("PRAGMA foreign_keys=ON;");
+            var connectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = _paths.DatabaseFile,
+                Mode = SqliteOpenMode.ReadWriteCreate,
+                Cache = SqliteCacheMode.Private,
+            }.ToString();
 
-        Execute(@"
+            _connection = new SqliteConnection(connectionString);
+            _connection.Open();
+
+            Execute("PRAGMA journal_mode=WAL;");
+            Execute("PRAGMA synchronous=NORMAL;");
+            Execute("PRAGMA foreign_keys=ON;");
+
+            Execute(@"
             CREATE TABLE IF NOT EXISTS world_meta (id INTEGER PRIMARY KEY CHECK (id = 0), json TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS block_edit (
                 planet TEXT NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL, z INTEGER NOT NULL,
@@ -121,31 +124,38 @@ public sealed class SqliteWorldRepository : IWorldRepository
             CREATE TABLE IF NOT EXISTS custom_shape (
                 id INTEGER PRIMARY KEY, owner TEXT NOT NULL, owner_name TEXT NOT NULL,
                 name TEXT NOT NULL, voxels TEXT NOT NULL);");
-        // (Landing pads are deterministic + live-occupancy now — no per-player landing_zone table; item 38.)
+            // (Landing pads are deterministic + live-occupancy now — no per-player landing_zone table; item 38.)
 
-        // Migrate older saves to carry per-voxel colour modifiers (dyed blocks / coloured lights). The
-        // columns are added if absent; on a fresh DB they already exist from the CREATE above, so the
-        // ALTERs throw "duplicate column" and are harmlessly ignored.
-        TryExecute("ALTER TABLE block_edit ADD COLUMN tint INTEGER NOT NULL DEFAULT 0;");
-        TryExecute("ALTER TABLE block_edit ADD COLUMN glow INTEGER NOT NULL DEFAULT 0;");
-        // Migrate older saves to carry the per-voxel shape descriptor (non-cube building forms). Same pattern:
-        // harmlessly ignored on a fresh DB where the CREATE already added the column.
-        TryExecute("ALTER TABLE block_edit ADD COLUMN shape INTEGER NOT NULL DEFAULT 0;");
+            // Migrate older saves to carry per-voxel colour modifiers (dyed blocks / coloured lights). The
+            // columns are added if absent; on a fresh DB they already exist from the CREATE above, so the
+            // ALTERs throw "duplicate column" and are harmlessly ignored.
+            TryExecute("ALTER TABLE block_edit ADD COLUMN tint INTEGER NOT NULL DEFAULT 0;");
+            TryExecute("ALTER TABLE block_edit ADD COLUMN glow INTEGER NOT NULL DEFAULT 0;");
+            // Migrate older saves to carry the per-voxel shape descriptor (non-cube building forms). Same pattern:
+            // harmlessly ignored on a fresh DB where the CREATE already added the column.
+            TryExecute("ALTER TABLE block_edit ADD COLUMN shape INTEGER NOT NULL DEFAULT 0;");
 
-        // Block attribution (issue #490): who last changed a cell, and when. The owner is an interned integer
-        // rather than the player name — measured at +13.5 % on this table versus +24 % for the name as TEXT,
-        // and this is the one table that grows with play. 0 = unknown, which is what every pre-existing row
-        // keeps: there is no way to back-fill who built what before this shipped.
-        TryExecute("ALTER TABLE block_edit ADD COLUMN owner_id INTEGER NOT NULL DEFAULT 0;");
-        TryExecute("ALTER TABLE block_edit ADD COLUMN edited_unix INTEGER NOT NULL DEFAULT 0;");
+            // Block attribution (issue #490): who last changed a cell, and when. The owner is an interned integer
+            // rather than the player name — measured at +13.5 % on this table versus +24 % for the name as TEXT,
+            // and this is the one table that grows with play. 0 = unknown, which is what every pre-existing row
+            // keeps: there is no way to back-fill who built what before this shipped.
+            TryExecute("ALTER TABLE block_edit ADD COLUMN owner_id INTEGER NOT NULL DEFAULT 0;");
+            TryExecute("ALTER TABLE block_edit ADD COLUMN edited_unix INTEGER NOT NULL DEFAULT 0;");
 
-        // Player-designed forms (#843) share the report table with paint. Rows written before this shipped
-        // are all paint reports, which is exactly what the column default says.
-        TryExecute("ALTER TABLE paint_report ADD COLUMN kind TEXT NOT NULL DEFAULT 'paint';");
-        // Attribution for copied designs (#846): pre-existing designs simply have no designer name on record.
-        TryExecute("ALTER TABLE paint_design ADD COLUMN owner_name TEXT NOT NULL DEFAULT '';");
-        // Per-container stash filter (#1032): '' = no filter, which is what every pre-existing crate keeps.
-        TryExecute("ALTER TABLE container ADD COLUMN filter TEXT NOT NULL DEFAULT '';");
+            // Player-designed forms (#843) share the report table with paint. Rows written before this shipped
+            // are all paint reports, which is exactly what the column default says.
+            TryExecute("ALTER TABLE paint_report ADD COLUMN kind TEXT NOT NULL DEFAULT 'paint';");
+            // Attribution for copied designs (#846): pre-existing designs simply have no designer name on record.
+            TryExecute("ALTER TABLE paint_design ADD COLUMN owner_name TEXT NOT NULL DEFAULT '';");
+            // Per-container stash filter (#1032): '' = no filter, which is what every pre-existing crate keeps.
+            TryExecute("ALTER TABLE container ADD COLUMN filter TEXT NOT NULL DEFAULT '';");
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode is 11 or 26)
+        {
+            throw new InvalidDataException(
+                $"SQLite database is corrupted: {_paths.DatabaseFile}",
+                ex);
+        }
     }
 
     // --- Block-id palette (content-shift migration) ---

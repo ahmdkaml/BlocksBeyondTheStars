@@ -48,15 +48,17 @@ public sealed class PostgreSqlWorldRepository : IWorldRepository
 
     public void Initialize()
     {
-        _paths.EnsureDirectories();
+        try
+        {
+            _paths.EnsureDirectories();
 
-        _connection = new NpgsqlConnection(_connectionString);
-        _connection.Open();
+            _connection = new NpgsqlConnection(_connectionString);
+            _connection.Open();
 
-        Execute($"CREATE SCHEMA IF NOT EXISTS {QuoteIdentifier(_schemaName)};");
-        Execute($"SET search_path TO {QuoteIdentifier(_schemaName)};");
+            Execute($"CREATE SCHEMA IF NOT EXISTS {QuoteIdentifier(_schemaName)};");
+            Execute($"SET search_path TO {QuoteIdentifier(_schemaName)};");
 
-        Execute(@"
+            Execute(@"
             CREATE TABLE IF NOT EXISTS world_meta (id INTEGER PRIMARY KEY CHECK (id = 0), json TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS block_edit (
                 planet TEXT NOT NULL, x INTEGER NOT NULL, y INTEGER NOT NULL, z INTEGER NOT NULL,
@@ -117,27 +119,36 @@ public sealed class PostgreSqlWorldRepository : IWorldRepository
             CREATE TABLE IF NOT EXISTS custom_shape (
                 id INTEGER PRIMARY KEY, owner TEXT NOT NULL, owner_name TEXT NOT NULL,
                 name TEXT NOT NULL, voxels TEXT NOT NULL);");
-        // (Landing pads are deterministic + live-occupancy now — no per-player landing_zone table; item 38.)
+            // (Landing pads are deterministic + live-occupancy now — no per-player landing_zone table; item 38.)
 
-        // Migrate older saves to carry per-voxel colour modifiers (dyed blocks / coloured lights). The
-        // columns are added if absent; on a fresh DB they already exist from the CREATE above, so the
-        // ALTERs throw "duplicate column" and are harmlessly ignored.
-        TryExecute("ALTER TABLE block_edit ADD COLUMN IF NOT EXISTS tint INTEGER NOT NULL DEFAULT 0;");
-        TryExecute("ALTER TABLE block_edit ADD COLUMN IF NOT EXISTS glow INTEGER NOT NULL DEFAULT 0;");
-        // Migrate older saves to carry the per-voxel shape descriptor (non-cube building forms). Same pattern:
-        // harmlessly ignored on a fresh DB where the CREATE already added the column.
-        TryExecute("ALTER TABLE block_edit ADD COLUMN IF NOT EXISTS shape INTEGER NOT NULL DEFAULT 0;");
-        // Block attribution (issue #490) — mirrors the SQLite side: interned owner + edit time, 0 = unknown for
-        // every row written before this shipped (no back-fill is possible).
-        TryExecute("ALTER TABLE block_edit ADD COLUMN IF NOT EXISTS owner_id INTEGER NOT NULL DEFAULT 0;");
-        TryExecute("ALTER TABLE block_edit ADD COLUMN IF NOT EXISTS edited_unix BIGINT NOT NULL DEFAULT 0;");
-        // Player-designed forms (#843) share the report table with paint — every pre-existing row is a paint
-        // report, which is exactly what the column default says.
-        TryExecute("ALTER TABLE paint_report ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'paint';");
-        // Attribution for copied designs (#846): pre-existing designs simply have no designer name on record.
-        TryExecute("ALTER TABLE paint_design ADD COLUMN IF NOT EXISTS owner_name TEXT NOT NULL DEFAULT '';");
-        // Per-container stash filter (#1032): '' = no filter, which is what every pre-existing crate keeps.
-        TryExecute("ALTER TABLE container ADD COLUMN IF NOT EXISTS filter TEXT NOT NULL DEFAULT '';");
+            // Migrate older saves to carry per-voxel colour modifiers (dyed blocks / coloured lights). The
+            // columns are added if absent; on a fresh DB they already exist from the CREATE above, so the
+            // ALTERs throw "duplicate column" and are harmlessly ignored.
+            TryExecute("ALTER TABLE block_edit ADD COLUMN IF NOT EXISTS tint INTEGER NOT NULL DEFAULT 0;");
+            TryExecute("ALTER TABLE block_edit ADD COLUMN IF NOT EXISTS glow INTEGER NOT NULL DEFAULT 0;");
+            // Migrate older saves to carry the per-voxel shape descriptor (non-cube building forms). Same pattern:
+            // harmlessly ignored on a fresh DB where the CREATE already added the column.
+            TryExecute("ALTER TABLE block_edit ADD COLUMN IF NOT EXISTS shape INTEGER NOT NULL DEFAULT 0;");
+            // Block attribution (issue #490) — mirrors the SQLite side: interned owner + edit time, 0 = unknown for
+            // every row written before this shipped (no back-fill is possible).
+            TryExecute("ALTER TABLE block_edit ADD COLUMN IF NOT EXISTS owner_id INTEGER NOT NULL DEFAULT 0;");
+            TryExecute("ALTER TABLE block_edit ADD COLUMN IF NOT EXISTS edited_unix BIGINT NOT NULL DEFAULT 0;");
+            // Player-designed forms (#843) share the report table with paint — every pre-existing row is a paint
+            // report, which is exactly what the column default says.
+            TryExecute("ALTER TABLE paint_report ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'paint';");
+            // Attribution for copied designs (#846): pre-existing designs simply have no designer name on record.
+            TryExecute("ALTER TABLE paint_design ADD COLUMN IF NOT EXISTS owner_name TEXT NOT NULL DEFAULT '';");
+            // Per-container stash filter (#1032): '' = no filter, which is what every pre-existing crate keeps.
+            TryExecute("ALTER TABLE container ADD COLUMN IF NOT EXISTS filter TEXT NOT NULL DEFAULT '';");
+        }
+        // 42P01/42P07 = the stored schema no longer matches what Initialize expects (undefined/duplicate
+        // relation). Deliberately NOT 42601 (syntax_error) — that is a bug in our SQL, not a broken save.
+        catch (PostgresException ex) when (ex.SqlState is "42P01" or "42P07")
+        {
+            throw new InvalidDataException(
+                $"PostgreSQL database is corrupted or incompatible: {_paths.WorldDirectory}",
+                ex);
+        }
     }
 
     // --- Block-id palette (content-shift migration) ---

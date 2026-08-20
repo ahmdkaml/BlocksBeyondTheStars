@@ -224,7 +224,17 @@ public sealed partial class GameServer
 
     public void Start()
     {
-        _repo.Initialize();
+        try
+        {
+            _repo.Initialize();
+        }
+        catch (InvalidDataException ex)
+        {
+            _log.Error($"Failed to initialize persistence: database is corrupted. " +
+                       $"The database was left untouched. Error: {ex.Message}");
+
+            throw;
+        }
         // Record the current block-id palette and remap any save written under a different block set BEFORE
         // world load. Block ids are assigned by key sort order, so adding a block shifts them; without this a
         // content update would silently decode every stored edit to the wrong block.
