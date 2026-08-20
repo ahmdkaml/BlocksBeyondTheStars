@@ -5,7 +5,7 @@ using BlocksBeyondTheStars.Persistence;
 using BlocksBeyondTheStars.Shared.Geometry;
 using BlocksBeyondTheStars.Shared.State;
 using BlocksBeyondTheStars.Shared.World;
-using Xunit;
+using Microsoft.Data.Sqlite;
 
 namespace BlocksBeyondTheStars.Tests;
 
@@ -18,9 +18,16 @@ public sealed class PersistenceTests : IDisposable
         _root = Path.Combine(Path.GetTempPath(), "bbts_test_" + Guid.NewGuid().ToString("N"));
     }
 
-    private SqliteWorldRepository NewRepo(string world = "world_001")
+    private SqliteWorldRepository NewSqliteRepo(string world = "world_001")
     {
         var repo = new SqliteWorldRepository(new SaveGamePaths(_root, world));
+        repo.Initialize();
+        return repo;
+    }
+
+    private MemoryWorldRepository NewMemoryRepo(string world = "world_001")
+    {
+        var repo = new MemoryWorldRepository(new SaveGamePaths(_root, world));
         repo.Initialize();
         return repo;
     }
@@ -28,12 +35,12 @@ public sealed class PersistenceTests : IDisposable
     [Fact]
     public void Metadata_RoundTrips()
     {
-        using (var repo = NewRepo())
+        using (var repo = NewSqliteRepo())
         {
             repo.SaveMetadata(new WorldMetadata { WorldName = "Alpha", Seed = 42, DefaultPlanetType = "ice" });
         }
 
-        using var reopened = NewRepo();
+        using var reopened = NewSqliteRepo();
         var meta = reopened.LoadMetadata();
         Assert.NotNull(meta);
         Assert.Equal("Alpha", meta!.WorldName);
@@ -44,14 +51,14 @@ public sealed class PersistenceTests : IDisposable
     [Fact]
     public void BlockEdits_PersistAndLoadByChunk()
     {
-        using (var repo = NewRepo())
+        using (var repo = NewSqliteRepo())
         {
             repo.SetBlock("rocky", new Vector3i(1, 2, 3), 5);
             repo.SetBlock("rocky", new Vector3i(1, 2, 3), 0);   // overwrite (mined to air)
             repo.SetBlock("rocky", new Vector3i(40, 2, 3), 9);  // different chunk
         }
 
-        using var reopened = NewRepo();
+        using var reopened = NewSqliteRepo();
         var edits = reopened.LoadChunkEdits("rocky", new ChunkCoord(0, 0, 0));
         Assert.Single(edits);
         Assert.Equal(new Vector3i(1, 2, 3), edits[0].WorldPosition);
@@ -71,12 +78,12 @@ public sealed class PersistenceTests : IDisposable
         rel.Log.Add(new NpcInteraction { Kind = NpcInteractionKind.Trade });
         player.NpcMemory["settle_123:quartermaster"] = rel;
 
-        using (var repo = NewRepo())
+        using (var repo = NewSqliteRepo())
         {
             repo.SavePlayer(player);
         }
 
-        using var reopened = NewRepo();
+        using var reopened = NewSqliteRepo();
         var loaded = reopened.LoadPlayer("p1");
 
         Assert.NotNull(loaded);
@@ -102,12 +109,12 @@ public sealed class PersistenceTests : IDisposable
         player.Inventory.Add("iron_ore", 30, 99);
         player.UnlockedBlueprints.Add("oxygen_tank_1");
 
-        using (var repo = NewRepo())
+        using (var repo = NewSqliteRepo())
         {
             repo.SavePlayer(player);
         }
 
-        using var reopened = NewRepo();
+        using var reopened = NewSqliteRepo();
         var loaded = reopened.LoadPlayer("p1");
         Assert.NotNull(loaded);
         Assert.Equal("Pilot", loaded!.Name);
@@ -124,12 +131,12 @@ public sealed class PersistenceTests : IDisposable
         ship.Modules.Add("workshop");
         ship.Cargo.Add("stone", 200, 99);
 
-        using (var repo = NewRepo())
+        using (var repo = NewSqliteRepo())
         {
             repo.SaveShip("default", ship);
         }
 
-        using var reopened = NewRepo();
+        using var reopened = NewSqliteRepo();
         var loaded = reopened.LoadShip("default");
         Assert.NotNull(loaded);
         Assert.Contains("workshop", loaded!.Modules);
@@ -140,7 +147,7 @@ public sealed class PersistenceTests : IDisposable
     public void Backup_CreatesReadableCopy()
     {
         string backup;
-        using (var repo = NewRepo())
+        using (var repo = NewSqliteRepo())
         {
             repo.SaveMetadata(new WorldMetadata { WorldName = "Beta", Seed = 7 });
             backup = repo.CreateBackup("backup_test");
@@ -164,7 +171,7 @@ public sealed class PersistenceTests : IDisposable
         // A new block (algae) sorts first and takes id 5, shifting steel_wall→6 and torch→7; gone_block removed.
         var paletteB = new Dictionary<ushort, string> { [5] = "algae", [6] = "steel_wall", [7] = "torch" };
 
-        using (var repo = NewRepo())
+        using (var repo = NewSqliteRepo())
         {
             repo.SetBlock("rocky", new Vector3i(1, 2, 3), 5);  // steel_wall
             repo.SetBlock("rocky", new Vector3i(2, 2, 3), 6);  // torch
@@ -182,12 +189,12 @@ public sealed class PersistenceTests : IDisposable
             repo.EnsureBlockPalette(paletteA); // record the baseline palette
         }
 
-        using (var repo = NewRepo())
+        using (var repo = NewSqliteRepo())
         {
             repo.EnsureBlockPalette(paletteB); // content shifted → remap every stored id
         }
 
-        using var reopened = NewRepo();
+        using var reopened = NewSqliteRepo();
         var edits = reopened.LoadChunkEdits("rocky", new ChunkCoord(0, 0, 0));
         ushort BlockAt(int x) => edits.First(e => e.WorldPosition.X == x).Block;
         Assert.Equal((ushort)6, BlockAt(1)); // steel_wall 5 → 6 (no cascade into torch's remap)
@@ -203,19 +210,225 @@ public sealed class PersistenceTests : IDisposable
     public void BlockPalette_LeavesIdsUntouchedWhenUnchanged()
     {
         var palette = new Dictionary<ushort, string> { [5] = "steel_wall", [6] = "torch" };
-        using (var repo = NewRepo())
+        using (var repo = NewSqliteRepo())
         {
             repo.SetBlock("rocky", new Vector3i(1, 2, 3), 5);
             repo.EnsureBlockPalette(palette);
         }
 
-        using (var repo = NewRepo())
+        using (var repo = NewSqliteRepo())
         {
             repo.EnsureBlockPalette(palette); // identical palette → no remap
         }
 
-        using var reopened = NewRepo();
+        using var reopened = NewSqliteRepo();
         Assert.Equal((ushort)5, reopened.LoadChunkEdits("rocky", new ChunkCoord(0, 0, 0)).Single().Block);
+    }
+
+    // --- SQLite Player JSON Corruption Tests ---
+
+    [Theory]
+    [InlineData("invalid json")]
+    [InlineData("null")]
+    [InlineData("""{"Id":"p1","Name":"Pilot","Health":"lots"}""")]
+    [InlineData("""{"Id":"p1"}""")]
+    public void Sqlite_Player_DamagedJson_ThrowsInvalidDataExceptionAndPreservesRow(string json)
+    {
+        using (var repo = NewSqliteRepo())
+        {
+            repo.SavePlayer(new PlayerState
+            {
+                PlayerId = "p1",
+                Name = "Pilot",
+            });
+        }
+
+        var databaseFile = Path.Combine(_root, "world_001", "world.db");
+
+        using (var connection = new SqliteConnection($"Data Source={databaseFile}"))
+        {
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "UPDATE player SET json = $json WHERE id = $id;";
+            cmd.Parameters.AddWithValue("$json", json);
+            cmd.Parameters.AddWithValue("$id", "p1");
+            cmd.ExecuteNonQuery();
+        }
+
+        using (var reopened = NewSqliteRepo())
+        {
+            Assert.Throws<InvalidDataException>(() => reopened.LoadPlayer("p1"));
+        }
+
+        using (var connection = new SqliteConnection($"Data Source={databaseFile}"))
+        {
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT json FROM player WHERE id = $id;";
+            cmd.Parameters.AddWithValue("$id", "p1");
+
+            var storedJson = cmd.ExecuteScalar() as string;
+            Assert.Equal(json, storedJson);
+        }
+    }
+
+    // --- Memory Player JSON Corruption Tests ---
+
+    [Theory]
+    [InlineData("invalid json")]
+    [InlineData("null")]
+    [InlineData("""{"Id":"p1","Name":"Pilot","Health":"lots"}""")]
+    [InlineData("""{"Id":"p1"}""")]
+    public void Memory_Player_DamagedJson_ThrowsInvalidDataExceptionAndPreservesState(string json)
+    {
+        using var repo = NewMemoryRepo();
+
+        repo.SavePlayer(new PlayerState
+        {
+            PlayerId = "p1",
+            Name = "Pilot",
+        });
+
+        repo.SetRawPlayerJson("p1", json);
+
+        Assert.Throws<InvalidDataException>(() => repo.LoadPlayer("p1"));
+        Assert.Equal(json, repo.GetRawPlayerJson("p1"));
+    }
+
+    // --- SQLite File-Level Integrity Tests ---
+
+    [Theory]
+    [InlineData("non-sqlite")]
+    [InlineData("truncated")]
+    public void Initialize_WithCorruptedDatabase_ThrowsWithoutOverwritingFile(string corruption)
+    {
+        string dbPath;
+
+        using (var repo = NewSqliteRepo())
+        {
+            repo.SaveMetadata(new WorldMetadata
+            {
+                WorldName = "Alpha",
+                Seed = 42,
+            });
+
+            dbPath = Path.Combine(_root, "world_001", "world.db");
+        }
+
+        ApplyCorruption(dbPath, corruption);
+
+        var before = File.ReadAllBytes(dbPath);
+
+        using (var reopened = new SqliteWorldRepository(
+            new SaveGamePaths(_root, "world_001")))
+        {
+            Assert.ThrowsAny<Exception>(() => reopened.Initialize());
+        }
+
+        var after = File.ReadAllBytes(dbPath);
+
+        Assert.Equal(before, after);
+    }
+
+    [Fact]
+    public void Initialize_WithMultipleFlippedDatabaseBytes_PreservesFile()
+    {
+        string dbPath;
+
+        using (var repo = NewSqliteRepo())
+        {
+            repo.SaveMetadata(new WorldMetadata
+            {
+                WorldName = "Alpha",
+                Seed = 42,
+            });
+
+            dbPath = Path.Combine(_root, "world_001", "world.db");
+        }
+
+        byte[] bytes = File.ReadAllBytes(dbPath);
+        Assert.True(bytes.Length > 50);
+
+        bytes[50] ^= 0xFF;
+        bytes[60] ^= 0xFF;
+        bytes[65] ^= 0xFF;
+        bytes[6] ^= 0xFF;
+        File.WriteAllBytes(dbPath, bytes);
+
+        var before = File.ReadAllBytes(dbPath);
+
+        using (var reopened = new SqliteWorldRepository(
+            new SaveGamePaths(_root, "world_001")))
+        {
+            Record.Exception(() => reopened.Initialize());
+        }
+
+        var after = File.ReadAllBytes(dbPath);
+
+        Assert.Equal(before, after);
+    }
+
+    private static void ApplyCorruption(string dbPath, string corruption)
+    {
+        switch (corruption)
+        {
+            case "non-sqlite":
+                File.WriteAllText(dbPath, "this is not a sqlite database");
+                break;
+
+            case "truncated":
+                {
+                    byte[] bytes = File.ReadAllBytes(dbPath);
+                    int newLength = Math.Max(1, bytes.Length / 2);
+                    File.WriteAllBytes(dbPath, bytes[..newLength]);
+                    break;
+                }
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(corruption), corruption, null);
+        }
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(50, false)]
+    public void Initialize_WithFlippedDatabaseByte_ReportsBehavior(
+        int offset,
+        bool shouldThrow)
+    {
+        string dbPath;
+
+        using (var repo = NewSqliteRepo())
+        {
+            repo.SaveMetadata(new WorldMetadata
+            {
+                WorldName = "Alpha",
+                Seed = 42,
+            });
+
+            dbPath = Path.Combine(_root, "world_001", "world.db");
+        }
+
+        byte[] bytes = File.ReadAllBytes(dbPath);
+        Assert.InRange(offset, 0, bytes.Length - 1);
+
+        bytes[offset] ^= 0xFF;
+        File.WriteAllBytes(dbPath, bytes);
+
+        var before = File.ReadAllBytes(dbPath);
+
+        Exception? exception;
+
+        using (var reopened = new SqliteWorldRepository(
+            new SaveGamePaths(_root, "world_001")))
+        {
+            exception = Record.Exception(() => reopened.Initialize());
+        }
+
+        var after = File.ReadAllBytes(dbPath);
+
+        Assert.Equal(before, after);
+        Assert.Equal(shouldThrow, exception is not null);
     }
 
     public void Dispose()

@@ -497,8 +497,7 @@ public sealed class PostgreSqlWorldRepository : IWorldRepository
                 return null;
             }
 
-            var snapshot = JsonSerializer.Deserialize<PlayerSnapshot>(json, JsonOptions)!;
-            return StateMapper.FromSnapshot(snapshot);
+            return StateMapper.PlayerFromJson(json, playerId, JsonOptions);
         }
     }
 

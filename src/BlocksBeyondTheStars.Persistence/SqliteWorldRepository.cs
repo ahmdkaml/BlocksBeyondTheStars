@@ -524,8 +524,7 @@ public sealed class SqliteWorldRepository : IWorldRepository
                 return null;
             }
 
-            var snapshot = JsonSerializer.Deserialize<PlayerSnapshot>(json, JsonOptions)!;
-            return StateMapper.FromSnapshot(snapshot);
+            return StateMapper.PlayerFromJson(json, playerId, JsonOptions);
         }
     }
 

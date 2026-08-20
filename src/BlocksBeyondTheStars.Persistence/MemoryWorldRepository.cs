@@ -738,9 +738,12 @@ public sealed class MemoryWorldRepository : IWorldRepository
     {
         lock (_gate)
         {
-            return _players.TryGetValue(playerId, out var json)
-                ? StateMapper.FromSnapshot(JsonSerializer.Deserialize<PlayerSnapshot>(json, JsonOptions)!)
-                : null;
+            if (!_players.TryGetValue(playerId, out var json))
+            {
+                return null;
+            }
+
+            return StateMapper.PlayerFromJson(json, playerId, JsonOptions);
         }
     }
 
@@ -1185,6 +1188,23 @@ public sealed class MemoryWorldRepository : IWorldRepository
             $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{(safe.Length > 0 ? safe : "backup")}.world.json.gz");
         File.WriteAllBytes(path, blob);
         return path;
+    }
+
+    // Test-only hooks: inject/inspect a raw player row to exercise the corruption contract.
+    internal void SetRawPlayerJson(string playerId, string json)
+    {
+        lock (_gate)
+        {
+            _players[playerId] = json;
+        }
+    }
+
+    internal string? GetRawPlayerJson(string playerId)
+    {
+        lock (_gate)
+        {
+            return _players.GetValueOrDefault(playerId);
+        }
     }
 
     public void Dispose()

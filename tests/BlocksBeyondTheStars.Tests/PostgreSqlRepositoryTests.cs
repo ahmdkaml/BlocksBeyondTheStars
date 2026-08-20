@@ -7,6 +7,7 @@ using BlocksBeyondTheStars.Shared.Missions;
 using BlocksBeyondTheStars.Shared.State;
 using BlocksBeyondTheStars.Shared.World;
 using Npgsql;
+using Xunit;
 
 namespace BlocksBeyondTheStars.Tests;
 
@@ -61,6 +62,83 @@ public sealed class PostgreSqlRepositoryTests
             string backup = repo.CreateBackup("real_pg_backup");
             Assert.EndsWith(".postgresql.json", backup);
             Assert.Contains("\"world_meta\"", File.ReadAllText(backup), StringComparison.Ordinal);
+        }
+        finally
+        {
+            DropSchema(connectionString, schema);
+            try
+            {
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+            }
+            catch
+            {
+                // Best-effort cleanup; a failed temp-folder delete must not hide database failures.
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("invalid json")]
+    [InlineData("null")]
+    [InlineData("""{"Id":"p1","Name":"Pilot","Health":"lots"}""")]
+    [InlineData("""{"Id":"p1"}""")]
+    public void Postgres_Player_DamagedJson_ThrowsInvalidDataExceptionAndPreservesRow(string json)
+    {
+        string? connectionString = Environment.GetEnvironmentVariable(ConnectionStringEnv);
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return;
+        }
+
+        string world = "pg_" + Guid.NewGuid().ToString("N");
+        string root = Path.Combine(Path.GetTempPath(), "bbts_pg_" + Guid.NewGuid().ToString("N"));
+        string schema = SchemaNameFor(world);
+        string quotedTable = QuoteIdentifier(schema) + ".player";
+
+        try
+        {
+            AssertPostgreSqlServerResponds(connectionString);
+
+            var paths = new SaveGamePaths(root, world);
+            using (var repo = new PostgreSqlWorldRepository(paths, connectionString))
+            {
+                repo.Initialize();
+                repo.SavePlayer(new PlayerState
+                {
+                    PlayerId = "p1",
+                    Name = "Pilot",
+                });
+            }
+
+            using (var conn = new NpgsqlConnection(connectionString))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"UPDATE {quotedTable} SET json = @json WHERE id = @id;";
+                cmd.Parameters.AddWithValue("@json", json);
+                cmd.Parameters.AddWithValue("@id", "p1");
+                cmd.ExecuteNonQuery();
+            }
+
+            using (var reopened = new PostgreSqlWorldRepository(paths, connectionString))
+            {
+                reopened.Initialize();
+                Assert.Throws<InvalidDataException>(() => reopened.LoadPlayer("p1"));
+            }
+
+            using (var conn = new NpgsqlConnection(connectionString))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"SELECT json FROM {quotedTable} WHERE id = @id;";
+                cmd.Parameters.AddWithValue("@id", "p1");
+
+                var storedJson = cmd.ExecuteScalar() as string;
+                Assert.Equal(json, storedJson);
+            }
         }
         finally
         {
