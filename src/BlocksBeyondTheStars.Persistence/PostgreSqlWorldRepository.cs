@@ -141,7 +141,9 @@ public sealed class PostgreSqlWorldRepository : IWorldRepository
             // Per-container stash filter (#1032): '' = no filter, which is what every pre-existing crate keeps.
             TryExecute("ALTER TABLE container ADD COLUMN IF NOT EXISTS filter TEXT NOT NULL DEFAULT '';");
         }
-        catch (PostgresException ex) when (ex.SqlState is "42601" or "42P01" or "42P07")
+        // 42P01/42P07 = the stored schema no longer matches what Initialize expects (undefined/duplicate
+        // relation). Deliberately NOT 42601 (syntax_error) — that is a bug in our SQL, not a broken save.
+        catch (PostgresException ex) when (ex.SqlState is "42P01" or "42P07")
         {
             throw new InvalidDataException(
                 $"PostgreSQL database is corrupted or incompatible: {_paths.WorldDirectory}",

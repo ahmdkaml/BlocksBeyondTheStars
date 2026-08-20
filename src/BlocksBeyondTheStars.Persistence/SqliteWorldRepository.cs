@@ -158,7 +158,6 @@ public sealed class SqliteWorldRepository : IWorldRepository
         }
     }
 
-
     // --- Block-id palette (content-shift migration) ---
 
     public void EnsureBlockPalette(IReadOnlyDictionary<ushort, string> currentPalette)

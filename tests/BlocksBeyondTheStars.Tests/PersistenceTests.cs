@@ -322,7 +322,7 @@ public sealed class PersistenceTests : IDisposable
         using (var reopened = new SqliteWorldRepository(
             new SaveGamePaths(_root, "world_001")))
         {
-            Assert.ThrowsAny<Exception>(() => reopened.Initialize());
+            Assert.Throws<InvalidDataException>(() => reopened.Initialize());
         }
 
         var after = File.ReadAllBytes(dbPath);
@@ -429,6 +429,10 @@ public sealed class PersistenceTests : IDisposable
 
         Assert.Equal(before, after);
         Assert.Equal(shouldThrow, exception is not null);
+        if (shouldThrow)
+        {
+            Assert.IsType<InvalidDataException>(exception);
+        }
     }
 
     public void Dispose()
