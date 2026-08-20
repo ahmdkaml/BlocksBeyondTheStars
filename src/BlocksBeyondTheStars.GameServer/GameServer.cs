@@ -2919,7 +2919,22 @@ public sealed partial class GameServer
         // `marcel` ≠ `Marcel` mismatch would grant nothing with no error anywhere.
         bool fleetAdmin = IsFleetAdminName(name);
 
-        var state = _repo.LoadPlayer(name) ?? CreateNewPlayer(name);
+        PlayerState state;
+        try
+        {
+            state = _repo.LoadPlayer(name) ?? CreateNewPlayer(name);
+        }
+        catch (InvalidDataException ex)
+        {
+            _log.Error($"Failed to load player '{name}' (connection {connectionId}): persisted data is corrupted. " +
+                       $"The database record was kept untouched for manual recovery. Error: {ex.Message} -> {ex.InnerException?.Message}\n{ex.StackTrace}");
+
+            SendTo(connectionId, new JoinRejected
+            {
+                Reason = "@srv.join.data_corrupted"
+            });
+            return;
+        }
         string tokenHash = HashNameToken(join.Token);
 
         // Reconnect eviction (#964). A client that dies without closing its socket cleanly — PC crash, hard
@@ -3275,7 +3290,17 @@ public sealed partial class GameServer
     /// </summary>
     public PlayerSession AddLocalPlayer(string name, string locale = "en")
     {
-        var state = _repo.LoadPlayer(name) ?? CreateNewPlayer(name);
+        PlayerState state;
+        try
+        {
+            state = _repo.LoadPlayer(name) ?? CreateNewPlayer(name);
+        }
+        catch (InvalidDataException ex)
+        {
+            _log.Error($"Failed to load local player '{name}': save data is corrupted. " +
+                       $"Kept data untouched for manual recovery. Error: {ex.Message} -> {ex.InnerException?.Message}");
+            throw; // Preserve the contract: surface the corruption to UI/caller without overwriting
+        }
 
         if (state.Role != PlayerRole.WorldAdmin && _config.AdminPlayers.Contains(name))
         {
@@ -3288,6 +3313,7 @@ public sealed partial class GameServer
         var (joinBody, joinBodyType) = RestoreJoinBody(state);
         LoadWorld(joinBodyType, joinBody);
 
+        // ... rest of setup
         var session = new PlayerSession(connectionId, state)
         {
             Joined = true,
