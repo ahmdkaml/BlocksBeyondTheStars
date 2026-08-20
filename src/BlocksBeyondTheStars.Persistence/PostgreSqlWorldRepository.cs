@@ -48,7 +48,9 @@ public sealed class PostgreSqlWorldRepository : IWorldRepository
 
     public void Initialize()
     {
-        _paths.EnsureDirectories();
+        try
+        {
+            _paths.EnsureDirectories();
 
         _connection = new NpgsqlConnection(_connectionString);
         _connection.Open();
@@ -138,6 +140,13 @@ public sealed class PostgreSqlWorldRepository : IWorldRepository
         TryExecute("ALTER TABLE paint_design ADD COLUMN IF NOT EXISTS owner_name TEXT NOT NULL DEFAULT '';");
         // Per-container stash filter (#1032): '' = no filter, which is what every pre-existing crate keeps.
         TryExecute("ALTER TABLE container ADD COLUMN IF NOT EXISTS filter TEXT NOT NULL DEFAULT '';");
+        }
+        catch (PostgresException ex) when (ex.SqlState is "42601" or "42P01" or "42P07")
+        {
+            throw new InvalidDataException(
+                $"PostgreSQL database is corrupted or incompatible: {_paths.WorldDirectory}",
+                ex);
+        }
     }
 
     // --- Block-id palette (content-shift migration) ---
