@@ -150,6 +150,15 @@ public sealed class GameContent
     /// these (or "none"); the engine is story-agnostic, so adding a storyline is adding a pack.</summary>
     public IReadOnlyDictionary<string, StoryDefinition> Stories => _stories;
 
+    /// <summary>The SPS relay upgrade (#1125): costs + lane link range, or null when <c>data/relay.json</c>
+    /// is absent — the feature then simply does nothing (the achievements pattern).</summary>
+    public RelayDefinition? Relay { get; private set; }
+
+    /// <summary>Installs the relay definition (called by the content loader). A definition without any cost
+    /// line is treated as absent — a relay that costs nothing would complete on the first click.</summary>
+    public void SetRelay(RelayDefinition? relay)
+        => Relay = relay is { Costs.Count: > 0 } ? relay : null;
+
     private IReadOnlyList<AchievementDefinition> _achievements = new List<AchievementDefinition>();
 
     /// <summary>Achievements in authored order (empty when <c>data/achievements.json</c> is absent — the
@@ -662,6 +671,9 @@ public sealed class GameContent
             foreach (var ore in planet.Ores)
             {
                 RequireBlock($"Planet '{planet.Key}' ore", ore.Block);
+                // Frontier boost eligibility (#1122): derived from the block's tool gate, so the ore
+                // data never has to repeat (and can never contradict) the tier.
+                ore.RareTier = (GetBlock(ore.Block)?.MinToolTier ?? 0) >= 2;
             }
         }
 

@@ -286,6 +286,7 @@ public sealed partial class GameServer
         _worlds = new WorldManager(_content, _generator, _repo);
         BuildGalaxy(); // resolves _meta.ActiveLocationId to a concrete celestial body id
         LoadPlayerStations(); // item 20 S4: restore persisted player stations onto the star map + registry
+        RecomputeRelayLanes(); // #1125: jump lanes re-derive from the completed relays (never persisted)
         LoadAllBases();       // restore player-founded planet bases (Grundstein) server-wide for the travel screen
         LoadPaintDesigns();   // restore the save-global paint-design registry (painted blocks reference it by id)
         LoadCustomShapes();   // …and the player-designed form registry (shaped blocks/items reference it by index)
@@ -338,7 +339,10 @@ public sealed partial class GameServer
     /// </summary>
     private void BuildGalaxy()
     {
-        _galaxy = new UniverseGenerator(_meta.Seed, _meta.Description, _content).Generate();
+        // #1123: a grown save regenerates with the persisted extra count — system N is a pure function
+        // of (seed, N), so the grown systems come back byte-identical, in the same pass as the fixed ones.
+        int systemCount = _meta.Description.StarSystemCount + Math.Max(0, _meta.GalaxyGrownSystems);
+        _galaxy = new UniverseGenerator(_meta.Seed, _meta.Description, _content).Generate(systemCount);
 
         var stored = _repo.LoadLocationStatuses();
         foreach (var body in _galaxy.AllBodies())
@@ -506,10 +510,14 @@ public sealed partial class GameServer
         bool airlessMoon = worldBody?.Kind == CelestialKind.Moon
             && string.Equals(planet.Atmosphere, "none", System.StringComparison.OrdinalIgnoreCase);
         world.World.Cratered = airlessMoon; // stamped on the world so chunk gen re-configures fully (#424 S13)
+        // Frontier scaling (#1122): outer systems generate richer rare-tier veins. Stamped like Cratered,
+        // so every chunk generation re-configures the shared generator with it.
+        world.World.FrontierOreBoost = FrontierOreBoostFor(FrontierTierForBody(locationId));
         // Configure the shared generator for this body's direct gen queries (size, cratering, pads —
         // LandingPadFlats is still empty for a brand-new world; BuildLandingPads below refills it).
         // The location id salts the per-body identity (#478): terrain character, rosters, structures.
-        _generator.SetWorldMode(world.World.Circumference, airlessMoon, world.World.LandingPadFlats, locationId);
+        _generator.SetWorldMode(world.World.Circumference, airlessMoon, world.World.LandingPadFlats, locationId,
+            world.World.FrontierOreBoost);
         if (!isNew)
         {
             return world; // already resident — keep its fauna/structures/edits
@@ -736,10 +744,12 @@ public sealed partial class GameServer
             return;
         }
 
-        // A jump to a different star system is a hyperspace jump — it needs a jump generator fitted.
+        // A jump to a different star system is a hyperspace jump — it needs a jump generator fitted,
+        // UNLESS an SPS jump lane links the two systems (#1125): the relay network carries you.
         var origin = _galaxy?.FindBody(session.CurrentLocationId);
         bool hyperjump = origin is null || origin.SystemId != body.SystemId;
-        if (hyperjump && !adminBypass && (_ship is null || !_ship.HasModule("jump_generator")))
+        if (hyperjump && !adminBypass && (_ship is null || !_ship.HasModule("jump_generator"))
+            && !HasJumpLane(origin?.SystemId, body.SystemId))
         {
             Reject(session, "travel", "@srv.travel.no_jump_generator");
             return;
@@ -2726,6 +2736,7 @@ public sealed partial class GameServer
             case BuildShipModuleIntent build: HandleBuildModule(session, build); break;
             case EnterSpaceIntent: HandleEnterSpace(session); break;
             case HyperjumpSystemIntent hyperjump: HandleHyperjumpSystem(session, hyperjump); break;
+            case ContributeRelayIntent relay: HandleContributeRelay(session, relay); break; // #1125
             case EnterShipIntent: EnterShipInterior(session.State.PlayerId); break;
             case ExitShipIntent: ExitShipToFlight(session.State.PlayerId); break;
             case LeaveSpaceIntent leaveSpace: HandleLeaveSpace(session, leaveSpace); break;
@@ -2806,6 +2817,7 @@ public sealed partial class GameServer
             case NetFragmentFoundIntent netFrag: HandleNetFragmentFound(session, netFrag); break;
             case CoreHackIntent coreHack: HandleCoreHack(session, coreHack); break;
             case CoreDialogueChoiceIntent coreChoice: HandleCoreDialogueChoice(session, coreChoice); break;
+            case RequestStoryResolutionIntent: HandleRequestStoryResolution(session); break; // #1124: watch the ending again
         }
     }
 
@@ -3054,6 +3066,7 @@ public sealed partial class GameServer
         SendBases(session); // player-founded bases on the join world (Grundstein markers)
         SendAllianceList(session); // the player's alliance roster (shared station/base access + Funk tab)
         SendStoryStateOnJoin(session); // story meter + per-player beat catch-up (P0)
+        SendRelayNetwork(session); // SPS relay meters + jump lanes (#1125)
         ArmNpcRadioOnJoin(session); // NPC calls (#1119): quiet period first; the join scan then catches up
         BroadcastLandingPads(session); // the join claimed a pad — everyone's map must show it (#1020)
         SendContainers(session);
@@ -5510,6 +5523,7 @@ public sealed partial class GameServer
             MapX = sys.MapX,
             MapY = sys.MapY,
             Bodies = sys.Bodies.Select(b => ToNetBody(b, session)).ToArray(),
+            Tier = FrontierTierOf(sys.Id), // #1122: the star map tags frontier systems
         }).ToArray();
 
         var players = _sessions.Values
@@ -5573,6 +5587,7 @@ public sealed partial class GameServer
         {
             OnAchievementVisitSystem(session); // "System Hopper" / "Starfarer" (#1102)
             RecordStoryMilestone(); // a new star system mapped → story milestone (P3)
+            MaybeGrowGalaxy(session, body.SystemId); // #1123: reaching the edge pushes the frontier out
         }
 
         SendExploredMap(session, body.Id); // #1113: the remembered fog for this body's planet map
@@ -5586,6 +5601,7 @@ public sealed partial class GameServer
         {
             OnAchievementVisitSystem(session); // "System Hopper" / "Starfarer" (#1102)
             RecordStoryMilestone(); // a new star system mapped → story milestone (P3)
+            MaybeGrowGalaxy(session, systemId); // #1123: reaching the edge pushes the frontier out
         }
     }
 
@@ -5652,6 +5668,7 @@ public sealed partial class GameServer
             InstantTravel = r.InstantTravel,
             AutoAim = r.AutoAim,
             StarterTeleporter = r.StarterTeleporter,
+            FrontierDanger = r.FrontierDanger,
             VoiceChatEnabled = _config.VoiceChatEnabled,
             PlayerModeNames = modeNames,
             PlayerModeValues = modeValues,
@@ -5713,6 +5730,11 @@ public sealed partial class GameServer
         if (!string.IsNullOrEmpty(intent.StarterTeleporter))
         {
             Rules.StarterTeleporter = intent.StarterTeleporter.Equals("On", System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (!string.IsNullOrEmpty(intent.FrontierDanger))
+        {
+            Rules.FrontierDanger = intent.FrontierDanger.Equals("On", System.StringComparison.OrdinalIgnoreCase);
         }
 
         _meta.RulesOverride = Rules.Clone(); // the world owns its rules — persist the edit

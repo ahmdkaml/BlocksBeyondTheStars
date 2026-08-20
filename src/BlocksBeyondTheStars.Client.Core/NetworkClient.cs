@@ -140,6 +140,8 @@ namespace BlocksBeyondTheStars.Client
         public event Action<GuardianSystemRevealed>? GuardianSystemRevealedReceived; // finale system placed on the map
         public event Action<CoreHackProgress>? CoreHackProgressReceived;             // core-hack channel progress
         public event Action<CoreDialogueMessage>? CoreDialogueReceived;              // argument-duel node / win
+        public event Action<StoryResolved>? StoryResolvedReceived;                   // #1124: play the resolution cinematic
+        public event Action<RelayNetworkState>? RelayNetworkReceived;                // #1125: SPS relay meters + jump lanes
 
         // Scanning (knowledge), crashed-ship wreck repair, and player-to-player trade.
         public event Action<ScanResult>? ScanResultReceived;
@@ -254,7 +256,7 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>World admin: live-edits the gameplay world options (empty fields = unchanged).</summary>
         public void SendSetWorldRules(string creatures = "", string planetEnemies = "", string spaceNpcs = "", string ufos = "",
             string bandits = "", string instantTravel = "", string keepInventory = "", string keepShip = "", string hazards = "",
-            string autoAim = "", string starterTeleporter = "")
+            string autoAim = "", string starterTeleporter = "", string frontierDanger = "")
             => Send(new SetWorldRulesIntent
             {
                 CreatureAbundance = creatures,
@@ -268,6 +270,7 @@ namespace BlocksBeyondTheStars.Client
                 EnvironmentalHazards = hazards,
                 AutoAim = autoAim,
                 StarterTeleporter = starterTeleporter,
+                FrontierDanger = frontierDanger,
             });
 
         /// <summary>Hyperjump into a (possibly unvisited) star system, arriving in flight mode there.</summary>
@@ -566,6 +569,12 @@ namespace BlocksBeyondTheStars.Client
         public void SendStorySelect(string storyId) => Send(new StorySelectIntent { StoryId = storyId ?? string.Empty });
         public void SendCoreHackTick() => Send(new CoreHackIntent());                                  // channel the core hack
         public void SendCoreDialogueChoice(int choiceIndex) => Send(new CoreDialogueChoiceIntent { ChoiceIndex = choiceIndex }); // duel rebuttal
+        public void SendRequestStoryResolution() => Send(new RequestStoryResolutionIntent());          // #1124: watch the ending again
+
+        /// <summary>Pours items into a station's SPS relay conversion (#1125). The server clamps the count
+        /// to what is missing and what the player holds, so int.MaxValue means "give everything I have".</summary>
+        public void SendContributeRelay(string stationId, string item, int count)
+            => Send(new ContributeRelayIntent { StationId = stationId ?? string.Empty, Item = item ?? string.Empty, Count = count });
 
         /// <summary>Reports a finished minigame run so the server can grant a knowledge reward.</summary>
         public void SendMinigameResult(string gameKey, int score, int rating, bool completed)
@@ -803,6 +812,8 @@ namespace BlocksBeyondTheStars.Client
                 case GuardianSystemRevealed m: GuardianSystemRevealedReceived?.Invoke(m); break;
                 case CoreHackProgress m: CoreHackProgressReceived?.Invoke(m); break;
                 case CoreDialogueMessage m: CoreDialogueReceived?.Invoke(m); break;
+                case StoryResolved m: StoryResolvedReceived?.Invoke(m); break;
+                case RelayNetworkState m: RelayNetworkReceived?.Invoke(m); break;
                 case BanditDemand m: BanditDemandReceived?.Invoke(m); break;
                 case BanditEncounterResult m: BanditResultReceived?.Invoke(m); break;
             }

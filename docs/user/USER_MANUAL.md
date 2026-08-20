@@ -501,6 +501,11 @@ separate unlock; admins can still disable it through server world rules.
   around it, and it commissions into a boardable station on the star map.
 - **Name it**: rename a station you built from **Tab → Map** (select it → **Rename**), or by pressing **E**
   on the **station core** while standing inside your own station. Only the owner can rename it.
+- **SPS relay** (late game): any commissioned player station can be converted into a relay of the old
+  Stellar Positioning Service — select it on **Tab → Map** and **deliver** the bill of materials in person
+  (bulk metal plates, circuit boards, reactor fuel from the refinery). The meter is shared: friends can chip
+  in. Two finished relays in **neighbouring systems** form a **jump lane** — hyperjumps between those two
+  systems need **no jump generator**. The Codex article *SPS Relays* has the full picture.
 - **Player docking**: press **K** near another player to request docking; **U** to undock. Docking is
   modal and gated by server rules + a `docking_module`.
 
@@ -703,6 +708,10 @@ separate unlock; admins can still disable it through server world rules.
   the Story tab (Read buttons) — and they survive rejoining a server.
 - Scanning **runes** at a monument now also reveals their inscription. Settlement folk who know you
   (trade with them!) may share what they know — one of them keeps a page of the settler legend.
+- **Finishing the story is a moment now**: winning the finale plays a short **ending** — the resolution,
+  the credits roll, and an epilogue that opens the door to what comes after. It's skippable (**Esc**),
+  plays once on the next join for anyone who was offline at the time, and the Story tab keeps a
+  **"Watch the ending again"** button once you've earned it.
 
 ### Scanning & knowledge
 - With a scanner selected, **left-click** a creature or block to scan it. Scans award **knowledge points**
@@ -799,6 +808,23 @@ separate unlock; admins can still disable it through server world rules.
 - **Space stations** appear in the world list too (yours show their owner; others show *"Station of …"*).
   Selecting one offers **Board** — but only if you've **docked there at least once** before (just like landing
   gates worlds); a never-visited station shows *"visit it once to unlock"*. Boarding takes you straight inside.
+
+### The frontier — why flying far pays
+- Systems far from your home system carry a **"Frontier"** tag on the star map (shown even before you know
+  their name — it's the reason to go). Out there worlds generate **richer rare-ore veins** (titanium, cobalt,
+  uranium, platinum, tungsten, neodymium, diamond — everything the late tech tree wants), roll an **extra
+  buried vault and monument**, and structure caches carry a bonus late-game find. Your starter ores (iron,
+  copper, …) are the same everywhere — the frontier is the better place to *return to*, never the better
+  place to begin.
+- **Frontier danger** (Settings → world rules, world admin, off by default): when switched on, the machines
+  out in the frontier hit like the toughest world settings — richness and risk scale together. On
+  peaceful/family worlds there are no machines at all, so those stay "richer, never more dangerous". The
+  `dangerous` preset ships with it on.
+- **Growing galaxy** (world creation → Universe size → **"Growing"**): the galaxy starts at the normal 8
+  systems — but every time someone hyperjumps into one of the current **outermost** systems, deep-space
+  telescopes report a **brand-new system beyond it**. The galaxy literally grows at your frontier, up to a
+  generous cap ("the frontier is quiet"). Growth is permanent: new systems survive save/reload like any
+  others. Worlds created with a fixed size never change.
 
 ### Day/night & weather
 - **The world wraps east–west** — the X axis is a longitude, so walking continuously east (or west) brings

@@ -653,12 +653,21 @@ namespace BlocksBeyondTheStars.Client
         }
 
         /// <summary>A never-entered system's name reads "Unknown system" (#1113) — the galaxy is discovered,
-        /// not read off a chart. A fitted radar array decodes the beacon signals and shows real names.</summary>
+        /// not read off a chart. A fitted radar array decodes the beacon signals and shows real names.
+        /// Frontier systems (#1122) carry a tag either way: the far rim is richer, and that is worth
+        /// telegraphing BEFORE the player has been there — it is the reason to fly far.</summary>
         private string SystemDisplayName(NetStarSystem sys)
-            => sys == null ? string.Empty
-                : Game.KnowsSystem(sys.Id) || sys.Id == CurrentSystemId() || HasRadarArray()
-                    ? sys.Name
-                    : L("ui.map.system_unknown");
+        {
+            if (sys == null)
+            {
+                return string.Empty;
+            }
+
+            string name = Game.KnowsSystem(sys.Id) || sys.Id == CurrentSystemId() || HasRadarArray()
+                ? sys.Name
+                : L("ui.map.system_unknown");
+            return sys.Tier >= 2 ? $"{name} · {L("ui.map.frontier")}" : name;
+        }
 
         /// <summary>True when the active ship carries a radar_array module (server-reported fit).</summary>
         private bool HasRadarArray()
@@ -1842,6 +1851,23 @@ namespace BlocksBeyondTheStars.Client
                 starterTp ? UiKit.Ok : UiKit.CyanDim, TextAnchor.MiddleLeft, FontStyle.Bold);
             y += 96f;
 
+            // Frontier danger (#1122, opt-in): tougher machines out in the frontier tier. Only offered
+            // when planet enemies exist at all — on peaceful/family worlds (PlanetEnemies Off) the row is
+            // hidden, matching "richness only, never danger" for those setups.
+            if (!string.Equals(rules?.PlanetEnemies, "Off", System.StringComparison.OrdinalIgnoreCase))
+            {
+                bool frontier = rules?.FrontierDanger ?? false;
+                var frontierBtn = UiKit.AddButton(_listContent, 0, y, 780, 78, string.Empty, () =>
+                {
+                    Game?.Network?.SendSetWorldRules(frontierDanger: frontier ? "Off" : "On");
+                    Invoke(nameof(RebuildList), 0.35f);
+                });
+                UiKit.AddText(frontierBtn.transform, 16, 0, 520, 78, L("ui.worldopt.frontier_danger"), 24, UiKit.TextCol, TextAnchor.MiddleLeft, FontStyle.Bold);
+                UiKit.AddText(frontierBtn.transform, 560, 0, 200, 78, frontier ? L("ui.toggle.on") : L("ui.toggle.off"), 22,
+                    frontier ? UiKit.Ok : UiKit.CyanDim, TextAnchor.MiddleLeft, FontStyle.Bold);
+                y += 96f;
+            }
+
             // Per-player mode overrides (#1121): one row per online player, cycling World / Survival /
             // Creative. The server fills the roster ONLY for world admins, so the section simply is not
             // there for everyone else — same admin gating as the rule rows above, but without the noise.
@@ -2561,6 +2587,24 @@ namespace BlocksBeyondTheStars.Client
                 lines.Add(L("ui.progress.achievements").Replace("{done}", done.ToString()).Replace("{total}", all.Length.ToString()));
             }
 
+            // The SPS relay network (#1125): only once the first relay is done — a fresh save stays short.
+            var relayNet = Game?.RelayNetwork;
+            if (relayNet != null && relayNet.Enabled && relayNet.Relays != null)
+            {
+                int relaysDone = 0;
+                for (int i = 0; i < relayNet.Relays.Length; i++)
+                {
+                    if (relayNet.Relays[i] != null && relayNet.Relays[i].Completed) relaysDone++;
+                }
+
+                if (relaysDone > 0)
+                {
+                    lines.Add(L("ui.progress.relays")
+                        .Replace("{relays}", relaysDone.ToString())
+                        .Replace("{lanes}", (relayNet.LaneSystemA?.Length ?? 0).ToString()));
+                }
+            }
+
             foreach (var line in lines)
             {
                 UiKit.AddText(_listContent, 20, y, RowW - 28f, 26, line, 18, UiKit.TextCol, TextAnchor.MiddleLeft);
@@ -2605,6 +2649,7 @@ namespace BlocksBeyondTheStars.Client
         {
             "visit:body", "visit:system", "hyperjump:any", "mine:any", "build:any", "craft:any",
             "scan:any", "research:any", "defeat:any", "tame:any", "mission:completed", "loot:any",
+            "relay:commissioned",
         };
 
         /// <summary>One achievement row: name, description, a filled bar and the tally (or "Done").</summary>
@@ -2660,6 +2705,19 @@ namespace BlocksBeyondTheStars.Client
                     L("ui.story.fragments") + ": " + s.FragmentsFound + "   ·   " + L("ui.story.kills") + ": " + s.MachineKills + "   ·   " + L("ui.story.beats") + ": " + s.BeatsRevealed,
                     16, UiKit.CyanDim, TextAnchor.MiddleLeft);
                 y += 40f;
+
+                // The ending, re-viewable (#1124): once the story is resolved, the resolution cinematic can
+                // be replayed any time. The server re-sends it on request; the cinematic itself waits until
+                // this menu is closed, so the button both asks for it and gets the menu out of the way.
+                if (s.GuardianDefeated)
+                {
+                    UiKit.AddButton(_listContent, 0, y, 780, 56, L("ui.story.view_ending"), () =>
+                    {
+                        Game?.Network?.SendRequestStoryResolution();
+                        Hide();
+                    });
+                    y += 66f;
+                }
 
                 y = AllianceSection(L("ui.story.beats"), y);
                 y = StoryEntries(y, Game.StoryLogBeats);
@@ -3538,6 +3596,7 @@ namespace BlocksBeyondTheStars.Client
                     y = AddRenameRow(y, body.Name, L("ui.map.rename"), name => Game.Network?.SendSetStationName(body.Id, name));
                 }
 
+                y = BuildRelaySection(y, body);
                 return y;
             }
 
@@ -3599,6 +3658,64 @@ namespace BlocksBeyondTheStars.Client
             field.lineType = InputField.LineType.SingleLine;
             UiKit.AddButton(_detail, 416, y, 180, 48, buttonLabel, () => onConfirm?.Invoke(field.text ?? string.Empty));
             return y + 56f;
+        }
+
+        /// <summary>The SPS relay meter for a commissioned player station in the Map detail pane (#1125):
+        /// conversion progress per cost line + co-op "Deliver" buttons (any player may contribute; the server
+        /// clamps to what is missing and held, and enforces being AT the station). Completed relays show as
+        /// active. Hidden entirely when the data ships no relay definition or no meter exists yet.</summary>
+        private float BuildRelaySection(float y, NetBody body)
+        {
+            var net = Game?.RelayNetwork;
+            if (net == null || !net.Enabled || net.Relays == null)
+            {
+                return y;
+            }
+
+            var relay = System.Array.Find(net.Relays, r => r != null && r.StationId == body.Id);
+            if (relay == null)
+            {
+                return y;
+            }
+
+            y += 6f;
+            if (relay.Completed)
+            {
+                UiKit.AddText(_detail, 8, y, 620, 28, "⛭ " + L("ui.relay.active"), 20, UiKit.Cyan, TextAnchor.UpperLeft);
+                return y + 36f;
+            }
+
+            int req = 0, got = 0;
+            for (int i = 0; i < relay.Items.Length && i < relay.Required.Length && i < relay.Contributed.Length; i++)
+            {
+                req += relay.Required[i];
+                got += Mathf.Min(relay.Contributed[i], relay.Required[i]);
+            }
+
+            int pct = req > 0 ? Mathf.Clamp(Mathf.RoundToInt(100f * got / req), 0, 100) : 0;
+            UiKit.AddText(_detail, 8, y, 620, 28, L("ui.relay.title").Replace("{pct}", pct.ToString()), 20, UiKit.Cyan, TextAnchor.UpperLeft);
+            y += 32f;
+            UiKit.AddText(_detail, 8, y, 620, 44, L("ui.relay.hint"), 16, UiKit.CyanDim, TextAnchor.UpperLeft);
+            y += 50f;
+
+            for (int i = 0; i < relay.Items.Length && i < relay.Required.Length && i < relay.Contributed.Length; i++)
+            {
+                string item = relay.Items[i];
+                int have = relay.Contributed[i];
+                int need = relay.Required[i];
+                UiKit.AddText(_detail, 8, y, 360, 26, ItemName(item) + ": " + have.ToString("N0") + " / " + need.ToString("N0"),
+                    17, have >= need ? UiKit.Cyan : UiKit.TextCol, TextAnchor.MiddleLeft);
+                if (have < need)
+                {
+                    // "Give everything I have" — the server clamps to missing AND held (and rejects from afar).
+                    UiKit.AddButton(_detail, 376, y - 6, 220, 40, L("ui.relay.give"),
+                        () => Game.Network?.SendContributeRelay(body.Id, item, int.MaxValue));
+                }
+
+                y += 44f;
+            }
+
+            return y + 4f;
         }
 
         private float DetailMissions()

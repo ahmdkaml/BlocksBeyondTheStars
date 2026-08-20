@@ -105,6 +105,82 @@ Per-item detail lives in the dated work log below. **Since 2026-07 versions are 
 
 ---
 
+### ★ SPS relays & jump lanes — the late-game goal begins (#1125, 2026-08-19, branch feat/progression-pr10-relays)
+PR 10 of the progression package (epic #1101), Track F part 1 (F-2/#1126 adds the growth hook + star-map
+rendering + epilogue insights). The audit: nothing sat behind the last blueprint, the H2 ore chain had no
+consumer, and the new epilogue hands the player a relay network that didn't exist. Now any **commissioned
+player station** converts into an **SPS relay**: a data-driven bill of materials (`data/relay.json` — bulk
+titanium/iron plates, circuit boards, reactor fuel), **co-op contributable** (any player, delivered in
+person — aboard, alongside in space, or in the station's system), meter persisted as an additive
+`WorldMetadata.Relays` field (no migration). Two completed relays in systems within `linkRange` (500
+map units) form a **jump lane**: both travel paths (`HandleTravel`, `HyperjumpToSystem`) waive the
+`jump_generator` for lane hops. Lanes are never persisted — they re-derive from completed relays on every
+start. Surfaces: star-map detail pane meter + per-item **Deliver** buttons (server clamps to missing+held;
+`int.MaxValue` = give everything), Progress-header line once the first relay stands, Journey counter,
+`relay_engineer` achievement (reactor fuel reward), `relay:first`/`relay:lane` story milestones, completion +
+lane toasts in all 14 locales, Codex-wiki article "relays" (EN+DE). Messages 222 `RelayNetworkState` /
+223 `ContributeRelayIntent` (golden list updated — next free id 224). Drive-by fix: the Journey grid's
+Hyperjumps row rendered its raw locale key (`JourneyCounters` says `hyperjump:any` → lookup
+`ui.progress.stat.hyperjump_any`, locales shipped `…stat.hyperjump`) — key renamed in all 14 locales.
+Tests: `RelayNetworkTests` (5 — content resolution, consume/complete/refuse-after-done, in-person + co-op
+gates, lane forms and carries a generator-less jump while lane-less targets still refuse, meters + lanes
+survive a restart). Gotcha for later: a fresh ship's `CurrentLocationId` can be a planet-TYPE key (e.g.
+"varied"), so a station's `_stationHostBody` may not resolve to a galaxy body — relay code derives the
+system via host body WITH a star-map-entry fallback, and the in-person check is system-level on the ground.
+
+### ★ The ending — resolution cinematic, credits, epilogue handover (#1124, 2026-08-19, branch feat/progression-pr9-ending)
+PR 9 of the progression package (epic #1101). The audit: after `WinDuel` the reward for finishing the story
+was one VEGA line, a music sting and an emptier galaxy — no ending screen, no credits, nothing that *starts*.
+**Data:** `StoryDefinition.EpilogueTitle/EpilogueTextKey` — deliberately NOT a 14th beat (beats reveal by
+score and all-beats-revealed GATES the finale; a beat 13 in `Beats` would deadlock the arc). The epilogue
+reveals on the WIN instead: `story.vega.beat13` hands over to the relay network (Track F). Mirrored in the
+`StoryRegistry` fallback (no-drift test extended); pack locales EN+DE by hand + 12 MT'd (`translate_locale
+--file/--source`).
+**Server:** `StoryResolved` (msg 220) broadcast on the duel win, the epilogue spoken as a kind-2 VEGA line
+(enters the story log like a beat); per-player milestone `story:<id>:resolved` → join catch-up sends the
+cinematic EXACTLY once to whoever missed the moment (incl. existing finished saves — they get the ending
+they never had); `RequestStoryResolutionIntent` (msg 221) replays it from the Story tab, and only when the
+story IS resolved (the button can never spoil).
+**Client:** new `ResolutionCinematic` (WorldRig, `CinematicFrame` at sorting order 68 + `CinematicTimeline`,
+the intro pattern): resolution card (story name + stand-down line) → credits roll (the menu's
+`ui.credits.body`, scrolled bottom→top) → epilogue card. Skippable with **Esc only** (never any-key — the
+player may be mid-walk when it starts), queued while a menu is open; the Story tab gained "Watch the ending
+again" (closes the menu and requests). `CinematicFrame.Root` exposed for the roll text; the IMGUI finale
+banner yields while the cinematic plays (IMGUI draws above every canvas). Music: the existing
+`FinaleResolution` window keys off GuardianDefeated and covers replays/catch-up unchanged.
+Codex wiki deliberately untouched — the ending is a spoiler, not a feature to document in-game.
+Tests: `StoryResolutionTests` (4) — win broadcast + epilogue in the log + milestone, latecomer catch-up
+exactly once (restart round-trip), replay request silent-until-resolved then answers, epilogue text EN+DE;
+golden list +220/221; STORY_IMPLEMENTATION.md id table updated.
+
+### ★ The frontier — distance pays, and the galaxy can grow (#1122, #1123, 2026-08-19, branch feat/progression-pr8-frontier-galaxy)
+PR 8 of the progression package (epic #1101). The audit: nothing scaled with distance (system #8 ≡ #1) and
+the default 8-system galaxy simply ran out once visited.
+**Frontier tiers (#1122):** `GameServerFrontier.cs` — tier 0/1/2 from star-map distance to home (`sys0`)
+with ABSOLUTE thresholds (400/700), so tiers are a pure function of the seed, never re-tier as the galaxy
+grows, and home is always 0. Effects: rare-tier ore veins ×1.25/×1.6 (`OreVein.RareTier`, derived at content
+load from the block's `minToolTier ≥ 2` — starter iron/copper identical everywhere; boost rides OUTSIDE the
+memoised calibration via a new `SetWorldMode` param, stamped per world like `Cratered`); +1 vault on tier-2
+worlds as its OWN placement slot `vault_frontier` (base rng stream untouched; pre-feature worlds record a
+one-time skip so no vault ever materialises retroactively under a base); +1 monument (fresh stamps only,
+hard cap 3 kept); structure caches add one late-game pick; star map tags tier-2 systems ("Frontier", shown
+even while the name is still "Unknown system" — `NetStarSystem.Tier`). Opt-in rule `GameRules.FrontierDanger`
+(default off, `dangerous` preset on): tier-2 machines spawn as the tougher variant; the Settings toggle hides
+when PlanetEnemies is Off (family = richer, never more dangerous).
+**Growing galaxy (#1123):** `WorldDescription.GalaxyGrowth` (creation-time, default false = every existing
+save stays fixed; UI = 5th "Universe size" step "Growing" → `--galaxy-growth true`). Persistence is ONE int
+(`WorldMetadata.GalaxyGrownSystems`): the galaxy is re-derived per start, and `UniverseGenerator.Generate(count)`
+has the PREFIX property (system N is a pure function of seed+N, names claimed in index order), so a restart
+regenerates every grown system byte-identically. Growth trigger: a system becomes newly known to a player
+(hyperjump/first travel) AND ranks among the 3 outermost by map distance → regenerate at count+1, adopt the
+new system object (append-only — live references stay valid), pin its body types (#468), save, broadcast the
+star map, toast "srv.galaxy.grown". Grown systems place OUTWARD of home (Hash01 salt 900 — positions only;
+the body rng stream is untouched, `GalaxyLayoutRegressionTests` hashes stand). Soft cap 48 → "the frontier
+is quiet". Locales: 5 new keys EN+DE, 12 MT'd. Tests: `FrontierGalaxyTests` (7) — prefix property + outward
+placement, tier stability, edge-jump growth + restart round-trip, off-by-default/legacy-fixed, soft cap,
+ore-boost enriches rare veins only, preset/live-edit rule plumbing; guard subset (galaxy hashes, placement
+guarantees, world options, monuments, presets) all green.
+
 ### ★ Per-player mode — one family world, mixed Survival/Creative (#1121, 2026-08-19, branch feat/progression-pr7-per-player-mode)
 PR 7 of the progression package (epic #1101), first non-core PR. The problem: `GameRules` derived every
 mode switch from the world's `GameMode` — one family world, one ruleset; a parent wanting survival and a
