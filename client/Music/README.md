@@ -1,8 +1,9 @@
 # Background-music library (source of truth)
 
-The 40 Suno-generated MP3 tracks of the **Tracks** music mode. See
+The 51 MP3 tracks of the **Tracks** music mode (40 Suno-generated + 11 composed with the ElevenLabs Music
+API via `tools/ai-assets/gen_music.py`). See
 [docs/developer/MUSIC_TRACKS.md](../../docs/developer/MUSIC_TRACKS.md) for every track's prompt, context
-mapping and the pools in `ClientMusic`.
+mapping and the pools in `MusicLibrary`.
 
 This folder lives **outside `client/Assets/` on purpose** (#1167):
 
@@ -13,6 +14,7 @@ This folder lives **outside `client/Assets/` on purpose** (#1167):
   them verbatim to the git-ignored `client/Assets/StreamingAssets/music/`, and `ClientMusic` streams a
   track on first use with `UnityWebRequestMultimedia` — over HTTP in the browser, from disk on desktop.
 
-Adding a track: drop the `.mp3` here, add it to the matching pool in `ClientMusic.PoolFor`, document it in
-`MUSIC_TRACKS.md`. Keep the music out of `client/Assets/StreamingAssets/data/` — that folder's manifest is
+Adding a track: drop the `.mp3` here, add it to the matching pool in `MusicLibrary`
+(`src/BlocksBeyondTheStars.Client.Core/Music/MusicLibrary.cs`; `MusicLibraryTests` checks that every pool
+entry ships from this folder), document it in `MUSIC_TRACKS.md`. Keep the music out of `client/Assets/StreamingAssets/data/` — that folder's manifest is
 prefetched eagerly by the browser client, which would defeat the on-demand loading.
