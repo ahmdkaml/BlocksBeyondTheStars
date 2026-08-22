@@ -598,6 +598,31 @@ public sealed class GameContent
             {
                 problems.Add($"Recipe '{recipe.Key}' has no outputs.");
             }
+            foreach (var input in recipe.Inputs)
+            {
+                RequireItem($"Recipe '{recipe.Key}' input", input.Item);
+                if (input.Count < 1)
+                {
+                    problems.Add($"Recipe '{recipe.Key}' input '{input.Item}' has invalid amount {input.Count}; must be >= 1.");
+                }
+            }
+
+            foreach (var output in recipe.Outputs)
+            {
+                RequireItem($"Recipe '{recipe.Key}' output", output.Item);
+                if (output.Count < 1)
+                {
+                    problems.Add($"Recipe '{recipe.Key}' output '{output.Item}' has invalid amount {output.Count}; must be >= 1.");
+                }
+            }
+            var inputKeys = new HashSet<string>(recipe.Inputs.Select(i => i.Item), StringComparer.Ordinal);
+            foreach (var output in recipe.Outputs)
+            {
+                if (inputKeys.Contains(output.Item))
+                {
+                    problems.Add($"Recipe '{recipe.Key}' cannot use '{output.Item}' as both input and output.");
+                }
+            }
         }
 
         foreach (var bp in _blueprints.Values)
