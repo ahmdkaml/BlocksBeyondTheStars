@@ -407,6 +407,7 @@ public sealed class GameContent
                 continue; // explicit JSON opt-in stays
             }
 
+
             bool categorySeals = block.Category is "terrain" or "building" or "ore" or "machine" or "light";
             block.Airtight = categorySeals && block.Key != "air" && !AirtightExceptions.Contains(block.Key);
         }
@@ -626,6 +627,15 @@ public sealed class GameContent
 
         foreach (var block in _blocks.Values)
         {
+            if (string.IsNullOrWhiteSpace(block.Key))
+            {
+                problems.Add("Block definition has an empty or whitespace key.");
+            }
+            if (block.NumericId.Value >= 256)
+            {
+                problems.Add($"Block '{block.Key}' has numeric ID {block.NumericId.Value} exceeding the 256-tile atlas limit.");
+            }
+
             foreach (var drop in block.Drops)
             {
                 RequireItem($"Block '{block.Key}' drop", drop.Item);
@@ -638,6 +648,17 @@ public sealed class GameContent
             {
                 problems.Add($"Item '{item.Key}' places unknown block '{item.PlacesBlock}'.");
             }
+
+            if (string.IsNullOrWhiteSpace(item.Key))
+            {
+                problems.Add("Item definition has an empty or whitespace key.");
+            }
+
+            if (item.MaxStack < 1)
+            {
+                problems.Add($"Item '{item.Key}' has invalid MaxStack {item.MaxStack}; must be >= 1.");
+            }
+
         }
 
         foreach (var recipe in _recipes.Values)
@@ -679,6 +700,11 @@ public sealed class GameContent
 
         foreach (var bp in _blueprints.Values)
         {
+            if (string.IsNullOrWhiteSpace(bp.Key))
+            {
+                problems.Add("Blueprint definition has an empty or whitespace key.");
+            }
+
             foreach (var pre in bp.Prerequisites)
             {
                 RequireBlueprint($"Blueprint '{bp.Key}' prerequisite", pre);
@@ -726,6 +752,10 @@ public sealed class GameContent
 
         foreach (var planet in _planets.Values)
         {
+            if (string.IsNullOrWhiteSpace(planet.SurfaceBlock) || planet.SurfaceBlock == "air")
+            {
+                problems.Add($"Planet '{planet.Key}' surface block cannot be empty or air.");
+            }
             RequireBlock($"Planet '{planet.Key}' surface", planet.SurfaceBlock);
             RequireBlock($"Planet '{planet.Key}' sub-surface", planet.SubSurfaceBlock);
             RequireBlock($"Planet '{planet.Key}' deep", planet.DeepBlock);

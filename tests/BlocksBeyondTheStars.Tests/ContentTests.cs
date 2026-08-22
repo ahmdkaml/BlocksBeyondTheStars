@@ -278,4 +278,51 @@ public class ContentTests
     {
         Assert.Empty(ContentLoader.ParseLocaleTable("{}"));
     }
+
+    [Fact]
+    public void Validation_RejectsInvalidItemMaxStack()
+    {
+        var ex = Assert.Throws<ContentValidationException>(() => new GameContent(
+            blocks: Array.Empty<BlockDefinition>(),
+            items: new[] { new ItemDefinition { Key = "broken_crate", MaxStack = 0 } },
+            recipes: Array.Empty<RecipeDefinition>(),
+            blueprints: Array.Empty<BlueprintDefinition>(),
+            shipModules: Array.Empty<ShipModuleDefinition>(),
+            locales: new Dictionary<GameLocale, Dictionary<string, string>>()).Validate());
+
+        Assert.Contains(ex.Problems, p => p.Contains("broken_crate") && p.Contains("MaxStack"));
+    }
+
+    [Fact]
+    public void Validation_RejectsPlanetWithAirOrEmptySurfaceBlock()
+    {
+        var ex = Assert.Throws<ContentValidationException>(() => new GameContent(
+            blocks: new[] { new BlockDefinition { Key = "air" }, new BlockDefinition { Key = "stone" } },
+            items: Array.Empty<ItemDefinition>(),
+            recipes: Array.Empty<RecipeDefinition>(),
+            blueprints: Array.Empty<BlueprintDefinition>(),
+            shipModules: Array.Empty<ShipModuleDefinition>(),
+            locales: new Dictionary<GameLocale, Dictionary<string, string>>(),
+            planets: new[] { new PlanetType { Key = "void_world", SurfaceBlock = "air" } }).Validate());
+
+        Assert.Contains(ex.Problems, p => p.Contains("void_world") && p.Contains("surface block"));
+    }
+
+    [Fact]
+    public void Validation_RejectsBlockCountExceedingAtlasLimit()
+    {
+        var blocks = Enumerable.Range(1, 260)
+            .Select(i => new BlockDefinition { Key = $"block_{i}" })
+            .ToList();
+
+        var ex = Assert.Throws<ContentValidationException>(() => new GameContent(
+            blocks: blocks,
+            items: Array.Empty<ItemDefinition>(),
+            recipes: Array.Empty<RecipeDefinition>(),
+            blueprints: Array.Empty<BlueprintDefinition>(),
+            shipModules: Array.Empty<ShipModuleDefinition>(),
+            locales: new Dictionary<GameLocale, Dictionary<string, string>>()).Validate());
+
+        Assert.Contains(ex.Problems, p => p.Contains("256") || p.Contains("atlas"));
+    }
 }
