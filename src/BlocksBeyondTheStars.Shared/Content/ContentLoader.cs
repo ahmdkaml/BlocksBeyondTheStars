@@ -33,7 +33,7 @@ public static class ContentLoader
     /// there by the in-game editor (<c>station_templates/*.json</c>, <c>settlement_templates/*.json</c>,
     /// one <see cref="StructureTemplate"/> per file) are merged into the pools — so a structure built
     /// in-game appears in the next new world without a Python merge or rebuild.</summary>
-    public static GameContent LoadFromDirectory(string dataDir, string? userContentDir = null)
+    public static GameContent LoadFromDirectory(string dataDir, string? userContentDir = null, Action<string>? warn = null)
     {
         if (!Directory.Exists(dataDir))
         {
@@ -78,8 +78,8 @@ public static class ContentLoader
         // the shipped pools so in-game builds are picked up at world creation without a rebuild.
         if (!string.IsNullOrEmpty(userContentDir) && Directory.Exists(userContentDir))
         {
-            stationTemplates.AddRange(LoadUserTemplates(Path.Combine(userContentDir!, "station_templates"), "station"));
-            settlementTemplates.AddRange(LoadUserTemplates(Path.Combine(userContentDir!, "settlement_templates"), "settlement"));
+            stationTemplates.AddRange(LoadUserTemplates(Path.Combine(userContentDir!, "station_templates"), "station", warn));
+            settlementTemplates.AddRange(LoadUserTemplates(Path.Combine(userContentDir!, "settlement_templates"), "settlement", warn));
         }
 
         content.SetStructureTemplates(stationTemplates, settlementTemplates);
@@ -125,7 +125,7 @@ public static class ContentLoader
 
     /// <summary>Loads every <see cref="StructureTemplate"/> from a user-content sub-folder (one per file,
     /// key defaulting to the file name). Malformed files are skipped so one bad export can't break load.</summary>
-    private static List<StructureTemplate> LoadUserTemplates(string dir, string kind)
+    private static List<StructureTemplate> LoadUserTemplates(string dir, string kind, Action<string>? warn = null)
     {
         var result = new List<StructureTemplate>();
         if (!Directory.Exists(dir))
@@ -155,9 +155,9 @@ public static class ContentLoader
 
                 result.Add(t);
             }
-            catch (JsonException)
+            catch (JsonException ex)
             {
-                // Ignore an unreadable export; the rest of the folder still loads.
+                warn?.Invoke($"Skipping unreadable user template '{file}': {ex.Message}");
             }
         }
 
