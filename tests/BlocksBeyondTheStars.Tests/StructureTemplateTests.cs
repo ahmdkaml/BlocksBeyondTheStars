@@ -303,6 +303,39 @@ public sealed class StructureTemplateTests
     }
 
     [Fact]
+    public void UserContentFolder_WarnsAboutUnreadableTemplate_AndStillLoadsTheRest()
+    {
+        // #1048: a malformed editor export used to be skipped silently. The loader still skips it (one bad
+        // file must not break the load), but reports it through the optional warn callback — by file name,
+        // so the player can find and fix it — while the good file in the same folder loads as before.
+        var root = Path.Combine(Path.GetTempPath(), "bbts_usercontent_" + Guid.NewGuid().ToString("N"));
+        var stationDir = Path.Combine(root, "station_templates");
+        Directory.CreateDirectory(stationDir);
+        File.WriteAllText(Path.Combine(stationDir, "good_base.json"),
+            "{ \"name\": \"Good\", \"tier\": \"medium\", \"width\": 1, \"height\": 1, \"length\": 1, " +
+            "\"cells\": [ { \"x\": 0, \"y\": 0, \"z\": 0, \"kind\": \"block\", \"id\": \"iron_wall\" } ] }");
+        File.WriteAllText(Path.Combine(stationDir, "broken_export.json"), "{ \"name\": \"Broken\", \"cells\": [ {");
+
+        try
+        {
+            var warnings = new List<string>();
+            var content = ContentLoader.LoadFromDirectory(TestPaths.DataDir(), root, warnings.Add);
+
+            Assert.Single(content.StationTemplates, t => t.Key == "good_base");
+            Assert.DoesNotContain(content.StationTemplates, t => t.Key == "broken_export");
+            var warning = Assert.Single(warnings);
+            Assert.Contains("broken_export.json", warning);
+
+            // Without a callback the contract is unchanged: the bad file is skipped, nothing throws.
+            Assert.Single(ContentLoader.LoadFromDirectory(TestPaths.DataDir(), root).StationTemplates, t => t.Key == "good_base");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void WorldDescription_DefaultsKeepTemplatesOccasional()
     {
         var desc = new WorldDescription();
