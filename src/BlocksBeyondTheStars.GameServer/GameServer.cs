@@ -912,6 +912,7 @@ public sealed partial class GameServer
             if (!string.IsNullOrEmpty(id) && !session.Ships.ContainsKey(id)
                 && _repo.LoadShip(FleetShipSaveKey(p.PlayerId, id)) is { } stored)
             {
+                ClampInventory(stored.Cargo, $"ship '{id}' (owner '{p.PlayerId}') cargo");
                 session.Ships[id] = stored;
             }
         }
@@ -919,7 +920,9 @@ public sealed partial class GameServer
         if (session.Ships.Count == 0)
         {
             // Pre-#848 save (or a first join): the single persisted ship becomes the fleet's starter entry.
-            session.Ships[ShipId] = _repo.LoadShip(ShipSaveKey(p.PlayerId)) ?? CreateStarterShip();
+            var legacyShip = _repo.LoadShip(ShipSaveKey(p.PlayerId)) ?? CreateStarterShip();
+            ClampInventory(legacyShip.Cargo, $"legacy starter ship (owner '{p.PlayerId}') cargo");
+            session.Ships[ShipId] = legacyShip;
         }
 
         if (!session.Ships.ContainsKey(session.ActiveShipId))
@@ -2939,6 +2942,8 @@ public sealed partial class GameServer
         try
         {
             state = _repo.LoadPlayer(name) ?? CreateNewPlayer(name);
+            ClampInventory(state.Inventory, $"player '{name}' inventory");
+            ClampInventory(state.RationStore, $"player '{name}' ration store");
         }
         catch (InvalidDataException ex)
         {
@@ -3310,6 +3315,8 @@ public sealed partial class GameServer
         try
         {
             state = _repo.LoadPlayer(name) ?? CreateNewPlayer(name);
+            ClampInventory(state.Inventory, $"player '{name}' inventory");
+            ClampInventory(state.RationStore, $"player '{name}' ration store");
         }
         catch (InvalidDataException ex)
         {
@@ -6058,5 +6065,33 @@ public sealed partial class GameServer
         }
 
         return seen;
+    }
+
+    /// <summary>
+    /// Clamps every stack in an inventory to its item definition's max stack limit,
+    /// logging any anomalies that exceed the cap.
+    /// </summary>
+    private void ClampInventory(Inventory? inventory, string context)
+    {
+        if (inventory is null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < inventory.SlotCount; i++)
+        {
+            var stack = inventory.Slots[i];
+            if (stack is null || stack.IsEmpty || string.IsNullOrEmpty(stack.Item))
+            {
+                continue;
+            }
+
+            int maxStack = _content.MaxStackOf(stack.Item);
+            if (stack.Count > maxStack)
+            {
+                _log.Warn($"Clamping {context} slot {i} ('{stack.Item}'): count {stack.Count} exceeds max stack {maxStack}.");
+                stack.Count = maxStack;
+            }
+        }
     }
 }
