@@ -188,6 +188,49 @@ public class ContentTests
         Assert.Contains(ex.Problems, p => p.Contains("nonexistent_item"));
     }
 
+    /// <summary>#1048: recipe amounts below 1 are a data error that used to load silently (a free input, a
+    /// negative output). Validation fails now, naming the recipe, the side and the item.</summary>
+    [Fact]
+    public void Validation_RejectsRecipeAmountsBelowOne()
+    {
+        BuildRecipes(new RecipeDefinition { Key = "smelt", Inputs = { new ItemAmount("iron_ore", 2) }, Outputs = { new ItemAmount("iron_ingot", 1) } }).Validate();
+
+        var zeroInput = Assert.Throws<ContentValidationException>(() => BuildRecipes(
+            new RecipeDefinition { Key = "free_lunch", Inputs = { new ItemAmount("iron_ore", 0) }, Outputs = { new ItemAmount("iron_ingot", 1) } }).Validate());
+        Assert.Contains(zeroInput.Problems, p => p.Contains("free_lunch") && p.Contains("input") && p.Contains("iron_ore") && p.Contains("amount 0"));
+
+        var negativeOutput = Assert.Throws<ContentValidationException>(() => BuildRecipes(
+            new RecipeDefinition { Key = "sink", Inputs = { new ItemAmount("iron_ore", 1) }, Outputs = { new ItemAmount("iron_ingot", -1) } }).Validate());
+        Assert.Contains(negativeOutput.Problems, p => p.Contains("sink") && p.Contains("output") && p.Contains("iron_ingot") && p.Contains("amount -1"));
+    }
+
+    /// <summary>#1048: a recipe that consumes what it produces (a free loop, or a no-op) is rejected.</summary>
+    [Fact]
+    public void Validation_RejectsSelfConsumingRecipe()
+    {
+        var ex = Assert.Throws<ContentValidationException>(() => BuildRecipes(
+            new RecipeDefinition { Key = "loop", Inputs = { new ItemAmount("iron_ingot", 1) }, Outputs = { new ItemAmount("iron_ingot", 2) } }).Validate());
+        Assert.Contains(ex.Problems, p => p.Contains("loop") && p.Contains("iron_ingot") && p.Contains("both input and output"));
+    }
+
+    /// <summary>The amount checks share the existing item-lookup loops, so an unknown recipe item is still
+    /// reported exactly once, not once per check.</summary>
+    [Fact]
+    public void Validation_ReportsUnknownRecipeItemOnce()
+    {
+        var ex = Assert.Throws<ContentValidationException>(() => BuildRecipes(
+            new RecipeDefinition { Key = "ghost", Inputs = { new ItemAmount("unobtainium", 1) }, Outputs = { new ItemAmount("iron_ingot", 1) } }).Validate());
+        Assert.Single(ex.Problems, p => p.Contains("unobtainium"));
+    }
+
+    private static GameContent BuildRecipes(params RecipeDefinition[] recipes) => new(
+        blocks: Array.Empty<BlockDefinition>(),
+        items: new[] { new ItemDefinition { Key = "iron_ore" }, new ItemDefinition { Key = "iron_ingot" } },
+        recipes: recipes,
+        blueprints: Array.Empty<BlueprintDefinition>(),
+        shipModules: Array.Empty<ShipModuleDefinition>(),
+        locales: new Dictionary<GameLocale, Dictionary<string, string>>());
+
     /// <summary>#427: an unknown block id in an authored ship layout used to become hull silently at stamp
     /// time; the validator now fails the load, while the editor's special palette ids (hatch, doors, lights,
     /// engine, glass) and station markers stay legal.</summary>
