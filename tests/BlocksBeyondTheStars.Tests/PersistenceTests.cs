@@ -389,6 +389,66 @@ public sealed class PersistenceTests : IDisposable
         }
     }
 
+    [Fact]
+    public void BlockPalette_HandEditedWithUnknownAndDuplicateNames_MigratesSafely()
+    {
+        // 1. Initialize a world with baseline palette
+        var paletteBaseline = new Dictionary<ushort, string>
+        {
+            [5] = "steel_wall",
+            [6] = "torch",
+        };
+
+        using (var repo = NewSqliteRepo())
+        {
+            repo.SetBlock("rocky", new Vector3i(1, 0, 0), 5); // steel_wall (id 5)
+            repo.SetBlock("rocky", new Vector3i(2, 0, 0), 6); // will be corrupted to unknown (id 6)
+            repo.SetBlock("rocky", new Vector3i(3, 0, 0), 7); // duplicate steel_wall (id 7)
+            repo.EnsureBlockPalette(paletteBaseline);
+        }
+
+        // 2. Simulate hand-edited SQLite: inject duplicate key (steel_wall at 5 and 7) and unknown key at 6
+        var databaseFile = Path.Combine(_root, "world_001", "world.db");
+        using (var connection = new SqliteConnection($"Data Source={databaseFile}"))
+        {
+            connection.Open();
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                DELETE FROM block_palette;
+                INSERT INTO block_palette (numeric_id, key) VALUES (5, 'steel_wall');
+                INSERT INTO block_palette (numeric_id, key) VALUES (6, 'unknown_modded_block_99');
+                INSERT INTO block_palette (numeric_id, key) VALUES (7, 'steel_wall');
+            ";
+            cmd.ExecuteNonQuery();
+        }
+
+        // 3. New game version content palette: steel_wall shifted to ID 10, torch is ID 11
+        var newPalette = new Dictionary<ushort, string>
+        {
+            [10] = "steel_wall",
+            [11] = "torch",
+        };
+
+        // 4. Migration executes without throwing
+        using (var repo = NewSqliteRepo())
+        {
+            var ex = Record.Exception(() => repo.EnsureBlockPalette(newPalette));
+            Assert.Null(ex);
+        }
+
+        // 5. Verify world data state:
+        // - Stored id 5 ('steel_wall') -> 10
+        // - Stored id 6 ('unknown_modded_block_99') -> 0 (air fallback for dropped/unknown keys)
+        // - Stored id 7 ('steel_wall') -> 10 (duplicate entry resolved to correct new id)
+        using var reopened = NewSqliteRepo();
+        var edits = reopened.LoadChunkEdits("rocky", new ChunkCoord(0, 0, 0));
+        ushort BlockAt(int x) => edits.First(e => e.WorldPosition.X == x).Block;
+
+        Assert.Equal((ushort)10, BlockAt(1));
+        Assert.Equal((ushort)0, BlockAt(2));
+        Assert.Equal((ushort)10, BlockAt(3));
+    }
+
     public void Dispose()
     {
         try
