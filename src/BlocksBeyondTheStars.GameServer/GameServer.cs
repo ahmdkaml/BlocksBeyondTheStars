@@ -927,9 +927,10 @@ public sealed partial class GameServer
 
         if (!session.Ships.ContainsKey(session.ActiveShipId))
         {
-            session.ActiveShipId = session.Ships.Keys.First();
+            session.ActiveShipId = session.Ships.Keys.First(); // a dropped/unknown active id falls back to ship one
         }
     }
+
     /// <summary>Revalidates the landing pad restored from the save (#848). Pads are communal and finite, so a
     /// persisted pad that is out of range for this body, or already held by another player standing on it, is
     /// released — the next <c>PlayerPad</c> call then hands out the first free one, as before this existed.</summary>
@@ -6065,6 +6066,7 @@ public sealed partial class GameServer
 
         return seen;
     }
+
     /// <summary>
     /// Clamps every stack in an inventory to its item definition's max stack limit,
     /// logging any anomalies that exceed the cap.
