@@ -908,6 +908,33 @@ public sealed partial class GameServer
         }
     }
 
+    private void HandleTravelIntent(PlayerSession session, TravelIntent intent)
+    {
+        // Landed ship: turn map travel into an automatic space transit.
+        if (IsOnLandableBody(session))
+        {
+            // New transit sequence goes here.
+            // EnterSpace(...);
+            // pending destination...
+            // client signals launch complete
+            // LandOnBody(...)
+            return;
+        }
+
+        // Existing behavior for callers that are already in space / other contexts.
+        HandleTravel(session, intent);
+    }
+
+    private bool IsOnLandableBody(PlayerSession session)
+    {
+        var body = _galaxy?.FindBody(session.CurrentLocationId);
+
+        return body is not null &&
+               (body.Kind == CelestialKind.Planet ||
+                body.Kind == CelestialKind.Moon ||
+                body.Kind == CelestialKind.AsteroidField);
+    }
+
     /// <summary>Persistence key for a player's ACTIVE ship. Kept as the legacy single-ship key (#848): every
     /// save still mirrors the active ship here, so a save written by this build stays loadable by an older one
     /// and the pre-fleet write sites need no change. The other ships use <see cref="FleetShipSaveKey"/>.</summary>
@@ -3102,7 +3129,7 @@ public sealed partial class GameServer
             case RepairWreckIntent repairWreck: HandleRepairWreck(session, repairWreck); break;
             case ClaimWreckIntent: HandleClaimWreck(session); break;
             case RepairShipIntent repairShip: HandleRepairShip(session, repairShip); break;
-            case TravelIntent travel: HandleTravel(session, travel); break;
+            case TravelIntent travel: HandleTravelIntent(session, travel); break;
             case NpcGreetIntent greet: HandleNpcGreet(session, greet); break;
             case SkipOnboardingIntent skipOnboarding: HandleSkipOnboarding(session, skipOnboarding); break;
             case SetWorldRulesIntent worldRules: HandleSetWorldRules(session, worldRules); break;
