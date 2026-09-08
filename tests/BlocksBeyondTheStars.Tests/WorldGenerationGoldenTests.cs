@@ -62,6 +62,37 @@ public sealed class WorldGenerationGoldenTests
         // #1648 (part 5): props, micro-ruins, new tree kinds and giant flora on generation-1 worlds.
         new("savanna-gen1", 424242, "savanna", 0, false, null, 1),
         new("swamp-gen1", 20260903, "swamp", 0, false, null, 1),
+        // Terrain generation 3, part 1 (the landform completion package): seamounts (sea-relative rows),
+        // icebergs (material bands), underground river reaches (sub-surface fluid spans), glacier-tongue fill
+        // (paint fill). highland-gen3 activated none of them through part 4 (= highland-gen1); since part 5 the wet alpine
+        // world has river morphology and rias, and the no-family control lives in the gate-searching test.
+        new("ocean-gen3", 424242, "ocean", 0, false, null, 3),
+        new("frozen_ocean-gen3", 20260903, "frozen_ocean", 0, false, null, 3),
+        new("karst-gen3", 20260903, "karst", 0, false, null, 3),
+        new("highland-gen3", 20260903, "highland", 0, false, null, 3),
+        // Part 2 (rock): slot canyons / labyrinth / petrified dunes on the deserts, rainbow strata and the
+        // hoodoo-butte families on red_desert, pavement on the dust bowl.
+        new("desert-gen3", 1, "desert", 0, false, null, 3),
+        new("red_desert-gen3", 1, "red_desert", 0, false, null, 3),
+        new("dust_bowl-gen3", 20260903, "dust_bowl", 0, false, null, 3),
+        // Part 3 (caves): dripstone in tunnels and caverns, karst cathedrals — karst-gen3 re-pinned, jungle drips too.
+        new("jungle-gen3", 20260903, "jungle", 0, false, null, 3),
+        // Part 4 (volcanic + desert): lava flows / obsidian fields on the lava world, frost polygons on the tundra;
+        // barchans may move the desert groups (re-pinned).
+        new("lava-gen3", 20260903, "lava", 0, false, null, 3),
+        new("tundra-gen3", 20260903, "tundra", 0, false, null, 3),
+        // Part 5 (wetlands + rivers): mats and peat on the swamp, peat and morphology on the boreal world.
+        new("swamp-gen3", 20260903, "swamp", 0, false, null, 3),
+        new("boreal-gen3", 20260903, "boreal", 0, false, null, 3),
+        // Part 6 (coast + sea floor): reef rings, reef fields, causeways, arches, blue holes on the archipelago.
+        new("archipelago-gen3", 20260903, "archipelago", 0, false, null, 3),
+        // Part 7 (ice): glaciers, ice sheets and nunataks, hanging valleys, ice caves on the two ice worlds.
+        new("glacier-gen3", 20260903, "glacier", 0, false, null, 3),
+        new("ice-gen3", 20260903, "ice", 0, false, null, 3),
+        // Part 8: the three generation-3 planet types, where the new families are dense.
+        new("coral_sea-gen3", 20260903, "coral_sea", 0, false, null, 3),
+        new("icecap-gen3", 20260903, "icecap", 0, false, null, 3),
+        new("river_lowlands-gen3", 20260903, "river_lowlands", 0, false, null, 3),
     };
 
     /// <summary>Sample columns: the spawn column (pad 0 sits at (0,0) on every world), one ordinary inland
@@ -95,6 +126,34 @@ public sealed class WorldGenerationGoldenTests
             // Pinned 2026-09-06 (#1648, Windows 11, .NET 10).
             ["savanna-gen1"] = 0x1f2b23eba6c17a34UL,
             ["swamp-gen1"] = 0x5c5a1959a7982a19UL,
+            // Pinned 2026-09-07 (terrain generation 3 part 1, Windows 11, .NET 10; unreleased — later parts
+            // re-pin these). ocean-gen3 equals ocean-gen1 (no seamount under the three sample columns) and
+            // highland-gen3 equalled highland-gen1 through part 4 (no family active); part 5 re-pinned it.
+            ["ocean-gen3"] = 0xd332372ad8f67b85UL, // re-pinned for part 5: a ria drowns a coast column
+            ["frozen_ocean-gen3"] = 0x13b8385bbef612d6UL, // re-pinned for part 7 (glaciers, ice sheet; part 4: frost polygons)
+            ["karst-gen3"] = 0xbb494ccb1798e108UL, // re-pinned for part 5 (river morphology; part 2: the stone-forest style)
+            ["highland-gen3"] = 0x7f796ec06cb54308UL, // re-pinned for part 5: since then the wet alpine world has river morphology + rias — the no-family control lives in the gate-searching test
+            // Pinned 2026-09-07 (part 2, the rock landforms; unreleased — later parts re-pin these).
+            ["desert-gen3"] = 0x12d1f68f2b91c7ddUL, // re-pinned for part 5: flora follows the generation-3 paints
+            ["red_desert-gen3"] = 0xc9b35bc8e7953302UL, // re-pinned for part 5
+            ["dust_bowl-gen3"] = 0xdbd5c91922585dd8UL, // re-pinned for part 5
+            // Pinned 2026-09-07 (part 3, the caves; unreleased — later parts re-pin these).
+            ["jungle-gen3"] = 0x604c4eaed2ed4148UL, // re-pinned for part 5 (river morphology, flora on paints)
+            // Pinned 2026-09-07 (part 4, volcanic + desert; unreleased — later parts re-pin these).
+            ["lava-gen3"] = 0xe08b8deab2d122deUL,
+            ["tundra-gen3"] = 0xd568581839e0daf1UL, // re-pinned for part 7 (glaciers, ice sheet, hanging valleys)
+            // Pinned 2026-09-07 (part 5, wetlands + rivers; unreleased — later parts re-pin these).
+            ["swamp-gen3"] = 0x6f5636cb565bf8cfUL,
+            ["boreal-gen3"] = 0x0db4acbd71f6b6bdUL,
+            // Pinned 2026-09-08 (part 6, coast + sea floor; unreleased — later parts re-pin these).
+            ["archipelago-gen3"] = 0x819963dbc81a43bbUL,
+            // Pinned 2026-09-08 (part 7, ice; unreleased — later parts re-pin these).
+            ["glacier-gen3"] = 0xaaf721d431838ceaUL,
+            ["ice-gen3"] = 0x3e04e32f31a07609UL,
+            // Pinned 2026-09-08 (part 8, the new planet types).
+            ["coral_sea-gen3"] = 0x1fb61378b5bb1fa2UL,
+            ["icecap-gen3"] = 0x786cf683677e2526UL,
+            ["river_lowlands-gen3"] = 0xee25a930cd9958d9UL,
         },
         // Linux (ubuntu CI runners): filled in from the first CI run of this test; a group absent here falls
         // back to the Windows value above and fails with the value to pin if the libm differs.

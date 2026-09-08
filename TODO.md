@@ -24,6 +24,69 @@ envelope at the WebSocket edge; deterministic seed world-gen; SQLite default per
 
 ---
 
+### ⚙ Terrain generation 3 — the landform completion package (#1688–#1695, 2026-09-08, branch feat/terrain-gen3, PR #1696)
+
+A landform audit measured the generator against a list of 84 real-world landforms: 43 present, 15 partial,
+26 missing. The misses cluster around four things the generator had no concept of — a designed sea floor,
+ice as a volume, river morphology, and water below the surface — so the package is one invisible
+foundation followed by the families built on it. Everything gates on `TerrainGeneration >= 3`; generation
+0–2 worlds stay byte-identical and the classic golden checksums never move. See
+[docs/developer/WORLD_GENERATION.md](docs/developer/WORLD_GENERATION.md) §13.
+
+**Part 1 (foundation) — DONE on the branch (2026-09-07):** the generation-3 switch and the `karst` / `reef`
+terrain tags; the worm carver as a family table with a generation-gated span budget; and the four
+structural extensions, each proven by one real family — landmark paints that fill a column (glacier tongues
+ice six deep), sea-relative landmark rows that never touch the calibration (seamounts), ice / fluid bands
+inside the water span (icebergs), sub-surface fluid spans with a cave shield (underground river reaches on
+wet karst worlds: swallow hole, sealed passage with bank ledges, spring). Golden groups `ocean-gen3`,
+`frozen_ocean-gen3`, `karst-gen3`, `highland-gen3` (= `highland-gen1`, the control); a Slow-tier chunk-cost
+guard. Not released: the whole package ships together after Marcel's local Unity playtest.
+**Part 2 (rock) — DONE on the branch (2026-09-07):** slot canyons, arêtes and tooth rows, desert pavement
+and the petrified-dune skin (landmark rows); rock gates and mountain halls (worm families riding their
+landform's own hotspot cell); the labyrinth, stone-forest and petrified-dune styles, gated by generation
+so a style added to an existing pool never moves an older world's relief. Rainbow strata (Bunte Berge)
+via the paint CYCLE — a paint row may lay its fill down in 3-thick bands parallel to the surface.
+Goldens `desert-gen3`, `red_desert-gen3`, `dust_bowl-gen3` pinned, `karst-gen3` re-pinned (the
+stone-forest style joined the pool).
+**Part 3 (caves) — DONE on the branch (2026-09-07):** dripstone — stalactites hanging from the roof and
+stalagmites rising from the floor of every worm tunnel and mega-cavern on a wet karst / wetland world
+(salt-white on limestone country, the deep rock elsewhere; an underground river's passage never drips — its
+headroom is the promise the reach is passable); karst cathedrals — caverns up to 40 tall instead of 28 on
+`karst`-tagged worlds. Golden `jungle-gen3` pinned, `karst-gen3` re-pinned.
+**Part 4 (volcanic + desert) — DONE on the branch (2026-09-07):** obsidian fields (a paint three deep with
+crystal glints on dry volcanic worlds), lava flows (2–3 bent tongues from every cone foot: a ropy 1–3 rise,
+a basalt skin three deep, and 1-deep lava pockets on the core through the body chain — never over a cave
+mouth), barchans (fields of crescent dunes on wind-and-sand worlds that rolled no dune sea), frost polygons
+(the salt-polygon net on cold wet ground: 1-high stone ridges, ice-covered ponds in a fifth of the plates).
+All geometry trig-free. Goldens `lava-gen3`, `tundra-gen3` pinned, `frozen_ocean-gen3` re-pinned.
+**Part 5 (wetlands + rivers) — DONE on the branch (2026-09-08):** river morphology in the rasteriser behind
+classic-no-op parameters — meanders (one S per low-gradient coarse cell, oxbow pools at a quarter of the
+apexes), delta fans (2–4 half-width strokes out of every sea outlet), floodplains (mud paint, a third of it
+1-deep pools); rias (drowned shelf-coast valleys, a sea-relative row — the partition test now allows land to
+become sea, never the reverse); floating vegetation mats (a mud band at a lake's water top); peat bogs (the
+new `peat` block — texture generated, 14 locales — six deep with pools, reeds and lichen as its late-host
+flora); thermokarst ponds (2–4 deep on Voronoi plates with a 1-high polygonal rim). Surface flora follows a
+generation-3 paint (ember blooms on a lava flow, lichen on a frost ridge). Goldens `swamp-gen3`,
+`boreal-gen3` pinned; every gen-3 group re-pinned; every classic / gen-1 golden unchanged (the peat host is a
+`LateHosts` entry so the roster coverage rule never sees it).
+**Part 6 (coast + sea floor) — DONE on the branch (2026-09-08):** sea arches (a Cap-band bar from a cliff to a
+sea-relative stem), blowholes (a geyser vent on a cliff over a sealed water shaft), causeway islands (an islet
+joined to the coast by a sandbar one below the sea), lagoons and atolls (reef rings of the new `coral_rock`
+block, the atoll with sand islets), reef fields (bumpy coral shallows with 4× seabed flora), blue holes,
+submarine canyons and trenches. The partition rule now has an explicit new-land allow-list (islets, stems)
+and permits sea-floor cuts above the floor cap. Golden `archipelago-gen3` pinned; `ocean-gen3` unchanged.
+**Part 7 (ice) — DONE on the branch (2026-09-08):** glaciers as a volume (a hotspot tongue 150–400 long down the
+steepest descent, 12–30 thick, ice filled to the old ground, own crevasses, icefall decks where the ground
+drops, scree moraines on the flanks and the snout), glacier gates and ice caves (worm families on the glacier
+cell), sheet caves through the crust of ice-surface worlds, ice sheets with nunataks by row precedence,
+hanging valleys beside the glacial troughs, icebergs off the pads; frost polygons and thaw ponds yield to ice
+cover. Goldens `glacier-gen3`, `ice-gen3` pinned, `tundra-gen3`, `frozen_ocean-gen3` re-pinned.
+**Part 8 (planet types + docs) — DONE on the branch (2026-09-08):** `coral_sea`, `icecap`, `river_lowlands`
+(`minTerrainGeneration: 3`, retyped into generation-3 galaxies by the #1649 roll), names + descriptions in
+all 14 locales, name flavours, goldens `coral_sea-gen3`, `icecap-gen3`, `river_lowlands-gen3`; docs §13.8,
+changelog entry. Full fast suite green (2888), local Unity Windows client built from the branch; issues
+#1688–#1695, PR #1696. Marcel's playtest follows the merge.
+
 ### ★ Tool-tier gates say what they want (#1686, 2026-09-07, branch feat/1686-tool-tier-hints)
 
 Aiming the starter Basic Drill at a Machine Housing produced `Your current tool cannot mine this block.` and

@@ -109,12 +109,37 @@ public sealed class TerrainTagsAndGenerationTests
         Assert.True(Content.Planets["lava"].HasTag(TerrainTag.Volcanic));
         Assert.True(Content.Planets["rocky"].HasTag(TerrainTag.Buttes | TerrainTag.Hoodoos));
         Assert.False(Content.Planets["jungle"].HasTag(TerrainTag.Buttes));
-        Assert.Equal(TerrainTag.Wetland, Content.Planets["ocean"].Tags); // #1647: marsh sheets on the ocean world's flats
+        // #1647: marsh sheets on the ocean world's flats; generation 3: reef relief on its warm shallows.
+        Assert.Equal(TerrainTag.Wetland | TerrainTag.Reef, Content.Planets["ocean"].Tags);
         Assert.Equal(TerrainTag.None, Content.Planets["lava"].Tags & ~TerrainTag.Volcanic);
 
         var bad = new PlanetType { Key = "bad", TerrainTags = new List<string> { "volcanic", "moon_cheese" } };
         bad.Tags = TerrainTags.Parse(bad.TerrainTags, out var unknown);
         Assert.Equal("moon_cheese", unknown);
+    }
+
+    /// <summary>Terrain generation 3: the two new tags parse and sit on the types the landform package needs
+    /// them on — soluble rock for the underground reaches, warm shallow coasts for the reef families.</summary>
+    [Fact]
+    public void KarstAndReefTags_ParseAndSitOnTheExpectedTypes()
+    {
+        var parsed = TerrainTags.Parse(new[] { "karst", "reef" }, out var unknown);
+        Assert.Equal(TerrainTag.Karst | TerrainTag.Reef, parsed);
+        Assert.Null(unknown);
+
+        foreach (var key in new[] { "jungle", "karst", "fungal", "boreal" })
+        {
+            Assert.True(Content.Planets[key].HasTag(TerrainTag.Karst), $"{key} should carry the karst tag");
+        }
+
+        foreach (var key in new[] { "ocean", "archipelago", "jungle" })
+        {
+            Assert.True(Content.Planets[key].HasTag(TerrainTag.Reef), $"{key} should carry the reef tag");
+        }
+
+        Assert.False(Content.Planets["desert"].HasTag(TerrainTag.Karst));
+        Assert.False(Content.Planets["desert"].HasTag(TerrainTag.Reef));
+        Assert.False(Content.Planets["ice"].HasTag(TerrainTag.Reef));
     }
 
     [Fact]
@@ -154,6 +179,37 @@ public sealed class TerrainTagsAndGenerationTests
         // #1648 appends the generation-1 rows after the classic five — the classic precedence is the prefix.
         Assert.Equal(new[] { "monolith", "stone-circle", "boulder", "crystal-shard", "dead-tree" },
             WorldGenerator.PropOrderForTest().Take(5).ToArray());
+    }
+
+    /// <summary>The worm carver is a table like the landmarks and the props. The classic worms stay row 0, so a
+    /// later family appended to it can never take carve budget away from an existing world's caves.</summary>
+    [Fact]
+    public void TunnelTable_KeepsTheClassicWormsFirst()
+    {
+        Assert.Equal("worms", WorldGenerator.TunnelFamilyOrderForTest()[0]);
+    }
+
+    /// <summary>Generation 0–2 worlds keep the classic six-span carve budget per column even though the buffer
+    /// is bigger now: a column that used to drop its seventh span must still drop it, or its caves would move.</summary>
+    [Fact]
+    public void TunnelSpanBudget_StaysAtSix_BelowGenerationThree()
+    {
+        var planet = Content.Planets["jungle"];
+        int circ = WorldConstants.Circumference;
+        int period = WorldConstants.LatitudePeriodFor(circ);
+        Span<(int Lo, int Hi)> spans = stackalloc (int Lo, int Hi)[16];
+
+        foreach (int generation in new[] { 0, 1, 2 })
+        {
+            var gen = new WorldGenerator(20260907, Content);
+            gen.SetTerrainGeneration(generation);
+            for (int z = -period / 2; z < period / 2; z += 53)
+                for (int x = 0; x < circ; x += 61)
+                {
+                    Assert.True(gen.TunnelSpans(planet, x, z, spans) <= 6,
+                        $"generation {generation} wrote more than the classic six spans at ({x},{z})");
+                }
+        }
     }
 
     [Fact]

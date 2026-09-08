@@ -416,9 +416,39 @@ public sealed partial class WorldGenerator
         // #1647 (generation 1): water / lava bodies and surface paints — all false on gen 0.
         public bool Marshes, Oases, HotSprings, CalderaLakes, Playas, DeckBands, Moss, DryBeds;
 
+        // Terrain generation 3 (the landform completion package, part 1): the sea-floor family that proves the
+        // sea-relative landmark rows, the ice band that proves the band material, and the underground river
+        // reaches that prove the sub-surface fluid spans — all false below generation 3.
+        public bool Seamounts, Icebergs, UndergroundRivers;
+
+        // Terrain generation 3, part 2 — the rock landforms.
+        public bool SlotCanyons, Aretes, ToothRows, DesertPavement, RockGates, MountainHalls, PetrifiedDunes, RainbowStrata;
+
+        // Terrain generation 3, part 3 — the caves: dripstone in every tunnel and cavern of a wet karst / wetland world.
+        public bool Dripstone;
+
+        // Terrain generation 3, part 4 — the volcanic and desert landforms.
+        public bool ObsidianFields, LavaFlows, Barchans, FrostPolygons;
+
+        // Terrain generation 3, part 5 — wetlands and rivers.
+        public bool RiverMorphology, Rias, FloatingMats, PeatBogs, Thermokarst;
+
+        // Terrain generation 3, part 6 — the coast and the sea floor.
+        public bool SeaArches, Blowholes, CausewayIslands, ReefRings, ReefFields, BlueHoles, SubmarineCanyons, Trenches;
+
+        // Terrain generation 3, part 7 — ice as a volume.
+        public bool Glaciers, IceSheets, HangingValleys, IceCaves, SheetCaves;
+
+        /// <summary>Aligned with <see cref="ActivePaints"/>: the row's colour cycle, or null (generation 3).</summary>
+        public LandmarkCycleFn?[] ActivePaintCycles = System.Array.Empty<LandmarkCycleFn?>();
+
         /// <summary>The landmark table rows active on this world, in precedence order (#1644) — what
         /// <see cref="SurfaceHeightUncached"/> loops instead of a hand-written if-chain.</summary>
         public LandmarkOffsetFn[] ActiveLandmarks = System.Array.Empty<LandmarkOffsetFn>();
+
+        /// <summary>The active SEA-RELATIVE rows (generation 3), run after <see cref="ActiveLandmarks"/> and only
+        /// once the sea level is known — never inside the calibration sample that computes it.</summary>
+        public LandmarkOffsetFn[] ActiveSeaLandmarks = System.Array.Empty<LandmarkOffsetFn>();
 
         /// <summary>The active rows' surface repaints, table order (#1644); run by the column phase.</summary>
         public LandmarkPaintFn[] ActivePaints = System.Array.Empty<LandmarkPaintFn>();
@@ -434,23 +464,43 @@ public sealed partial class WorldGenerator
     private delegate double LandmarkOffsetFn(WorldGenerator g, PlanetType planet, WonderProfile w, int worldX, int worldZ);
 
     /// <summary>A landmark family's optional surface repaint at a column (null = keep the block the biome and
-    /// paint chain chose). Runs after the classic paints and before the ejecta rays.</summary>
-    private delegate BlockId? LandmarkPaintFn(WorldGenerator g, PlanetType planet, WonderProfile w, int worldX, int worldZ, int surfaceY);
+    /// paint chain chose). Runs after the classic paints and before the ejecta rays.
+    /// <paramref name="fillToY"/> (terrain generation 3): the lowest world Y the paint block also claims below
+    /// the topsoil — every SOLID cell from the surface down to it becomes the paint block, before ores, strata
+    /// and data caches (caves, tunnels and caverns still carve through it). <see cref="int.MinValue"/> = the
+    /// topsoil only, the classic behaviour.</summary>
+    private delegate BlockId? LandmarkPaintFn(WorldGenerator g, PlanetType planet, WonderProfile w, int worldX, int worldZ, int surfaceY, out int fillToY);
+
+    /// <summary>A paint row's optional colour CYCLE at a column (terrain generation 3): the blocks the paint
+    /// fill lays down in <c>RainbowBandThickness</c>-thick bands parallel to the surface, top first, instead
+    /// of the single paint block. Null = the single block. Consulted only when the row's paint hit.</summary>
+    private delegate BlockId[]? LandmarkCycleFn(WorldGenerator g, PlanetType planet, WonderProfile w, int worldX, int worldZ);
 
     private readonly struct LandmarkKind
     {
-        public LandmarkKind(string name, System.Func<WonderProfile, bool> active, LandmarkOffsetFn offset, LandmarkPaintFn? paint = null)
+        public LandmarkKind(string name, System.Func<WonderProfile, bool> active, LandmarkOffsetFn offset, LandmarkPaintFn? paint = null,
+            bool seaRelative = false, LandmarkCycleFn? cycle = null)
         {
             Name = name;
             Active = active;
             Offset = offset;
             Paint = paint;
+            SeaRelative = seaRelative;
+            Cycle = cycle;
         }
 
         public readonly string Name;
         public readonly System.Func<WonderProfile, bool> Active; // reads the profile's cached gate boolean
         public readonly LandmarkOffsetFn Offset;
         public readonly LandmarkPaintFn? Paint;
+        public readonly LandmarkCycleFn? Cycle;
+
+        /// <summary>Terrain generation 3: the row shapes the SEA FLOOR and needs the calibrated sea level. It
+        /// runs after every classic row and never inside the calibration sample (the #1631 sea-mount rule,
+        /// generalised), so the percentile it reads is never its own output. Its offset must be 0 on a dry
+        /// world, 0 wherever the raw ground is not at least two below the sea, and must never lift the result
+        /// above one below the sea — so the land/sea partition the calibration saw stays exactly that.</summary>
+        public readonly bool SeaRelative;
     }
 
     private static readonly LandmarkKind[] LandmarkKinds =
@@ -475,14 +525,69 @@ public sealed partial class WorldGenerator
         new("yardangs", w => w.Yardangs, static (g, p, w, x, z) => g.YardangOffset(w, x, z)),
         new("drumlin-field", w => w.DrumlinFields, static (g, p, w, x, z) => g.DrumlinFieldOffset(w, x, z)),
         new("inselberg", w => w.Inselbergs, static (g, p, w, x, z) => g.InselbergOffset(p, w.Seed, x, z),
-            static (g, p, w, x, z, y) => g.InselbergPaint(p, w, x, z)),
+            static (WorldGenerator g, PlanetType p, WonderProfile w, int x, int z, int y, out int fill) => g.InselbergPaint(p, w, x, z, out fill)),
         new("star-dunes", w => w.StarDunes, static (g, p, w, x, z) => g.StarDuneOffset(w.Seed, x, z)),
         new("mud-volcanoes", w => w.MudVolcanoes, static (g, p, w, x, z) => g.MudVolcanoOffset(w.Seed, x, z)),
         new("sinkhole-chain", w => w.SinkholeChains, static (g, p, w, x, z) => g.SinkholeChainOffset(w.Seed, x, z)),
         new("maar", w => w.Maars, static (g, p, w, x, z) => g.MaarOffset(w.Seed, x, z)),
         new("mushroom-rock", w => w.MushroomRocks, static (g, p, w, x, z) => g.MushroomStemOffset(p, w, x, z)),
         new("glacier-tongue", w => w.GlacierTongues, static (g, p, w, x, z) => 0.0,
-            static (g, p, w, x, z, y) => g.GlacierTonguePaint(w, x, z)),
+            static (WorldGenerator g, PlanetType p, WonderProfile w, int x, int z, int y, out int fill) => g.GlacierTonguePaint(w, x, z, y, out fill)),
+        // Terrain generation 3 — sea-relative rows (SeaRelative: true). They run after every row above and only
+        // once the sea level is known, so the percentile they read is never their own output; the gates are
+        // false below generation 3.
+        new("seamount", w => w.Seamounts, static (g, p, w, x, z) => g.SeamountOffset(p, w, x, z), seaRelative: true),
+        // Part 2 — the rock landforms, appended after part 1 so no earlier precedence moves. The two
+        // paint-only rows carry a zero offset, like the classic glacier tongue.
+        new("slot-canyon", w => w.SlotCanyons, static (g, p, w, x, z) => g.SlotCanyonOffset(w.Seed, x, z)),
+        new("arete", w => w.Aretes, static (g, p, w, x, z) => g.AreteOffset(p, w.Seed, x, z)),
+        new("tooth-row", w => w.ToothRows, static (g, p, w, x, z) => g.ToothRowOffset(p, w.Seed, x, z)),
+        new("desert-pavement", w => w.DesertPavement, static (g, p, w, x, z) => 0.0,
+            static (WorldGenerator g, PlanetType p, WonderProfile w, int x, int z, int y, out int fill) => g.DesertPavementPaint(p, w, x, z, out fill)),
+        new("petrified-dunes", w => w.PetrifiedDunes, static (g, p, w, x, z) => 0.0,
+            static (WorldGenerator g, PlanetType p, WonderProfile w, int x, int z, int y, out int fill) => g.PetrifiedDunePaint(w, x, z, y, out fill)),
+        new("rainbow-strata", w => w.RainbowStrata, static (g, p, w, x, z) => 0.0,
+            static (WorldGenerator g, PlanetType p, WonderProfile w, int x, int z, int y, out int fill) => g.RainbowStrataPaint(p, w, x, z, y, out fill),
+            cycle: static (g, p, w, x, z) => g.RainbowStrataCycle(w, x, z)),
+        // Part 4 — volcanic and desert. The lava flow starts where the cone's own row ends (its foot); the
+        // frost net's ridge is a one-block heave with a stone skin; the obsidian field is a paint alone.
+        new("lava-flow", w => w.LavaFlows, static (g, p, w, x, z) => g.LavaFlowOffset(p, w, x, z),
+            static (WorldGenerator g, PlanetType p, WonderProfile w, int x, int z, int y, out int fill) => g.LavaFlowPaint(p, w, x, z, y, out fill)),
+        new("barchans", w => w.Barchans, static (g, p, w, x, z) => g.BarchanOffset(w, x, z)),
+        new("frost-polygons", w => w.FrostPolygons, static (g, p, w, x, z) => g.FrostPolygonOffset(p, w, x, z),
+            static (WorldGenerator g, PlanetType p, WonderProfile w, int x, int z, int y, out int fill) => g.FrostPolygonPaint(p, w, x, z, out fill)),
+        new("obsidian-field", w => w.ObsidianFields, static (g, p, w, x, z) => 0.0,
+            static (WorldGenerator g, PlanetType p, WonderProfile w, int x, int z, int y, out int fill) => g.ObsidianFieldPaint(p, w, x, z, y, out fill)),
+        // Part 5 — wetlands and rivers. The ria is sea-relative (it drowns the shelf coast, so it must know the
+        // sea); the thaw-pond rim is a one-block heave; the floodplain and the bog are paints (peat last, so a
+        // bog on a floodplain is peat).
+        new("ria", w => w.Rias, static (g, p, w, x, z) => g.RiaOffset(p, w, x, z), seaRelative: true),
+        new("thermokarst", w => w.Thermokarst, static (g, p, w, x, z) => g.ThermokarstOffset(p, w, x, z)),
+        new("floodplain", w => w.RiverMorphology, static (g, p, w, x, z) => 0.0,
+            static (WorldGenerator g, PlanetType p, WonderProfile w, int x, int z, int y, out int fill) => g.FloodplainPaint(p, w, x, z, out fill)),
+        new("peat-bog", w => w.PeatBogs, static (g, p, w, x, z) => 0.0,
+            static (WorldGenerator g, PlanetType p, WonderProfile w, int x, int z, int y, out int fill) => g.PeatBogPaint(p, w, x, z, y, out fill)),
+        // Part 6 — the coast and the sea floor: every row sea-relative. Order = precedence among them: the small
+        // sharp forms (arch stem, blue hole) before the broad ones, the reef ring before the reef field it may
+        // stand in, the great cuts last.
+        new("sea-arch", w => w.SeaArches, static (g, p, w, x, z) => g.SeaArchOffset(p, w, x, z), seaRelative: true),
+        new("blue-hole", w => w.BlueHoles, static (g, p, w, x, z) => g.BlueHoleOffset(p, w, x, z), seaRelative: true),
+        new("causeway-island", w => w.CausewayIslands, static (g, p, w, x, z) => g.CausewayIslandOffset(p, w, x, z, out _), seaRelative: true),
+        new("reef-ring", w => w.ReefRings, static (g, p, w, x, z) => g.ReefRingOffset(p, w, x, z, out _),
+            static (WorldGenerator g, PlanetType p, WonderProfile w, int x, int z, int y, out int fill) => g.ReefRingPaint(p, w, x, z, y, out fill),
+            seaRelative: true),
+        new("reef-field", w => w.ReefFields, static (g, p, w, x, z) => g.ReefFieldOffset(p, w, x, z),
+            static (WorldGenerator g, PlanetType p, WonderProfile w, int x, int z, int y, out int fill) => g.ReefFieldPaint(p, w, x, z, y, out fill),
+            seaRelative: true),
+        new("submarine-canyon", w => w.SubmarineCanyons, static (g, p, w, x, z) => g.SubmarineCanyonOffset(p, w, x, z), seaRelative: true),
+        new("trench", w => w.Trenches, static (g, p, w, x, z) => g.TrenchOffset(p, w, x, z), seaRelative: true),
+        // Part 7 — ice as a volume (land rows, appended after every earlier land row: a massif or a trough owns its
+        // column first, which is what makes a nunatak poke through the ice sheet).
+        new("hanging-valley", w => w.HangingValleys, static (g, p, w, x, z) => g.HangingValleyOffset(w.Seed, x, z)),
+        new("glacier", w => w.Glaciers, static (g, p, w, x, z) => g.GlacierOffset(p, w, x, z),
+            static (WorldGenerator g, PlanetType p, WonderProfile w, int x, int z, int y, out int fill) => g.GlacierPaint(p, w, x, z, y, out fill)),
+        new("ice-sheet", w => w.IceSheets, static (g, p, w, x, z) => g.IceSheetOffset(w, x, z),
+            static (WorldGenerator g, PlanetType p, WonderProfile w, int x, int z, int y, out int fill) => g.IceSheetPaint(w, x, z, y, out fill)),
     };
 
     /// <summary>The landmark families active on this world in precedence order (tests).</summary>
@@ -528,8 +633,56 @@ public sealed partial class WorldGenerator
             ["lavaOceanContinents"] = LavaOceanContinentsFor(planet),
             ["geyserVolcanic"] = GeyserVolcanicFor(planet, w.Volcanoes),
             ["crystalProps"] = CrystalPropsFor(planet),
+            // terrain generation 3
+            ["seamounts"] = w.Seamounts,
+            ["icebergs"] = w.Icebergs,
+            ["undergroundRivers"] = w.UndergroundRivers,
+            ["glacierTongues"] = w.GlacierTongues,
+            ["slotCanyons"] = w.SlotCanyons,
+            ["aretes"] = w.Aretes,
+            ["toothRows"] = w.ToothRows,
+            ["desertPavement"] = w.DesertPavement,
+            ["rockGates"] = w.RockGates,
+            ["mountainHalls"] = w.MountainHalls,
+            ["petrifiedDunes"] = w.PetrifiedDunes,
+            ["rainbowStrata"] = w.RainbowStrata,
+            ["dripstone"] = w.Dripstone,
+            ["obsidianFields"] = w.ObsidianFields,
+            ["lavaFlows"] = w.LavaFlows,
+            ["barchans"] = w.Barchans,
+            ["frostPolygons"] = w.FrostPolygons,
+            ["riverMorphology"] = w.RiverMorphology,
+            ["rias"] = w.Rias,
+            ["floatingMats"] = w.FloatingMats,
+            ["peatBogs"] = w.PeatBogs,
+            ["thermokarst"] = w.Thermokarst,
+            ["seaArches"] = w.SeaArches,
+            ["blowholes"] = w.Blowholes,
+            ["causewayIslands"] = w.CausewayIslands,
+            ["reefRings"] = w.ReefRings,
+            ["reefFields"] = w.ReefFields,
+            ["blueHoles"] = w.BlueHoles,
+            ["submarineCanyons"] = w.SubmarineCanyons,
+            ["trenches"] = w.Trenches,
+            ["glaciers"] = w.Glaciers,
+            ["iceSheets"] = w.IceSheets,
+            ["hangingValleys"] = w.HangingValleys,
+            ["iceCaves"] = w.IceCaves,
+            ["sheetCaves"] = w.SheetCaves,
         };
     }
+
+    /// <summary>Every gate a generation-3 family reads, by name (tests) — the "is any landform family active
+    /// on this world at all" question the golden control group rests on.</summary>
+    internal static readonly string[] Gen3GateNames =
+    {
+        "seamounts", "icebergs", "undergroundRivers", "slotCanyons", "aretes", "toothRows",
+        "desertPavement", "rockGates", "mountainHalls", "petrifiedDunes", "rainbowStrata", "dripstone",
+        "obsidianFields", "lavaFlows", "barchans", "frostPolygons",
+        "riverMorphology", "rias", "floatingMats", "peatBogs", "thermokarst",
+        "seaArches", "blowholes", "causewayIslands", "reefRings", "reefFields", "blueHoles", "submarineCanyons", "trenches",
+        "glaciers", "iceSheets", "hangingValleys", "iceCaves", "sheetCaves",
+    };
 
     // Static cross-instance cache (client bakes fresh generators per preview; tests spin up hundreds)
     // PLUS a lock-free instance fast path: a generator works one world at a time, so per-column lookups
@@ -586,6 +739,11 @@ public sealed partial class WorldGenerator
         lock (_volcanoLock)
         {
             _volcanoCells.Clear(); // #1631: the sea-mount lift depends on the world mode + calibration
+        }
+
+        lock (_seaCellLock)
+        {
+            _seaCells.Clear(); // generation 3: the sea-relative families roll against the calibrated sea
         }
     }
 
@@ -651,7 +809,7 @@ public sealed partial class WorldGenerator
                 if (_terrainGeneration >= 1)
                 {
                     w.Scale = ScaleJitterFor(planet, seed);
-                    w.Styles = PickStyles(planet, seed, w.Style);
+                    w.Styles = PickStyles(planet, seed, w.Style, _terrainGeneration);
                     w.ReliefMuls = ReliefMulsFor(planet);
                     w.Tilted = HasTilt(planet, seed);
                     w.Stepped = HasStepped(planet, seed);
@@ -691,8 +849,61 @@ public sealed partial class WorldGenerator
                     w.DryBeds = DryBedWorld(planet);
                 }
 
+                if (_terrainGeneration >= 3)
+                {
+                    // The landform completion package, part 1: one reference family per structural extension.
+                    w.Seamounts = HasSeamounts(planet);
+                    w.Icebergs = HasIcebergs(planet);
+                    w.UndergroundRivers = HasUndergroundRivers(planet);
+
+                    // Part 2: the rock landforms.
+                    w.SlotCanyons = HasSlotCanyons(planet);
+                    w.Aretes = HasAretes(planet, w.Styles);
+                    w.ToothRows = w.Aretes;
+                    w.DesertPavement = HasDesertPavement(planet);
+                    w.RockGates = HasRockGates(planet);
+                    w.MountainHalls = HasMountainHalls(planet);
+                    w.PetrifiedDunes = HasPetrifiedDunes(w.Styles);
+                    w.RainbowStrata = HasRainbowStrata(planet);
+
+                    // Part 3: the caves.
+                    w.Dripstone = HasDripstone(planet);
+
+                    // Part 4: the volcanic and desert landforms.
+                    w.ObsidianFields = HasObsidianFields(planet);
+                    w.LavaFlows = HasLavaFlows(planet);
+                    w.Barchans = HasBarchans(planet, w.Styles);
+                    w.FrostPolygons = HasFrostPolygons(planet);
+
+                    // Part 5: wetlands and rivers.
+                    w.RiverMorphology = HasRiverMorphology(planet);
+                    w.Rias = HasRias(planet);
+                    w.FloatingMats = HasFloatingMats(planet);
+                    w.PeatBogs = HasPeatBogs(planet);
+                    w.Thermokarst = HasThermokarst(planet);
+
+                    // Part 6: the coast and the sea floor.
+                    w.SeaArches = HasSeaArches(planet);
+                    w.Blowholes = HasBlowholes(planet);
+                    w.CausewayIslands = HasCausewayIslands(planet);
+                    w.ReefRings = HasReefRings(planet);
+                    w.ReefFields = HasReefFields(planet);
+                    w.BlueHoles = HasBlueHoles(planet);
+                    w.SubmarineCanyons = HasSubmarineCanyons(planet);
+                    w.Trenches = HasTrenches(planet);
+
+                    // Part 7: ice as a volume.
+                    w.Glaciers = HasGlaciers(planet);
+                    w.IceSheets = HasIceSheets(planet);
+                    w.HangingValleys = HasHangingValleys(planet);
+                    w.IceCaves = HasIceCaves(planet);
+                    w.SheetCaves = HasSheetCaves(planet);
+                }
+
                 var offsets = new System.Collections.Generic.List<LandmarkOffsetFn>(LandmarkKinds.Length);
+                var seaOffsets = new System.Collections.Generic.List<LandmarkOffsetFn>();
                 var paints = new System.Collections.Generic.List<LandmarkPaintFn>();
+                var cycles = new System.Collections.Generic.List<LandmarkCycleFn?>();
                 foreach (var kind in LandmarkKinds)
                 {
                     if (!kind.Active(w))
@@ -700,17 +911,21 @@ public sealed partial class WorldGenerator
                         continue;
                     }
 
-                    offsets.Add(kind.Offset);
+                    (kind.SeaRelative ? seaOffsets : offsets).Add(kind.Offset);
                     if (kind.Paint is { } paint)
                     {
                         paints.Add(paint);
+                        cycles.Add(kind.Cycle);
                     }
                 }
 
                 w.ActiveLandmarks = offsets.ToArray();
+                w.ActiveSeaLandmarks = seaOffsets.ToArray();
                 w.ActivePaints = paints.ToArray();
+                w.ActivePaintCycles = cycles.ToArray();
                 w.AnyBands = planet.FloatingIslands || w.Arches || w.SeaStacks || w.Hoodoos || w.Cenotes
-                    || w.NaturalBridges || w.CoastalOverhangs || w.IceCornices || w.MushroomRocks; // #1646
+                    || w.NaturalBridges || w.CoastalOverhangs || w.IceCornices || w.MushroomRocks // #1646
+                    || w.Icebergs;
                 // #703 hybrid fade; #1645: on a multi-style world the fade runs whenever more than one style was
                 // rolled — identity styles (flats, spires) stay pure only as the sole pick.
                 w.HybridEligible = _terrainGeneration >= 1 && w.Styles.Length != 0
@@ -772,6 +987,18 @@ public sealed partial class WorldGenerator
         for (int i = 0; i < landmarks.Length && overlay == 0.0; i++)
         {
             overlay = landmarks[i](this, planet, w, worldX, worldZ); // table order = precedence, first hit wins
+        }
+
+        // Sea-relative rows (terrain generation 3) fire only once the sea is known — never inside the
+        // calibration sample, so the percentile they read is never their own output (the #1631 sea-mount
+        // rule, generalised). Last in precedence: a classic landmark always owns its column.
+        var seaRows = w.ActiveSeaLandmarks;
+        if (overlay == 0.0 && seaRows.Length != 0 && !_calibrating && !DisableSeaRowsForTest)
+        {
+            for (int i = 0; i < seaRows.Length && overlay == 0.0; i++)
+            {
+                overlay = seaRows[i](this, planet, w, worldX, worldZ);
+            }
         }
 
         if (overlay != 0.0)

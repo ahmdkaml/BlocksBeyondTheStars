@@ -108,6 +108,10 @@ public sealed partial class WorldGenerator
         bool tunnelWorld = HasTunnels(planet);        // #708: worm tunnels + cave mouths
         var saltBlockId = _content.GetBlock("salt")?.NumericId ?? BlockId.Air;
         var cavernCrystalId = _content.GetBlock("crystal")?.NumericId ?? BlockId.Air;
+        // Dripstone (generation 3, part 3): white like the travertine repaint on limestone country, the deep rock
+        // elsewhere. Read only where a column carries dripstone lengths, which no generation 0–2 column does.
+        var dripstoneId = planet.HasTag(TerrainTag.Karst) && !saltBlockId.IsAir ? saltBlockId : deepId;
+        var coralRockId = _content.GetBlock("coral_rock")?.NumericId ?? BlockId.Air; // part 6: the reef floor
 
         // Generation-1 underground finds (#1646): crystal geodes (hollow crystal-lined spheres) and sediment
         // strata (tilted granite bands in the upper crust). Both gates are false on a generation-0 world.
@@ -258,12 +262,66 @@ public sealed partial class WorldGenerator
                 bool geodeHere = col.GeodeHere;
                 int geoLo = col.GeoLo, geoHi = col.GeoHi, geoInLo = col.GeoInLo, geoInHi = col.GeoInHi;
                 int strataShift = col.StrataShift;
+                // Terrain generation 3: the paint fill, the sub-surface fluid spans and the cave shield — all at
+                // their classic no-op values (MinValue / empty / an empty range) on every generation 0–2 column.
+                int paintFillToY = col.PaintFillToY;
+                var paintCycle = col.PaintCycle;
+                var subFluid = col.SubFluid;
+                int subFluidCount = subFluid.Length;
+                int shieldLo = col.ShieldLo, shieldHi = col.ShieldHi;
+                bool materialBands = col.MaterialBands;
+                int dripDown = col.DripDown, dripUp = col.DripUp;
+                bool paintedHost = col.PaintedHost;
 
                 for (int ly = 0; ly < WorldConstants.ChunkSize; ly++)
                 {
                     int worldY = origin.Y + ly;
                     if (worldY > seabedY)
                     {
+                        // Material bands (generation 3) stand INSIDE the water span — an iceberg's hull below the
+                        // waterline — so they are consulted before the sea fill. Never present on a classic column.
+                        if (materialBands)
+                        {
+                            bool bandHit = false;
+                            for (int b = 0; b < bandCount && !bandHit; b++)
+                            {
+                                if (worldY < bands[b].Bottom || worldY > bands[b].Top)
+                                {
+                                    continue;
+                                }
+
+                                if (bands[b].Kind == BandKind.Ice)
+                                {
+                                    if (!iceId.IsAir)
+                                    {
+                                        chunk.Set(lx, ly, lz, iceId);
+                                    }
+
+                                    bandHit = true;
+                                }
+                                else if (bands[b].Kind == BandKind.Fluid)
+                                {
+                                    if (!columnFluid.IsAir)
+                                    {
+                                        chunk.Set(lx, ly, lz, columnFluid);
+                                    }
+
+                                    bandHit = true;
+                                }
+                                else if (bands[b].Kind == BandKind.Mat)
+                                {
+                                    // A floating mat (part 5): one cell of mud at the lake's water top.
+                                    chunk.Set(lx, ly, lz, mudId.IsAir ? subSurfaceId : mudId);
+                                    bandHit = true;
+                                }
+                            }
+
+                            if (bandHit)
+                            {
+                                continue;
+                            }
+                        }
+
                         if (worldY <= waterTop)
                         {
                             // Sea fill in a basin, or an upland pond above it — the top of a cold column
@@ -295,6 +353,23 @@ public sealed partial class WorldGenerator
                                         break;
                                     case BandKind.Cap:
                                         chunk.Set(lx, ly, lz, deepId); // bare rock: arch bars, caps, lips
+                                        break;
+                                    case BandKind.Ice: // generation 3 (normally taken by the pre-scan above)
+                                        if (!iceId.IsAir)
+                                        {
+                                            chunk.Set(lx, ly, lz, iceId);
+                                        }
+
+                                        break;
+                                    case BandKind.Fluid: // generation 3
+                                        if (!columnFluid.IsAir)
+                                        {
+                                            chunk.Set(lx, ly, lz, columnFluid);
+                                        }
+
+                                        break;
+                                    case BandKind.Mat: // generation 3, part 5 (normally taken by the pre-scan above)
+                                        chunk.Set(lx, ly, lz, mudId.IsAir ? subSurfaceId : mudId);
                                         break;
                                     default: // BandKind.Waterfall (#707): a standing column of falling water
                                         if (!seaWaterId.IsAir)
@@ -333,12 +408,43 @@ public sealed partial class WorldGenerator
                     // Underground mega-cavern (#707): a vast void with an optional still lake in its bowl.
                     if (cavernHere && worldY >= cavLo && worldY <= cavHi)
                     {
+                        // Dripstone (generation 3): a spike from the roof, a spike from the floor, never a wall —
+                        // both keep an air cell between them. Zero-length on every generation 0–2 column.
+                        if ((dripDown | dripUp) != 0 && DripstoneFits(cavLo, cavHi, dripDown, dripUp, seabedY)
+                            && (worldY > cavHi - dripDown || worldY < cavLo + dripUp))
+                        {
+                            chunk.Set(lx, ly, lz, dripstoneId);
+                            continue;
+                        }
+
                         if (worldY <= cavLakeY && !airlessBody)
                         {
                             chunk.Set(lx, ly, lz, depth > lavaTableDepth ? lavaFloorId : seaWaterId);
                         }
 
                         continue; // void (or the lake fill above)
+                    }
+
+                    // Sub-surface fluid spans (generation 3): an underground river's water on its passage floor —
+                    // the passage itself is a tunnel span, the cells around it are shielded from the cave carver,
+                    // so the water sits in a sealed pocket (generated fluid is a bottomless source to the automaton).
+                    if (subFluidCount > 0)
+                    {
+                        bool inFluid = false;
+                        for (int f = 0; f < subFluidCount; f++)
+                        {
+                            if (worldY >= subFluid[f].Lo && worldY <= subFluid[f].Hi)
+                            {
+                                chunk.Set(lx, ly, lz, subFluid[f].Fluid);
+                                inFluid = true;
+                                break;
+                            }
+                        }
+
+                        if (inFluid)
+                        {
+                            continue;
+                        }
                     }
 
                     // Crystal geode (#1646): a hollow sphere lined with crystal — the shell is solid crystal, the
@@ -366,11 +472,14 @@ public sealed partial class WorldGenerator
                     if (tunnelCount > 0)
                     {
                         bool inTunnel = false;
+                        int spanLo = 0, spanHi = -1;
                         for (int t = 0; t < tunnelCount; t++)
                         {
                             if (worldY >= tunnelSpans[t].Lo && worldY <= tunnelSpans[t].Hi)
                             {
                                 inTunnel = true;
+                                spanLo = tunnelSpans[t].Lo;
+                                spanHi = tunnelSpans[t].Hi;
                                 break;
                             }
                         }
@@ -383,13 +492,24 @@ public sealed partial class WorldGenerator
                             {
                                 chunk.Set(lx, ly, lz, lavaFloorId);
                             }
+                            else if ((dripDown | dripUp) != 0 && DripstoneFits(spanLo, spanHi, dripDown, dripUp, seabedY)
+                                && !(spanLo >= shieldLo && spanHi <= shieldHi)
+                                && (worldY > spanHi - dripDown || worldY < spanLo + dripUp))
+                            {
+                                // Dripstone (generation 3) at the span's ends. An underground river's passage is the
+                                // one span inside the cave shield and never drips: its floor is water or a bank
+                                // ledge and its three cells of headroom are the promise the reach is passable.
+                                // Zero-length on every generation 0–2 column.
+                                chunk.Set(lx, ly, lz, dripstoneId);
+                            }
 
                             continue;
                         }
                     }
 
-                    // Carve caves below the surface layer (quantile-calibrated per world, #472).
-                    if (caveThreshold > 0.0 && depth > 1)
+                    // Carve caves below the surface layer (quantile-calibrated per world, #472). The cave shield
+                    // (generation 3) is the rock around a sub-surface fluid span; empty on a classic column.
+                    if (caveThreshold > 0.0 && depth > 1 && (worldY < shieldLo || worldY > shieldHi))
                     {
                         double cave = SampleField(samplers, CaveSampler, seed + 7777, worldX, worldZ, 22.0, 16.0, 22.0, worldY);
                         if (cave > caveThreshold)
@@ -419,6 +539,14 @@ public sealed partial class WorldGenerator
                     else if (depth < effSurfaceDepth)
                     {
                         block = depth == 0 ? surfaceId : subSurfaceId;
+                    }
+                    else if (paintFillToY != int.MinValue && worldY >= paintFillToY)
+                    {
+                        // Paint fill (generation 3): a landmark paint that claims the column down to fillToY — a
+                        // glacier that is ice through and through, or a rainbow cliff cycling its bands parallel
+                        // to the surface. No ore, strata or cache inside the fill; the carvers above have already
+                        // had their say.
+                        block = paintCycle is null ? subSurfaceId : CycleBlockAt(paintCycle, depth);
                     }
                     else
                     {
@@ -454,8 +582,10 @@ public sealed partial class WorldGenerator
                 {
                     // On a beach the painted ground is the beach block, not the biome surface — grow that
                     // host's flora (sparse sand tufts), never grass plants standing in sand (#679).
+                    // A generation-3 landmark paint likewise hosts its own flora (reeds on peat, lichen on a frost
+                    // ridge's stone, ember blooms on a lava flow's basalt) — never on an older world.
                     var floraId = FloraForSurface(planet, biome, seed, worldX, worldZ,
-                        beachHere ? surfaceId : (BlockId?)null);
+                        beachHere || paintedHost ? surfaceId : (BlockId?)null);
                     int fy = seabedY + 1;
                     int fly = fy - origin.Y;
                     // Local density is modulated by a vegetation-richness mask (lush forest floors / meadows vs
@@ -474,14 +604,17 @@ public sealed partial class WorldGenerator
                         chunk.Set(lx, fly, lz, floraId);
                     }
                 }
-                else if (waterFlora && columnFluid == seaWaterId && seabedY + 1 <= waterTop - iceTop)
+                else if (waterFlora && columnFluid == seaWaterId && seabedY + 1 <= waterTop - iceTop && !materialBands)
                 {
+                    // (materialBands: an iceberg's hull stands in this water span — no kelp through solid ice.)
                     // Submerged WATER column — the sea or an upland pond grows seabed plants / lily pads.
                     // The column-fluid check keeps kelp out of lava rivers and volcano craters (#477).
                     // Plants stay below any ice sheet, and no lily pads float on a frozen surface (#494);
                     // frozen-through columns (guard above) grow nothing at all.
+                    // A coral-rock floor (a generation-3 reef) grows four times the seabed flora.
                     StampWaterFlora(chunk, origin, lx, lz, seed, worldX, worldZ, seabedY, waterTop - iceTop,
-                        kelpId, iceTop > 0 ? BlockId.Air : lilyId, coralId, seagrassId, floraDensity);
+                        kelpId, iceTop > 0 ? BlockId.Air : lilyId, coralId, seagrassId,
+                        !coralRockId.IsAir && surfaceId == coralRockId ? floraDensity * 4.0 : floraDensity);
                 }
 
                 // Sky islands grow their own surface flora on top — a floating meadow, not a bare slab.
@@ -551,6 +684,25 @@ public sealed partial class WorldGenerator
         public BlockId? CraterMetal;
         public ColumnBand[] Bands = System.Array.Empty<ColumnBand>();
         public (int Lo, int Hi)[] Tunnels = System.Array.Empty<(int Lo, int Hi)>();
+
+        // Terrain generation 3 — every field at its classic no-op value on a generation 0–2 column.
+        /// <summary>The lowest Y a landmark paint claims below the topsoil (MinValue = topsoil only).</summary>
+        public int PaintFillToY = int.MinValue;
+        /// <summary>The blocks the paint fill lays down in bands parallel to the surface, top first (null = the
+        /// single paint block). Rainbow strata are the reference consumer.</summary>
+        public BlockId[]? PaintCycle;
+        /// <summary>Fluid spans below the seabed (an underground river's water); at most two.</summary>
+        public (int Lo, int Hi, BlockId Fluid)[] SubFluid = System.Array.Empty<(int Lo, int Hi, BlockId Fluid)>();
+        /// <summary>[ShieldLo, ShieldHi] is never cave-carved — the rock around a sub-surface fluid span. Empty when Lo &gt; Hi.</summary>
+        public int ShieldLo = 1, ShieldHi = 0;
+        /// <summary>True when a band of kind Ice or Fluid covers the column (they must be written before the sea fill).</summary>
+        public bool MaterialBands;
+        /// <summary>Dripstone lengths (part 3): cells hanging from a carve span's roof / rising from its floor; 0/0 unless
+        /// the world drips and the column carries a tunnel or a cavern.</summary>
+        public byte DripDown, DripUp;
+        /// <summary>A generation-3 landmark paint set the surface block, so the surface flora follows the painted
+        /// block instead of the biome's (part 5). Never true on a generation 0–2 column.</summary>
+        public bool PaintedHost;
     }
 
     /// <summary>The per-chunk constants the column phase reads (resolved once per Generate call).</summary>
@@ -676,19 +828,43 @@ public sealed partial class WorldGenerator
         // a flagged step a vertical waterfall column poured into the lower reach. Skipped where a pond,
         // a volcano crater or the global sea already claims the column. The river bed is carved to BedY.
         bool riverHere = false;
+        // Underground reach (generation 3): the surface stays; the passage and its water are carved below it.
+        bool passageHere = false;
+        int passageLo = 0, passageHi = -1, subLo = 0, subHi = -1, shieldLo = 1, shieldHi = 0;
         if (!pondHere && !craterHere && surfaceY > fluidLevel && riverField.TryGet(worldX, worldZ, out var river))
         {
-            riverHere = true;
-            seabedY = river.BedY;
-            if (river.WaterfallDrop > 0)
+            if (river.Underground)
             {
-                // River incision (#709): the plunge pool under a waterfall cuts a slot into the bed —
-                // the erosion look without simulating erosion.
-                seabedY -= System.Math.Min(6, river.WaterfallDrop);
-            }
+                // The roof is the CENTERLINE's value, so on a slope it may sit above this column's own ground —
+                // keep the carve under the surface unless this is the mouth (the shaft through the ground).
+                int roof = river.Mouth ? river.RoofY : System.Math.Min(river.RoofY, surfaceY - 1);
+                bool water = river.WaterSurfaceY > river.BedY; // a bank column carries air only
+                passageLo = water ? river.BedY + 1 : river.WaterSurfaceY + 1;
+                passageHi = roof;
+                passageHere = passageHi >= passageLo;
+                if (water)
+                {
+                    subLo = river.BedY + 1;
+                    subHi = System.Math.Min(river.WaterSurfaceY, roof);
+                }
 
-            waterTop = river.WaterfallDrop > 0 ? river.WaterSurfaceY + river.WaterfallDrop : river.WaterSurfaceY;
-            columnFluid = riverField.FillFluid; // water on watery worlds, lava on lava/ashen worlds (L2)
+                shieldLo = river.BedY - 2;
+                shieldHi = roof + 2;
+            }
+            else
+            {
+                riverHere = true;
+                seabedY = river.BedY;
+                if (river.WaterfallDrop > 0)
+                {
+                    // River incision (#709): the plunge pool under a waterfall cuts a slot into the bed —
+                    // the erosion look without simulating erosion.
+                    seabedY -= System.Math.Min(6, river.WaterfallDrop);
+                }
+
+                waterTop = river.WaterfallDrop > 0 ? river.WaterSurfaceY + river.WaterfallDrop : river.WaterSurfaceY;
+                columnFluid = riverField.FillFluid; // water on watery worlds, lava on lava/ashen worlds (L2)
+            }
         }
 
         // Travertine deck pools (#701): shallow 1-deep water flush on the white terrace decks.
@@ -828,12 +1004,19 @@ public sealed partial class WorldGenerator
         // classic world — the families above keep their inline paints because those interleave with the
         // beach/snow order; new families register a paint delegate instead of editing this method.
         var landmarkPaints = wonder.ActivePaints;
+        var landmarkCycles = wonder.ActivePaintCycles;
+        int paintFillToY = int.MinValue; // generation 3: the last painter that hit decides the fill, like the block
+        BlockId[]? paintCycle = null;
+        bool paintedHost = false;
         for (int i = 0; i < landmarkPaints.Length; i++)
         {
-            if (landmarkPaints[i](this, planet, wonder, worldX, worldZ, surfaceY) is { } painted)
+            if (landmarkPaints[i](this, planet, wonder, worldX, worldZ, surfaceY, out int fillToY) is { } painted)
             {
                 surfaceId = painted;
                 subSurfaceId = painted;
+                paintFillToY = fillToY;
+                paintCycle = landmarkCycles[i]?.Invoke(this, planet, wonder, worldX, worldZ);
+                paintedHost = wonder.Generation >= 3; // part 5: the flora follows a generation-3 paint
             }
         }
 
@@ -850,11 +1033,16 @@ public sealed partial class WorldGenerator
         // sky-island fill; islandTop below feeds the island flora pass like before.
         int bandCount = anyBands ? GetExtraBands(planet, worldX, worldZ, bands) : 0;
         int islandTop = int.MinValue;
+        bool materialBands = false; // generation 3: Ice / Fluid bands are written before the sea fill
         for (int b = 0; b < bandCount; b++)
         {
             if (bands[b].Kind == BandKind.Island && bands[b].Top > islandTop)
             {
                 islandTop = bands[b].Top;
+            }
+            else if (bands[b].Kind == BandKind.Ice || bands[b].Kind == BandKind.Fluid || bands[b].Kind == BandKind.Mat)
+            {
+                materialBands = true;
             }
         }
 
@@ -863,8 +1051,72 @@ public sealed partial class WorldGenerator
         bool cavernHere = cavernWorld
             && TryGetCavernSpan(planet, worldX, worldZ, out cavLo, out cavHi, out cavLakeY);
 
-        // Tunnel carver (#708): this column's worm-carve y-spans (empty on most columns).
+        // Tunnel carver (#708): this column's worm-carve y-spans (empty on most columns). An underground river's
+        // passage (generation 3) is appended as one more span: the same carve, one more source.
         int tunnelCount = tunnelWorld ? TunnelSpans(planet, worldX, worldZ, tunnelSpans) : 0;
+        if (shieldHi >= shieldLo)
+        {
+            // The cave shield also keeps the worms out: a classic span overlapping the shielded rock around the
+            // passage is clipped to what lies outside it (at most one extra piece when it straddles the shield).
+            System.Span<(int Lo, int Hi)> original = stackalloc (int Lo, int Hi)[TunnelMaxSpans];
+            tunnelSpans.Slice(0, tunnelCount).CopyTo(original);
+            int kept = 0;
+            for (int t = 0; t < tunnelCount; t++)
+            {
+                var (lo, hi) = original[t];
+                if (hi < shieldLo || lo > shieldHi)
+                {
+                    tunnelSpans[kept++] = (lo, hi);
+                    continue;
+                }
+
+                if (lo < shieldLo)
+                {
+                    tunnelSpans[kept++] = (lo, shieldLo - 1);
+                }
+
+                if (hi > shieldHi && kept < tunnelSpans.Length - 1)
+                {
+                    tunnelSpans[kept++] = (shieldHi + 1, hi); // leave one slot for the passage itself
+                }
+            }
+
+            tunnelCount = kept;
+        }
+
+        if (passageHere && tunnelCount < tunnelSpans.Length)
+        {
+            tunnelSpans[tunnelCount++] = (passageLo, passageHi);
+        }
+
+        // Sub-surface fluid spans (generation 3): the underground river's water, and — part 6 — a blowhole's shaft:
+        // water from the sea line up to the cell under the vent, sealed by the vent block above and the cave
+        // shield around it (generated fluid is a bottomless source; a dug-into shaft gushes, which is the point).
+        var subFluidSpans = System.Array.Empty<(int Lo, int Hi, BlockId Fluid)>();
+        if (subHi >= subLo)
+        {
+            subFluidSpans = new[] { (subLo, subHi, riverField.FillFluid) };
+        }
+
+        if (wonder.Blowholes && !seaWaterId.IsAir && seabedY == surfaceY && surfaceY > fluidLevel + 2
+            && BlowholeAt(planet, wonder, worldX, worldZ))
+        {
+            int shaftLo = fluidLevel + 1, shaftHi = surfaceY - 1;
+            subFluidSpans = subFluidSpans.Length == 0
+                ? new[] { (shaftLo, shaftHi, seaWaterId) }
+                : new[] { subFluidSpans[0], (shaftLo, shaftHi, seaWaterId) };
+            shieldLo = shieldHi >= shieldLo ? System.Math.Min(shieldLo, shaftLo - 2) : shaftLo - 2;
+            shieldHi = shieldHi >= shieldLo ? System.Math.Max(shieldHi, surfaceY + 1) : surfaceY + 1;
+        }
+
+        // Dripstone (generation 3, part 3): resolved once per column, and only where a carve exists to hang it in.
+        byte dripDown = 0, dripUp = 0;
+        if (wonder.Dripstone && (tunnelCount > 0 || cavernHere))
+        {
+            var (down, up) = DripstoneAt(wonder, worldX, worldZ);
+            dripDown = (byte)down;
+            dripUp = (byte)up;
+        }
 
         // Generation-1 underground finds (#1646): the geode sphere covering this column, and the strata region.
         int geoLo = 0, geoHi = -1, geoInLo = 1, geoInHi = 0;
@@ -906,6 +1158,16 @@ public sealed partial class WorldGenerator
             GeoInLo = geoInLo,
             GeoInHi = geoInHi,
             StrataShift = strataShift,
+            // Terrain generation 3
+            PaintFillToY = paintFillToY,
+            PaintCycle = paintCycle,
+            SubFluid = subFluidSpans,
+            ShieldLo = shieldLo,
+            ShieldHi = shieldHi,
+            MaterialBands = materialBands,
+            DripDown = dripDown,
+            DripUp = dripUp,
+            PaintedHost = paintedHost,
         };
     }
 }
