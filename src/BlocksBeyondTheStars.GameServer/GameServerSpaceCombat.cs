@@ -2541,8 +2541,25 @@ public sealed partial class GameServer
 
     private void HandleLeaveSpace(PlayerSession session, LeaveSpaceIntent intent)
     {
-        string dest = intent.DestinationBodyId ?? string.Empty;
+        // Automatic landed-ship transit: the client has finished the launch animation.
+        // The destination was validated and stored when the transit started.
+        if (!string.IsNullOrEmpty(session.PendingTransitBodyId))
+        {
+            var destination = session.PendingTransitBodyId;
+            session.PendingTransitBodyId = null;
 
+            HandleTravel(
+                session,
+                new TravelIntent
+                {
+                    DestinationBodyId = destination,
+                    PadIndex = -1
+                },
+                quickTravel: false);
+
+            return;
+        }
+        string dest = intent.DestinationBodyId ?? string.Empty;
         // From an EVA spacewalk you can only land on an asteroid — not a planet or moon.
         if (session.State.InEva)
         {

@@ -549,8 +549,6 @@ namespace BlocksBeyondTheStars.Client
 
         public void SendEnterSpace() => Send(new EnterSpaceIntent());
 
-        public void SendReadyForLanding() => Send(new ReadyForLandingIntent());
-
         public void SendEnterShip() => Send(new EnterShipIntent());
 
         public void SendExitShip() => Send(new ExitShipIntent());

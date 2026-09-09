@@ -950,19 +950,6 @@ public sealed partial class GameServer
         HandleTravel(session, intent, quickTravel);
     }
 
-    private void HandleReadyForLanding(PlayerSession session, ReadyForLandingIntent intent)
-    {
-        var destination = session.PendingTransitBodyId;
-        if (string.IsNullOrEmpty(destination))
-        {
-            return;
-        }
-
-        session.PendingTransitBodyId = null;
-
-        LandOnBody(session.State.PlayerId, destination);
-    }
-
     /// <summary>Persistence key for a player's ACTIVE ship. Kept as the legacy single-ship key (#848): every
     /// save still mirrors the active ship here, so a save written by this build stays loadable by an older one
     /// and the pre-fleet write sites need no change. The other ships use <see cref="FleetShipSaveKey"/>.</summary>
@@ -3158,7 +3145,6 @@ public sealed partial class GameServer
             case ClaimWreckIntent: HandleClaimWreck(session); break;
             case RepairShipIntent repairShip: HandleRepairShip(session, repairShip); break;
             case TravelIntent travel: HandleTravelIntent(session, travel); break;
-            case ReadyForLandingIntent ready: HandleReadyForLanding(session, ready); break;
             case NpcGreetIntent greet: HandleNpcGreet(session, greet); break;
             case SkipOnboardingIntent skipOnboarding: HandleSkipOnboarding(session, skipOnboarding); break;
             case SetWorldRulesIntent worldRules: HandleSetWorldRules(session, worldRules); break;

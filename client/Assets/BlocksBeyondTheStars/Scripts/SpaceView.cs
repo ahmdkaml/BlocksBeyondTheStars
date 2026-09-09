@@ -962,7 +962,7 @@ namespace BlocksBeyondTheStars.Client
             {
                 if (Game.SpaceState.AutomaticTransit)
                 {
-                    Game.Network?.SendReadyForLanding();
+                    Game.Network?.SendLeaveSpace();
                     return;
                 }
 
