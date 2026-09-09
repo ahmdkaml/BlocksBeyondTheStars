@@ -320,6 +320,9 @@ public sealed class PlayerSession
     public bool PendingRespawnSameWorld { get; set; }
     public string PendingRespawnReason { get; set; } = string.Empty;
 
+    /// <summary>Destination body for an automatic landed-ship transit, or null when no transit is pending.</summary>
+    public string? PendingTransitBodyId { get; set; }
+
     // --- Bandit hold-up (a robber demands part of the inventory; comply or fight) ---
 
     /// <summary>Id of the pending bandit demand (0 = none). The client's answer must echo it, so a stale

@@ -224,6 +224,10 @@ public sealed class EnterSpaceIntent
 {
 }
 
+/// <summary>for transit travel indicate that the client is ready to land at the target location.</summary>
+public sealed class ReadyForLandingIntent
+{
+}
 /// <summary>Client steps from the flight view (or an EVA) into the ship's walkable interior in space.</summary>
 public sealed class EnterShipIntent
 {
@@ -1462,6 +1466,12 @@ public sealed class SpaceState
     /// <summary>True when the player arrived in this flight via a hyperjump into a new star system — the
     /// client plays the warp VFX as the view opens (there is no surface take-off).</summary>
     public bool Hyperjump { get; set; }
+
+    /// <summary>
+    /// True when the player is in the middle of an automatic landed-ship transit — the client will
+    /// wait for the animation to finish before signaling the server to continue the travel.
+    /// </summary>
+    public bool AutomaticTransit { get; set; } = false;
 
     /// <summary>Friendly names of the star system and the body this flight is anchored on (#1565). An in-flight
     /// hyperjump never lands, so no <see cref="WorldReset"/> carries the new identity — the HUD, the F1 form and

@@ -728,29 +728,25 @@ public sealed partial class GameServer
             return false;
         }
 
-        HandleTravel(session, new TravelIntent { DestinationBodyId = destinationBodyId }, quickTravel: true);
+        HandleTravelIntent(session, new TravelIntent { DestinationBodyId = destinationBodyId }, quickTravel: true);
         return session.CurrentLocationId == destinationBodyId;
     }
 
-    /// <summary>Travels (instantly) to a body. <paramref name="quickTravel"/> = true is the travel-screen
-    /// shortcut: it is gated by the Instant Travel world rule — when that rule is off you may only quick-travel
-    /// to bodies you've already landed on. <paramref name="quickTravel"/> = false is a manual flight landing
-    /// (you flew there and chose to set down), which is always allowed.</summary>
-    private void HandleTravel(PlayerSession session, TravelIntent intent, bool quickTravel = true, bool adminBypass = false, bool allowCurrentBody = false)
+    private bool AllowNormalTravel(PlayerSession session, TravelIntent intent, bool quickTravel, bool adminBypass = false, bool allowCurrentBody = false)
     {
         Serve(session); // act on the traveller's own world + ship (the jump-drive check below needs it)
 
         if (!Rules.FreeSpaceFlight)
         {
             Reject(session, "travel", "@srv.travel.flight_disabled");
-            return;
+            return false;
         }
 
         var body = _galaxy?.FindBody(intent.DestinationBodyId);
         if (body is null)
         {
             Reject(session, "travel", "@srv.travel.no_destination");
-            return;
+            return false;
         }
 
         // A space station is BOARDED straight from the travel screen (Q1: "board directly"), gated by having
@@ -758,7 +754,7 @@ public sealed partial class GameServer
         if (body.Kind == CelestialKind.SpaceStation)
         {
             TravelToStation(session, body.Id, quickTravel);
-            return;
+            return false; // the station boarding path handles the travel, so the caller must not continue to land on it
         }
 
         if ((body.Kind != CelestialKind.Planet && body.Kind != CelestialKind.Moon && body.Kind != CelestialKind.AsteroidField)
@@ -767,13 +763,13 @@ public sealed partial class GameServer
             // Planets, moons AND landable asteroids are surfaces you land on (B45); belts/wrecks are not
             // "travel" destinations (you visit those differently).
             Reject(session, "travel", "@srv.travel.surface_only");
-            return;
+            return false;
         }
 
         if (body.Id == session.CurrentLocationId && !allowCurrentBody)
         {
             Reject(session, "travel", "@srv.travel.already_there"); // allowCurrentBody: the body was never loaded (a hyperjump anchor, #1566)
-            return;
+            return false;
         }
 
         // Instant Travel gate (world option, default off): the travel-screen shortcut may only reach bodies
@@ -782,7 +778,7 @@ public sealed partial class GameServer
         if (quickTravel && !Rules.InstantTravel && !session.State.LandedBodies.Contains(body.Id))
         {
             Reject(session, "travel", "@srv.travel.not_visited");
-            return;
+            return false;
         }
 
         // A jump to a different star system is a hyperspace jump — it needs a jump generator fitted,
@@ -793,7 +789,7 @@ public sealed partial class GameServer
             && !HasJumpLane(origin?.SystemId, body.SystemId))
         {
             Reject(session, "travel", "@srv.travel.no_jump_generator");
-            return;
+            return false;
         }
 
         // Fixed landing pads (item 38): claim the player's chosen (or first free) pad before tearing down the
@@ -802,14 +798,33 @@ public sealed partial class GameServer
         // world — the world most likely to need an operator's eyes — would be exactly backwards.
         if (!session.Spectating && !ClaimPadOrReject(session, body.Id, intent.PadIndex))
         {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>Travels (instantly) to a body. <paramref name="quickTravel"/> = true is the travel-screen
+    /// shortcut: it is gated by the Instant Travel world rule — when that rule is off you may only quick-travel
+    /// to bodies you've already landed on. <paramref name="quickTravel"/> = false is a manual flight landing
+    /// (you flew there and chose to set down), which is always allowed.</summary>
+    private void HandleTravel(PlayerSession session, TravelIntent intent, bool quickTravel = true, bool adminBypass = false, bool allowCurrentBody = false)
+    {
+
+        if (!AllowNormalTravel(session, intent, quickTravel, adminBypass, allowCurrentBody))
+        {
             return;
         }
+
+        var body = _galaxy.FindBody(intent.DestinationBodyId)!;
+        var origin = _galaxy?.FindBody(session.CurrentLocationId);
+        bool hyperjump = origin is null || origin.SystemId != body.SystemId;
 
         // Per-player travel: only THIS player moves. Other players stay on their own worlds.
         string oldLoc = session.CurrentLocationId;
         LeaveSpace(session.State.PlayerId);
 
-        LoadWorld(body.PlanetType, body.Id); // loads/initialises the destination + sets the Active cursor
+        LoadWorld(body.PlanetType!, body.Id); // loads/initialises the destination + sets the Active cursor
         session.CurrentLocationId = body.Id;
         OnMarkerOwnerLeftWorld(session, oldLoc, disconnected: false); // the players left behind lose this player's pings (#1293)
         if (hyperjump && !session.Spectating)
@@ -853,7 +868,7 @@ public sealed partial class GameServer
             BroadcastShipTransit(session, body.Id, pad.CenterX + 0.5f, surfaceY, pad.CenterZ + 0.5f, landing: true); // others see the descent (item 38)
         }
 
-        Send(session, new WorldReset { PlanetType = body.PlanetType, PlanetName = planetName, SystemName = systemName, Hyperjump = hyperjump });
+        Send(session, new WorldReset { PlanetType = body.PlanetType!, PlanetName = planetName, SystemName = systemName, Hyperjump = hyperjump });
         // The parked ship objects and the ground go out BEFORE the position (#1450): the client settles the
         // moment it knows where it is, and the deck it is meant to stand on has to exist by then — with the
         // ship arriving after the snap, the terrain under the pad answered the ground check and the player
@@ -908,31 +923,44 @@ public sealed partial class GameServer
         }
     }
 
-    private void HandleTravelIntent(PlayerSession session, TravelIntent intent)
+    private void HandleTravelIntent(PlayerSession session, TravelIntent intent, bool quickTravel = true)
     {
         // Landed ship: turn map travel into an automatic space transit.
-        if (IsOnLandableBody(session))
+        if (!InSpace(session.State.PlayerId) && !session.Spectating)
         {
-            // New transit sequence goes here.
-            // EnterSpace(...);
-            // pending destination...
-            // client signals launch complete
-            // LandOnBody(...)
+            if (!AllowNormalTravel(session, intent, quickTravel))
+            {
+                return;
+            }
+
+            var body = _galaxy?.FindBody(intent.DestinationBodyId)!;
+
+            var origin = _galaxy?.FindBody(session.CurrentLocationId);
+            bool hyperjump = origin is null || origin.SystemId != body.SystemId;
+
+            session.PendingTransitBodyId = intent.DestinationBodyId;
+
+            // Launch normally; the client must NOT skip the launch sequence.
+            EnterSpace(session.State.PlayerId, skipLaunch: false, hyperjump: hyperjump);
+
             return;
         }
 
         // Existing behavior for callers that are already in space / other contexts.
-        HandleTravel(session, intent);
+        HandleTravel(session, intent, quickTravel);
     }
 
-    private bool IsOnLandableBody(PlayerSession session)
+    private void HandleReadyForLanding(PlayerSession session, ReadyForLandingIntent intent)
     {
-        var body = _galaxy?.FindBody(session.CurrentLocationId);
+        var destination = session.PendingTransitBodyId;
+        if (string.IsNullOrEmpty(destination))
+        {
+            return;
+        }
 
-        return body is not null &&
-               (body.Kind == CelestialKind.Planet ||
-                body.Kind == CelestialKind.Moon ||
-                body.Kind == CelestialKind.AsteroidField);
+        session.PendingTransitBodyId = null;
+
+        LandOnBody(session.State.PlayerId, destination);
     }
 
     /// <summary>Persistence key for a player's ACTIVE ship. Kept as the legacy single-ship key (#848): every
@@ -3130,6 +3158,7 @@ public sealed partial class GameServer
             case ClaimWreckIntent: HandleClaimWreck(session); break;
             case RepairShipIntent repairShip: HandleRepairShip(session, repairShip); break;
             case TravelIntent travel: HandleTravelIntent(session, travel); break;
+            case ReadyForLandingIntent ready: HandleReadyForLanding(session, ready); break;
             case NpcGreetIntent greet: HandleNpcGreet(session, greet); break;
             case SkipOnboardingIntent skipOnboarding: HandleSkipOnboarding(session, skipOnboarding); break;
             case SetWorldRulesIntent worldRules: HandleSetWorldRules(session, worldRules); break;

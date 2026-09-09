@@ -960,6 +960,12 @@ namespace BlocksBeyondTheStars.Client
 
             if (_seq >= SeqDuration)
             {
+                if (Game.SpaceState.AutomaticTransit)
+                {
+                    Game.Network?.SendReadyForLanding();
+                    return;
+                }
+
                 _phase = Phase.Cruise;
             }
         }

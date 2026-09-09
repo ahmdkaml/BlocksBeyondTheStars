@@ -2199,6 +2199,9 @@ public sealed partial class GameServer
             Entities = instance.Entities.Select(ToNet).ToArray(),
             SkipLaunch = skipLaunch,
             Hyperjump = hyperjump,
+            // Automatic landed-ship transit: tell the client that finishing
+            // the launch animation should signal the server to continue.
+            AutomaticTransit = !string.IsNullOrEmpty(session.PendingTransitBodyId),
             SystemName = systemName,
             BodyName = bodyName,
             // Other real pilots PLUS the peaceful NPC traders out here — both ride the flight view's
