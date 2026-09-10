@@ -270,6 +270,11 @@ public sealed class TravelIntent
     public int PadIndex { get; set; } = -1;
 }
 
+/// <summary>launch done during transit travel move on to the next step</summary>
+public sealed class TransitLaunchDoneIntent
+{
+}
+
 /// <summary>Client fires a built ship weapon at a space entity. The server validates and resolves the hit.
 /// Contractless-additive aim fields (#693): the ship's forward direction at the moment of firing, so the
 /// server can enforce a firing arc. An all-zero direction (older client) skips the arc check.</summary>

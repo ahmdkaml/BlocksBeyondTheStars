@@ -2201,7 +2201,7 @@ public sealed partial class GameServer
             Hyperjump = hyperjump,
             // Automatic landed-ship transit: tell the client that finishing
             // the launch animation should signal the server to continue.
-            AutomaticTransit = !string.IsNullOrEmpty(session.PendingTransitBodyId),
+            AutomaticTransit = session.AutomaticTransit,
             SystemName = systemName,
             BodyName = bodyName,
             // Other real pilots PLUS the peaceful NPC traders out here — both ride the flight view's
@@ -2480,8 +2480,9 @@ public sealed partial class GameServer
         // you fly to its worlds and land manually from there.
         var anchor = system.Bodies.FirstOrDefault(b => !string.IsNullOrEmpty(b.PlanetType)) ?? system.Bodies[0];
 
+        bool wasLanded = !InSpace(playerId);
         // Launching off a surface? Remove the parked ship from the OLD world before we switch systems.
-        if (!InSpace(playerId) && SetActiveWorld(session.CurrentLocationId))
+        if (wasLanded && SetActiveWorld(session.CurrentLocationId))
         {
             RemoveLandedShip(session);
         }
@@ -2505,6 +2506,13 @@ public sealed partial class GameServer
         if (system.Id == GuardianFinaleSystemId && origin is not null)
         {
             _finaleReturn[playerId] = origin.Id;
+        }
+
+        if (wasLanded)
+        {
+            session.AutomaticTransit = true;
+            session.PendingTransitBodyId = null;
+            session.TransitLaunchTimer = 0;
         }
 
         EnterSpace(playerId, skipLaunch: true, hyperjump: true); // warp in; no surface take-off
@@ -2541,24 +2549,6 @@ public sealed partial class GameServer
 
     private void HandleLeaveSpace(PlayerSession session, LeaveSpaceIntent intent)
     {
-        // Automatic landed-ship transit: the client has finished the launch animation.
-        // The destination was validated and stored when the transit started.
-        if (!string.IsNullOrEmpty(session.PendingTransitBodyId))
-        {
-            var destination = session.PendingTransitBodyId;
-            session.PendingTransitBodyId = null;
-
-            HandleTravel(
-                session,
-                new TravelIntent
-                {
-                    DestinationBodyId = destination,
-                    PadIndex = -1
-                },
-                quickTravel: false);
-
-            return;
-        }
         string dest = intent.DestinationBodyId ?? string.Empty;
         // From an EVA spacewalk you can only land on an asteroid — not a planet or moon.
         if (session.State.InEva)

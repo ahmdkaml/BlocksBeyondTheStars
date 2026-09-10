@@ -322,6 +322,8 @@ public sealed class PlayerSession
 
     /// <summary>Destination body for an automatic landed-ship transit, or null when no transit is pending.</summary>
     public string? PendingTransitBodyId { get; set; }
+    /// <summary>Indicates whether the player is currently in an automatic transit.</summary>
+    public bool AutomaticTransit { get; set; }
 
     // --- Bandit hold-up (a robber demands part of the inventory; comply or fight) ---
 
@@ -390,6 +392,8 @@ public sealed class PlayerSession
 
     // --- Periodic vitals sync (HUD bars froze between event-driven sends before) ---
     public double VitalsSyncTimer { get; set; }
+    // Automatic landed-ship transit (#1614): server fallback if the client never signals launch completion.
+    public double TransitLaunchTimer { get; set; }
     public float LastSentHealth = 100f;
     public float LastSentOxygen = 100f;
     public float LastSentEnergy = 100f;

@@ -728,7 +728,7 @@ public sealed partial class GameServer
             return false;
         }
 
-        HandleTravelIntent(session, new TravelIntent { DestinationBodyId = destinationBodyId }, quickTravel: true);
+        HandleTravel(session, new TravelIntent { DestinationBodyId = destinationBodyId }, quickTravel: true);
         return session.CurrentLocationId == destinationBodyId;
     }
 
@@ -772,9 +772,7 @@ public sealed partial class GameServer
             return false;
         }
 
-        // Instant Travel gate (world option, default off): the travel-screen shortcut may only reach bodies
-        // you've already landed on. To reach a new world, fly there and land manually (which marks it). A
-        // manual flight landing (quickTravel=false) bypasses this — you physically flew there.
+
         if (quickTravel && !Rules.InstantTravel && !session.State.LandedBodies.Contains(body.Id))
         {
             Reject(session, "travel", "@srv.travel.not_visited");
@@ -791,7 +789,6 @@ public sealed partial class GameServer
             Reject(session, "travel", "@srv.travel.no_jump_generator");
             return false;
         }
-
         // Fixed landing pads (item 38): claim the player's chosen (or first free) pad before tearing down the
         // flight state. A full body (every pad occupied) refuses the landing here, leaving the player in flight.
         // An observer takes no pad (issue #487): pads are finite and communal, and being refused entry to a busy
@@ -934,20 +931,39 @@ public sealed partial class GameServer
             }
 
             var body = _galaxy?.FindBody(intent.DestinationBodyId)!;
-
             var origin = _galaxy?.FindBody(session.CurrentLocationId);
             bool hyperjump = origin is null || origin.SystemId != body.SystemId;
 
+            if (hyperjump && !session.State.LandedBodies.Contains(body.Id))
+            {
+                Reject(session, "travel", "@srv.travel.not_visited");
+                return;
+            }
+
             session.PendingTransitBodyId = intent.DestinationBodyId;
+            session.AutomaticTransit = true;
+            session.TransitLaunchTimer = 0;
 
-            // Launch normally; the client must NOT skip the launch sequence.
             EnterSpace(session.State.PlayerId, skipLaunch: false, hyperjump: hyperjump);
-
-            return;
+            
+            return; // the transit path handles the travel, so the caller must not continue to land on it
         }
 
         // Existing behavior for callers that are already in space / other contexts.
         HandleTravel(session, intent, quickTravel);
+    }
+
+    private void HandleTransitLaunchDone(PlayerSession session, TransitLaunchDoneIntent intent)
+    {
+        var destinationBodyId = session.PendingTransitBodyId;
+
+        session.PendingTransitBodyId = null;
+        session.AutomaticTransit = false;
+
+        if (!string.IsNullOrEmpty(destinationBodyId))
+        {
+            LandOnBody(session.State.PlayerId, destinationBodyId);
+        }
     }
 
     /// <summary>Persistence key for a player's ACTIVE ship. Kept as the legacy single-ship key (#848): every
@@ -1623,6 +1639,22 @@ public sealed partial class GameServer
             UpdateAboard(session);
 
             var p = session.State;
+
+            // Server-side fallback in case the client never reports launch completion.
+            if (!string.IsNullOrEmpty(session.PendingTransitBodyId))
+            {
+                session.TransitLaunchTimer += dt;
+
+                if (session.TransitLaunchTimer >= _config.TransitLaunchTimeoutSeconds)
+                {
+                    var destinationBodyId = session.PendingTransitBodyId;
+                    session.PendingTransitBodyId = null;
+                    session.TransitLaunchTimer = 0;
+
+                    LandOnBody(session.State.PlayerId, destinationBodyId);
+                    continue;
+                }
+            }
 
             // Walk out of the ship's hatch while it floats in space → step straight onto an EVA spacewalk
             // (rather than falling into the void around the interior). The door you already have IS the airlock.
@@ -3145,6 +3177,7 @@ public sealed partial class GameServer
             case ClaimWreckIntent: HandleClaimWreck(session); break;
             case RepairShipIntent repairShip: HandleRepairShip(session, repairShip); break;
             case TravelIntent travel: HandleTravelIntent(session, travel); break;
+            case TransitLaunchDoneIntent transitLaunchDone: HandleTransitLaunchDone(session, transitLaunchDone); break;
             case NpcGreetIntent greet: HandleNpcGreet(session, greet); break;
             case SkipOnboardingIntent skipOnboarding: HandleSkipOnboarding(session, skipOnboarding); break;
             case SetWorldRulesIntent worldRules: HandleSetWorldRules(session, worldRules); break;
