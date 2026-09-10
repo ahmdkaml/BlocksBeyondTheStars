@@ -72,6 +72,7 @@ namespace BlocksBeyondTheStars.Client
         private static Sprite _solidSprite;
         private static Sprite _spinnerSprite;
         private static Sprite _discSprite;
+        private static Sprite _triangleSprite;
 
         /// <summary>A plain white sprite (tint via Image.color) — used for fills/bars.</summary>
         public static Sprite SolidSprite
@@ -123,6 +124,42 @@ namespace BlocksBeyondTheStars.Client
                 }
 
                 return _discSprite;
+            }
+        }
+
+        /// <summary>
+        /// A filled, anti-aliased triangle pointing UP (apex at the top edge, base along the bottom) — the
+        /// direction glyph for HUD markers that have to say "that way", rotated by the caller (#1682). Drawn
+        /// here rather than taken from a font: the HUD's SDF atlas is built at runtime from Rajdhani, which
+        /// carries no geometric shapes, so a "▲" would be a missing-glyph box on some machines. Cached.
+        /// </summary>
+        public static Sprite TriangleSprite
+        {
+            get
+            {
+                if (_triangleSprite == null)
+                {
+                    const int n = 64;
+                    var tex = new Texture2D(n, n, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
+                    var px = new Color[n * n];
+                    for (int y = 0; y < n; y++)
+                    {
+                        // Half-width of the triangle at this row: full at the base (y = 0), zero at the apex.
+                        float t = y / (float)(n - 1);
+                        float half = (1f - t) * (n * 0.5f);
+                        for (int x = 0; x < n; x++)
+                        {
+                            float d = half - Mathf.Abs(x - (n - 1) * 0.5f); // >0 inside, in pixels
+                            px[y * n + x] = new Color(1f, 1f, 1f, Mathf.Clamp01(d)); // 1 px AA edge
+                        }
+                    }
+
+                    tex.SetPixels(px);
+                    tex.Apply();
+                    _triangleSprite = Sprite.Create(tex, new Rect(0, 0, n, n), new Vector2(0.5f, 0.5f), 100f);
+                }
+
+                return _triangleSprite;
             }
         }
 
@@ -422,12 +459,35 @@ namespace BlocksBeyondTheStars.Client
             // Expand = scale by the smaller of the width/height ratios, so the whole 1920x1080 layout
             // always fits (no right-edge overflow on non-16:9 / high-res monitors); extra space is margin.
             scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.Expand;
+            // The holo chrome shader (UiHolo) carries its per-element parameters in UV1/UV2; canvases strip
+            // those channels unless asked to keep them.
+            canvas.additionalShaderChannels |= AdditionalCanvasShaderChannels.TexCoord1 | AdditionalCanvasShaderChannels.TexCoord2
+                                               | AdditionalCanvasShaderChannels.TexCoord3;
             go.AddComponent<GraphicRaycaster>();
             if (userScalable)
             {
                 ScalableCanvases.Add(new ScaledCanvas { Canvas = canvas, BaseRef = baseRef });
             }
 
+            return canvas;
+        }
+
+        /// <summary>Makes <paramref name="go"/> a nested Canvas (its own batch, so per-frame movers do not re-batch
+        /// the whole HUD). A nested canvas has its OWN shader-channel mask — without copying the parent's, the
+        /// UiHolo/TMP vertex channels (UV1–UV3) are dropped and the chrome renders as white boxes.</summary>
+        public static Canvas AddSubCanvas(GameObject go)
+        {
+            if (go == null)
+            {
+                return null;
+            }
+
+            var canvas = go.GetComponent<Canvas>() ?? go.AddComponent<Canvas>();
+            var parent = go.transform.parent != null ? go.transform.parent.GetComponentInParent<Canvas>() : null;
+            canvas.additionalShaderChannels = parent != null
+                ? parent.additionalShaderChannels
+                : AdditionalCanvasShaderChannels.TexCoord1 | AdditionalCanvasShaderChannels.TexCoord2 | AdditionalCanvasShaderChannels.TexCoord3;
+            canvas.overrideSorting = false;
             return canvas;
         }
 
@@ -748,20 +808,33 @@ namespace BlocksBeyondTheStars.Client
             public RectTransform Rt;     // the slot box (scaled up when selected)
             public Image Border;         // the box fill / frame (tinted by selection)
             public Image Ring;           // bright selection outline (toggled on the active slot)
+            public UiHolo.Shape RingShape; // the ring's holo parameters (glow flash on selection) — null on the bitmap fallback
             public RawImage Icon;        // the block-atlas / item texture
-            public Text Num, Name;
-            public Text Count;           // stack size, top-right (#744) — left empty by the ship-systems bar
+            public TMPro.TMP_Text Num, Name;
+            public TMPro.TMP_Text Count; // stack size, top-right (#744) — left empty by the ship-systems bar
         }
 
         /// <summary>Builds a quick-bar cell at a top-left anchored rect. The icon nearly fills the box (only a thin
-        /// inset) so the graphic reads large; the number sits top-left and the name caption along the bottom.</summary>
+        /// inset) so the graphic reads large; the number sits top-left and the name caption along the bottom.
+        /// Holo chrome (UiHolo) with SDF captions; bitmap sprites when the shader is unavailable.</summary>
         public static QuickSlot MakeQuickSlot(Transform parent, float x, float y, float size)
         {
-            var ring = AddImage(parent, x - 3f, y - 3f, size + 6f, size + 6f, PanelSprite, Cyan); // outline, behind the box
-            ring.type = Image.Type.Sliced;
+            Image ring;
+            UiHolo.Shape ringShape = null;
+            if (UiHolo.Available)
+            {
+                ring = UiHolo.AddPanel(parent, x - 3f, y - 3f, size + 6f, size + 6f, new Color(Cyan.r, Cyan.g, Cyan.b, 0.10f), 11f, 2f, 1.8f);
+                ringShape = ring.GetComponent<UiHolo.Shape>();
+            }
+            else
+            {
+                ring = AddImage(parent, x - 3f, y - 3f, size + 6f, size + 6f, PanelSprite, Cyan); // outline, behind the box
+                ring.type = Image.Type.Sliced;
+            }
+
             ring.enabled = false;
 
-            var box = AddPanel(parent, x, y, size, size, SlotIdle);
+            var box = UiHolo.AddPanel(parent, x, y, size, size, SlotIdle, 8f, 1f, 0.45f);
 
             float inset = 6f;
             var iconGo = new GameObject("Icon", typeof(RectTransform));
@@ -771,16 +844,16 @@ namespace BlocksBeyondTheStars.Client
             icon.raycastTarget = false;
             icon.enabled = false;
 
-            var num = AddText(box.transform, 5f, 2f, size - 8f, 18f, string.Empty, 15, TextCol, TextAnchor.UpperLeft, FontStyle.Bold);
-            AddOutline(num);
-            var name = AddText(box.transform, 2f, size - 17f, size - 4f, 16f, string.Empty, 12, TextCol, TextAnchor.MiddleCenter, FontStyle.Bold);
-            AddOutline(name);
+            var num = UiText.Add(box.transform, 5f, 2f, size - 8f, 18f, string.Empty, 15, TextCol, TextAnchor.UpperLeft, FontStyle.Bold, UiText.Look.Outline);
+            var name = UiText.Add(box.transform, 2f, size - 17f, size - 4f, 16f, string.Empty, 12, TextCol, TextAnchor.MiddleCenter, FontStyle.Bold, UiText.Look.Outline);
             // Stack size in the free corner: the hotkey number owns top-left, the caption owns the bottom edge.
-            var count = AddText(box.transform, 5f, 2f, size - 10f, 18f, string.Empty, 13, TextCol, TextAnchor.UpperRight, FontStyle.Bold);
-            AddOutline(count);
+            var count = UiText.Add(box.transform, 5f, 2f, size - 10f, 18f, string.Empty, 13, TextCol, TextAnchor.UpperRight, FontStyle.Bold, UiText.Look.Outline);
 
-            return new QuickSlot { Rt = box.rectTransform, Border = box, Ring = ring, Icon = icon, Num = num, Name = name, Count = count };
+            return new QuickSlot { Rt = box.rectTransform, Border = box, Ring = ring, RingShape = ringShape, Icon = icon, Num = num, Name = name, Count = count };
         }
+
+        /// <summary>Selection feedback on a quick-bar cell: the ring's glow flares and eases back (holo only).</summary>
+        public static void FlashQuickSlot(in QuickSlot s) => UiHolo.Flash(s.RingShape, 3.2f, 1.8f, 0.4f);
 
         /// <summary>Applies the selected/idle look to a quick-bar cell: a bright fill + a cyan outline ring on the
         /// active slot, so the held tool / active system is unmistakable. (The ring sits just behind the cell and
@@ -802,8 +875,11 @@ namespace BlocksBeyondTheStars.Client
         /// separated from the busy world, with a faint cyan keyline along the bottom.</summary>
         public static void QuickBackplate(Transform parent, float x, float y, float w, float h)
         {
-            AddPanel(parent, x, y, w, h, new Color(0.02f, 0.05f, 0.11f, 0.62f));
-            AddImage(parent, x + 6f, y + h - 3f, w - 12f, 2f, SolidSprite, new Color(Cyan.r, Cyan.g, Cyan.b, 0.5f));
+            UiHolo.AddPanel(parent, x, y, w, h, new Color(0.02f, 0.05f, 0.11f, 0.62f), 12f, 1.2f, 0.8f);
+            if (!UiHolo.Available)
+            {
+                AddImage(parent, x + 6f, y + h - 3f, w - 12f, 2f, SolidSprite, new Color(Cyan.r, Cyan.g, Cyan.b, 0.5f));
+            }
         }
 
         /// <summary>Adds a crisp dark outline to small HUD text so it stays legible over bright terrain/space.</summary>

@@ -31,6 +31,8 @@
   { "key": "lava",            "nameKey": "item.lava.name",            "category": "block",      "maxStack": 1024, "placesBlock": "lava" },
   { "key": "sand",            "nameKey": "item.sand.name",            "category": "block",      "maxStack": 1024, "placesBlock": "sand" },
   { "key": "mud",             "nameKey": "item.mud.name",             "category": "block",      "maxStack": 1024, "placesBlock": "mud" },
+  { "key": "peat",            "nameKey": "item.peat.name",            "category": "block",      "maxStack": 1024, "placesBlock": "peat" },
+  { "key": "coral_rock",      "nameKey": "item.coral_rock.name",      "category": "block",      "maxStack": 1024, "placesBlock": "coral_rock" },
   { "key": "crystal",         "nameKey": "item.crystal.name",         "category": "material",   "maxStack": 1024, "placesBlock": "crystal" },
   { "key": "snow",            "nameKey": "item.snow.name",            "category": "block",      "maxStack": 1024, "placesBlock": "snow" },
   { "key": "salt",            "nameKey": "item.salt.name",            "category": "material",   "maxStack": 1024, "placesBlock": "salt" },
@@ -186,6 +188,8 @@
   { "key": "algae_tank", "craftTab": "machines",     "nameKey": "item.algae_tank.name",     "category": "block", "maxStack": 16,   "placesBlock": "algae_tank", "descriptionKey": "item.algae_tank.desc" },
   { "key": "heal_tank", "craftTab": "machines",      "nameKey": "item.heal_tank.name",      "category": "block", "maxStack": 16,   "placesBlock": "heal_tank", "descriptionKey": "item.heal_tank.desc" },
   { "key": "sentry_post", "craftTab": "machines",    "nameKey": "item.sentry_post.name",    "category": "block", "maxStack": 16,   "placesBlock": "sentry_post", "descriptionKey": "item.sentry_post.desc" },
+  { "key": "power_relay", "craftTab": "machines",    "nameKey": "item.power_relay.name",    "category": "block", "maxStack": 16,   "placesBlock": "power_relay", "descriptionKey": "item.power_relay.desc" },
+  { "key": "water_spout", "craftTab": "machines",    "nameKey": "item.water_spout.name",    "category": "block", "maxStack": 16,   "placesBlock": "water_spout", "descriptionKey": "item.water_spout.desc" },
   { "key": "matter_dust",    "nameKey": "item.matter_dust.name",    "category": "material", "maxStack": 1024, "descriptionKey": "item.matter_dust.desc" },
   { "key": "insulated_wall", "nameKey": "item.insulated_wall.name", "category": "block", "maxStack": 1024, "placesBlock": "insulated_wall" },
   { "key": "energy_fence", "craftTab": "machines",   "nameKey": "item.energy_fence.name",   "category": "block", "maxStack": 1024, "placesBlock": "energy_fence", "descriptionKey": "item.energy_fence.desc" },
@@ -235,5 +239,10 @@
   // #1203 campfire meals (field_kitchen): the three best foods in the game — cooked, not foraged.
   { "key": "hearty_stew", "nameKey": "item.hearty_stew.name", "category": "consumable", "maxStack": 20, "descriptionKey": "item.hearty_stew.desc", "consumeHealth": 30, "consumeHunger": 80 },
   { "key": "algae_soup", "nameKey": "item.algae_soup.name", "category": "consumable", "maxStack": 20, "descriptionKey": "item.algae_soup.desc", "consumeHealth": 10, "consumeHunger": 60 },
-  { "key": "mushroom_skewer", "nameKey": "item.mushroom_skewer.name", "category": "consumable", "maxStack": 20, "descriptionKey": "item.mushroom_skewer.desc", "consumeHealth": 15, "consumeHunger": 45 }
+  { "key": "mushroom_skewer", "nameKey": "item.mushroom_skewer.name", "category": "consumable", "maxStack": 20, "descriptionKey": "item.mushroom_skewer.desc", "consumeHealth": 15, "consumeHunger": 45 },
+  { "key": "moss_stone", "nameKey": "item.moss_stone.name", "category": "material", "maxStack": 1024, "placesBlock": "moss_stone" },
+  { "key": "tar",        "nameKey": "item.tar.name",        "category": "material", "maxStack": 1024, "placesBlock": "tar" },
+  { "key": "bone",       "nameKey": "item.bone.name",       "category": "material", "maxStack": 1024, "placesBlock": "bone" },
+  { "key": "sandstone",  "nameKey": "item.sandstone.name",  "category": "material", "maxStack": 1024, "placesBlock": "sandstone" },
+  { "key": "scree",      "nameKey": "item.scree.name",      "category": "material", "maxStack": 1024, "placesBlock": "scree" }
 ]

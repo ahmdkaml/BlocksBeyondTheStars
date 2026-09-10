@@ -25,9 +25,9 @@ namespace BlocksBeyondTheStars.Client
 
         private Canvas _canvas;
         private RectTransform _center;
-        private Text _stationLabel;
+        private TMPro.TMP_Text _stationLabel;
         private Image _wpBlip;    // the nav waypoint (#597), amber — distinct from every entity colour
-        private Text _wpLabel;    // waypoint distance readout under the radar
+        private TMPro.TMP_Text _wpLabel;    // waypoint distance readout under the radar
 
         // #1516: last-formatted readout state so the label strings are built on change, not every frame.
         // Tracked in rounded flight units; the labels print them as km (#1599, SpaceDistance).
@@ -37,6 +37,14 @@ namespace BlocksBeyondTheStars.Client
         private int _readoutVert;
         private int _readoutKind; // 0 = none, 1 = station, 2 = body
         private readonly List<Image> _blips = new List<Image>();
+
+        // #1663: a name beside every RIM-PINNED blip (a body/wreck beyond radar range — the anonymous green
+        // arrows that "only the nearest one" got a name for). Pooled parallel to _blips; the source string is
+        // cached per label so the truncated text is rebuilt only when the blip changes identity.
+        private readonly List<TMPro.TMP_Text> _rimLabels = new List<TMPro.TMP_Text>();
+        private readonly List<string> _rimLabelSource = new List<string>();
+        private const int RimLabelChars = 12;
+        private static readonly Color WreckCol = new Color(1f, 0.75f, 0.35f); // scorched amber — salvage, not a threat
 
         private static readonly Color WaypointCol = new Color(1f, 0.85f, 0.3f);
 
@@ -63,9 +71,20 @@ namespace BlocksBeyondTheStars.Client
             face.pivot = new Vector2(0.5f, 1f);
             face.sizeDelta = new Vector2((Radius + 8f) * 2f, (Radius + 8f) * 2f);
             face.anchoredPosition = new Vector2(0f, -16f);
-            var faceImg = faceGo.AddComponent<RawImage>();
-            faceImg.texture = UiKit.RadarCircle;
-            faceImg.raycastTarget = false;
+            // Holo ring face (crisp at any DPI, slow border sweep) — the bitmap disc when the shader is out.
+            if (UiHolo.Available)
+            {
+                var faceImg = faceGo.AddComponent<Image>();
+                faceImg.raycastTarget = false;
+                faceImg.color = new Color(0.04f, 0.10f, 0.20f, 1f);
+                UiHolo.Apply(faceImg, UiHolo.Style.Ring, Radius + 8f, 2f, 1.2f).FillOpacity = 0.62f;
+            }
+            else
+            {
+                var faceRaw = faceGo.AddComponent<RawImage>();
+                faceRaw.texture = UiKit.RadarCircle;
+                faceRaw.raycastTarget = false;
+            }
 
             // A centred anchor that the ship marker + blips position around (+y = up/forward).
             var centerGo = new GameObject("Center", typeof(RectTransform));
@@ -85,13 +104,16 @@ namespace BlocksBeyondTheStars.Client
             lrt.pivot = new Vector2(0.5f, 1f);
             lrt.sizeDelta = new Vector2(280f, 22f);
             lrt.anchoredPosition = new Vector2(0f, -(16f + (Radius + 8f) * 2f + 4f));
-            _stationLabel = labelGo.AddComponent<Text>();
-            _stationLabel.font = UiKit.Font;
-            _stationLabel.fontSize = 15;
-            _stationLabel.color = new Color(0.4f, 0.85f, 1f);
-            _stationLabel.alignment = TextAnchor.MiddleCenter;
-            _stationLabel.horizontalOverflow = HorizontalWrapMode.Overflow;
-            _stationLabel.raycastTarget = false;
+            var station = labelGo.AddComponent<TMPro.TextMeshProUGUI>();
+            station.font = UiText.Font;
+            station.fontSize = 15;
+            station.color = new Color(0.4f, 0.85f, 1f);
+            station.alignment = TMPro.TextAlignmentOptions.Center;
+            station.textWrappingMode = TMPro.TextWrappingModes.NoWrap;
+            station.overflowMode = TMPro.TextOverflowModes.Overflow;
+            station.raycastTarget = false;
+            UiText.Style(station, UiText.Look.Outline);
+            _stationLabel = station;
 
             // Nav waypoint (#597): the map_waypoint glyph as a radar blip + a distance line of its own —
             // amber like the surface compass waypoint, so the two systems read as one feature.
@@ -111,13 +133,16 @@ namespace BlocksBeyondTheStars.Client
             wrt.pivot = new Vector2(0.5f, 1f);
             wrt.sizeDelta = new Vector2(280f, 20f);
             wrt.anchoredPosition = new Vector2(0f, -(16f + (Radius + 8f) * 2f + 26f));
-            _wpLabel = wpGo.AddComponent<Text>();
-            _wpLabel.font = UiKit.Font;
-            _wpLabel.fontSize = 14;
-            _wpLabel.color = WaypointCol;
-            _wpLabel.alignment = TextAnchor.MiddleCenter;
-            _wpLabel.horizontalOverflow = HorizontalWrapMode.Overflow;
-            _wpLabel.raycastTarget = false;
+            var wp = wpGo.AddComponent<TMPro.TextMeshProUGUI>();
+            wp.font = UiText.Font;
+            wp.fontSize = 14;
+            wp.color = WaypointCol;
+            wp.alignment = TMPro.TextAlignmentOptions.Center;
+            wp.textWrappingMode = TMPro.TextWrappingModes.NoWrap;
+            wp.overflowMode = TMPro.TextOverflowModes.Overflow;
+            wp.raycastTarget = false;
+            UiText.Style(wp, UiText.Look.Outline);
+            _wpLabel = wp;
             _wpLabel.gameObject.SetActive(false);
         }
 
@@ -168,20 +193,23 @@ namespace BlocksBeyondTheStars.Client
             foreach (var e in Game.Space.Entities)
             {
                 bool station = e.Kind == "SpaceStation";
+                bool wreck = e.Kind == "Wreck"; // #1664: the system's derelict — a fixed navigation point too
                 var world = new Vector3(e.X, e.Y, e.Z);
                 var dir = world - camPos;
                 var v = new Vector2(Vector3.Dot(dir, camR), Vector3.Dot(dir, camF)) * scale;
+                bool pinned = false;
                 if (v.magnitude > Radius)
                 {
-                    // A station stays as a rim direction-marker (it's a fixed navigation point); an asteroid
-                    // or enemy beyond radar range is simply not detected yet — don't paint a phantom blip at
-                    // the rim where nothing actually is.
-                    if (!station)
+                    // A station (or wreck) stays as a rim direction-marker (it's a fixed navigation point); an
+                    // asteroid or enemy beyond radar range is simply not detected yet — don't paint a phantom
+                    // blip at the rim where nothing actually is.
+                    if (!station && !wreck)
                     {
                         continue;
                     }
 
                     v = v.normalized * Radius;
+                    pinned = true;
                 }
                 if (station && dir.magnitude < nearestDist)
                 {
@@ -190,14 +218,17 @@ namespace BlocksBeyondTheStars.Client
                     nearestUp = world.y - camPos.y;
                 }
 
+                int slot = i;
                 var blip = Blip(i++);
                 blip.rectTransform.anchoredPosition = v; // +y already maps to up/forward
-                blip.rectTransform.sizeDelta = station ? new Vector2(9f, 9f) : new Vector2(6f, 6f);
+                blip.rectTransform.sizeDelta = station ? new Vector2(9f, 9f) : wreck ? new Vector2(8f, 8f) : new Vector2(6f, 6f);
                 blip.color = station ? new Color(0.4f, 0.85f, 1f)
+                    : wreck ? WreckCol
                     : e.Kind == "ResourceDrop" ? new Color(0.5f, 0.9f, 1f)
                     : e.Hostile ? new Color(1f, 0.35f, 0.35f)
                     : new Color(0.9f, 0.95f, 1f);
                 blip.gameObject.SetActive(true);
+                SetRimLabel(slot, pinned ? e.Name : null, blip.color, v);
             }
 
             // Landable planets/moons: a green bearing marker each, clamped to the rim so a far body reads as
@@ -222,11 +253,13 @@ namespace BlocksBeyondTheStars.Client
                         nearestBody = body.Name;
                     }
 
+                    int slot = i;
                     var blip = Blip(i++);
                     blip.rectTransform.anchoredPosition = v;
                     blip.rectTransform.sizeDelta = new Vector2(10f, 10f);
                     blip.color = new Color(0.45f, 1f, 0.55f); // green = a planet/moon you can land on
                     blip.gameObject.SetActive(true);
+                    SetRimLabel(slot, offEdge ? body.Name : null, blip.color, v); // #1663: which body is "that way"
                 }
             }
 
@@ -235,6 +268,11 @@ namespace BlocksBeyondTheStars.Client
                 if (_blips[i].gameObject.activeSelf)
                 {
                     _blips[i].gameObject.SetActive(false);
+                }
+
+                if (i < _rimLabels.Count && _rimLabels[i].gameObject.activeSelf)
+                {
+                    _rimLabels[i].gameObject.SetActive(false);
                 }
             }
 
@@ -320,6 +358,71 @@ namespace BlocksBeyondTheStars.Client
             }
 
             return _blips[index];
+        }
+
+        /// <summary>#1663: shows (or hides, <paramref name="name"/> null) the name label of blip
+        /// <paramref name="index"/>. The label sits just inside the rim on the blip's centre-facing side, in the
+        /// blip's colour, truncated to <see cref="RimLabelChars"/> so a long coined name never crosses the face.
+        /// Only rim-pinned blips get one — an in-range body is visible on screen, and a named blip for every
+        /// asteroid would clutter the HUD.</summary>
+        private void SetRimLabel(int index, string name, Color color, Vector2 blipPos)
+        {
+            if (name == null)
+            {
+                if (index < _rimLabels.Count && _rimLabels[index].gameObject.activeSelf)
+                {
+                    _rimLabels[index].gameObject.SetActive(false);
+                }
+
+                return;
+            }
+
+            while (index >= _rimLabels.Count)
+            {
+                _rimLabels.Add(MakeRimLabel());
+                _rimLabelSource.Add(null);
+            }
+
+            var label = _rimLabels[index];
+            // Pivot on the side facing the blip, so the text hangs inward from the rim (below a blip at the top,
+            // to the left of one on the right) and stays on the face.
+            var inward = blipPos.sqrMagnitude > 0.001f ? -blipPos.normalized : Vector2.down;
+            label.rectTransform.pivot = new Vector2(0.5f - inward.x * 0.5f, 0.5f - inward.y * 0.5f);
+            label.rectTransform.anchoredPosition = blipPos + inward * 7f;
+            if (!ReferenceEquals(_rimLabelSource[index], name))
+            {
+                _rimLabelSource[index] = name;
+                label.text = name.Length <= RimLabelChars ? name : name.Substring(0, RimLabelChars - 1) + "…";
+            }
+
+            if (label.color != color)
+            {
+                label.color = color;
+            }
+
+            if (!label.gameObject.activeSelf)
+            {
+                label.gameObject.SetActive(true);
+            }
+        }
+
+        private TMPro.TMP_Text MakeRimLabel()
+        {
+            var go = new GameObject("BlipLabel", typeof(RectTransform));
+            go.transform.SetParent(_center, false);
+            var rt = go.GetComponent<RectTransform>();
+            rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
+            rt.sizeDelta = new Vector2(76f, 12f);
+            var t = go.AddComponent<TMPro.TextMeshProUGUI>();
+            t.font = UiText.Font;
+            t.fontSize = 9;
+            t.alignment = TMPro.TextAlignmentOptions.Center;
+            t.textWrappingMode = TMPro.TextWrappingModes.NoWrap;
+            t.overflowMode = TMPro.TextOverflowModes.Overflow;
+            t.raycastTarget = false;
+            UiText.Style(t, UiText.Look.Outline);
+            t.gameObject.SetActive(false);
+            return t;
         }
     }
 }

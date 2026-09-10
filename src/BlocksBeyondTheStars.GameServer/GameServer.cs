@@ -317,6 +317,8 @@ public sealed partial class GameServer
             _meta.Description.FloraDensity.FloraFactor(),
             _meta.Description.RareResources.OreFactor());
         _generator.SetContinentsEnabled(_meta.Description.TerrainContinents);
+        _generator.SetLavaCoreVolcanoes(_meta.Description.LavaCoreVolcanoes); // #1631: new worlds only, like continents
+        _generator.SetTerrainGeneration(_meta.Description.TerrainGeneration); // #1644: the wave this save was created with
         _worlds = new WorldManager(_content, _generator, _repo);
         BuildGalaxy(); // resolves _meta.ActiveLocationId to a concrete celestial body id
         LoadPlayerStations(); // item 20 S4: restore persisted player stations onto the star map + registry
@@ -1523,6 +1525,7 @@ public sealed partial class GameServer
             Guard("TickCompanionPayoff", TickCompanionPayoff); // #1210: companions growl at hostiles, stall robbers, drop produce (1 Hz)
             Guard("TickCompanionScouting", TickCompanionScouting); // #1225: a deeply bonded companion shares a landmark now and then
             Guard("TickSentries", TickSentries); // #1214: base sentry posts fire at hostiles near a home base (2 Hz)
+            Guard("TickBurning", TickBurning); // #1700: lava and fire hurt animals, robbers and machines too (2 Hz)
             Guard("TickHealTanks", deltaSeconds, TickHealTanks); // base/station regen field: heal + feed + suit recharge
             Guard("TickStationsInReach", deltaSeconds, TickStationsInReach); // #1070: Tab-menu station gates follow the player
             Guard("TickVoidRescue", deltaSeconds, TickVoidRescue);
@@ -2061,6 +2064,7 @@ public sealed partial class GameServer
         p.InEva = false; // a death ends any spacewalk
         _inShipInterior.Remove(p.PlayerId); // and any in-ship walkabout
         _dockedFromEva.Remove(p.PlayerId);  // and any "ship floating while docked" memory
+        ReleaseDrivenVehicle(p);            // and the seat of a speeder/boat — the bond used to survive (#1661)
 
         if (useCustomSpawn && TryCustomRespawn(session, reason, salvaged, sameWorld))
         {
@@ -3136,6 +3140,7 @@ public sealed partial class GameServer
             case StowSpeederIntent stowSpeeder: HandleStowSpeeder(session, stowSpeeder); break;
             case RefuelSpeederIntent refuelSpeeder: HandleRefuelSpeeder(session, refuelSpeeder); break;
             case SpeederImpactIntent speederImpact: HandleSpeederImpact(session, speederImpact); break;
+            case RecallVehicleIntent recallVehicle: HandleRecallVehicle(session, recallVehicle); break;
             case SetBeaconLabelIntent beacon: HandleSetBeaconLabel(session, beacon); break;
             case SetBeamNameIntent beamName: HandleSetBeamName(session, beamName); break;
             case BeamTeleportIntent beamJump: HandleBeamTeleport(session, beamJump); break;
@@ -3416,6 +3421,7 @@ public sealed partial class GameServer
             WorldId = WorldIdOf(state.CurrentLocationId), // #1534
             CumulativePlaytimeSeconds = _meta.CumulativePlaytimeSeconds,
             TerrainContinents = _meta.Description.TerrainContinents,
+            TerrainGeneration = _meta.Description.TerrainGeneration, // #1644
         });
         SendInventory(session);
         SendPlayerState(session);
@@ -4021,7 +4027,10 @@ public sealed partial class GameServer
 
         if (IsShipBlock(pos))
         {
-            Reject(session, "mine", "@srv.mine.ship_hull");
+            // #1710: this guard is about the pad ground the hull stands on, never about the hull — which has
+            // not been world blocks since ship-as-object. Saying "ship hull" here sent a builder off writing a
+            // feature request for removable doors, because the door she was aiming at answered as a hull.
+            Reject(session, "mine", "@srv.mine.ship_pad");
             return;
         }
 
@@ -4032,7 +4041,8 @@ public sealed partial class GameServer
         // of — glass, beds, frame — stays protected.
         bool harvestingPlant = IsFlora(current.Value);
 
-        if (!harvestingPlant && IsSettlementBlock(pos))
+        // A natural tree inside the box is not the settlement's either (#1659) — see IsSettlementProtected.
+        if (!harvestingPlant && IsSettlementProtected(pos, current))
         {
             Reject(session, "mine", "@srv.protect.settlement");
             return;
@@ -4072,7 +4082,8 @@ public sealed partial class GameServer
         var tool = ActiveTool(session.State);
         if (!ToolCanMine(tool, def))
         {
-            Reject(session, "mine", "@srv.mine.wrong_tool");
+            NoteTierGate(session, def);
+            Reject(session, "mine", WrongToolReason(session, def));
             return;
         }
 
@@ -4245,7 +4256,7 @@ public sealed partial class GameServer
 
                     var p = new Vector3i(center.X + dx, center.Y + dy, center.Z + dz);
                     var b = _world.GetBlock(p);
-                    if (b.IsAir || IsShipBlock(p) || IsSettlementBlock(p) || IsStationBlock(p)
+                    if (b.IsAir || IsShipBlock(p) || IsSettlementProtected(p, b) || IsStationBlock(p)
                         || IsBaseProtected(p, session.State.PlayerId, session.State.IsAdmin))
                     {
                         continue;
@@ -4650,6 +4661,10 @@ public sealed partial class GameServer
         {
             PlaceBeam(session, pos, place.Label); // a placed beam block becomes a named teleporter pad
         }
+        else if (blockDef.Key == SentryBlockKey)
+        {
+            WarnIfSentryOutsideBase(session, pos); // #1699: a post outside a base zone never fires — say so
+        }
 
         BroadcastToWorld(new BlockChanged { X = pos.X, Y = pos.Y, Z = pos.Z, Block = blockDef.NumericId.Value, Tint = placeTint, Glow = placeGlow, Shape = placeShape });
         NudgeCreatureBodyChecks(pos); // #1357: an animal the block landed in steps aside on its next tick
@@ -4665,6 +4680,11 @@ public sealed partial class GameServer
             // stream cut off here recedes (and the body around a new underwater wall settles again).
             UntrackFluid(pos);
             OnFluidRemoved(pos);
+        }
+
+        if (blockDef.Key == WaterSpoutBlockKey)
+        {
+            StartSpout(session, pos); // #1726: a waterfall block starts pouring the moment it is placed
         }
 
         ActivateGranular(pos); // #1319: placed sand with nothing under it drops; over lava it sinks
@@ -5166,10 +5186,18 @@ public sealed partial class GameServer
     {
         var p = session.State;
 
+        // #1728: /basewalls is a read-only report about the caller's OWN walls, and the one question a builder
+        // cannot otherwise answer. A player whose ring keeps letting animals in has exactly two possible
+        // reasons — a gap somewhere, or a compound larger than the fill's 48-block reach — and no way to tell
+        // them apart. She had to guess, and guessed at both. The owner of a base on this body may ask about it.
+        bool ownsABaseHere = _bases.Any(b => b.Planet == _world.LocationId && b.OwnerId == p.PlayerId);
+        bool basewallsForOwner = ownsABaseHere
+            && string.Equals(cmd.Command, "basewalls", StringComparison.OrdinalIgnoreCase);
+
         // A fleet admin is an admin everywhere by definition — they are the operator of the installation, not
         // a guest on someone's world. Checked as a session flag rather than by writing PlayerRole.Admin into
         // the save, so the elevation never travels with an exported world (see ServerConfig.FleetAdminPlayers).
-        if (!p.IsAdmin && !session.IsFleetAdmin)
+        if (!p.IsAdmin && !session.IsFleetAdmin && !basewallsForOwner)
         {
             Reject(session, "admin", "@srv.admin.not_admin");
             return;
@@ -5662,14 +5690,24 @@ public sealed partial class GameServer
         return new ToolProperties { Kind = ToolKind.None, Tier = 0 };
     }
 
+    /// <summary>Delegates to the shared rule (#1686) so the server, the client fluid cursor and the client's
+    /// "this block wants a better drill" hint can never disagree about what a tool may break.</summary>
     private static bool ToolCanMine(ToolProperties tool, BlockDefinition block)
-    {
-        if (block.RequiredTool != ToolKind.None && tool.Kind != block.RequiredTool)
-        {
-            return false;
-        }
+        => MiningRules.ToolCanMine(tool, block);
 
-        return tool.Tier >= block.MinToolTier;
+    /// <summary>
+    /// The reject token for a swing the held tool cannot land (#1686). The bare "your tool cannot mine this"
+    /// left a new player with no move to make — a Machine Housing in the open world simply refused to break
+    /// and never said what would work. When the content set has a tool that WOULD break it, the token carries
+    /// that tool's name (localized for this session) so the message can name it. Falls back to the old
+    /// wording when nothing in the game can break the block at all.
+    /// </summary>
+    private string WrongToolReason(PlayerSession session, BlockDefinition block)
+    {
+        var wanted = MiningRules.CheapestToolFor(_content, block);
+        return wanted is null
+            ? "@srv.mine.wrong_tool"
+            : "@srv.mine.wrong_tool_named:" + LocalizedName(session.Locale, wanted.NameKey, wanted.Key);
     }
 
     private bool StationAvailable(PlayerState player, CraftingStation station) => StationAvailable(player, _ship, station);

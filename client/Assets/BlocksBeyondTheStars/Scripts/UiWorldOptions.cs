@@ -201,8 +201,14 @@ namespace BlocksBeyondTheStars.Client
                 _ => 4,     // Frequent
             };
 
-            float x = 30f, y = 86f;
-            int column = 0;
+            // Two columns whose row pitch follows the type count (#1649 added eight types — 29 selectable): the
+            // longer column must end above the footer, so the pitch shrinks from the comfortable 56 px down to
+            // 40 px (a slider row is 40 px tall) before the list would ever run under the Back button.
+            const float FirstRowY = 86f;
+            int perColumn = Mathf.Max(1, Mathf.CeilToInt(types.Count / 2f));
+            float pitch = Mathf.Clamp((FooterY - 16f - FirstRowY) / perColumn, 40f, 56f);
+            float x = 30f, y = FirstRowY;
+            int row = 0;
             foreach (var p in types)
             {
                 string key = p.Key;
@@ -212,12 +218,11 @@ namespace BlocksBeyondTheStars.Client
                     v => opt.PlanetTypes[key] = v,
                     rebuilders: null);
 
-                y += 56f;
-                if (y > 640f && column == 0)
+                y += pitch;
+                if (++row == perColumn)
                 {
-                    column = 1;
                     x = 820f;
-                    y = 86f;
+                    y = FirstRowY;
                 }
             }
 
@@ -255,6 +260,15 @@ namespace BlocksBeyondTheStars.Client
             y += 62f;
             AddSliderRow(parent, 30f, y, 740f, shell.L("ui.worldopt.continents"), galaxyOnOff,
                 () => opt.TerrainContinents ? 1 : 0, v => opt.TerrainContinents = v == 1, rebuilders: null);
+
+            // Landscape-variety package (#1644): the terrain generation is pinned to the newest one this launcher
+            // knows (WorldCreationOptions.TerrainGeneration) — shown read-only so the panel says which landform
+            // set the new world rolls; the classic set (0) stays a server-CLI escape hatch, not a slider.
+            y += 62f;
+            UiKit.AddText(parent, 30f, y, 280f, 40f, shell.L("ui.worldopt.terrain_generation"), 16, UiKit.TextCol, TextAnchor.MiddleLeft);
+            UiKit.AddText(parent, 320f, y, 450f, 40f,
+                shell.L("ui.worldopt.terrain_generation_value").Replace("{gen}", opt.TerrainGeneration.ToString()),
+                15, UiKit.Cyan, TextAnchor.MiddleLeft);
 
             // Pack picker (right column): one toggle per pack; "on" = enabled = not in DisabledPacks.
             float px = 820f, py = 96f;

@@ -122,6 +122,8 @@ public sealed class ServerConfig
         SystemVariance = true,
         AsteroidBelts = true,
         TerrainContinents = true,
+        LavaCoreVolcanoes = true,
+        TerrainGeneration = BlocksBeyondTheStars.Shared.World.WorldDescription.CurrentTerrainGeneration,
         SpaceStations = BlocksBeyondTheStars.Shared.World.Frequency.Normal,
         StationTemplateUse = BlocksBeyondTheStars.Shared.World.Frequency.Normal,
         SettlementTemplateUse = BlocksBeyondTheStars.Shared.World.Frequency.Normal,
@@ -695,6 +697,17 @@ public sealed class ServerConfig
                     if (bool.TryParse(value, out var tc)) { World.TerrainContinents = tc; applied.Add("continents"); }
                     else if (string.Equals(value, "on", StringComparison.OrdinalIgnoreCase)) { World.TerrainContinents = true; applied.Add("continents"); }
                     else if (string.Equals(value, "off", StringComparison.OrdinalIgnoreCase)) { World.TerrainContinents = false; applied.Add("continents"); }
+                    break;
+                case "terrain-generation":
+                    // Landscape-variety package (#1644): the terrain generation a NEW world is created with.
+                    // 0 = classic generators only (the escape hatch, like "continents off"); the default is the
+                    // current generation. Loaded saves always keep the generation stored in their metadata.
+                    if (int.TryParse(value, out var tg) && tg >= 0 && tg <= BlocksBeyondTheStars.Shared.World.WorldDescription.CurrentTerrainGeneration)
+                    {
+                        World.TerrainGeneration = tg;
+                        applied.Add("terrain-generation");
+                    }
+
                     break;
                 case "galaxy-growth":
                     // Growing galaxy (#1123): jumping the edge appends a new system (creation-time choice;

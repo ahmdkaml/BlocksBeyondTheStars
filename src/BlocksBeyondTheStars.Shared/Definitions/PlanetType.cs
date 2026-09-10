@@ -20,6 +20,11 @@ public sealed class Biome
 
     /// <summary>Per-biome multiplier on tree density (1.0 = the planet's tree density; 0 = a treeless biome).</summary>
     public double TreeDensityMul { get; set; } = 1.0;
+
+    /// <summary>Per-biome multiplier on the RELIEF under it (#1645, terrain generation 1 only): a mud marsh at
+    /// 0.35 lies flat next to stone country at 1.5 on the same world. Applies to the style/archetype relief,
+    /// never to the baseline (continents, escarpments) or landmarks. 1.0 = the planet's relief.</summary>
+    public double ReliefMul { get; set; } = 1.0;
 }
 
 /// <summary>An ore vein generation rule for a planet type.</summary>
@@ -66,6 +71,32 @@ public sealed class PlanetType
     /// the surface). Other values reshape the heightmap: "flats", "hills", "mountains", "canyons",
     /// "mesa" (terraced plateaus + cliffs), "dunes" (parallel sand ridges), "spires" (sparse tall spikes).</summary>
     public string TerrainStyle { get; set; } = string.Empty;
+
+    /// <summary>The style POOL (#1645, terrain generation 1): a world of this type rolls 1–3 of these styles
+    /// and lays them out as regions blended in offset space, so one desert is a dune sea, the next badlands
+    /// with dune fields, the third flats with buttes. Empty = the single <see cref="TerrainStyle"/> (every
+    /// generation-0 world ignores the pool). Same style names as <see cref="TerrainStyle"/> plus the
+    /// generation-1 styles ("archipelago", "fjordlands", "downs", "shattered", "terraces", "drumlins", "glacial").</summary>
+    public List<string> TerrainStyles { get; set; } = new();
+
+    /// <summary>The first terrain generation whose galaxies may roll this type (#1649). 0 = every galaxy; the
+    /// eight data-only types of the landscape-variety package carry 1, so a classic-generation galaxy (every
+    /// existing save, every test world pinned to generation 0) keeps its exact planet roll — "new worlds only"
+    /// holds for the planet mix as well as for the terrain.</summary>
+    public int MinTerrainGeneration { get; set; }
+
+    /// <summary>Terrain feature tags this type opts into (#1644): "volcanic", "salt", "buttes", "hoodoos",
+    /// "crystal", "wind", "wetland", "glacial", "inselbergs", plus "karst" and "reef" (terrain generation 3;
+    /// see <see cref="TerrainTag"/>). The generator gates
+    /// its landform families on these — never on the type key — so a data-only type can carry any family.</summary>
+    public List<string> TerrainTags { get; set; } = new();
+
+    /// <summary>Computed at content load from <see cref="TerrainTags"/>, never from data (#1644).</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public TerrainTag Tags { get; set; }
+
+    /// <summary>True when the type carries <paramref name="tag"/> (#1644).</summary>
+    public bool HasTag(TerrainTag tag) => (Tags & tag) != 0;
 
     /// <summary>Signature alien terrain (item 21 V5): when true, chunks of solid land float in the sky high
     /// above the surface — drifting voxel islands you reach by flying up or building a tower. Off by default.</summary>

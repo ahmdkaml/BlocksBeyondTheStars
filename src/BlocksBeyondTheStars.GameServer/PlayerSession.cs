@@ -308,6 +308,13 @@ public sealed class PlayerSession
     /// <summary>Decaying "is digging right now" score: +1 per broken block, ×0.9 per second.</summary>
     public double VegaMineRecent { get; set; }
 
+    /// <summary>Localized name of the block whose tool-tier gate just turned a swing away (#1686), and the
+    /// tool that would break it. Empty until the player runs into a gate; consumed by the <c>tier_gate</c>
+    /// context tip on the next cadence slot and cleared once it has been spoken.</summary>
+    public string VegaTierGateBlock { get; set; } = string.Empty;
+
+    public string VegaTierGateTool { get; set; } = string.Empty;
+
     // --- Deferred death respawn (choice between ship and home spawn, issue #462) ---
 
     /// <summary>Server uptime deadline for a pending respawn choice; 0 = no choice pending. While pending the
@@ -376,6 +383,11 @@ public sealed class PlayerSession
 
     /// <summary>Server uptime of the last answered LocateStationIntent (rate limit).</summary>
     public double LastStationLocateAt { get; set; } = -1;
+
+    /// <summary>Server uptime when this player was last told that a flowing quench hardens only the surface
+    /// of a lava body (#1727). A flood over a trench crusts hundreds of cells in a few ticks — one sentence
+    /// per episode, not one per block.</summary>
+    public double LastFlowQuenchTold { get; set; } = double.NegativeInfinity;
 
     // --- Temperature hazard (#666): the effective-temperature scan is ~1 Hz, the drain applies every tick ---
 

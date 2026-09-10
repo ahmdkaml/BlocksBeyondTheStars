@@ -154,6 +154,44 @@ public sealed class WorldDescription
     /// description carries true; a loaded save keeps whatever it stored).</summary>
     public bool TerrainContinents { get; set; }
 
+    /// <summary>Volcanoes on every lava-core world + sea-mount cones (#1631): when true, every non-cratered body
+    /// may grow basalt cones (not only watery breathable worlds) and a cone whose base lies under a sea is
+    /// lifted into a volcanic island. MUST default to false like <see cref="TerrainContinents"/>: terrain is
+    /// re-derived from the seed, and a new mountain on an existing desert save could bury a player base. New
+    /// worlds switch it on at creation (ServerConfig's default description carries true).</summary>
+    public bool LavaCoreVolcanoes { get; set; }
+
+    /// <summary>Terrain generation number (#1644): which wave of landform generators a world was created with.
+    /// 0 = every world created before the landscape-variety package (the classic generators only); 1 = the
+    /// 2026-09 package (regional style pools, per-world scale, biome relief, new landmarks, water bodies,
+    /// paints, props); 2 = the ocean-pad wave (#1618–#1622, gated by #1665: the two-dimensional dry-land
+    /// nudge, deep-water islets on every world with a water sea, the plateau-and-beach islet shape);
+    /// 3 = the landform completion package (2026-09): landmark paints that fill a whole column, sea-relative
+    /// landmark rows (sea-floor landforms), ice/fluid overhang bands, sub-surface fluid spans, river
+    /// morphology, and the landform families built on them; 4 = the flora-roster wave (#1715): the biome
+    /// themes take part in the species activation roll (the terrain of a generation-4 world equals
+    /// generation 3 — the roster is what changes, and a roster is as much "the world" as a mountain). MUST
+    /// default to 0 like <see cref="TerrainContinents"/>: terrain is re-derived from the seed, so a loaded
+    /// save keeps the generation it was created with and its terrain never moves — and neither do its
+    /// landing pads, which are re-derived the same way. New worlds get the current generation from
+    /// ServerConfig's creation-time description (<see cref="CurrentTerrainGeneration"/>). One integer instead
+    /// of one bool per wave — every later wave is a single compare.</summary>
+    public int TerrainGeneration { get; set; }
+
+    /// <summary>The terrain generation new worlds are created with today (#1644, #1665, landform package,
+    /// #1715 flora roster).</summary>
+    public const int CurrentTerrainGeneration = 4;
+
+    /// <summary>The generation from which the flora roster's activation roll reads the biome themes as well as
+    /// the planet theme (#1715). Older worlds keep the planet-only roll — a changed roll would rename and
+    /// re-pick every species they ever grew.</summary>
+    public const int BiomeThemeRosterGeneration = 4;
+
+    /// <summary>The generation from which landing pads use the ocean-pad rules (#1665): the 2-D nudge with the
+    /// ocean search budget, islets under every deep all-water pad, the plateau islet shape. Older saves keep the
+    /// longitude-only march, the rolled ocean-world islet and the plain sand mound they were created with.</summary>
+    public const int OceanPadsGeneration = 2;
+
     /// <summary>Growing galaxy (#1123): when true, hyperjumping into one of the current OUTERMOST systems
     /// appends a brand-new system beyond it (deterministic — system N is a pure function of seed + N — and
     /// persisted via <c>WorldMetadata.GalaxyGrownSystems</c>), up to a soft cap. Defaults to false so every

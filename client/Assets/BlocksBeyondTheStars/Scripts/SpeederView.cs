@@ -15,8 +15,10 @@ namespace BlocksBeyondTheStars.Client
     /// ships use, painted in the owner's hull colour), positions it (a parked speeder at its authoritative spot,
     /// a driven one following its driver), and adds the hover dust + engine glow plus the deploy/destruction
     /// bursts. Render-only — the speeders are server-authoritative; the client just shows what the
-    /// <see cref="GameBootstrap.Speeders"/> snapshot describes. Speeders carry NO collider so they never fight
-    /// the driver's character controller.
+    /// <see cref="GameBootstrap.Speeders"/> snapshot describes. A PARKED vehicle is solid (#1662: you used to walk
+    /// straight through a 3×5 hull and stand in the middle of it); the collider is switched off while the vehicle
+    /// is driven, so it never fights the driver's character controller, and while the local player is inside
+    /// its bounds, so a body that is somehow in there can step out instead of being held.
     /// </summary>
     public sealed class SpeederView : MonoBehaviour
     {
@@ -27,6 +29,7 @@ namespace BlocksBeyondTheStars.Client
             public GameObject Root;
             public Transform Glow0;
             public Transform Glow1;
+            public MeshCollider Collider;        // the parked hull's collider (off while driven / while the local player is inside)
             public int HullColor = int.MinValue; // forces the first build
             public Vector3 LastPos;
             public float DustTimer;
@@ -155,6 +158,24 @@ namespace BlocksBeyondTheStars.Client
 
             t.rotation = Quaternion.Slerp(t.rotation, Quaternion.Euler(0f, yaw, 0f), 1f - Mathf.Exp(-12f * Time.deltaTime));
 
+            // Solid only while parked (#1662). A driven hull would collide with its own driver's capsule (and a
+            // remote driver's body), and a local player standing inside the bounds — dismounted before the
+            // server stepped them off, or walked in while it was disabled — must be able to walk out. "Inside"
+            // is the hull box itself shrunk by the capsule radius (VehicleHull, #1669): the old root-centred
+            // box overhung the hull on two sides (walk-through) and counted the hull's roof as inside (fall-through).
+            if (obj.Collider != null)
+            {
+                bool driven = !string.IsNullOrEmpty(s.DriverId);
+                Vector3 local = t.InverseTransformPoint(Game.PlayerPosition);
+                Vector3 off = obj.Boat ? BoatMeshOffset : MeshOffset;
+                bool localInside = !driven && VehicleHull.Encloses(local.x, local.y, local.z, off.x, off.y, off.z);
+                bool solid = !driven && !localInside;
+                if (obj.Collider.enabled != solid)
+                {
+                    obj.Collider.enabled = solid;
+                }
+            }
+
             // Hover dust while moving, scaled by ground speed — a boat throws a white wake off the stern instead.
             float speed = (t.position - obj.LastPos).magnitude / Mathf.Max(1e-4f, Time.deltaTime);
             obj.LastPos = t.position;
@@ -191,6 +212,7 @@ namespace BlocksBeyondTheStars.Client
             }
 
             obj.Glow0 = obj.Glow1 = null;
+            obj.Collider = null;
 
             if (Game.ChunkMaterial == null || Game.Atlas == null || Game.Content == null)
             {
@@ -226,10 +248,6 @@ namespace BlocksBeyondTheStars.Client
             // cube grid built by SpeederCells() with no shaped (slab/ramp/…) cells, so no cube face can border a
             // shaped neighbour and there are no see-through holes to rescue.
             var (mesh, collider) = ChunkMesher.Build(chunk, Game.Content, CellAt, Game.Atlas, paintTint: paint);
-            if (collider != null)
-            {
-                Destroy(collider); // render-only hull — the cooked collider mesh is never used (#423)
-            }
 
             if (mesh.vertexCount > 0)
             {
@@ -238,6 +256,17 @@ namespace BlocksBeyondTheStars.Client
                 // The boat hull hangs lower so it sits IN the water (the driver floats 0.35 above the waterline,
                 // the hull bottom ~0.45 below it) instead of perching on top like a hovering sled.
                 go.transform.localPosition = obj.Boat ? BoatMeshOffset : MeshOffset;
+                if (collider != null)
+                {
+                    // The collider FIRST (same order as the landed ship, #1528): a MeshCollider added after the
+                    // MeshFilter adopts the non-readable render mesh and logs a cook error. Parked = solid (#1662);
+                    // PositionAndAnimate switches it off while driven.
+                    var mc = go.AddComponent<MeshCollider>();
+                    mc.sharedMesh = collider;
+                    mc.enabled = string.IsNullOrEmpty(s.DriverId);
+                    obj.Collider = mc;
+                }
+
                 go.AddComponent<MeshFilter>().sharedMesh = mesh;
                 go.AddComponent<MeshRenderer>().sharedMaterials = mats;
                 go.AddComponent<OwnedProceduralMesh>(); // freed by the child teardown on the next recolor/rebuild
@@ -245,6 +274,10 @@ namespace BlocksBeyondTheStars.Client
             else
             {
                 Destroy(mesh); // empty grid — free the mesh instead of orphaning it
+                if (collider != null)
+                {
+                    Destroy(collider);
+                }
             }
 
             if (obj.Boat)

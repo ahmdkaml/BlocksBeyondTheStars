@@ -35,7 +35,8 @@ public sealed class WorldGenerationGoldenTests
     /// <summary>One pinned group: a generator configuration whose chunks are hashed together in a fixed order.
     /// <see cref="Circumference"/> 0 = the generator's default mode (no <c>SetWorldMode</c> call, the legacy
     /// per-type seeding); otherwise the full per-world mode is applied like <c>ServerWorld.GetOrLoadChunk</c> does.</summary>
-    private sealed record Group(string Name, long Seed, string Planet, int Circumference, bool Cratered, string? LocationId);
+    private sealed record Group(string Name, long Seed, string Planet, int Circumference, bool Cratered, string? LocationId,
+        int Generation = 0);
 
     private static readonly Group[] Groups =
     {
@@ -47,6 +48,51 @@ public sealed class WorldGenerationGoldenTests
         new("jungle-default", 20260903, "jungle", 0, false, null),
         new("varied-world-5472", 424242, "varied", 5472, false, "golden:varied-body"),
         new("asteroid-cratered-800", 14, "asteroid", 800, true, "golden:asteroid"),
+        // Terrain generation 1 (#1645, landscape-variety part 2): the gen-0 groups above must never move; these
+        // pin the generation-1 relief (style regions, scale jitter, biome relief, new archetypes, regimes).
+        new("varied-gen1", 424242, "varied", 5472, false, "golden:varied-body", 1),
+        new("desert-gen1", 1, "desert", 0, false, null, 1),
+        new("highland-gen1", 20260903, "highland", 0, false, null, 1),
+        // #1646 (part 3): landmark families, bands and underground finds on generation-1 worlds.
+        new("tundra-gen1", 424242, "tundra", 0, false, null, 1),
+        new("rocky-gen1", 1, "rocky", 5472, false, "golden:rocky-body", 1),
+        // #1647 (part 4): water / lava bodies and paints on generation-1 worlds.
+        new("ocean-gen1", 424242, "ocean", 0, false, null, 1),
+        new("jungle-gen1", 20260903, "jungle", 0, false, null, 1),
+        // #1648 (part 5): props, micro-ruins, new tree kinds and giant flora on generation-1 worlds.
+        new("savanna-gen1", 424242, "savanna", 0, false, null, 1),
+        new("swamp-gen1", 20260903, "swamp", 0, false, null, 1),
+        // Terrain generation 3, part 1 (the landform completion package): seamounts (sea-relative rows),
+        // icebergs (material bands), underground river reaches (sub-surface fluid spans), glacier-tongue fill
+        // (paint fill). highland-gen3 activated none of them through part 4 (= highland-gen1); since part 5 the wet alpine
+        // world has river morphology and rias, and the no-family control lives in the gate-searching test.
+        new("ocean-gen3", 424242, "ocean", 0, false, null, 3),
+        new("frozen_ocean-gen3", 20260903, "frozen_ocean", 0, false, null, 3),
+        new("karst-gen3", 20260903, "karst", 0, false, null, 3),
+        new("highland-gen3", 20260903, "highland", 0, false, null, 3),
+        // Part 2 (rock): slot canyons / labyrinth / petrified dunes on the deserts, rainbow strata and the
+        // hoodoo-butte families on red_desert, pavement on the dust bowl.
+        new("desert-gen3", 1, "desert", 0, false, null, 3),
+        new("red_desert-gen3", 1, "red_desert", 0, false, null, 3),
+        new("dust_bowl-gen3", 20260903, "dust_bowl", 0, false, null, 3),
+        // Part 3 (caves): dripstone in tunnels and caverns, karst cathedrals — karst-gen3 re-pinned, jungle drips too.
+        new("jungle-gen3", 20260903, "jungle", 0, false, null, 3),
+        // Part 4 (volcanic + desert): lava flows / obsidian fields on the lava world, frost polygons on the tundra;
+        // barchans may move the desert groups (re-pinned).
+        new("lava-gen3", 20260903, "lava", 0, false, null, 3),
+        new("tundra-gen3", 20260903, "tundra", 0, false, null, 3),
+        // Part 5 (wetlands + rivers): mats and peat on the swamp, peat and morphology on the boreal world.
+        new("swamp-gen3", 20260903, "swamp", 0, false, null, 3),
+        new("boreal-gen3", 20260903, "boreal", 0, false, null, 3),
+        // Part 6 (coast + sea floor): reef rings, reef fields, causeways, arches, blue holes on the archipelago.
+        new("archipelago-gen3", 20260903, "archipelago", 0, false, null, 3),
+        // Part 7 (ice): glaciers, ice sheets and nunataks, hanging valleys, ice caves on the two ice worlds.
+        new("glacier-gen3", 20260903, "glacier", 0, false, null, 3),
+        new("ice-gen3", 20260903, "ice", 0, false, null, 3),
+        // Part 8: the three generation-3 planet types, where the new families are dense.
+        new("coral_sea-gen3", 20260903, "coral_sea", 0, false, null, 3),
+        new("icecap-gen3", 20260903, "icecap", 0, false, null, 3),
+        new("river_lowlands-gen3", 20260903, "river_lowlands", 0, false, null, 3),
     };
 
     /// <summary>Sample columns: the spawn column (pad 0 sits at (0,0) on every world), one ordinary inland
@@ -59,14 +105,55 @@ public sealed class WorldGenerationGoldenTests
         // Pinned 2026-09-04 from main @ 75fe9397 (Windows 11, .NET 10). Per-chunk values are in the failure report.
         ["windows"] = new()
         {
-            ["varied-default"] = 0x8cbecc0ad775fbd8UL,
-            ["rocky-default"] = 0x6a2db75f8a72597cUL,
-            ["desert-default"] = 0x2d0f68b62a055e40UL,
-            ["ocean-default"] = 0xcd5b96126e2b095fUL,
-            ["ice-default"] = 0xca83725ec07d4f02UL,
-            ["jungle-default"] = 0xfafe0246f460230cUL,
-            ["varied-world-5472"] = 0xd184d06aee4c17feUL,
-            ["asteroid-cratered-800"] = 0xea45216efb76ba71UL,
+            ["varied-default"] = 0x41037a332a1ecbe6UL,
+            ["rocky-default"] = 0x018f3fcd29dc3072UL,
+            ["desert-default"] = 0xc9aebd668ca714e7UL,
+            ["ocean-default"] = 0x161920f6b7dc1f68UL,
+            ["ice-default"] = 0xad1d02f2b2814251UL,
+            ["jungle-default"] = 0x9f198f0eb8281da4UL,
+            ["varied-world-5472"] = 0x2dcf8cfc85d02359UL,
+            ["asteroid-cratered-800"] = 0x0ccae399034733eeUL,
+            // Pinned 2026-09-05 (#1645, Windows 11, .NET 10).
+            ["varied-gen1"] = 0xaba279484571bcb4UL, // re-pinned for #1647 (gen-1 bodies + paints; unreleased)
+            ["desert-gen1"] = 0x5e5d6d6f809bb612UL, // re-pinned for #1647
+            ["highland-gen1"] = 0x49f4107c54801291UL, // re-pinned for #1646 + #1647
+            // Pinned 2026-09-05 (#1646, Windows 11, .NET 10).
+            ["tundra-gen1"] = 0x6e7d5380a92cd7f3UL, // re-pinned for #1647
+            ["rocky-gen1"] = 0x9981bc39fdae70e5UL, // re-pinned for #1647
+            // Pinned 2026-09-05 (#1647, Windows 11, .NET 10).
+            ["ocean-gen1"] = 0xcd2223af53fc3766UL,
+            ["jungle-gen1"] = 0xc9e7499dcae9f034UL,
+            // Pinned 2026-09-06 (#1648, Windows 11, .NET 10).
+            ["savanna-gen1"] = 0x1f2b23eba6c17a34UL,
+            ["swamp-gen1"] = 0x5c5a1959a7982a19UL,
+            // Pinned 2026-09-07 (terrain generation 3 part 1, Windows 11, .NET 10; unreleased — later parts
+            // re-pin these). ocean-gen3 equals ocean-gen1 (no seamount under the three sample columns) and
+            // highland-gen3 equalled highland-gen1 through part 4 (no family active); part 5 re-pinned it.
+            ["ocean-gen3"] = 0xd332372ad8f67b85UL, // re-pinned for part 5: a ria drowns a coast column
+            ["frozen_ocean-gen3"] = 0x13b8385bbef612d6UL, // re-pinned for part 7 (glaciers, ice sheet; part 4: frost polygons)
+            ["karst-gen3"] = 0xbb494ccb1798e108UL, // re-pinned for part 5 (river morphology; part 2: the stone-forest style)
+            ["highland-gen3"] = 0x7f796ec06cb54308UL, // re-pinned for part 5: since then the wet alpine world has river morphology + rias — the no-family control lives in the gate-searching test
+            // Pinned 2026-09-07 (part 2, the rock landforms; unreleased — later parts re-pin these).
+            ["desert-gen3"] = 0x12d1f68f2b91c7ddUL, // re-pinned for part 5: flora follows the generation-3 paints
+            ["red_desert-gen3"] = 0xc9b35bc8e7953302UL, // re-pinned for part 5
+            ["dust_bowl-gen3"] = 0xdbd5c91922585dd8UL, // re-pinned for part 5
+            // Pinned 2026-09-07 (part 3, the caves; unreleased — later parts re-pin these).
+            ["jungle-gen3"] = 0x604c4eaed2ed4148UL, // re-pinned for part 5 (river morphology, flora on paints)
+            // Pinned 2026-09-07 (part 4, volcanic + desert; unreleased — later parts re-pin these).
+            ["lava-gen3"] = 0xe08b8deab2d122deUL,
+            ["tundra-gen3"] = 0xd568581839e0daf1UL, // re-pinned for part 7 (glaciers, ice sheet, hanging valleys)
+            // Pinned 2026-09-07 (part 5, wetlands + rivers; unreleased — later parts re-pin these).
+            ["swamp-gen3"] = 0x6f5636cb565bf8cfUL,
+            ["boreal-gen3"] = 0x0db4acbd71f6b6bdUL,
+            // Pinned 2026-09-08 (part 6, coast + sea floor; unreleased — later parts re-pin these).
+            ["archipelago-gen3"] = 0x819963dbc81a43bbUL,
+            // Pinned 2026-09-08 (part 7, ice; unreleased — later parts re-pin these).
+            ["glacier-gen3"] = 0xaaf721d431838ceaUL,
+            ["ice-gen3"] = 0x3e04e32f31a07609UL,
+            // Pinned 2026-09-08 (part 8, the new planet types).
+            ["coral_sea-gen3"] = 0x1fb61378b5bb1fa2UL,
+            ["icecap-gen3"] = 0x786cf683677e2526UL,
+            ["river_lowlands-gen3"] = 0xee25a930cd9958d9UL,
         },
         // Linux (ubuntu CI runners): filled in from the first CI run of this test; a group absent here falls
         // back to the Windows value above and fails with the value to pin if the libm differs.
@@ -91,6 +178,11 @@ public sealed class WorldGenerationGoldenTests
             if (group.Circumference > 0)
             {
                 gen.SetWorldMode(group.Circumference, group.Cratered, null, group.LocationId);
+            }
+
+            if (group.Generation > 0)
+            {
+                gen.SetTerrainGeneration(group.Generation); // #1645
             }
 
             var perChunk = new List<string>();
@@ -179,15 +271,44 @@ public sealed class WorldGenerationGoldenTests
 
     /// <summary>FNV-1a over the dense block ids, then the sparse colour modifiers and shape descriptors in
     /// ascending cell order (dictionary order is not deterministic, so they are sorted first).</summary>
+    /// <summary>Per numeric id, the FNV hash of the block's KEY (#1647): numeric ids are assigned alphabetically
+    /// at content load, so adding any block shifts the ids of every block sorting after it — hashing raw ids
+    /// made every golden move whenever a block was added, although no terrain had changed. Hashing the key
+    /// keeps the goldens about the terrain. Ids without a block (synthetic test chunks) hash as themselves.</summary>
+    private static readonly ulong[] KeyHashById = BuildKeyHashes();
+
+    private static ulong[] BuildKeyHashes()
+    {
+        var content = Content();
+        ushort max = 0;
+        foreach (var b in content.Blocks.Values)
+        {
+            max = Math.Max(max, b.NumericId.Value);
+        }
+
+        var table = new ulong[max + 1];
+        foreach (var b in content.Blocks.Values)
+        {
+            ulong kh = FnvOffset;
+            foreach (char c in b.Key)
+            {
+                kh ^= c;
+                kh *= FnvPrime;
+            }
+
+            table[b.NumericId.Value] = kh == 0 ? 1UL : kh;
+        }
+
+        return table;
+    }
+
     internal static ulong HashChunk(ChunkData chunk)
     {
         ulong h = FnvOffset;
         foreach (ushort id in chunk.RawBlocks)
         {
-            h ^= (ulong)(id & 0xFF);
-            h *= FnvPrime;
-            h ^= (ulong)(id >> 8);
-            h *= FnvPrime;
+            ulong v = id < KeyHashById.Length && KeyHashById[id] != 0 ? KeyHashById[id] : id;
+            h = FnvMix(h, v);
         }
 
         if (chunk.Modifiers is { Count: > 0 } mods)

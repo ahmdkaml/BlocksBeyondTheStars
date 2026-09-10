@@ -11,64 +11,344 @@ Versions are date-based (CalVer) `YYYY.MM.N` — year, month, release counter wi
 Each release below mirrors its [GitHub release notes](https://github.com/marceld23/BlocksBeyondTheStars/releases);
 the richer, screenshot-laden versions live there. `(#123)` references the pull request or issue.
 
-## [Unreleased]
+## [2026.9.5] — 2026-09-10
 
-### 🏝️ Landing on ocean worlds: real islands first, proper islets otherwise, the seabed only in the shallows (#1618 #1619 #1620 #1621 #1622)
+The big-build release. Almost everything below came from players who built **big** — a spaceport, a walled
+compound, a perimeter far past what the game had ever been asked to cover — and found the game's helpers
+stopping at the edge of a small base. So: a **power relay** that carries your base core's power out to the
+far corner, a **waterfall spout** that pours water down without flooding the floor, **double doors** whose
+two leaves finally swing apart instead of both the same way, and the wall check every base owner can now
+run on their own build. Nobody gets stuck any more either — sealed inside your own hull, frozen by a rescue
+that fired over and over, or unable to mine your own blocks under a parked ship. Hosted worlds in the
+browser stay up instead of dying seconds after they start. And plants and animals got a careful
+read-through: biome plants, calmer herds, crops that keep their own colour.
 
-- **Landing pads look for land north and south too.** Until now a pad only searched east and west along
-  its own latitude and gave up in open sea — while real islands lay a short swim away. The search now
-  circles outward in every direction, and on ocean worlds it looks further (#1618). On twelve test ocean
-  worlds that put 157 of 164 pads on natural land, up from 81.
-- **No more landing at the bottom of a deep sea.** A pad that still sits in open water raises an island
-  whenever the water is deeper than a wade (8 blocks); only shallow water still parks the ship in its dry
-  seabed shaft. Every world with a water sea follows the same rule now, not only ocean worlds (#1619).
-- **The islets are islands now**: a level top wider than the ship, a gentle beach into the sea, a
-  natural outline instead of a perfect disc, grass and a few plants where the world has them (#1620).
-- **Your first landing prefers dry ground.** A new player's first pad, and any landing you do not pick
-  by hand, takes natural land over an islet over the seabed (#1621).
-- **Seabed pads are blue on the approach map** and say how deep the water is ("underwater · seabed · 6 m"),
-  on the world map too (#1622).
+ℹ️ **Compatibility:** the network protocol stays at version 5, saves migrate unchanged. The new plant
+rosters reach **new worlds only** — a world you already built in keeps exactly the plants it has.
 
-### ✨ A bigger sky (#1615 #1616 #1617)
+### 🔌 Power runs where you build it — the Power Relay (#1714)
 
-- **More stars in every new world.** A Normal world now starts with 12 star systems instead of 8, and the
-  other Universe-size tiers grew with it: Small 6, Large 20, Huge 32. A Growing world also starts at 12 and
-  keeps growing at the frontier as before. Existing saves keep the galaxy they were created with (#1615).
-- Dedicated servers that do not set a system count start with the same 12 systems (#1616).
+- A sentry post shoots 14 blocks, but it only worked within 8 blocks of your base core. On a compound of
+  80×80 that made it useless: the posts you actually need, out on the perimeter, were decoration.
+- The new **Power Relay** carries your core's power one zone further, and **relays chain** — core to relay
+  to relay to post — so you can run a line into the far corner of any build. Sixteen relays per base.
+- The sentry post's own description and VEGA's base-wall advice now say **"powered"** instead of "within 8
+  blocks of the core", because that is what the rule really is.
 
-### 🌌 A map of the stars (#1603 #1604 #1605)
+### 💧 A waterfall that stays a waterfall — the Waterfall Spout (#1726)
 
-- **The system chart has a Hyperspace tab.** Press M while flying and switch tabs (LB/RB on a pad): the
-  whole galaxy as stars in their real colours. The ringed star is where you are, named stars are systems
-  you have visited, a **?** is one you have never entered, and the lines are the relay network's jump
-  lanes. Click a star to read about it — and, with a jump generator aboard or a lane, hyperjump to it
-  straight from the chart (#1603).
-- **Stars in their true colour.** Every system's star colour now travels with the star map, so the chart
-  shows the same sun you will see after landing (#1604).
-- **The finale system sits beyond the frontier.** The Guardian Core, once revealed, appears out past every
-  other star on the chart instead of in a corner among them (#1605).
+- A builder levelled an ~80×80 spaceport, placed water for a waterfall, and got a flood: on stepped ground
+  every step re-arms the spread, so the water crawled across the whole floor. That is exactly how water has
+  always worked, and changing it would change every lake and every sea in every save.
+- So there is a **new block** instead. The **Waterfall Spout** pours a column of water straight down from
+  its underside — **only** down. The fall never spreads sideways, and the cell it lands in does not spread
+  either, so you get a waterfall and not a puddle that eats your build. Hang it over an edge with open air
+  beneath it; mine the block under the fall or the spout itself and the column dries up. Placed flat on
+  solid ground it tells you so.
+- It survives a reload: the column comes back as a waterfall, not as a flood.
 
-### 🪐 More room between the planets (#1599 #1600 #1601)
+### 🚪 Double doors that meet in the middle (#1729)
 
-- **Space distances in kilometres.** The radar and the system chart now say "830 km" to the next planet
-  instead of "83 m" — a scale that fits what you are looking at. On a spacewalk the way back to your ship
-  is still given in metres (#1599).
-- **Roomier star systems.** Planets, moons and asteroids sit half as far apart again in the flight view, so a
-  system no longer looks like a huddle. The hop to the next planet takes a little longer (about 20 s instead
-  of 13 s in the starter ship). Anything you built in space next to the planet you launch from stays exactly
-  where it was; a structure parked beside *another* planet is now a bit off it (#1600).
-- **Moons keep their distance.** A moon rides one and a half times the clear gap off its planet instead of
-  hugging it — a planet with moons reads as a family, not a clump (#1601).
+- Two doors placed side by side both swung the same way, which looks wrong for what is obviously one wide
+  doorway. Now the game notices the pair by itself and hangs the right-hand leaf on the far post, so the
+  two halves swing **apart** — a proper double door.
+- It keeps up with your building: put a door next to an existing one and it becomes a pair on the spot,
+  take one away and the other goes back to a single door. Three in a row pair at the end, sliding doors
+  and mismatched pairs stay as they are, and doors on different floors or on opposite sides of a wall are
+  left alone.
 
-### 👁️ A wider view (#1589 #1590 #1591)
+### 🧱 Checking your own walls, and lava that explains itself (#1727 #1728)
 
-- **The world no longer feels oversized.** The first-person camera now looks through an 80° field of view
-  instead of the narrow 60° it silently used before, so blocks take up about a third less of your screen and a wall
-  only fills the view when you are really standing at it (#1589).
-- **Field of view setting.** Settings → Controls has a new *Field of view* stepper, 50° to 100°. It applies
-  right away, even from the pause menu; wider shows more of the world and costs a little frame rate (#1590).
-- **A smaller tool in hand.** The drill, block or hand you hold is a fifth smaller and stays the same size on
-  screen whatever field of view you pick (#1591).
+- **`/basewalls` is open to base owners now.** It answers the one question a builder cannot answer by
+  walking the perimeter — *is there a gap somewhere, or is my compound simply bigger than the 48-block
+  reach?* — and it used to be admin-only. It names your core, its exact position, and where the ring is
+  open. It only ever reports bases **you** own.
+- **Water that reaches lava now says what happened.** Placing water on lava by hand always explained
+  itself, but a flood that found a lava trench on its own said nothing: the trench went dark, lava still
+  glowed under the new rock, and it looked like the game had stacked a block on top of your lava. It had
+  not — only the cells the water actually touched turn to rock. Now the game says so.
+
+### 🆘 Nobody stays stuck (#1708 #1709 #1710)
+
+- **Sealed inside your own ship?** There is a rescue for that now. Building yourself into your own hull
+  used to leave you with no way out at all — the block rescue cannot see ship hulls, and the ship rescue
+  needed two of them around you.
+- **The rescue no longer freezes you in place.** Being dug out could leave the player hovering, frozen and
+  unable to move: the rescue fired again every second and re-armed the short settle pause faster than it
+  could ever run out. It fires once now, and lets go.
+- **Your own blocks under a parked ship stay yours.** The guard that stops you mining the ground out from
+  under a landed ship protected *every* block beneath it, including the floor you laid yourself — and told
+  you a wooden door was ship hull while it did it.
+
+### ☁️ Hosted worlds in the browser stay up (#1704 #1705 #1706 #1707)
+
+- One hosted world died within seconds of every single start and was restarted over two thousand times in
+  eighteen hours. The save itself was fine — loading it just needed briefly more room than the world was
+  given, and the world was killed for space it was about to hand back. It now loads with room to spare.
+- **A world that cannot start no longer restarts forever.** The keep-awake pass hammered every dead world
+  every 30 seconds with no back-off and no giving up; now it waits longer between attempts and stops.
+- **A world no longer dies on a busy port.** Claiming its network port got exactly one attempt, so losing
+  a momentary race with a world that had just shut down killed it outright. It retries now.
+
+### 🌿 Plants and animals: a read-through (#1715 #1716 #1717 #1718 #1719 #1720 #1721 #1722 #1723 #1724)
+
+We measured the plant and animal generators against a full audit. Most of what it found had already been
+fixed over the summer; here is the rest.
+
+- **Biomes grow their own plants.** A world's plant roster only ever looked at the planet type, so a desert
+  strip on a forest world drew from a thinned-down pool. Every biome now contributes its own plants.
+  **New worlds only.**
+- **Crops keep their own colour.** Plants you farm yourself were taking the world's plant tint, so your
+  field came out the wrong colour for what you planted.
+- **Calmer, better-placed animals.** A herd used to check only one spot for water and lava before it
+  settled, so members could appear in places nothing should stand in. Spawn checks now look at the real
+  world, herds check where each animal is actually going, and the game counts wild animals rather than your
+  tame companions when it decides what to spawn next.
+- Plus internal tidying with no visible effect: one shared list of tall plants, one shared world-seed
+  formula, and a caching fix at the world seam.
+
+### ✨ Smaller things (#1711 #1712)
+
+- Cave creatures rest on the cave floor, not inside the rock above them (#1711).
+- The scan panel no longer cuts off its fourth line (#1712).
+
+### 🎓 Credits
+
+- **Paul and Noa join the school-club block** in the README and the in-game Credits, in all 14 languages —
+  Paul for the club's second wave of browser reports (#1708, #1709, #1713), Noa for testing one computer-room
+  PC after another so the club knew which machines run the game.
+
+## [2026.9.4] — 2026-09-08
+
+The living-world release. Animals finally **walk** instead of sliding along the ground: every creature has
+jointed legs now, with knees, ankles and feet that stay planted where they were set down, a stride that
+matches how fast the body is actually moving, wings that fold at a wrist, tails and necks that ripple, fins
+for the swimmers, and a jaw that opens when they call. They lie down to sleep, they blink, and they watch
+you. And the landscape is finished: **terrain generation 3** rolls the last forty-odd landforms the world
+builder never had — seamounts and icebergs, glaciers as real bodies of ice with crevasses and ice caves,
+coral atolls and blue holes, meandering rivers with oxbow lakes, dripstone caves, slot canyons, nunataks —
+plus **two new blocks** and **three new kinds of planet**. Water you dig and fill yourself now counts as
+real water for everyone, lava burns whatever steps into it, and the sentry post finally defends you against
+animals as well. **Lyxette** sent two more rounds of reports and drove most of the fixes below — thank you! 🙏
+
+ℹ️ **Compatibility:** the network protocol stays at version 5, saves migrate unchanged. Every new landform,
+block and planet type reaches **new worlds only** — a world you already built in keeps exactly the terrain
+it has, down to the block.
+
+### 🐾 Animals that really walk (#1674)
+
+- **No more sliding.** A leg used to be a single box swinging at a speed that had nothing to do with the
+  distance the body covered, so every animal in the game skated across the ground. The stride is now tied
+  to the walking speed, which means a planted foot stays where it was put down while the body travels over
+  it — the way a real animal moves.
+- **Legs with knees and feet.** Hip, thigh, knee, shin and foot, with front legs folding back and hind legs
+  forward (a four-legged animal whose knees all bend the same way reads as a table), and the sole staying
+  flat on the ground. Legs sit at the body's real width instead of the middle of the belly, and they spread
+  across the whole torso, so a long or a broad species is built the way it looks.
+- **Six ways of walking**, picked from leg count, size and speed — a walk, a trot, a bound, the insect
+  tripod, the wave a many-legged creature runs down its side, and a paddle — and the change from one to the
+  next fades instead of popping. A giant's slow, heavy stride now simply falls out of how big it is.
+- **Feet find the ground.** Each foot targets a real block, so legs follow slopes, steps and ledges instead
+  of standing on one invisible plane, and the body leans with the ground it stands on.
+- **Wings, tails, necks, trunks and tentacles move.** A wing folds at the wrist, back along the flank
+  instead of flipping over the back; tails, necks, trunks and tentacles are chains now, so the motion
+  travels outward as a wave — and a grazed titan bends its whole neck instead of nodding a head on a pole.
+- **A face.** The jaw opens on every call and snaps on a bite (the voices have been coming out of sealed
+  heads since they were added), animals blink, follow you with their eyes, lie down to sleep, and flick
+  ears, swat tails and shift their weight when they have been standing around a while.
+- **Fins.** Legless swimmers grow pectoral, tail and dorsal fins that beat as they swim and fold flat when
+  they are washed ashore. Existing worlds keep exactly the species they had.
+- **Distant animals cost less.** Nearby creatures animate in full, far ones less often, and the ones you
+  cannot see at all stop animating entirely while still moving about their business.
+
+### 🏔️ Terrain generation 3 — the landform package (#1688 #1689 #1690 #1691 #1692 #1693 #1694 #1695)
+
+A landform audit measured the world builder against 84 real-world landforms and found 26 missing and 15
+half-done. New worlds now roll them all.
+
+- **Rock and desert:** slot canyons, arêtes and tooth rows, rock gates and mountain halls, desert pavement,
+  petrified dunes, rainbow strata, labyrinths, stone forests, barchan dunes, frost polygons, obsidian
+  fields and lava flows with glowing pockets (#1689 #1691).
+- **Underground:** dripstone caves with stalactites and stalagmites, karst cathedrals, and rivers that run
+  underground on karst worlds (#1688 #1690).
+- **Rivers and wetlands:** rivers that meander, with oxbow lakes left behind, deltas and floodplains at the
+  mouth, drowned river valleys, floating mats of plants, peat bogs and thaw ponds (#1692).
+- **Coast and sea floor:** sea arches and blowholes, tidal islands you can walk to at low water, lagoons
+  and atolls of coral rock, reef fields, blue holes, submarine canyons and deep trenches, and seamounts
+  rising out of the deep (#1693 #1688).
+- **Ice:** glaciers are real volumes of ice now, with crevasses, icefalls, moraines, ice caves and glacier
+  gates; ice sheets carry nunataks — bare peaks poking through — and there are hanging valleys and
+  icebergs adrift (#1694 #1688).
+- **Two new blocks** to mine and build with, **peat** and **coral rock**, and **three new kinds of planet**:
+  a coral sea, an ice cap and river lowlands (#1695).
+- All of it is tied to the world's terrain generation number, so **existing worlds are untouched** — every
+  old world still generates block for block the way it always did (#1688).
+
+### 💧 Built water is real water — and fire burns everybody (#1697 #1698 #1700 #1701)
+
+- **Animals no longer walk across a moat you dug yourself.** A player built a wide water trench around a
+  spaceport and watched the attacking creatures stroll over the surface of it. Water the world was born
+  with counted as water; water you place did not — so the animals were still walking on the ground that
+  used to be there before you dug. Now they stop at the bank of any water, wade through the shallow kind,
+  and a flying animal settles above the surface of a pool instead of falling asleep under it (#1697).
+- **Lava and fire burn everybody now, not just you.** Animals, robbers and Guardian machines burn exactly
+  as you do — a fire moat is a real defence, not only a wall. Tame companions never burn, creatures that
+  live in lava are at home in it, and on a peaceful world nothing burns at all (#1700).
+- **You can fight in the water.** Shooting at anything while swimming — or at anything swimming — always
+  answered "no clear line of fire", because water blocked sight completely. Water now dims the view instead
+  of ending it: a few blocks of it are see-through, a whole lake still hides what is behind it (#1698).
+- **A wide water surface looks like one surface.** Big flat water read as a grid of blocks with hard edges,
+  and a trench that changed width could ripple in one spot and lie still in the next. Both are smoothed
+  out (#1701).
+
+### 🛡️ Your sentry post defends you against animals too (#1699)
+
+- It used to shoot only machines and robbers, while the game's own advice said to keep one for the fliers
+  and cave animals that walls do not stop. Now it answers those as well, and never a tame animal. Put one
+  down outside your base zone and it says so straight away; scanning a post shows how far it shoots and how
+  close to a base core it has to stand.
+
+### ⛏️ A tool that will not break a block says which one would (#1686)
+
+- Aiming the starter drill at a machine block used to produce "Your current tool cannot mine this block."
+  and nothing else — never which tool would work, never before the swing. Fifteen blocks gate this way, so
+  the first wall a new player meets had no visible way through. Now the refusal names the tool
+  ("Needs: Titanium Drill"), **every scan of a gated block carries a "Needs:" line** whether or not the
+  tool in hand already clears it, and VEGA explains the whole idea once, the first time you are turned
+  away. None of the rules changed — only what the game tells you about them.
+
+### 🚀 Hyperjumps, landing pads and the compass (#1677 #1678 #1679 #1680 #1681 #1682 #1683 #1684)
+
+- **A hyperjump from the cockpit really takes you to the new system.** Jumping between stars while flying
+  left the old system's planets in the flight view: the landing list still offered the planets you had come
+  from, and picking one jumped you straight back. The flight view rebuilds itself on arrival now, and the
+  star chart reaches you before the flight does (#1677).
+- **Two ships can no longer be parked on the same landing spot.** A player landed at position 1 and found a
+  trader's ship standing inside their own, with no way out. Parking a ship now checks the ground itself
+  instead of trusting the booking: an arriving ship takes the next free spot, a trader that finds the spot
+  taken keeps flying, and a pilot who jumps between stars no longer carries the landing spot of the world
+  they left (#1678 #1679).
+- **A visiting trader takes its ship with it when it leaves.** Its parked hull could be left standing on a
+  spot already reported as free, and a trader that never touched down could take an unrelated character out
+  of the world with it (#1680).
+- **Anyone caught inside a parked hull is set down beside it.** The rescue only knew about blocks, not about
+  ships, so a player wedged between two hulls was teleported back into the same spot every second (#1681).
+- **The compass points at your ship again.** The ship is marked by an arrow on the rim of the dial that
+  points the way to it and stays readable however far away it is — the small square inside the dial keeps
+  showing how close you are getting (#1682).
+- Closing the feedback window no longer risks an error while a text field still has the cursor (#1683), and
+  a planet's crashed wreck is pinned to where it was built, like every other structure, so its repair plan
+  can never drift away from the hull lying in the world (#1684).
+## [2026.9.3] — 2026-09-06
+
+The landscape release. Every new world you create from now on rolls its own landscape — dune seas next to
+badlands, fjord coasts under mountain country, glacier valleys, impact basins full of water, rock bridges,
+hidden geodes, oases in the desert — and there are **eight new kinds of planet**, six new ancient relics
+and dozens of small things to stumble over. **Existing worlds keep exactly the terrain they have.** Space
+grew too: a new galaxy starts with twelve star systems, the flight chart shows every star, wrecks really
+drift out there, and distances are in kilometres. The HUD has a new look, the view is wider, shade no
+longer looks like a cave, and the speeder stays on land and comes back when you call it. **Lyxette** sent
+his eighth and ninth rounds of reports and **ahmdkaml** contributed a first code fix — thank you both! 🙏
+
+ℹ️ **Compatibility:** the network protocol stays at version 5, saves migrate unchanged. New landscapes,
+volcanoes and ocean-landing rules reach **new worlds only** — nothing moves under a base you already built.
+
+### 🏔️ New worlds: the landscape package (#1644 #1645 #1646 #1647 #1648 #1649 #1631 #1657)
+
+- **Every new world rolls its own relief.** A planet type used to have one landscape; now a new world
+  mixes one to three landscape styles as regions, with its own hill spacing, biomes that shape the ground,
+  and rare whole-planet shapes (tilted, stepped, an equatorial ridge). Seven new styles join in, from
+  island archipelagos and fjordlands to chalk downs and shattered rift country (#1645).
+- **New kinds of mountains, holes and hidden places:** shield volcanoes, water-filled impact basins,
+  U-valleys, yardang ridges, drumlins, granite domes, star dunes, mud volcanoes, sinkhole chains, maars,
+  mushroom rocks, glacier tongues; rock bridges, wave-cut ledges and snow cornices; crystal geodes,
+  underground lakes and layered strata beneath the surface (#1646).
+- **Water where it was missing, and the ground tells its story:** marshes with reeds, oases with palms,
+  hot springs, caldera lakes, maars, salt playas and glacial tarns; scree on steep slopes, ash around
+  volcanoes, dry riverbeds, banded sandstone, moss on warm wet rock. **Five new blocks** to mine and build
+  with: moss stone, tar, bone, sandstone and scree (#1647).
+- **Things you meet every hundred blocks:** fallen logs, termite mounds, cairns, bone piles, ice boulders,
+  coral, crystal clusters, meteorites, tar pools, and small ruins with the odd data cache; **seven new tree
+  kinds** (baobab, mangrove, bamboo, saguaro, willow, mushroom and crystal trees) and giant ferns, crystals
+  and cacti (#1648).
+- **Eight new planet types** — red deserts, boreal forests, archipelagos, glacier worlds, meadows, ash seas
+  with basalt continents, dust bowls and frozen seas — and **six new ancient relics**: a stone bridge, a
+  watchtower, a tomb, a ziggurat, a fallen colossus and an aqueduct (#1649). The world-options page fits
+  all 29 planet types again (#1657).
+- **Volcanoes on every world with a lava core**, and volcanoes under the sea rise as smoking islands (#1631).
+- Every new world carries a *terrain generation* number in its save, so all of this reaches new worlds
+  only; existing worlds are byte-identical (#1644).
+
+### 🏝️ Landing on ocean worlds (#1618 #1619 #1620 #1621 #1622 #1665)
+
+- Landing pads now search in every direction for real land, and further on ocean worlds. Where only deep
+  water remains, the pad raises a proper island — a level top, a gentle beach, a natural outline, some
+  grass. Only shallow water still parks the ship on the seabed, and those pads are blue on the approach
+  map with the depth written next to them. Your first landing prefers dry ground. **New worlds only**;
+  older saves keep their pads exactly where they are.
+
+### 🌌 Space: a bigger galaxy, a chart of every star, wrecks to salvage (#1615 #1616 #1617 #1603 #1604 #1605 #1599 #1600 #1601 #1664 #1663 #1638 #1584 #1582)
+
+- **More stars.** A Normal galaxy starts with 12 star systems instead of 8 (Small 6, Large 20, Huge 32);
+  Growing worlds start at 12 too, and dedicated servers default to 12. Existing saves keep their galaxy
+  (#1615 #1616 #1617).
+- **The flight chart has a Hyperspace tab** (M while flying, LB/RB on a pad): the whole galaxy as stars in
+  their true colours, visited systems named, unvisited ones a **?**, the relay lanes drawn between them.
+  Click a star to read about it and hyperjump straight from the chart. The finale system sits out past
+  the frontier (#1603 #1604 #1605).
+- **Kilometres and roomier systems.** Radar and chart say "830 km" instead of "83 m"; planets, moons and
+  asteroids sit half as far apart again, so a system reads as a family rather than a huddle. The hop to
+  the next planet takes a little longer (#1599 #1600 #1601).
+- **Wrecks in space are real now.** Every wreck the travel screen has listed drifts in its system as a
+  hull you can fly to, read on approach and cut apart with the mining laser for plating, cable, metal and
+  data fragments (#1664). **Distant asteroids stay findable**: never smaller than a dot, named on the radar
+  rim, and VEGA explains chart waypoints once (#1663).
+- **Three space fixes from Lyxette:** a system you jumped into but never landed in can be jumped to again
+  (#1638); a ship you switched into launches into the orbit it is really on, not your home system's
+  (#1584); and the starfield is no longer painted over far-side moons (#1582).
+
+### 🖥️ HUD and view: a new look, a wider view, shade you can see in (#1623 #1624 #1625 #1626 #1627 #1628 #1636 #1589 #1590 #1591 #1594 #1597 #1585 #1608 #1609 #1610 #1611 #1612)
+
+- **The HUD's new look:** crisp text at any size, holographic panels, rings and bars with a soft glow,
+  icons on the vitals rows, a hologram glow that glitches when you take damage (Medium graphics and up),
+  and motion — ghost-trail bars, rolling numbers, toasts that slide in, a boot-up when you enter a world.
+  Nothing moved on screen; the reduced-motion setting is honoured; the browser keeps its flat overlay and
+  the glow runs on older tablets too (#1623–#1628 #1636).
+- **A wider view.** First person now looks through 80° instead of the narrow 60° it silently used, with a
+  50–100° *Field of view* setting under Controls and a held tool that keeps its size (#1589 #1590 #1591).
+- **The compass explains itself:** "Ship 114 m" and "Waypoint 138 m" instead of bare numbers, a rotating
+  **N** that marks north (the old ▲ only meant "ahead"), a VEGA tip when you wander far from your ship, and
+  a Codex paragraph on finding your way (#1594 #1597). Hull and shield rows show value and maximum, so a
+  fresh shield generator no longer looks dead while landed (#1585).
+- **Shade is shade, not a cave.** The ground under trees and overhangs was lit like a cave; it now stays
+  daylight with sun spots through the leaves, corners are less crushed, orange and red suns light the
+  ground as well as a yellow one, and shadows fade out instead of ending in a hard line (#1608–#1612).
+
+### 🛵 Speeder and boat (#1660 #1661 #1662 #1668 #1669 #1670 #1671)
+
+- **The speeder stays on land**: it hovers reliably again, stops at the shore, hops free when stuck, and a
+  wet driver is set back on dry ground (#1660).
+- **A vehicle is never lost.** X at your landed ship's cockpit or console packs every speeder and boat left
+  on this world back into your inventory; with no free slot it is parked beside the ship with a marker and
+  the distance. The seat frees on respawn, and the HUD tells you where the vehicle is (#1661 #1668).
+- **Parked vehicles are solid from every side** and you can stand on them; getting off puts you on firm
+  ground beside the hull, or in the water if you leave a boat mid-lake (#1662 #1669 #1671).
+- **"Board (E) · Pack up (X)" on screen** next to your own vehicle, with the right buttons on pad and touch (#1670).
+
+### 🏘️ Ship, settlements and small fixes (#1586 #1658 #1659 #1583 #1634)
+
+- **The shield is topped up after a repair** — once the hull is whole, the shield fills at once instead of
+  waiting for the next flight. Contributed by **ahmdkaml** (#1586, PR #1606). 🙏
+- **Settlers never make their home in water**, and trees are cleared out of village and station footprints
+  (#1658 #1659).
+- **The ground is solid when you drop fast** — collision is prepared ahead of a fast descent (#1583).
+- **N continues a VEGA line right after the chat closes**, no click into the world needed (#1634).
+
+### 🔩 Under the hood (#1642 #1640 #1641 #1652)
+
+- The report inbox shows one conversation per report again — the two halves of a report no longer open
+  separate threads (#1642). Two streaming tests wrap at the world's longitude seam so main stays green
+  (#1640 #1641 #1652), and the world-generation golden test compares block names instead of ids.
 
 ## [2026.9.2] — 2026-09-05
 
@@ -4653,7 +4933,10 @@ A graphics-quality pass and a licensing/foundation cleanup.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.2...HEAD
+[Unreleased]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.5...HEAD
+[2026.9.5]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.4...v2026.9.5
+[2026.9.4]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.3...v2026.9.4
+[2026.9.3]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.2...v2026.9.3
 [2026.9.2]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.1...v2026.9.2
 [2026.9.1]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.8.26...v2026.9.1
 [2026.8.26]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.8.25...v2026.8.26

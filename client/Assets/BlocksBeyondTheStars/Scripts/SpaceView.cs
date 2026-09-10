@@ -272,6 +272,13 @@ namespace BlocksBeyondTheStars.Client
         private const int SpaceNoWrap = int.MaxValue;
         private readonly List<Transform> _cloudShells = new List<Transform>();
 
+        // #1663: the system's landable asteroid bodies (sphere + its true orbit diameter). Their real size is
+        // 11–15 units, which at belt distances (500–1300 units) is an 8–20 px speck nobody can find — so each
+        // frame they are held at a minimum on-screen diameter (KeepFarAsteroidsVisible); up close they are
+        // exactly their true size again.
+        private readonly List<(Transform Body, float Diameter)> _asteroidBodies = new List<(Transform, float)>();
+        private const float MinAsteroidScreenPx = 20f;
+
         private Transform _camPrevParent;
         private Vector3 _camPrevLocalPos;
         private Quaternion _camPrevLocalRot;
@@ -324,6 +331,7 @@ namespace BlocksBeyondTheStars.Client
         private bool _combatSubscribed;
         private bool _hyperjumpSubscribed;
         private bool _hyperjumping; // a hyperspace jump is tearing down the view (warp covers it, no landing)
+        private string _sceneInstance; // flight instance the current scene was built for (#1677)
         private bool _shipDestroyed; // the ship blew up in space — tear down at once (explosion stays, no landing descent)
 
         private readonly HashSet<string> _dropIds = new HashSet<string>(); // tracked ResourceDrop entities
@@ -423,6 +431,21 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
+            // #1677: a hyperjump made IN FLIGHT never turns the flag off for a frame we get to see — the server
+            // sends SpaceClosed, SpaceState and the new star map in one tick, and the client pump applies all
+            // three before Update runs. Watching Game.InSpace alone therefore missed the whole transition: the
+            // scene kept the DEPARTURE system's star, planets and landables, and landing on one of those bodies
+            // was a second cross-system jump straight back to the old planet. The flight INSTANCE is the honest
+            // signal — it is keyed on the body the pilot flies over, so a jump always changes it.
+            string instance = Game.Space != null ? Game.Space.InstanceId : null;
+            if (!string.IsNullOrEmpty(instance) && !string.IsNullOrEmpty(_sceneInstance)
+                && !string.Equals(instance, _sceneInstance, System.StringComparison.Ordinal))
+            {
+                Exit();  // same teardown a jump-with-a-visible-gap would have run…
+                Enter(); // …and the same rebuild, now against the arrived system's map
+                return;  // the rest of this frame belongs to the old scene
+            }
+
             // item 20 S1: the voxel ship design arrives just after we enter space (separate message), so rebuild
             // the ship mesh once it (or a switched ship's design) is available.
             if (!ReferenceEquals(_builtDesign, Game.ShipDesign))
@@ -432,6 +455,8 @@ namespace BlocksBeyondTheStars.Client
 
             // item 20 S3: build/update/remove the voxel asteroid bodies as their designs arrive.
             ReconcileStructs();
+
+            KeepFarAsteroidsVisible(); // #1663: a belt body must never shrink to an unfindable speck
 
             // Live hull re-tint: the player can change their ship colour from the menu mid-flight (item 32).
             // Cube fallback: re-tint the material; voxel ship: the paint lives in the mesh's tint stream,
@@ -1469,7 +1494,7 @@ namespace BlocksBeyondTheStars.Client
             var raw = mapGo.AddComponent<UnityEngine.UI.RawImage>();
             raw.texture = WorldMinimap.Bake(Game.Content, Game.Atlas, Game.WorldSeed, locName, typeKey, circ, 256, 128,
                 bodyId: !string.IsNullOrEmpty(_choosePadBody) ? _choosePadBody : Game?.LocationName ?? "home",
-                continents: Game?.TerrainContinents ?? false);
+                continents: Game?.TerrainContinents ?? false, generation: Game?.TerrainGeneration ?? 0);
             raw.raycastTarget = true;
 
             // Day/night terminator: shade the night half of the strip + mark dawn/dusk, so you can see which pads
@@ -1729,9 +1754,9 @@ namespace BlocksBeyondTheStars.Client
             float bestDist = range;    // boresight: nearest body the ray pierces
             foreach (var e in space.Entities)
             {
-                if (e.Kind != "Asteroid" && e.Kind != "Drone" && e.Kind != "Ufo" && e.Kind != "Cruiser" && e.Kind != "BanditShip")
+                if (e.Kind != "Asteroid" && e.Kind != "Wreck" && e.Kind != "Drone" && e.Kind != "Ufo" && e.Kind != "Cruiser" && e.Kind != "BanditShip")
                 {
-                    continue;
+                    continue; // (a Wreck is salvage, #1664 — carved with the mining beam like a rock)
                 }
 
                 Vector3 to = new Vector3(e.X, e.Y, e.Z) - shipPos;
@@ -1788,7 +1813,7 @@ namespace BlocksBeyondTheStars.Client
                 new BlocksBeyondTheStars.Shared.Geometry.Vector3f(fwd.x, fwd.y, fwd.z));
             Game.LastShotTargetId = target.Id;
             Game.LastShotTime = Time.time;
-            bool mining = target.Kind == "Asteroid";
+            bool mining = target.Kind == "Asteroid" || target.Kind == "Wreck"; // salvaging a derelict is mining (#1664)
             Color col = mining ? new Color(1f, 0.7f, 0.25f) : new Color(0.45f, 1f, 1f);
 
             Vector3 muzzle = _ship.transform.localPosition + _ship.transform.localRotation * new Vector3(0f, 0f, 2.2f);
@@ -2268,8 +2293,9 @@ namespace BlocksBeyondTheStars.Client
         {
             // Whitelist, not blacklist (#954): "ship" is the own hull (Game.ShipDesign), "ship_remote"
             // only feeds the remote avatar's hull — building either here spawned a static, unscaled,
-            // collider-less ghost copy at the design position (players: the scene origin).
-            if (m.Kind != "asteroid" && m.Kind != "station")
+            // collider-less ghost copy at the design position (players: the scene origin). A "wreck" (#1664)
+            // is the system's derelict: a static voxel hull like an asteroid.
+            if (m.Kind != "asteroid" && m.Kind != "station" && m.Kind != "wreck")
             {
                 return;
             }
@@ -2519,6 +2545,7 @@ namespace BlocksBeyondTheStars.Client
 
             ResolveShipFlight();
             BuildScene();
+            _sceneInstance = Game.Space != null ? Game.Space.InstanceId : null; // what this scene depicts (#1677)
 
             // React to server-reported hull/shield damage (collisions, enemy fire) with a flash + shake,
             // and to ship destruction with an explosion burst at the hull.
@@ -2585,6 +2612,9 @@ namespace BlocksBeyondTheStars.Client
 
             if (_root != null)
             {
+                // Deactivate before destroying: Unity frees it at the END of the frame, and a same-frame
+                // rebuild (#1677) would otherwise draw the old system's planets over the new one for a frame.
+                _root.SetActive(false);
                 Destroy(_root);
                 _root = null;
             }
@@ -2632,6 +2662,7 @@ namespace BlocksBeyondTheStars.Client
             _shake = 0f;
             _hitFlash = 0f;
             _cargoFlash = 0f;
+            _sceneInstance = null;
             Game.SpaceViewActive = false;
         }
 
@@ -2747,6 +2778,7 @@ namespace BlocksBeyondTheStars.Client
         private void BuildSystemBodies()
         {
             _landables.Clear();
+            _asteroidBodies.Clear();
             _bounds = Bounds;
 
             var map = Game?.StarMap;
@@ -2948,7 +2980,12 @@ namespace BlocksBeyondTheStars.Client
                 // Spawn the separated bodies + register them as landable / keep-out.
                 for (int k = 0; k < positions.Count; k++)
                 {
-                    SpawnBody("SystemBody_" + ids[k], ids[k], kinds[k], locKeys[k], positions[k], radii[k] * 2f, bodyTypes[k], biases[k], rings[k]);
+                    var bodyGo = SpawnBody("SystemBody_" + ids[k], ids[k], kinds[k], locKeys[k], positions[k], radii[k] * 2f, bodyTypes[k], biases[k], rings[k]);
+                    if (kinds[k] == "AsteroidField")
+                    {
+                        _asteroidBodies.Add((bodyGo.transform, radii[k] * 2f)); // #1663: held findable from afar
+                    }
+
                     _landables.Add((ids[k], names[k], positions[k], radii[k]));
                     _keepOut.Add((positions[k], radii[k] + KeepOutMargin)); // can't fly into it — slide + press E to land
                     maxDist = Mathf.Max(maxDist, positions[k].magnitude);
@@ -2956,6 +2993,41 @@ namespace BlocksBeyondTheStars.Client
             }
 
             _bounds = Mathf.Max(Bounds, maxDist + 140f); // keep the whole system reachable
+        }
+
+        /// <summary>#1663: holds every landable asteroid body at a minimum apparent size. A rock's true orbit
+        /// diameter (11–15 units) projects to 8–20 px at belt distances, so the belt you were told to fly to
+        /// was invisible until you were nearly in it. The sphere is scaled up only as far as it takes to fill
+        /// <see cref="MinAsteroidScreenPx"/> on screen (perspective: world units per pixel = 2·d·tan(fov/2)/
+        /// screen height); once you are close enough that its true size covers that, it is exactly its true
+        /// size again — near-range looks and keep-out spheres are untouched. A handful of bodies, one
+        /// distance each: negligible per frame.</summary>
+        private void KeepFarAsteroidsVisible()
+        {
+            if (_asteroidBodies.Count == 0 || Camera == null)
+            {
+                return;
+            }
+
+            float tanHalf = Mathf.Tan(Camera.fieldOfView * 0.5f * Mathf.Deg2Rad);
+            float screenH = Mathf.Max(1f, Screen.height);
+            Vector3 cam = Camera.transform.localPosition; // the flight camera lives in the scene-root frame, like the bodies
+            for (int i = 0; i < _asteroidBodies.Count; i++)
+            {
+                var (body, diameter) = _asteroidBodies[i];
+                if (body == null)
+                {
+                    continue;
+                }
+
+                float dist = (body.localPosition - cam).magnitude;
+                float minWorld = MinAsteroidScreenPx * 2f * dist * tanHalf / screenH;
+                float want = Mathf.Max(diameter, minWorld);
+                if (Mathf.Abs(body.localScale.x - want) > 0.01f)
+                {
+                    body.localScale = Vector3.one * want;
+                }
+            }
         }
 
         /// <summary>The orbit-view diameter for a body, derived from its real walkable circumference — so a
@@ -2980,7 +3052,7 @@ namespace BlocksBeyondTheStars.Client
         /// plus a per-type cloud shell and an atmosphere haze rim scaled by atmosphere density.
         /// <paramref name="bodyId"/> keys the body's true circumference; <paramref name="locationName"/>
         /// seeds the per-planet flora hue.</summary>
-        private void SpawnBody(string name, string bodyId, string kind, string locationName, Vector3 pos, float diameter, string planetType, float sizeBias = 0f, int ringSeed = 0)
+        private GameObject SpawnBody(string name, string bodyId, string kind, string locationName, Vector3 pos, float diameter, string planetType, float sizeBias = 0f, int ringSeed = 0)
         {
             // B37 rest: planets + cloud shells in the orbit view are lit by THIS system's star, so under a
             // red sun the whole system reads warm (a light wash — the biome tint stays recognisable).
@@ -3007,7 +3079,7 @@ namespace BlocksBeyondTheStars.Client
                     string.IsNullOrEmpty(bodyId) ? locationName ?? "home" : bodyId, ClassOf(kind, planetType), sizeBias);
                 var baked = WorldMinimap.Bake(Game.Content, Game.Atlas, Game.WorldSeed, locationName, planetType, circ, 96, 48,
                     bodyId: string.IsNullOrEmpty(bodyId) ? locationName ?? "home" : bodyId,
-                    continents: Game.TerrainContinents);
+                    continents: Game.TerrainContinents, generation: Game.TerrainGeneration);
                 Color washTint = Color.Lerp(Color.white, sunHue, 0.35f);
                 sphere.GetComponent<Renderer>().sharedMaterial = LitPhase(washTint, sunDir, baked, new Vector2(1f, 1f));
             }
@@ -3049,6 +3121,8 @@ namespace BlocksBeyondTheStars.Client
             {
                 PlanetRings.Attach(sphere.transform, ringSeed, sunHue, 0.55f, 3001, out _);
             }
+
+            return sphere;
         }
 
         private GameObject BuildShip(Transform parent)
@@ -3827,8 +3901,9 @@ namespace BlocksBeyondTheStars.Client
 
                     // #1469: a player-built station renders as its own voxel hull (a "station" design in _structs
                     // under the same id) — never ALSO as the generic spinning placeholder model. A placeholder
-                    // built before the design arrived (a late SpaceShipDesign) is torn down here.
-                    if (e.Kind == "SpaceStation" && _structs.ContainsKey(e.Id))
+                    // built before the design arrived (a late SpaceShipDesign) is torn down here. The same
+                    // goes for the derelict wreck (#1664), whose hull arrives as a "wreck" design.
+                    if ((e.Kind == "SpaceStation" || e.Kind == "Wreck") && _structs.ContainsKey(e.Id))
                     {
                         if (_entities.TryGetValue(e.Id, out var placeholder))
                         {
@@ -3862,9 +3937,9 @@ namespace BlocksBeyondTheStars.Client
                         _entities[e.Id] = go;
                     }
 
-                    // Stations are static scenery — everything else the server moves gets the snapshot
-                    // buffer (#756). Rotation stays driven by Spin (no yaw on the entity wire).
-                    if (e.Kind != "SpaceStation")
+                    // Stations (and the derelict wreck, #1664) are static scenery — everything else the server
+                    // moves gets the snapshot buffer (#756). Rotation stays driven by Spin (no yaw on the entity wire).
+                    if (e.Kind != "SpaceStation" && e.Kind != "Wreck")
                     {
                         if (fresh)
                         {
@@ -4072,6 +4147,10 @@ namespace BlocksBeyondTheStars.Client
         /// empty id (it doubles as "no travel target"), so the chart pins it under this sentinel instead.</summary>
         public const string HomeWaypointId = "~home";
 
+        /// <summary>Arrival distance for a wreck waypoint (#1664): inside the mining beam's reach (40) and the
+        /// server's manifest-reading approach range (45), so arriving IS visiting.</summary>
+        private const float WreckArriveRange = 30f;
+
         /// <summary>Resolves the player's space waypoint (#597) to a scene position + squared arrival
         /// distance: a landable body id (arrive just outside land range), a station entity id (arrive in
         /// dock range), or a free point (arrive within a small fixed radius). False when no waypoint is
@@ -4109,6 +4188,14 @@ namespace BlocksBeyondTheStars.Client
                         {
                             target = new Vector3(e.X, e.Y, e.Z);
                             arriveSq = BoardRange * BoardRange * 0.64f;
+                            return true;
+                        }
+
+                        if (e.Kind == "Wreck" && e.Id == id)
+                        {
+                            // The system's derelict (#1664): a chart target like a station, arrive in salvage range.
+                            target = new Vector3(e.X, e.Y, e.Z);
+                            arriveSq = WreckArriveRange * WreckArriveRange;
                             return true;
                         }
                     }
@@ -4910,6 +4997,7 @@ namespace BlocksBeyondTheStars.Client
             "Ufo" => new Vector3(2.4f, 0.7f, 2.4f),
             "Cruiser" => new Vector3(3f, 1.5f, 5f),
             "SpaceStation" => new Vector3(8f, 5f, 8f),
+            "Wreck" => new Vector3(4f, 2.5f, 6f), // #1664: only until its voxel hull design arrives
             "ResourceDrop" => Vector3.one * 0.7f,
             _ => Vector3.one * 1.1f,
         };
@@ -4917,6 +5005,7 @@ namespace BlocksBeyondTheStars.Client
         private static Color EntityColor(string kind) => kind switch
         {
             "Asteroid" => new Color(0.45f, 0.42f, 0.38f),
+            "Wreck" => new Color(0.55f, 0.45f, 0.32f), // scorched plating — amber-grey like its radar blip
             "Ufo" => new Color(0.6f, 0.35f, 0.8f),
             "Cruiser" => new Color(0.7f, 0.3f, 0.3f),
             "SpaceStation" => new Color(0.62f, 0.66f, 0.72f),

@@ -120,7 +120,7 @@ Last updated: 2026-08-26.
 | **G** | Loot the nearest container |
 | **H** | Store your loose materials and blocks in the nearest storage crate / wood box (tools, weapons and equipment stay with you) |
 | **E** | Use a nearby ship/station tile (cockpit, workshop, cargo, medbay, …); **trade with a vendor** (opens the Market); **board your hover speeder**; **beam** from a teleporter pad you're standing on; **choose what belongs in a storage crate** you're aiming at (see §5 → Storage crates) |
-| **X** | Pack up (stow) a nearby deployed hover speeder or boat back into its item |
+| **X** | Pack up (stow) a nearby deployed hover speeder or boat back into its item; at your own landed ship's **cockpit / console**: **recall** every speeder / boat you left out on this world straight into your inventory (parked beside the ship, with a marker, only when no slot is free; see §5 → Hover speeder) |
 | **T** | Send a trade request to a nearby player |
 | **K** | Send a dock request to a nearby player |
 | **U** | Undock from a player / leave a boarded space station |
@@ -304,10 +304,11 @@ separate unlock; admins can still disable it through server world rules.
 - **HUD** — health/oxygen/hunger/energy, hotbar, location, compass, scan readout (bottom-left), and the
   wreck panel (right) when near a repairable wreck.
 - **Compass** (bottom-right, on foot) — a heading-up dial: the top is the way you look, and the **N** that
-  moves around the dial marks north (the map is north-up, so the two agree). The blue
-  square is your ship and the amber pin the waypoint; the captions under the dial ("Ship 114 m", "Waypoint
-  138 m") give each distance. Beacons and saved markers show as smaller blips. Turn until the ship sits at the
-  top and walk; VEGA reminds you of this once you are a long way from the hull.
+  moves around the dial marks north (the map is north-up, so the two agree). A blue **arrow on the rim** points
+  the way to your ship and stays readable however far off it is; the blue square inside the dial is the ship
+  itself and the amber pin the waypoint, and the captions under the dial ("Ship 114 m", "Waypoint 138 m") give
+  each distance. Beacons and saved markers show as smaller blips. Turn until the arrow points to the top of the
+  dial and walk; VEGA reminds you of this once you are a long way from the hull.
 - **VEGA panel** — the ship AI speaks through a typewriter speech panel with a persistent **objective
   chip** (live progress, e.g. "mine 1/3") during onboarding. Advance lines with **N** — a line stays on
   screen until you do (no auto-dismiss), and further lines wait in the queue. Advisor hints can
@@ -378,6 +379,11 @@ separate unlock; admins can still disable it through server world rules.
   stays. Water flowing into lava still chills to obsidian at the contact face.
 - **Lava is slow, water is quick**: lava creeps at half the speed water flows, so a breached crater gives
   you time to step back.
+- **Lava and fire burn everybody**: animals, robbers and Guardian machines take contact damage exactly as
+  you do (lava −15/s, fire −10/s), so a flooded fire trench really defends a base. Land animals are kept out
+  of a lava column anyway and mostly never reach it; what burns is what flies in, what was inside when you
+  flooded it, and what gets driven in. Tame companions never burn, creatures that live in lava are at home
+  in it, and with **environmental hazards off** (or on a Creative world) nothing burns at all.
 - **Aim at water and lava**: holding a block, the crosshair stops at a fluid's surface and the block goes
   *into* that cell (the fluid makes way) — so you can bridge a lake or a lava field from its edge. Holding
   a tier-3 drill (mining beam, diamond drill) the surface is mineable too. While you are swimming the aim
@@ -408,12 +414,22 @@ separate unlock; admins can still disable it through server world rules.
 - Water is not solid: you sink in with gentle buoyancy and **dive**; hold **Space** to swim up and
   surface. Water **breaks falls**. Deep, swimmable water (lakes, ponds, seas) is common on wet worlds;
   oxygen keeps draining while submerged on non-breathable worlds.
+- **You can fight in the water.** Water dims the view rather than ending it: a few blocks of it are
+  see-through, so you can hit something swimming beside you or just under the surface, while a whole lake
+  still hides what is on the far side of it — nothing notices you across open water, and you cannot snipe
+  through it either.
 
 ### Mining & tools
 - Tools have a **kind** (drill/scanner/…) and **tier** (1–5). A block has a **hardness** and may require a
   minimum tool tier; mining accumulates the tool's power until it exceeds the hardness, then the block
   breaks and yields its **drops**. Powerful drills can clear a small radius — the sweep only takes blocks
   the drill could mine directly (same tier rules).
+- **The game tells you which tool a block wants.** Scanning a block lists a `Needs:` line naming the cheapest
+  tool that opens it, and a swing the held tool cannot land is refused by name ("Needs: Titanium Drill")
+  rather than a bare "wrong tool". The first time a tier gate turns you away, VEGA explains it once.
+  Tier-2 blocks (machine housings, factory terminals, titanium/platinum/tungsten and the rare ores) will not
+  budge for the starter drill — and since titanium ore is itself tier 2, your first titanium comes from a
+  wreck, from loot or from **trade**, never from digging.
 - Some powered drills (titanium drill, mining beam) **draw suit energy with every swing**; with an empty
   suit the swing is refused. The basic and diamond drills need no energy, so you can always keep mining.
 - **A full backpack does not stop you.** When neither your inventory nor (while aboard) the cargo hold has
@@ -709,12 +725,15 @@ separate unlock; admins can still disable it through server world rules.
   sealed rooms currently have air and whether the spot you stand on does (*here: air*). VEGA explains the
   three rules once when you found a core on a world without breathable air.
 - **Sentry post** (workshop, blueprint-gated after the Heal Tank): a small automatic turret you place inside
-  your own base zone. It fires at hostile machines and at robbers who have **already started a fight** —
-  never at players, never at tame animals, and never at somebody walking up to talk (you always get to
-  answer a hold-up yourself). It needs neither power nor ammunition, and you can build as many as you like.
-  Two things worth knowing: it only works **while you are home** on that world, and machines appear 35–50
-  blocks away from you — so a sentry is the thing that covers your back while you build, not a fence that
-  clears the neighbourhood. On **Creative** or **Peaceful** worlds it stays quiet, like everything else.
+  your own base zone. It fires at hostile machines, at **hostile animals**, and at robbers who have
+  **already started a fight** — never at players, never at tame animals, and never at somebody walking up to
+  talk (you always get to answer a hold-up yourself). It needs neither power nor ammunition, and you can
+  build as many as you like. Three things worth knowing: it has to stand **within 8 blocks of your base
+  core** (place one farther out and the game tells you on the spot that it will not fire), it reaches
+  **14 blocks**, and it only works **while you are home** on that world. Machines appear 35–50 blocks away
+  from you — so a sentry is the thing that covers your back while you build, not a fence that clears the
+  neighbourhood. Scan a post to read its range and the zone it needs back. On **Creative** or **Peaceful**
+  worlds it stays quiet, like everything else.
   A sentry's kill **counts for you**: bandit and machine bounty steps progress, a scout it finishes still
   counts towards *Guard the homestead* and the base-defended tally, and the drops land on the ground where
   the target fell. Only the plain "defeat" achievement stays yours to earn by hand.
@@ -867,6 +886,13 @@ separate unlock; admins can still disable it through server world rules.
 - Space holds two friendly surprises: a **life pod** sometimes drifts through a system — **fly close**
   and you rescue the survivor (a small thank-you, a new person in *People you know*, and a radio call
   later) — and an **anomaly** no catalogue explains: **scan** it for knowledge and a field record.
+- Many systems also hold a **space wreck**: the travel screen lists it with its ship's name and "Wreck",
+  it shows amber on the radar and on the system chart (**M**, click it to set a waypoint), and it is a
+  **fly-to**, never a quick-travel destination. Coming close reads its manifest (a field record, and the
+  wreck counts as visited); the **mining laser** carves it up like an asteroid for plating, cabling, a metal
+  and now and then a data fragment — an EVA pick works too.
+- Every **asteroid** listed for a system stays a visible dot from anywhere in that system, and the green
+  bearing blips on the radar's rim carry the body's name — the chart's waypoint is still the quickest way there.
 - Everything in this section is peaceful and appears under every preset — nothing here fights back.
 
 ### Bandits (robbers, camps, pirate space)
@@ -1075,7 +1101,10 @@ separate unlock; admins can still disable it through server world rules.
   - **Off (default):** you can only quick-travel to worlds you've already **landed on manually**. To reach a
     new world, **launch into space and fly there**, then land (pick a pad). A never-visited star system shows
     only as a single **"Hyperjump to this system"** entry — jumping there drops you into its flight space, and
-    you fly to its worlds and land. Once you've been somewhere, quick-travel to it works from then on.
+    you fly to its worlds and land. Once you've been somewhere, quick-travel to it works from then on. Every
+    other system keeps its **"Hyperjump to this system"** entry above its worlds, so a system you have jumped
+    into but never landed in stays reachable — a locked world in another system offers the same jump in its
+    detail pane (#1638).
   - **On:** quick-travel works for any world/system immediately, visited or not.
 - Jumping to **another star system** always requires a fitted **`jump_generator`** module.
 - A star system you have **never entered** shows as **"Unknown system"** — its name is part of what you
@@ -1194,6 +1223,20 @@ separate unlock; admins can still disable it through server world rules.
   and **F** dismounts. Press **X** near a parked speeder you own to **pack it back up** into the item.
 - The speeder has its **own energy tank** (driving drains it) and a **voxel hull** that takes collision damage —
   hard impacts dent it and enough damage destroys it. It persists with you across reloads (like a companion).
+- It is a **land vehicle**: it unfolds only on dry ground (deploying towards water is refused) and **stops at the
+  shoreline** — water ahead caps the throttle, and if it does get pushed into water it floats and can only back out.
+  A speeder wedged against a lip hops over it by itself after a moment; a hull that ends up inside a block lifts out.
+- **Dismounting** puts you on the ground **beside** the hull, and a parked speeder or boat is **solid** — you can
+  stand on it, not walk through it.
+- **Boarding:** walk up to your parked speeder or boat — the centre prompt reads **Board (E) · Pack up (X)** (pad and
+  touch: the USE button boards, the ACT list carries the pack-up).
+- **Lost it?** Walk within 5 m to pack it up (the HUD names the vehicle and its distance while it is within 30 m).
+  If it is somewhere you cannot get to — the far shore, a ravine — go to your landed ship's **cockpit or console**
+  and press **X**: the ship **recalls** every speeder and boat you left out on this world **straight into your
+  inventory**. Only when no slot is free is it parked beside the ship instead — on the cell nearest you, with a
+  "look here" marker on the spot and its distance in the message. Only from the landed ship, never while someone
+  drives it, never from another world. Dying while driving releases the seat, so you can board or pack it up again
+  afterwards.
 
 #### Boat (water vehicle)
 - The **boat** (`boat`) is the water kind of the same system — an early-game workshop craft with **no

@@ -285,7 +285,9 @@ public sealed class NetCodecTests
         [232] = typeof(MarkerActionIntent),
         [233] = typeof(MarkerList),
         [234] = typeof(UninstallShipModuleIntent),
+        [235] = typeof(RecallVehicleIntent),  
         [236] = typeof(TransitLaunchDoneIntent),
+        
     };
 
     [Fact]

@@ -823,6 +823,11 @@ public sealed class JoinAccepted
     /// <summary>Whether this save was created with continents (#704) — the client's preview generators
     /// must apply the same gate or orbit/minimap textures would show the wrong coastlines.</summary>
     public bool TerrainContinents { get; set; }
+
+    /// <summary>The terrain generation this save was created with (#1644) — the client's preview generators
+    /// must apply the same generation as the server, like <see cref="TerrainContinents"/>. Contractless
+    /// MessagePack: an older client ignores it, an older server leaves it 0 (the classic generators).</summary>
+    public int TerrainGeneration { get; set; }
 }
 
 public sealed class JoinRejected
@@ -1735,6 +1740,10 @@ public sealed class NetCreature
     public bool EyeStalks { get; set; }
     public bool HasGasSac { get; set; }
 
+    /// <summary>Pectoral + tail fins — a legless swimmer's only limbs. Additive field: an older client
+    /// ignores it and draws the finless body it always did, and an older server leaves it false.</summary>
+    public bool HasFins { get; set; }
+
     // Body plans (#637/#638): which architecture the client renders ("Standard" | "Medusa" | "Titan"),
     // plus the titan-only neck/trunk traits. Additive fields — older clients ignore them and draw the
     // standard body, so the wire tag is unchanged.
@@ -1879,6 +1888,7 @@ public sealed class NetCompanion
     public int Tentacles { get; set; }
     public bool EyeStalks { get; set; }
     public bool HasGasSac { get; set; }
+    public bool HasFins { get; set; }
     public string BodyPlan { get; set; } = "Standard"; // #637/#638 — the portrait renders the real plan
     public int NeckLength { get; set; }
     public bool HasTrunk { get; set; }

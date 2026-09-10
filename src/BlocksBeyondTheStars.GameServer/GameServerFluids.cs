@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using BlocksBeyondTheStars.Networking.Messages;
 using BlocksBeyondTheStars.Shared.Geometry;
 using BlocksBeyondTheStars.Shared.Primitives;
+using BlocksBeyondTheStars.Shared.World;
 
 namespace BlocksBeyondTheStars.GameServer;
 
@@ -38,12 +39,29 @@ public sealed partial class GameServer
     private double _sinceFluid { get => _worlds.Active.SinceFluid; set => _worlds.Active.SinceFluid = value; }
     private ushort _waterId, _lavaId, _obsidianId, _basaltId;
 
+    /// <summary>The waterfall block (#1726): a placed block — solid, not a fluid — whose underside pours a column
+    /// of ordinary water straight down, and that column never spreads sideways, not even where it lands. A builder
+    /// wanted a waterfall on a levelled ~80×80 spaceport and got a flood instead: a falling cell is refilled at
+    /// <see cref="FluidFull"/>, so every step of stepped ground re-arms a seven-cell spread, and on a big flat
+    /// build "one water block" meant "the whole place". Changing that rule would change every existing body of
+    /// water in every save; a source that only ever falls is the tool she actually asked for (Marcel's call,
+    /// option C of the issue).</summary>
+    private const string WaterSpoutBlockKey = "water_spout";
+    private ushort _spoutId;
+
+    /// <summary>How close a player must be to a lava cell hardened by a FLOWING quench to be told about it
+    /// (#1727), and how long that explanation stays quiet afterwards. A flood over a trench hardens hundreds
+    /// of cells in a few ticks; the point is one sentence per episode, not one per block.</summary>
+    private const double FlowQuenchTellRange = 40.0;
+    private const double FlowQuenchTellCooldown = 60.0;
+
     private void InitFluids()
     {
         _waterId = _content.GetBlock("water")?.NumericId.Value ?? 0;
         _lavaId = _content.GetBlock("lava")?.NumericId.Value ?? 0;
         _obsidianId = _content.GetBlock("obsidian")?.NumericId.Value ?? 0;
         _basaltId = _content.GetBlock("basalt")?.NumericId.Value ?? 0;
+        _spoutId = _content.GetBlock(WaterSpoutBlockKey)?.NumericId.Value ?? 0;
     }
 
     // --- Water meets lava (#477 decision 4, completed by #1284) -------------------------------------------
@@ -77,6 +95,39 @@ public sealed partial class GameServer
         BroadcastToWorld(new BlockChanged { X = pos.X, Y = pos.Y, Z = pos.Z, Block = crust });
         WakeNeighbors(pos);
         return crust;
+    }
+
+    /// <summary>
+    /// Tells nearby players, at most once a minute each, what a FLOWING quench actually did (#1727).
+    /// <para>
+    /// Placing a fluid by hand already explains itself (<see cref="QuenchPlacedFluid"/>), but a flood that
+    /// reaches a lava trench on its own said nothing at all. A player watched her whole trench go dark, saw
+    /// glowing lava still in the walls beneath the new rock, and reasonably concluded the game had laid a
+    /// block ON TOP of the lava. It had not — <see cref="QuenchLava"/> replaces the cell it hardens — but only
+    /// the cells the water actually touched are quenched, so the molten core stays. That is the sentence the
+    /// game owed her.
+    /// </para>
+    /// </summary>
+    private void TellAboutFlowQuench(Vector3i waterPos)
+    {
+        foreach (var s in JoinedInActiveWorld())
+        {
+            if (_uptime - s.LastFlowQuenchTold < FlowQuenchTellCooldown)
+            {
+                continue;
+            }
+
+            double dx = WorldConstants.WrapDeltaX(s.State.Position.X - waterPos.X, _world.Circumference);
+            double dy = s.State.Position.Y - waterPos.Y;
+            double dz = s.State.Position.Z - waterPos.Z;
+            if (dx * dx + dy * dy + dz * dz > FlowQuenchTellRange * FlowQuenchTellRange)
+            {
+                continue;
+            }
+
+            s.LastFlowQuenchTold = _uptime;
+            Send(s, new ServerMessage { Text = "@srv.fluid.quench_surface_only" });
+        }
     }
 
     /// <summary>Quenches every lava cell around a water cell. Returns the crust ids produced (0 = none) as a
@@ -215,6 +266,81 @@ public sealed partial class GameServer
         }
     }
 
+    private bool IsSpout(ushort id) => id != 0 && id == _spoutId;
+
+    /// <summary>A just-placed waterfall block starts pouring (#1726). Placed on solid ground it can do nothing at
+    /// all, and a block that silently does nothing is a bug report waiting to happen — so the player is told.</summary>
+    private void StartSpout(PlayerSession session, Vector3i pos)
+    {
+        _activeFluid.Add(pos);
+        if (!FluidCanEnter(new Vector3i(pos.X, pos.Y - 1, pos.Z)))
+        {
+            Send(session, new ServerMessage { Text = "@srv.fluid.spout_needs_drop" });
+        }
+    }
+
+    /// <summary>One step of a waterfall block: fill the cell beneath with full, falling water if it is open. The
+    /// block then sleeps — it is woken again like any fluid when a neighbour changes (the column dries up, the cell
+    /// below is mined), so a spout on a wall keeps pouring for as long as it stands there.</summary>
+    private void PourFromSpout(Vector3i pos)
+    {
+        if (_waterId == 0)
+        {
+            return;
+        }
+
+        var below = new Vector3i(pos.X, pos.Y - 1, pos.Z);
+        if (FluidCanEnter(below))
+        {
+            FillFluid(below, new BlockId(_waterId), FluidFull, falling: true);
+        }
+    }
+
+    /// <summary>Whether a falling water cell hangs from a waterfall block: walks up the falling column above it and
+    /// answers true if the block at its top is a spout. Only evaluated for the cell at the foot of a fall — the one
+    /// place an ordinary column would start to spread — so the walk costs the column's height, once per landing.</summary>
+    private bool FedByASpout(Vector3i p, ushort id)
+    {
+        if (id != _waterId || _spoutId == 0)
+        {
+            return false;
+        }
+
+        var c = p;
+        for (int guard = 0; guard < 256; guard++) // a column is at most a world's height tall
+        {
+            var up = new Vector3i(c.X, c.Y + 1, c.Z);
+            ushort u = _world.GetBlock(up).Value;
+            if (IsSpout(u))
+            {
+                return true;
+            }
+
+            if (u != id || !_fallingFluid.Contains(up))
+            {
+                return false;
+            }
+
+            c = up;
+        }
+
+        return false;
+    }
+
+    /// <summary>Test seam: places a waterfall block and wakes it exactly as the placement path does.</summary>
+    public void PlaceWaterSpoutForTest(int x, int y, int z)
+    {
+        if (_spoutId == 0)
+        {
+            return;
+        }
+
+        var pos = new Vector3i(x, y, z);
+        _world.SetBlock(pos, new BlockId(_spoutId));
+        BroadcastToWorld(new BlockChanged { X = x, Y = y, Z = z, Block = _spoutId });
+        _activeFluid.Add(pos);
+    }
+
     private void TickFluids(double dt)
     {
         if (_activeFluid.Count == 0)
@@ -257,6 +383,12 @@ public sealed partial class GameServer
             }
 
             ushort id = _world.GetBlock(pos).Value;
+            if (IsSpout(id))
+            {
+                PourFromSpout(pos); // #1726: a waterfall block only ever feeds the cell beneath it
+                continue;
+            }
+
             if (!IsFluid(id))
             {
                 UntrackFluid(pos);
@@ -283,7 +415,11 @@ public sealed partial class GameServer
             }
             else if (id == _waterId)
             {
-                CrustLavaAround(pos); // a woken water cell hardens the lava it touches (#1284)
+                var (crustedObsidian, crustedBasalt) = CrustLavaAround(pos); // a woken water cell hardens the lava it touches (#1284)
+                if (crustedObsidian + crustedBasalt > 0)
+                {
+                    TellAboutFlowQuench(pos); // #1727: say what happened, once per episode
+                }
             }
 
             bool isSource = !_fluidLevel.ContainsKey(pos);
@@ -328,7 +464,10 @@ public sealed partial class GameServer
                 // otherwise spread at its own (high) elevation and build a sheet of water hanging over the drop.
                 ushort belowId = _world.GetBlock(below).Value;
                 bool feedingFall = IsFluid(belowId) && _fallingFluid.Contains(below);
-                if (!feedingFall)
+                // ...and a column poured by a waterfall block (#1726) never spreads at all, not even where it
+                // lands: the whole point of that block is a fall that ends where it hits, not a sheet across the floor.
+                bool confined = !feedingFall && _fallingFluid.Contains(pos) && FedByASpout(pos, id);
+                if (!feedingFall && !confined)
                 {
                     Spread(new Vector3i(pos.X + 1, pos.Y, pos.Z), kind, level, ref changed);
                     Spread(new Vector3i(pos.X - 1, pos.Y, pos.Z), kind, level, ref changed);
@@ -353,9 +492,10 @@ public sealed partial class GameServer
     /// of fluid feeds (water never sustains lava or vice-versa).</summary>
     private int SupportedLevel(Vector3i p, ushort id)
     {
-        if (_world.GetBlock(new Vector3i(p.X, p.Y + 1, p.Z)).Value == id)
+        ushort above = _world.GetBlock(new Vector3i(p.X, p.Y + 1, p.Z)).Value;
+        if (above == id || (id == _waterId && IsSpout(above)))
         {
-            return FluidFull; // fed from directly above (a waterfall column)
+            return FluidFull; // fed from directly above (a waterfall column, or the waterfall block itself — #1726)
         }
 
         int best = 0;
@@ -458,7 +598,8 @@ public sealed partial class GameServer
         || IsFluid(_world.GetBlock(new Vector3i(p.X, p.Y, p.Z + 1)).Value)
         || IsFluid(_world.GetBlock(new Vector3i(p.X, p.Y, p.Z - 1)).Value)
         || IsFluid(_world.GetBlock(new Vector3i(p.X, p.Y + 1, p.Z)).Value)
-        || IsFluid(_world.GetBlock(new Vector3i(p.X, p.Y - 1, p.Z)).Value);
+        || IsFluid(_world.GetBlock(new Vector3i(p.X, p.Y - 1, p.Z)).Value)
+        || IsSpout(_world.GetBlock(new Vector3i(p.X, p.Y + 1, p.Z)).Value); // a waterfall block overhead pours into the hole (#1726)
 
     /// <summary>True if a cell has any neighbour it could flow into (sideways or down) — used to let settled
     /// full cells go dormant, so a big body of fluid doesn't keep every cell active forever. Ship-interior
@@ -486,7 +627,8 @@ public sealed partial class GameServer
 
     private void Wake(Vector3i p)
     {
-        if (IsFluid(_world.GetBlock(p).Value))
+        ushort id = _world.GetBlock(p).Value;
+        if (IsFluid(id) || IsSpout(id))
         {
             _activeFluid.Add(p); // untracked stays a source, tracked stays flowing — no promotion here
         }

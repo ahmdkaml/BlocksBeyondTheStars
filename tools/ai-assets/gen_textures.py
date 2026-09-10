@@ -198,12 +198,25 @@ TEXTURES = [
     ("machine_block", "a heavy sci-fi industrial machine housing, dark grey armoured metal casing with rivets, bolted seams, ventilation slits and a small amber indicator light, front view"),
     ("factory_pipe", "an industrial factory pipe duct, a thick riveted olive-grey metal pipe with flanged joints and a pressure valve, front view"),
     ("factory_terminal", "a sci-fi factory production terminal, a dark metal console with a glowing cyan holographic screen showing production graphs, buttons and a status light, front view"),
+    # #1714: carries base power out to a sentry post beyond the base zone. Reads as a relay, not a generator —
+    # heavy insulators and a conduit running through, so a chain of them looks like a power line.
+    ("power_relay", "a sci-fi power relay pylon, a dark grey metal housing with two ceramic insulator rings, a thick cable conduit running through it and a bright glowing cyan energy core between the rings, small status lights, front view"),
+    # #1726: the waterfall spout — a machine block that pours a column of water straight down and never sideways.
+    # Reads as plumbing, not as water: a riveted housing with a wide nozzle underneath, so the player can see
+    # which way it pours before placing it over an edge.
+    ("water_spout", "a sci-fi water spout block, a dark blue-grey riveted metal housing with a wide round nozzle opening at the bottom edge, a short pipe running down into the nozzle, clear blue-white water pouring out of the nozzle underneath, a small blue status light, front view"),
     # Guardian machines (#1338): the plating tile WorldEntities/SpaceView load for the robot, scan-drone,
     # space drone, UFO and cruiser hulls — grey circuit-board armour, no lights (the red eyes are separate).
     # Post-processed by `guardian_plating` (see POST_PROCESS) before the tile is written, since the entity
     # loaders do NOT brighten tiles like CreatureBuilder does: desaturated 70 % and lifted
     # v' = 1 - (1 - v) * 0.76 so the plates sit at ~0.40 mean grey.
     ("enemy_robot", "dark grey armoured sci-fi robot plating with bolted panel seams and etched light-grey circuit-board traces and solder pads, matte metal, coarse large panels, no lights, no glow, no colour"),
+    # Landscape variety 4/6 (#1647): the five terrain blocks of the generation-1 paints, fluids and props.
+    ("moss_stone", "grey cobbled stone rock surface thickly overgrown with soft green moss patches in the cracks, damp, top-down"),
+    ("tar", "glossy black tar pitch surface with a few slow dull bubbles and faint oily sheen, very dark, top-down"),
+    ("bone", "bleached pale ivory bone surface, a dense mass of old dry bones and skull fragments, slightly yellowed, top-down"),
+    ("sandstone", "warm ochre sandstone rock with fine horizontal sediment banding in tan, rust and cream, top-down"),
+    ("scree", "loose grey and brown angular rock fragments and gravel, a talus slope of broken stone, top-down"),
 ]
 
 if TYPE_CHECKING:

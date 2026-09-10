@@ -47,7 +47,7 @@ public sealed partial class GameServer
             }
 
             _floraIds.Add(flora.NumericId.Value);
-            _floraHostIds[flora.NumericId.Value] = HostIds(sp.Hosts);
+            _floraHostIds[flora.NumericId.Value] = HostIds(sp.Hosts.Concat(sp.LateHosts).ToArray()); // regrow on a late host too
         }
 
         // Per-BODY flora roster (#478): each archetype block gets this world's coined name + edible/toxic
@@ -56,10 +56,12 @@ public sealed partial class GameServer
         // worldgen actually planted. (Previously every world of the same planet type shared one roster.)
         _floraSpeciesByBlock.Clear();
         var planet = _content.GetPlanet(_worlds.Active.PlanetType);
-        long rosterSeed = _meta.Seed ^ BlocksBeyondTheStars.WorldGeneration.WorldGenerator.StableHash(_world.LocationId);
+        long rosterSeed = BlocksBeyondTheStars.WorldGeneration.WorldGenerator.RosterSeedFor(_meta.Seed, _world.LocationId); // #1722: THE formula
         if (planet != null)
         {
-            foreach (var fs in BlocksBeyondTheStars.WorldGeneration.FloraGenerator.GenerateRoster(planet, rosterSeed))
+            // #1715: the roster reads the world's generation — from generation 4 the biome themes take part in
+            // the activation roll, exactly as worldgen's ResolveFlora rolls it.
+            foreach (var fs in BlocksBeyondTheStars.WorldGeneration.FloraGenerator.GenerateRoster(planet, rosterSeed, _meta.Description.TerrainGeneration))
             {
                 if (_content.GetBlock(fs.BlockKey) is { } b && b.NumericId.Value != 0)
                 {

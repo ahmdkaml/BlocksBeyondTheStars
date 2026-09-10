@@ -43,10 +43,10 @@ namespace BlocksBeyondTheStars.Client
 
         private Canvas _canvas;
         private GameObject _speech;
-        private Text _speechText;
-        private Text _continueHint;
+        private TMPro.TMP_Text _speechText;
+        private TMPro.TMP_Text _continueHint;
         private GameObject _chip;
-        private Text _chipText;
+        private TMPro.TMP_Text _chipText;
 
         private readonly Queue<(string Text, bool Prologue)> _queue = new Queue<(string, bool)>();
         private string _current = string.Empty;  // the page being typed/read (not the whole line)
@@ -58,7 +58,7 @@ namespace BlocksBeyondTheStars.Client
         // lines — they used to be silently truncated.
         private readonly List<string> _pages = new List<string>();
         private int _page;
-        private static readonly TextGenerator Measurer = new TextGenerator();
+        // (Page measurement now uses TMP's own line info — see SplitPages.)
 
         // First-spawn narrative prologue (#738, reworked in #754): Kind-4 lines run through the SAME speech
         // panel as every other VEGA line (same measure, same paging, same user UI scale) — they used to get
@@ -89,6 +89,8 @@ namespace BlocksBeyondTheStars.Client
 
         private void Start()
         {
+            Instance = this;
+
             // The HUD reference (1536×864), NOT the 1920×1080 default — VEGA was missed by the 2026-06-07
             // "bigger HUD" pass (#482), so her lines rendered 25 % smaller than every other HUD element at
             // every resolution. Subtitle-class text has to read while the eye is on the crosshair.
@@ -104,7 +106,7 @@ namespace BlocksBeyondTheStars.Client
             // Speech panel: left side above the vitals, out of the crosshair's way. VEGA gets a small
             // generated avatar chip beside her name (uGUI icon pass). Coordinates are in HUD reference
             // units; the left column is tight (vitals → speech → chip → scan panel → hotbar), see #482.
-            _speech = UiKit.AddPanel(_canvas.transform, 24, SpeechY, 640, SpeechH, new Color(0.05f, 0.10f, 0.16f, 0.82f)).gameObject;
+            _speech = UiHolo.AddPanel(_canvas.transform, 24, SpeechY, 640, SpeechH, new Color(0.05f, 0.10f, 0.16f, 0.82f), 12f, 1.5f, 1.2f).gameObject;
             var avatar = UiKit.Icon("icon_vega");
             float nameX = 14f;
             if (avatar != null)
@@ -113,28 +115,24 @@ namespace BlocksBeyondTheStars.Client
                 nameX = 54f;
             }
 
-            UiKit.AddText(_speech.transform, nameX, 6, 320, 30, L("ui.vega.name"), 22, UiKit.Cyan, TextAnchor.MiddleLeft, FontStyle.Bold);
-            _speechText = UiKit.AddText(_speech.transform, 14, 44, SpeechTextW, SpeechTextH, string.Empty, 22, UiKit.TextCol, TextAnchor.UpperLeft);
-            _speechText.horizontalOverflow = HorizontalWrapMode.Wrap;
+            UiText.Add(_speech.transform, nameX, 6, 320, 30, L("ui.vega.name"), 22, UiKit.Cyan, TextAnchor.MiddleLeft, FontStyle.Bold, UiText.Look.Glow);
+            _speechText = UiText.Add(_speech.transform, 14, 44, SpeechTextW, SpeechTextH, string.Empty, 22, UiKit.TextCol, TextAnchor.UpperLeft, FontStyle.Normal, UiText.Look.Outline);
             // Truncate, NOT Overflow: an LLM-authored line has no length bound on the wire, and an
             // over-long one used to run over the continue hint and out of the panel background (#482).
-            _speechText.verticalOverflow = VerticalWrapMode.Truncate;
-            UiKit.AddOutline(_speechText); // readable over bright terrain / snow / sky
+            UiText.Wrap(_speechText, truncate: true); // readable over bright terrain / snow / sky (underlay look)
             // Lines advance on a KEYPRESS (they queued straight through each other before — unreadable).
-            _continueHint = UiKit.AddText(_speech.transform, 14, 160, 612, 24, L("ui.vega.next"), 16, UiKit.CyanDim, TextAnchor.MiddleRight);
+            _continueHint = UiText.Add(_speech.transform, 14, 160, 612, 24, L("ui.vega.next"), 16, UiKit.CyanDim, TextAnchor.MiddleRight, FontStyle.Normal, UiText.Look.Outline);
             _continueHint.gameObject.SetActive(false);
             _speech.SetActive(false);
 
             // Objective chip: small persistent strip below the speech spot. (Skipping/restarting the
             // tutorial lives in the Settings tab — the mouse is captured for camera control out here,
             // so a button on the chip was unreachable.)
-            _chip = UiKit.AddPanel(_canvas.transform, 24, ChipY, 640, 48, new Color(0.05f, 0.10f, 0.16f, 0.66f)).gameObject;
-            _chipText = UiKit.AddText(_chip.transform, 14, 0, 614, 48, string.Empty, 20, UiKit.Cyan, TextAnchor.MiddleLeft);
+            _chip = UiHolo.AddPanel(_canvas.transform, 24, ChipY, 640, 48, new Color(0.05f, 0.10f, 0.16f, 0.66f), 10f, 1.2f, 0.9f).gameObject;
+            _chipText = UiText.Add(_chip.transform, 14, 0, 614, 48, string.Empty, 20, UiKit.Cyan, TextAnchor.MiddleLeft, FontStyle.Normal, UiText.Look.Outline);
             // Wrap + truncate as a safety net — the UiKit default (Overflow) would let an over-long
             // objective label spill outside the chip background (#736 side finding).
-            _chipText.horizontalOverflow = HorizontalWrapMode.Wrap;
-            _chipText.verticalOverflow = VerticalWrapMode.Truncate;
-            UiKit.AddOutline(_chipText);
+            UiText.Wrap(_chipText, truncate: true);
             _chip.SetActive(false);
 
             if (Game?.Network != null)
@@ -160,6 +158,30 @@ namespace BlocksBeyondTheStars.Client
         }
 
         private string L(string key) => Game?.Localizer?.Get(key) ?? key;
+
+        /// <summary>The live panel (one per rig), for client-side one-shot hints (<see cref="SayLocal"/>).</summary>
+        public static VegaPanel Instance { get; private set; }
+
+        /// <summary>A client-side hint spoken in VEGA's voice without a server round-trip (#1663) — for UI
+        /// lessons only the client knows the moment for (the first time a screen opens). Follows the advisor
+        /// rules of a Kind-1 server line: the VegaHints mute, <c>{key:Action}</c> glyphs, the same speech
+        /// queue, and the tips log for the session (a rejoin rebuilds the log from server milestones, so a
+        /// purely local lesson drops out of it then — by design, it is a one-liner).</summary>
+        public void SayLocal(string lineKey)
+        {
+            if (string.IsNullOrEmpty(lineKey) || Settings is { VegaHints: false })
+            {
+                return;
+            }
+
+            _queue.Enqueue((VegaText.ExpandKeyTokens(L(lineKey), KeyGlyphFor), false));
+            if (Game != null && !Game.VegaLogKeys.Contains(lineKey))
+            {
+                Game.VegaLogKeys.Add(lineKey);
+            }
+
+            Refresh();
+        }
 
         /// <summary>Resolver for <c>{key:Action}</c> tokens in VEGA lines: the pad glyph or bound key for a
         /// known action; on touch the on-screen action menu is the way to reach every toggle, so the token
@@ -383,7 +405,10 @@ namespace BlocksBeyondTheStars.Client
         /// field (chat, beacon label) currently has keyboard focus. Only a focused INPUT FIELD counts —
         /// uGUI also leaves an ordinary Button selected after any click, and with pad focus
         /// (<see cref="UiNavFocus"/>) something is selected most of the time; treating that as "captured"
-        /// left the panel stuck after the first HUD click / on a pad (#1041).</summary>
+        /// left the panel stuck after the first HUD click / on a pad (#1041). And only a field that is
+        /// ACTIVE and FOCUSED: uGUI keeps a closed InputField as the selected object (nothing deselects on
+        /// deactivate), so the chat box closed with Esc or Enter counted as "captured" until the next
+        /// world click — N did nothing on a VEGA line that arrived mid-chat (#1634).</summary>
         private bool InputCaptured()
         {
             if (Game != null && Game.MenuOpen)
@@ -392,7 +417,13 @@ namespace BlocksBeyondTheStars.Client
             }
 
             var selected = UnityEngine.EventSystems.EventSystem.current?.currentSelectedGameObject;
-            return selected != null && selected.GetComponent<InputField>() != null;
+            if (selected == null || !selected.activeInHierarchy)
+            {
+                return false;
+            }
+
+            var field = selected.GetComponent<InputField>();
+            return field != null && field.isFocused;
         }
 
         /// <summary>True while a VEGA line is on screen (typing or waiting for continue) — gates the touch
@@ -648,21 +679,36 @@ namespace BlocksBeyondTheStars.Client
         }
 
         /// <summary>Splits a line into pages that fit the speech box, cutting only on wrap-line boundaries.
-        /// Layout is measured with an explicit scaleFactor of 1, so line heights come back in HUD reference
-        /// units regardless of canvas scaling (the What's-new dialog's proven measurement pattern).</summary>
+        /// TMP lays the text out against the label's own rect (HUD reference units, independent of the canvas
+        /// scale) without rendering it; each line's first character maps back to its index in the raw string,
+        /// so pages cut on the same boundaries the legacy TextGenerator measurement did.</summary>
         private List<string> SplitPages(string text)
         {
-            var settings = _speechText.GetGenerationSettings(new Vector2(SpeechTextW, 0f));
-            settings.scaleFactor = 1f;
-            settings.verticalOverflow = VerticalWrapMode.Overflow;
-            Measurer.Populate(text, settings);
-            var lines = Measurer.lines;
-            var starts = new List<int>(lines.Count);
-            var heights = new List<float>(lines.Count);
-            for (int i = 0; i < lines.Count; i++)
+            bool wasActive = _speech.activeSelf;
+            if (!wasActive)
             {
-                starts.Add(lines[i].startCharIdx);
-                heights.Add(lines[i].height);
+                _speech.SetActive(true); // TMP needs a live rect to lay out against
+            }
+
+            var prevOverflow = _speechText.overflowMode;
+            _speechText.overflowMode = TMPro.TextOverflowModes.Overflow;
+            var info = _speechText.GetTextInfo(text);
+            _speechText.overflowMode = prevOverflow;
+            if (!wasActive)
+            {
+                _speech.SetActive(false);
+            }
+
+            int lineCount = info != null ? info.lineCount : 0;
+            var starts = new List<int>(lineCount);
+            var heights = new List<float>(lineCount);
+            for (int i = 0; i < lineCount; i++)
+            {
+                var line = info.lineInfo[i];
+                int first = line.firstCharacterIndex;
+                int raw = first >= 0 && first < info.characterCount ? info.characterInfo[first].index : 0;
+                starts.Add(Mathf.Clamp(raw, 0, text.Length));
+                heights.Add(Mathf.Max(line.lineHeight, 1f));
             }
 
             var pages = new List<string>();
@@ -685,6 +731,11 @@ namespace BlocksBeyondTheStars.Client
 
         private void OnDestroy()
         {
+            if (Instance == this)
+            {
+                Instance = null;
+            }
+
             if (Game?.Network != null)
             {
                 Game.Network.ShipAiLineReceived -= OnLine;

@@ -20,6 +20,8 @@
   { "key": "lava",         "nameKey": "block.lava.name", "category": "terrain",         "hardness": 4, "requiredTool": "drill", "minToolTier": 3, "mineable": true, "drops": [ { "item": "lava", "count": 1 } ] },
   { "key": "sand",         "nameKey": "block.sand.name", "granular": true, "category": "terrain",         "hardness": 0.5, "requiredTool": "none",  "minToolTier": 0, "drops": [ { "item": "sand", "count": 1 } ] },
   { "key": "mud",          "nameKey": "block.mud.name", "category": "terrain",          "hardness": 0.6, "requiredTool": "none",  "minToolTier": 0, "drops": [ { "item": "mud", "count": 1 } ] },
+  { "key": "peat",         "nameKey": "block.peat.name", "category": "terrain",         "hardness": 0.6, "requiredTool": "none",  "minToolTier": 0, "drops": [ { "item": "peat", "count": 1 } ] },
+  { "key": "coral_rock",   "nameKey": "block.coral_rock.name", "category": "terrain",   "hardness": 1.2, "requiredTool": "none",  "minToolTier": 0, "drops": [ { "item": "coral_rock", "count": 1 } ] },
   { "key": "grass",        "nameKey": "block.grass.name", "category": "terrain",        "hardness": 0.6, "requiredTool": "none",  "minToolTier": 0, "drops": [ { "item": "dirt", "count": 1 } ] },
   { "key": "wood_log",     "nameKey": "block.wood_log.name", "category": "building",     "hardness": 1.6, "requiredTool": "drill", "minToolTier": 1, "flammable": true, "drops": [ { "item": "wood_log", "count": 1 } ] },
   { "key": "tree_leaves",  "nameKey": "block.tree_leaves.name", "category": "flora",  "hardness": 0.3, "requiredTool": "none",  "minToolTier": 0, "flammable": true, "drops": [] },
@@ -135,6 +137,8 @@
   { "key": "algae_tank",   "nameKey": "block.algae_tank.name", "category": "machine",   "hardness": 4.5, "requiredTool": "drill", "minToolTier": 1, "emission": 0.35, "color": 3122027, "drops": [ { "item": "algae_tank", "count": 1 } ] },
   { "key": "heal_tank",    "nameKey": "block.heal_tank.name",  "category": "machine",   "hardness": 4.5, "requiredTool": "drill", "minToolTier": 1, "emission": 0.5,  "color": 4245951, "drops": [ { "item": "heal_tank", "count": 1 } ] },
   { "key": "sentry_post",  "nameKey": "block.sentry_post.name", "category": "machine",  "hardness": 5.0, "requiredTool": "drill", "minToolTier": 1, "emission": 0.35, "color": 9211020, "drops": [ { "item": "sentry_post", "count": 1 } ] },
+  { "key": "power_relay",  "nameKey": "block.power_relay.name", "category": "machine",  "hardness": 4.0, "requiredTool": "drill", "minToolTier": 1, "emission": 0.5, "color": 3520736, "drops": [ { "item": "power_relay", "count": 1 } ] },
+  { "key": "water_spout",  "nameKey": "block.water_spout.name", "category": "machine",  "hardness": 3.0, "requiredTool": "drill", "minToolTier": 1, "color": 5929626, "drops": [ { "item": "water_spout", "count": 1 } ] },
   { "key": "factory_terminal", "nameKey": "block.factory_terminal.name", "category": "machine", "hardness": 6.0, "requiredTool": "drill", "minToolTier": 2, "emission": 0.7, "color": 3978195, "drops": [ { "item": "factory_terminal", "count": 1 } ] },
   { "key": "machine_block",    "nameKey": "block.machine_block.name", "category": "machine",    "hardness": 6.0, "requiredTool": "drill", "minToolTier": 2, "emission": 0.15, "color": 5526612, "drops": [ { "item": "machine_block", "count": 1 } ] },
   { "key": "factory_pipe",     "nameKey": "block.factory_pipe.name", "category": "machine",     "hardness": 4.4, "requiredTool": "drill", "minToolTier": 1, "color": 7898741, "drops": [ { "item": "factory_pipe", "count": 1 } ] },
@@ -179,5 +183,10 @@
   { "key": "wood_crate", "nameKey": "block.wood_crate.name", "category": "building", "hardness": 1.2, "requiredTool": "none", "minToolTier": 0, "flammable": true, "color": 9127187, "drops": [ { "item": "wood_crate", "count": 1 } ] },
   { "key": "lantern",    "nameKey": "block.lantern.name",    "tintable": true, "category": "light",    "hardness": 0.4, "requiredTool": "none", "minToolTier": 0, "solid": false, "emission": 0.8, "color": 16758855, "drops": [ { "item": "lantern", "count": 1 } ] },
   { "key": "rug",        "nameKey": "block.rug.name",        "category": "building", "hardness": 0.2, "requiredTool": "none", "minToolTier": 0, "flammable": true, "tintable": true, "color": 11553354, "drops": [ { "item": "rug", "count": 1 } ] },
-  { "key": "flower_pot", "nameKey": "block.flower_pot.name", "category": "building", "hardness": 0.4, "requiredTool": "none", "minToolTier": 0, "color": 10841676, "drops": [ { "item": "flower_pot", "count": 1 } ] }
+  { "key": "flower_pot", "nameKey": "block.flower_pot.name", "category": "building", "hardness": 0.4, "requiredTool": "none", "minToolTier": 0, "color": 10841676, "drops": [ { "item": "flower_pot", "count": 1 } ] },
+  { "key": "moss_stone", "nameKey": "block.moss_stone.name", "category": "terrain", "hardness": 3.2, "requiredTool": "drill", "minToolTier": 0, "drops": [ { "item": "moss_stone", "count": 1 } ] },
+  { "key": "tar",        "nameKey": "block.tar.name",        "category": "terrain", "hardness": 1.2, "requiredTool": "none",  "minToolTier": 0, "flammable": true, "drops": [ { "item": "tar", "count": 1 } ] },
+  { "key": "bone",       "nameKey": "block.bone.name",       "category": "terrain", "hardness": 1.8, "requiredTool": "none",  "minToolTier": 0, "drops": [ { "item": "bone", "count": 1 } ] },
+  { "key": "sandstone",  "nameKey": "block.sandstone.name",  "category": "terrain", "hardness": 3.6, "requiredTool": "drill", "minToolTier": 0, "drops": [ { "item": "sandstone", "count": 1 } ] },
+  { "key": "scree",      "nameKey": "block.scree.name",      "category": "terrain", "hardness": 1.0, "requiredTool": "none",  "minToolTier": 0, "drops": [ { "item": "scree", "count": 1 } ] }
 ]
