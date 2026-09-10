@@ -219,7 +219,7 @@ public static class NetCodec
         Register(105, typeof(SpaceShipDesign));
 
         // Automatic landed-ship transit (#1614): client signals that the launch animation has completed.
-        Register(235, typeof(TransitLaunchDoneIntent)); // Client -> Server
+        Register(236, typeof(TransitLaunchDoneIntent)); // Client -> Server
 
         // item 20 S2: free-space EVA build/mine on a voxel structure (client intent + server broadcast).
         Register(106, typeof(StructureEditIntent));
