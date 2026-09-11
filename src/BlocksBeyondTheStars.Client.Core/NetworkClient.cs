@@ -554,7 +554,7 @@ namespace BlocksBeyondTheStars.Client
         public void SendExitShip() => Send(new ExitShipIntent());
 
         public void SendLeaveSpace() => Send(new LeaveSpaceIntent());
-        
+
         public void SendTransitLaunchDone() => Send(new TransitLaunchDoneIntent());
 
         /// <summary>Leave space and land on a body (empty = the current body), on a chosen landing pad (item 38;

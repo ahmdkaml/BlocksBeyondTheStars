@@ -774,7 +774,9 @@ public sealed partial class GameServer
             return false;
         }
 
-
+        // Instant Travel gate (world option, default off): the travel-screen shortcut may only reach bodies
+        // you've already landed on. To reach a new world, fly there and land manually (which marks it). A
+        // manual flight landing (quickTravel=false) bypasses this — you physically flew there.
         if (quickTravel && !Rules.InstantTravel && !session.State.LandedBodies.Contains(body.Id))
         {
             Reject(session, "travel", "@srv.travel.not_visited");
