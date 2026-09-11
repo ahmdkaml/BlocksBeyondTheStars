@@ -331,6 +331,7 @@ namespace BlocksBeyondTheStars.Client
         private bool _combatSubscribed;
         private bool _hyperjumpSubscribed;
         private bool _hyperjumping; // a hyperspace jump is tearing down the view (warp covers it, no landing)
+        private bool _transitLaunchDone; // #1614: the automatic transit's launch-done signal was sent (once per flight)
         private string _sceneInstance; // flight instance the current scene was built for (#1677)
         private bool _shipDestroyed; // the ship blew up in space — tear down at once (explosion stays, no landing descent)
 
@@ -985,7 +986,7 @@ namespace BlocksBeyondTheStars.Client
 
             if (_seq >= SeqDuration)
             {
-                if (Game.SpaceState.AutomaticTransit)
+                if (Game.SpaceAutomaticTransit)
                 {
                     if (!_transitLaunchDone)
                     {
@@ -2536,6 +2537,7 @@ namespace BlocksBeyondTheStars.Client
             HideLandMap();
             _boardSent = false;
             _hyperjumping = false;
+            _transitLaunchDone = false;
             _shipDestroyed = false;
             _eva = false;
             _enteringInterior = false;
