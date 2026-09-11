@@ -331,6 +331,8 @@ public sealed class PlayerSession
     public string? PendingTransitBodyId { get; set; }
     /// <summary>Indicates whether the player is currently in an automatic transit.</summary>
     public bool AutomaticTransit { get; set; }
+    /// <summary>Pad index reserved for an automatic landed-ship transit, or -1 when none is pending.</summary>
+    public int PendingTransitPadIndex { get; set; } = -1;
 
     // --- Bandit hold-up (a robber demands part of the inventory; comply or fight) ---
 

@@ -2535,7 +2535,7 @@ public sealed partial class GameServer
             session.TransitLaunchTimer = 0;
         }
 
-        EnterSpace(playerId, skipLaunch: true, hyperjump: true); // warp in; no surface take-off
+        EnterSpace(playerId, skipLaunch: !wasLanded, hyperjump: true); // landed ships take off before the warp
         SendStarMap(session); // refresh the travel screen with the now-known system
         // The landing path says where you arrived; the in-flight arrival said nothing, so the chat scrollback
         // never told the pilot the jump had happened at all (#1565).
@@ -2547,11 +2547,11 @@ public sealed partial class GameServer
     }
 
     /// <summary>Test/util entry: leave space and land on a specific body (system-scale flight landing).</summary>
-    public void LandOnBody(string playerId, string destinationBodyId)
+    public void LandOnBody(string playerId, string destinationBodyId, int padIndex = -1)
     {
         if (FindSessionByPlayerId(playerId) is { } session)
         {
-            HandleLeaveSpace(session, new LeaveSpaceIntent { DestinationBodyId = destinationBodyId });
+            HandleLeaveSpace(session, new LeaveSpaceIntent { DestinationBodyId = destinationBodyId, PadIndex = padIndex });
         }
     }
 

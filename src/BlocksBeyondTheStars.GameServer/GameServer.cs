@@ -927,11 +927,6 @@ public sealed partial class GameServer
         // Landed ship: turn map travel into an automatic space transit.
         if (!InSpace(session.State.PlayerId) && !session.Spectating)
         {
-            if (!AllowNormalTravel(session, intent, quickTravel))
-            {
-                return;
-            }
-
             var body = _galaxy?.FindBody(intent.DestinationBodyId)!;
             var origin = _galaxy?.FindBody(session.CurrentLocationId);
             bool hyperjump = origin is null || origin.SystemId != body.SystemId;
@@ -942,12 +937,18 @@ public sealed partial class GameServer
                 return;
             }
 
+            if (!AllowNormalTravel(session, intent, quickTravel))
+            {
+                return;
+            }
+
             session.PendingTransitBodyId = intent.DestinationBodyId;
             session.AutomaticTransit = true;
             session.TransitLaunchTimer = 0;
+            session.PendingTransitPadIndex = intent.PadIndex;
 
             EnterSpace(session.State.PlayerId, skipLaunch: false, hyperjump: hyperjump);
-            
+
             return; // the transit path handles the travel, so the caller must not continue to land on it
         }
 
@@ -964,7 +965,8 @@ public sealed partial class GameServer
 
         if (!string.IsNullOrEmpty(destinationBodyId))
         {
-            LandOnBody(session.State.PlayerId, destinationBodyId);
+            LandOnBody(session.State.PlayerId, destinationBodyId, session.PendingTransitPadIndex);
+            session.PendingTransitPadIndex = -1;
         }
     }
 
@@ -1652,9 +1654,11 @@ public sealed partial class GameServer
                 {
                     var destinationBodyId = session.PendingTransitBodyId;
                     session.PendingTransitBodyId = null;
+                    session.AutomaticTransit = false;
                     session.TransitLaunchTimer = 0;
 
-                    LandOnBody(session.State.PlayerId, destinationBodyId);
+                    LandOnBody(session.State.PlayerId, destinationBodyId, session.PendingTransitPadIndex);
+                    session.PendingTransitPadIndex = -1;
                     continue;
                 }
             }
