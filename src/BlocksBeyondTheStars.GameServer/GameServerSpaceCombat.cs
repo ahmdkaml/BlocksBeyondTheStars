@@ -2295,6 +2295,8 @@ public sealed partial class GameServer
 
     private void HandleEnterSpace(PlayerSession session)
     {
+        session.AutomaticTransit = false;
+        session.PendingTransitBodyId = null;
         // If the player is inside the ship interior, they are parked in space (the interior is only ever
         // entered from a space instance) — so returning to flight must SKIP the planet take-off animation and
         // restore the ship where it was parked, exactly like the helm (B40). Only a launch from a real planet
