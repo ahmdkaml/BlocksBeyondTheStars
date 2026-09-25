@@ -16,42 +16,275 @@ namespace BlocksBeyondTheStars.WorldGeneration;
 /// </summary>
 public static class CreatureGenerator
 {
-    public static IReadOnlyList<CreatureSpecies> GenerateRoster(PlanetType planet, long worldSeed)
+    /// <summary>This world's roster. <paramref name="terrainGeneration"/> and <paramref name="authored"/> are the
+    /// school club wave (#1763): on a generation-5 world the type's authored species are appended AFTER the
+    /// procedural slots, so no rolled species ever moves; older worlds and callers of the two-argument form get
+    /// the procedural roster exactly as before.</summary>
+    public static IReadOnlyList<CreatureSpecies> GenerateRoster(PlanetType planet, long worldSeed,
+        int terrainGeneration = 0, IReadOnlyList<AuthoredCreature>? authored = null)
     {
         int count = planet.IsAirless ? 0 : AbundanceCount(planet.CreatureAbundance);
         var list = new List<CreatureSpecies>(count);
-        if (count == 0)
-        {
-            return list; // airless bodies (asteroids / airless moons+planets) + "none" worlds are lifeless
-        }
-
         long planetSeed = worldSeed ^ WorldGenerator.StableHash(planet.Key);
         bool allowWater = HasWaterLife(planet);
         bool allowLava = HasLavaLife(planet);
         bool allowCave = planet.CaveThreshold > 0.0; // worlds with caves host subterranean fauna
         int biomeCount = System.Math.Max(1, planet.Biomes.Count);
-
         const long golden = unchecked((long)0x9E3779B97F4A7C15UL);
-        for (int i = 0; i < count; i++)
+
+        if (count > 0)
         {
-            long s = unchecked(planetSeed ^ ((long)i * golden));
-            var rng = new System.Random(unchecked((int)(s ^ (s >> 32))));
-            list.Add(MakeSpecies(i, rng, allowWater, allowLava, allowCave, biomeCount, forcedHabitat: null, speciesSeed: s));
+            for (int i = 0; i < count; i++)
+            {
+                long s = unchecked(planetSeed ^ ((long)i * golden));
+                var rng = new System.Random(unchecked((int)(s ^ (s >> 32))));
+                list.Add(MakeSpecies(i, rng, allowWater, allowLava, allowCave, biomeCount, forcedHabitat: null, speciesSeed: s, terrainGeneration));
+            }
+
+            // Diversity guarantee (#640): every living world should field at least one ground species and
+            // one flier (and an aquatic one where the world has water life). Only the slots ADDED by the
+            // roster bump (index ≥ legacy count) may be re-drawn — each species draws its own sub-seed, so
+            // the legacy indices keep their exact pre-bump rolls and existing worlds keep their known fauna.
+            EnsureHabitatDiversity(list, LegacyAbundanceCount(planet.CreatureAbundance), planetSeed,
+                allowWater, allowLava, allowCave, biomeCount, terrainGeneration);
+
+            // Generation 8 (2026-09): the extreme types' roster rules — Titas caps its water life, Valuma is peaceful.
+            if (terrainGeneration >= BlocksBeyondTheStars.Shared.World.WorldDescription.ExtremePlanetsGeneration)
+            {
+                CapAquaticSpecies(list, planet.MaxAquaticSpecies, planetSeed, allowWater, allowLava, allowCave, biomeCount, terrainGeneration);
+                if (planet.PeacefulFauna)
+                {
+                    MakePeaceful(list);
+                }
+            }
         }
 
-        // Diversity guarantee (#640): every living world should field at least one ground species and
-        // one flier (and an aquatic one where the world has water life). Only the slots ADDED by the
-        // roster bump (index ≥ legacy count) may be re-drawn — each species draws its own sub-seed, so
-        // the legacy indices keep their exact pre-bump rolls and existing worlds keep their known fauna.
-        EnsureHabitatDiversity(list, LegacyAbundanceCount(planet.CreatureAbundance), planetSeed,
-            allowWater, allowLava, allowCave, biomeCount);
+        // Airless bodies (asteroids / airless moons+planets) stay lifeless whatever the data says; otherwise the
+        // authored species join at the tail on a generation-5 world. Their sub-seed is salted with the key, not
+        // the slot, so adding a second authored species to a type never renames the first.
+        if (!planet.IsAirless && authored is { Count: > 0 }
+            && terrainGeneration >= BlocksBeyondTheStars.Shared.World.WorldDescription.AuthoredContentGeneration)
+        {
+            foreach (var record in authored)
+            {
+                long s = unchecked(planetSeed ^ ((long)list.Count * golden) ^ WorldGenerator.StableHash("authored:" + record.Key));
+                var rng = new System.Random(unchecked((int)(s ^ (s >> 32))));
+                list.Add(MakeAuthoredSpecies(record, planet, rng, s));
+            }
+        }
 
         return list;
+    }
+
+    /// <summary>Builds the roster entry of an authored record (#1763): the designed traits verbatim, the name's
+    /// second word coined per world, the formulas of the rolled species where the record leaves a stat null, and
+    /// the derived fields (voice, fins) exactly as for a rolled species.</summary>
+    private static CreatureSpecies MakeAuthoredSpecies(AuthoredCreature a, PlanetType planet, System.Random rng, long speciesSeed)
+    {
+        bool hostile = a.Temperament is CreatureTemperament.Aggressive or CreatureTemperament.PackHunter;
+        string coined = NameGenerator.Creature(rng);
+        int space = coined.IndexOf(' ');
+        string second = space > 0 ? coined.Substring(0, space) : coined;
+
+        // The biome affinity by surface block: the first of the type's biomes whose surface the record names, so a
+        // rolled roster's "native to biome n" pass still prefers Leni on the snow. The hard rule is BiomeExclusive,
+        // which the spawner checks against the ground under the animal's feet.
+        int affinity = -1;
+        for (int i = 0; i < planet.Biomes.Count && affinity < 0; i++)
+        {
+            if (a.BiomeSurfaces.Contains(planet.Biomes[i].SurfaceBlock))
+            {
+                affinity = i;
+            }
+        }
+
+        var species = new CreatureSpecies
+        {
+            Id = "au_" + a.Key,
+            NameKey = "creature.generic.name",
+            Name = string.IsNullOrWhiteSpace(a.NamePrefix) ? coined : a.NamePrefix + " " + second,
+            Habitat = a.Habitat,
+            Activity = a.Activity,
+            Temperament = a.Temperament,
+            LocoStyle = a.LocoStyle,
+            BodyPlan = a.BodyPlan,
+            HeadShape = a.HeadShape, // #2009: a worksheet arachnid may wear a pyramid
+            Size = a.Size,
+            MaxHealth = a.MaxHealth ?? 10f + a.Size * 8f + (hostile ? 10f : 0f),
+            Speed = a.Speed,
+            AttackDamage = a.AttackDamage ?? (hostile ? 4.5f : 0f),
+            Legs = a.Legs,
+            HasWings = a.HasWings,
+            HasTail = a.HasTail,
+            BodySegments = a.BodySegments,
+            ColorRgb = a.ColorRgb,
+            BellyRgb = a.BellyRgb,
+            Eyes = a.Eyes,
+            Horns = a.Horns,
+            HasCrest = a.HasCrest,
+            Glows = a.Glows,
+            SocialGroupSize = a.SocialGroupSize,
+            HoverAltitude = a.HoverAltitude,
+            Heads = System.Math.Clamp(a.Heads, 1, 3),         // #1780-#1782: an authored species may use the gen-6 bodies
+            WingPairs = System.Math.Clamp(a.WingPairs, 1, 3),
+            FinPairs = System.Math.Clamp(a.FinPairs, 1, 3),
+            BiomeAffinity = affinity,
+            DropItem = a.DropItem,
+            DropCount = a.DropCount,
+            DropKind = a.DropKind,
+            BiomeSurfaces = a.BiomeSurfaces.ToArray(),
+            BiomeExclusive = a.BiomeExclusive,
+            Hide = a.Hide,
+            AngeredByMining = a.AngeredByMining,
+            GiftsWhenCalm = a.GiftsWhenCalm,
+            GiantHeight = a.GiantHeight,  // #1998: an authored giant (#2003) carries the same traits as a rolled one
+            BackFeature = a.BackFeature,
+            LegRatio = a.LegRatio,
+            NeckLength = a.NeckLength,
+            Mandibles = a.Mandibles,
+            WormLength = a.WormLength,
+            WormGirth = a.WormGirth,
+            Hearing = a.Hearing,
+        };
+
+        species.VoiceSeed = unchecked((int)(speciesSeed ^ (speciesSeed >> 32)) ^ 0x5EED_1CE);
+        species.HasFins = CreatureMotion.FinsFor(species);
+        if (species.Habitat == CreatureHabitat.Air && species.HoverAltitude <= 0f)
+        {
+            species.HoverAltitude = 3f + (float)rng.NextDouble() * 9f;
+        }
+
+        return species;
+    }
+
+    // ---------------- Giants (#1998–#2001, generation 9) ----------------
+
+    /// <summary>The species id of a world's colossus.</summary>
+    public const string ColossusId = "gi_colossus";
+
+    /// <summary>The species id of a world's sandworms (one species, one or two individuals).</summary>
+    public const string SandwormId = "gi_sandworm";
+
+    private static readonly string[] GiantBacks = { "", "plates", "spikes", "crystals", "forest" };
+    private static readonly string[] ColossusHides = { "hide", "plated", "scales", "shaggy", "mossy", "barkskin", "mottled", "banded" };
+    private static readonly string[] WormHides = { "plated", "banded", "scales", "chitin", "warty", "mottled" };
+
+    /// <summary>#2009: the hides an arachnid rolls — shaggy is the tarantula, the rest read as armour.</summary>
+    private static readonly string[] ArachnidHides = { "chitin", "plated", "spined", "banded", "shaggy", "mottled" };
+
+    /// <summary>#2009: the share of standard-plan Land species that become arachnids on a generation-10 world — rare
+    /// (Marcel: rarer than the titan's 18 %): with 5–9 species per world, roughly every third or fourth world has one.</summary>
+    private const double ArachnidChance = 1.0 / 12.0;
+
+    /// <summary>A world's colossus (#1999): a 40–60 block quadruped rolled from the world seed and its location — the
+    /// same giant on every visit, a different one on every world. The server decides WHETHER a world has one
+    /// (<see cref="GiantRules.HostsColossus"/>); this only decides what it is.</summary>
+    public static CreatureSpecies GenerateColossus(long worldSeed, string locationId)
+    {
+        long s = unchecked(worldSeed ^ ((long)WorldGenerator.StableHash("colossus:" + locationId) << 16) ^ 0x0C0105505L);
+        var rng = new System.Random(unchecked((int)(s ^ (s >> 32))));
+        float height = 40f + (float)rng.NextDouble() * 20f;
+        var temperament = (CreatureTemperament)Weighted(rng,
+            (int)CreatureTemperament.Passive, 40,
+            (int)CreatureTemperament.Skittish, 15,
+            (int)CreatureTemperament.Territorial, 30,
+            (int)CreatureTemperament.Aggressive, 15);
+        var sp = new CreatureSpecies
+        {
+            Id = ColossusId,
+            NameKey = "creature.generic.name",
+            Name = NameGenerator.Creature(rng),
+            Habitat = CreatureHabitat.Land,
+            Activity = CreatureActivity.Cathemeral, // a giant never lies down for the night
+            Temperament = temperament,
+            LocoStyle = LocomotionStyle.Strider,
+            BodyPlan = CreatureBodyPlan.Colossus,
+            GiantHeight = height,
+            Size = height / 10f,
+            MaxHealth = 3000f + (height - 40f) * 75f,       // 3000..4500 — very, very tough (decision 8)
+            AttackDamage = 22f + (float)rng.NextDouble() * 10f, // per stomp, not per second
+            Speed = 3.2f + (float)rng.NextDouble(),          // 3.2..4.2 — always slower than a walking player (6)
+            Legs = 4,
+            HasTail = rng.NextDouble() < 0.7,
+            NeckLength = Weighted(rng, 0, 15, 1, 25, 2, 30, 3, 20, 4, 10),
+            Heads = Weighted(rng, 1, 85, 2, 10, 3, 5),
+            Horns = rng.Next(5),                              // tusks
+            HasCrest = rng.NextDouble() < 0.35,
+            BackFeature = GiantBacks[rng.Next(GiantBacks.Length)],
+            LegRatio = 0.8f + (float)rng.NextDouble() * 0.5f,
+            Eyes = Weighted(rng, 2, 80, 4, 15, 1, 5),
+            ColorRgb = PickColor(rng, CreatureHabitat.Land),
+            BellyRgb = PickColor(rng, CreatureHabitat.Land),
+            Glows = rng.NextDouble() < 0.2,
+            Hide = ColossusHides[rng.Next(ColossusHides.Length)],
+            DropItem = "creature_meat",
+            DropCount = 20,
+            DropKind = CreatureDropKind.Food,
+        };
+        sp.VoiceSeed = unchecked((int)(s ^ (s >> 32)) ^ 0x5EED_1CE);
+        return sp;
+    }
+
+    /// <summary>A sand-sea world's sandworm (#2001): the fixed sandworm archetype — a long armoured tube, a mouth of
+    /// mandible petals with rings of teeth — with its size, colours, plates, hearing and temper rolled per world.</summary>
+    public static CreatureSpecies GenerateSandworm(long worldSeed, string locationId)
+    {
+        long s = unchecked(worldSeed ^ ((long)WorldGenerator.StableHash("sandworm:" + locationId) << 16) ^ 0x5A2D3A0L);
+        var rng = new System.Random(unchecked((int)(s ^ (s >> 32))));
+        float height = 40f + (float)rng.NextDouble() * 20f;
+        float girth = 7f + (float)rng.NextDouble() * 4f;
+        var sp = new CreatureSpecies
+        {
+            Id = SandwormId,
+            NameKey = "creature.generic.name",
+            Name = NameGenerator.Creature(rng),
+            Habitat = CreatureHabitat.Land,
+            Activity = CreatureActivity.Cathemeral,
+            Temperament = rng.NextDouble() < 0.6 ? CreatureTemperament.Aggressive : CreatureTemperament.Territorial,
+            LocoStyle = LocomotionStyle.Slitherer,
+            BodyPlan = CreatureBodyPlan.Sandworm,
+            GiantHeight = height,
+            Size = height / 10f,
+            WormGirth = girth,
+            WormLength = height * 2.1f + (float)rng.NextDouble() * 20f,
+            BodySegments = 30 + rng.Next(15),                 // ring segments
+            Mandibles = 3 + rng.Next(3),                      // 3..5 petals
+            Horns = rng.Next(4),                              // rows of back spikes
+            HasCrest = rng.NextDouble() < 0.5,                // a plated dorsal ridge
+            Hearing = 0.8f + (float)rng.NextDouble() * 0.5f,
+            MaxHealth = 2500f + (height - 40f) * 75f,         // 2500..4000
+            AttackDamage = 35f + (float)rng.NextDouble() * 10f, // per strike
+            Speed = 9f + (float)rng.NextDouble() * 3f,        // under the sand, blocks/s
+            Legs = 0,
+            Eyes = 0,
+            ColorRgb = SandColor(rng),
+            BellyRgb = SandColor(rng),
+            Glows = rng.NextDouble() < 0.3,
+            Hide = WormHides[rng.Next(WormHides.Length)],
+            DropItem = "creature_meat",
+            DropCount = 20,
+            DropKind = CreatureDropKind.Food,
+        };
+        sp.VoiceSeed = unchecked((int)(s ^ (s >> 32)) ^ 0x5EED_1CE);
+        return sp;
+    }
+
+    /// <summary>The sandworm's palette: sand, ochre, rust, umber and dusk tones.</summary>
+    private static int SandColor(System.Random rng)
+    {
+        int[] palette = { 0xC8A26B, 0xB5793E, 0x8E5A33, 0x6B4A36, 0xA88B6A, 0x7E6A7A, 0xD2B48C, 0x9C6644 };
+        int c = palette[rng.Next(palette.Length)];
+        int jitter = rng.Next(-14, 15);
+        int r = System.Math.Clamp(((c >> 16) & 0xFF) + jitter, 0, 255);
+        int g = System.Math.Clamp(((c >> 8) & 0xFF) + jitter, 0, 255);
+        int b = System.Math.Clamp((c & 0xFF) + jitter, 0, 255);
+        return (r << 16) | (g << 8) | b;
     }
 
     private static int AbundanceCount(string? abundance) => (abundance ?? "few").ToLowerInvariant() switch
     {
         "none" => 0,
+        "authored" => 0, // #1763: only the type's authored species
         "many" => 9, // was 6 before the roster bump (#640)
         _ => 5,      // "few" / unknown — was 3 before the roster bump (#640)
     };
@@ -61,6 +294,7 @@ public static class CreatureGenerator
     private static int LegacyAbundanceCount(string? abundance) => (abundance ?? "few").ToLowerInvariant() switch
     {
         "none" => 0,
+        "authored" => 0,
         "many" => 6,
         _ => 3,
     };
@@ -70,7 +304,7 @@ public static class CreatureGenerator
     /// (Water/Amphibian, only on water worlds). Each fix regenerates one slot from a niche-salted seed
     /// with a forced habitat, preferring slots whose habitat is over-represented in the roster.</summary>
     private static void EnsureHabitatDiversity(List<CreatureSpecies> list, int legacyCount, long planetSeed,
-        bool allowWater, bool allowLava, bool allowCave, int biomeCount)
+        bool allowWater, bool allowLava, bool allowCave, int biomeCount, int terrainGeneration)
     {
         if (list.Count <= legacyCount)
         {
@@ -120,11 +354,59 @@ public static class CreatureGenerator
             const long golden = unchecked((long)0x9E3779B97F4A7C15UL);
             long s = unchecked(planetSeed ^ ((long)pick * golden) ^ WorldGenerator.StableHash("niche:" + niche));
             var rng = new System.Random(unchecked((int)(s ^ (s >> 32))));
-            list[pick] = MakeSpecies(pick, rng, allowWater, allowLava, allowCave, biomeCount, niche, speciesSeed: s);
+            list[pick] = MakeSpecies(pick, rng, allowWater, allowLava, allowCave, biomeCount, niche, speciesSeed: s, terrainGeneration);
         }
     }
 
-    private static CreatureSpecies MakeSpecies(int index, System.Random rng, bool allowWater, bool allowLava, bool allowCave, int biomeCount, CreatureHabitat? forcedHabitat, long speciesSeed)
+    /// <summary>Generation 8 (Titas): keeps the first <paramref name="cap"/> water/amphibian species and re-draws every later
+    /// one as a land species from a salted seed (-1 = no cap).</summary>
+    private static void CapAquaticSpecies(List<CreatureSpecies> list, int cap, long planetSeed,
+        bool allowWater, bool allowLava, bool allowCave, int biomeCount, int terrainGeneration)
+    {
+        if (cap < 0)
+        {
+            return;
+        }
+
+        const long golden = unchecked((long)0x9E3779B97F4A7C15UL);
+        int kept = 0;
+        for (int i = 0; i < list.Count; i++)
+        {
+            if (list[i].Habitat is not (CreatureHabitat.Water or CreatureHabitat.Amphibian))
+            {
+                continue;
+            }
+
+            if (kept < cap)
+            {
+                kept++;
+                continue;
+            }
+
+            long s = unchecked(planetSeed ^ ((long)i * golden) ^ WorldGenerator.StableHash("cap:land"));
+            var rng = new System.Random(unchecked((int)(s ^ (s >> 32))));
+            list[i] = MakeSpecies(i, rng, allowWater, allowLava, allowCave, biomeCount, CreatureHabitat.Land, speciesSeed: s, terrainGeneration);
+        }
+    }
+
+    /// <summary>Generation 8 (Valuma): every rolled species is passive or skittish and bites for nothing.</summary>
+    private static void MakePeaceful(List<CreatureSpecies> list)
+    {
+        for (int i = 0; i < list.Count; i++)
+        {
+            var sp = list[i];
+            if (sp.Temperament is CreatureTemperament.Passive or CreatureTemperament.Skittish)
+            {
+                sp.AttackDamage = 0f;
+                continue;
+            }
+
+            sp.Temperament = i % 2 == 0 ? CreatureTemperament.Passive : CreatureTemperament.Skittish;
+            sp.AttackDamage = 0f;
+        }
+    }
+
+    private static CreatureSpecies MakeSpecies(int index, System.Random rng, bool allowWater, bool allowLava, bool allowCave, int biomeCount, CreatureHabitat? forcedHabitat, long speciesSeed, int terrainGeneration)
     {
         var habitat = forcedHabitat ?? PickHabitat(rng, allowWater, allowLava, allowCave);
         bool cave = habitat == CreatureHabitat.Cave;
@@ -222,13 +504,188 @@ public static class CreatureGenerator
         // client-side id hash gave the whole game nine voices per habitat.
         species.VoiceSeed = unchecked((int)(speciesSeed ^ (speciesSeed >> 32)) ^ 0x5EED_1CE);
 
+        // Fins: folded from the voice seed above, NOT drawn from `rng` — same discipline as the seed itself,
+        // so adding them changed no existing world's traits by a single bit. Must come after the body plan
+        // (a medusa never has fins) and after the voice seed it reads.
+        species.HasFins = CreatureMotion.FinsFor(species);
+
         if (species.Habitat == CreatureHabitat.Air && species.HoverAltitude <= 0f)
         {
             // Per-species hover altitude (#637) so the sky gets layers instead of one uniform band.
             species.HoverAltitude = 3f + (float)rng.NextDouble() * 9f; // 3..12
         }
 
+        // Generation 6 (#1778-#1782): rays, air fish, extra heads / wing pairs / fin pairs. Rolled AFTER every
+        // roll above and applied only on a generation-6 world, so a species of any older world keeps every
+        // trait it had — the same discipline as the body plans (appended) and the authored overlay (gated).
+        if (terrainGeneration >= BlocksBeyondTheStars.Shared.World.WorldDescription.NewKindsGeneration)
+        {
+            ApplyNewKinds(rng, species);
+        }
+
+        // Generation 10 (#2009): the arachnid — rolled LAST, after every older roll, and only on a generation-10 world,
+        // so a species of any older world keeps every trait it had (the roll is the final draw, nothing reads the RNG
+        // after it). One draw per standard-plan Land species; the plan then overrides what the body demands and
+        // re-rolls what depends on it (the gait, the group size).
+        if (terrainGeneration >= BlocksBeyondTheStars.Shared.World.WorldDescription.ArachnidGeneration
+            && species.Habitat == CreatureHabitat.Land && species.BodyPlan == CreatureBodyPlan.Standard
+            && rng.NextDouble() < ArachnidChance)
+        {
+            ApplyArachnidPlan(rng, species);
+        }
+
         return species;
+    }
+
+    /// <summary>The arachnid (#2009): a speeder-sized eight-legger — Size 3–3.6 on eight splayed legs, a cephalothorax
+    /// and an abdomen, a head that is a box or one of four pyramids (apex up, and not always the same one), spider eye
+    /// clusters, fangs on most. Temperament, activity and colours stay exactly as rolled (the normal roll, so a world's
+    /// arachnid may be a grazer or a pack hunter); the gait is re-rolled for the new body; a hunter or a territorial one
+    /// lies in wait (<see cref="ArachnidRules.Lurks"/>). Solitary unless it hunts as a pack.</summary>
+    private static void ApplyArachnidPlan(System.Random rng, CreatureSpecies sp)
+    {
+        sp.BodyPlan = CreatureBodyPlan.Arachnid;
+        sp.Size = ArachnidRules.MinSize + (float)rng.NextDouble() * (ArachnidRules.MaxSize - ArachnidRules.MinSize);
+        sp.Legs = 8;
+        sp.BodySegments = 2;                                    // cephalothorax + abdomen
+        sp.HeadShape = (CreatureHeadShape)Weighted(rng,
+            (int)CreatureHeadShape.Box, 50,
+            (int)CreatureHeadShape.Pyramid, 18,
+            (int)CreatureHeadShape.Spire, 12,
+            (int)CreatureHeadShape.Frustum, 10,
+            (int)CreatureHeadShape.Ziggurat, 10);
+        sp.Eyes = Weighted(rng, 2, 20, 4, 30, 6, 25, 8, 25);   // spider eye clusters
+        sp.EyeStalks = false;
+        sp.Horns = rng.NextDouble() < 0.65 ? 2 : 0;             // the builder draws them as fangs
+        sp.Hide = ArachnidHides[rng.Next(ArachnidHides.Length)];
+        sp.HasWings = false;
+        sp.WingPairs = 1;
+        sp.FinPairs = 1;
+        sp.HasGasSac = false;
+        sp.HasTail = false;
+        sp.Tentacles = 0;
+        sp.Heads = 1;                                           // generation 6 may have rolled a hydra before this plan
+        sp.NeckLength = 0;
+        sp.HasTrunk = false;
+        sp.HoverAltitude = 0f;
+        sp.MaxHealth = (10f + sp.Size * 8f + (sp.Hostile ? 10f : 0f)) * 2.5f; // ≈ 85–110: a real fight, below a titan
+        sp.AttackDamage = 3f + (float)rng.NextDouble() * 5f;    // used when hostile or provoked
+        sp.Speed = 2.0f + (float)rng.NextDouble() * 2.0f;       // quick for its size, still below a running player
+        sp.DropCount = 2 + rng.Next(3);                         // 2..4
+        sp.LocoStyle = PickLocoStyle(rng, sp);                  // prowler / darter / grazer / strider by temperament
+        sp.SocialGroupSize = sp.Temperament == CreatureTemperament.PackHunter ? 2 + rng.Next(2) : 1;
+    }
+
+    /// <summary>A rolled arachnid for a world whose roster has none (#2009, the <c>/arachnid</c> test command): this
+    /// world's own Land roll with the plan forced, from a seed salted so it never collides with a roster slot.</summary>
+    public static CreatureSpecies GenerateArachnid(PlanetType planet, long rosterSeed)
+    {
+        long s = unchecked(rosterSeed ^ 0x5A2A_C41DL);
+        var rng = new System.Random(unchecked((int)(s ^ (s >> 32))));
+        var sp = MakeSpecies(90, rng, allowWater: false, allowLava: false, allowCave: false, biomeCount: planet.Biomes.Count,
+            forcedHabitat: CreatureHabitat.Land, speciesSeed: s,
+            terrainGeneration: BlocksBeyondTheStars.Shared.World.WorldDescription.ArachnidGeneration);
+        if (sp.BodyPlan != CreatureBodyPlan.Arachnid)
+        {
+            ApplyArachnidPlan(rng, sp);
+        }
+
+        return sp;
+    }
+
+    /// <summary>The generation-6 kinds (#1778-#1782), in a fixed roll order: first the body (ray / air fish),
+    /// then the counts that depend on it. Standard-plan Air and Water species may become rays (20 %), a standard
+    /// Air species that stayed an air animal may become an air fish (25 %); heads, wing pairs and fin pairs are
+    /// rolled for whichever body came out.</summary>
+    private static void ApplyNewKinds(System.Random rng, CreatureSpecies sp)
+    {
+        bool airOrWater = sp.Habitat is CreatureHabitat.Air or CreatureHabitat.Water;
+        if (airOrWater && sp.BodyPlan == CreatureBodyPlan.Standard && rng.NextDouble() < 0.20)
+        {
+            ApplyRayPlan(rng, sp);
+        }
+        else if (sp.Habitat == CreatureHabitat.Air && sp.BodyPlan == CreatureBodyPlan.Standard && rng.NextDouble() < 0.25)
+        {
+            ApplyAirFish(rng, sp);
+        }
+
+        // Heads (#1780): a few standard ground bodies carry two or three; titans more often (the hydra).
+        // Never on a medusa (a bell has no head), a ray (its eyes sit on the disc) or the flowerling.
+        bool ground = sp.Habitat is CreatureHabitat.Land or CreatureHabitat.Cave or CreatureHabitat.Lava or CreatureHabitat.Amphibian;
+        if (sp.BodyPlan == CreatureBodyPlan.Standard && ground)
+        {
+            sp.Heads = Weighted(rng, 1, 92, 2, 6, 3, 2);
+        }
+        else if (sp.BodyPlan == CreatureBodyPlan.Titan)
+        {
+            sp.Heads = Weighted(rng, 1, 80, 2, 15, 3, 5);
+        }
+
+        // Wing pairs (#1781): a fifth of the winged air species carry two pairs, a few three (the dragonfly);
+        // a winged ground bird sometimes two. A ray's wings ARE its body — one pair, always.
+        if (sp.HasWings && sp.BodyPlan != CreatureBodyPlan.Ray)
+        {
+            sp.WingPairs = sp.Habitat == CreatureHabitat.Air
+                ? Weighted(rng, 1, 72, 2, 20, 3, 8)
+                : Weighted(rng, 1, 90, 2, 10);
+        }
+
+        // Fins are derived (FinsFor), so re-read them for the body that came out; then the pair count (#1782)
+        // for the legless finned bodies — the fish and the air fish.
+        sp.HasFins = CreatureMotion.FinsFor(sp);
+        if (sp.HasFins && sp.Legs <= 0)
+        {
+            sp.FinPairs = Weighted(rng, 1, 60, 2, 30, 3, 10);
+        }
+    }
+
+    /// <summary>The ray (#1778): a flat disc on one pair of wing panels that beat as a travelling wave, a whip
+    /// tail, eyes on top — under water a bottom-hugging glider, in the air a sky glider that never lands (see
+    /// <see cref="CreatureMotion.IsSkyGlider"/>). Never a hunter: passive, skittish or territorial at most.</summary>
+    private static void ApplyRayPlan(System.Random rng, CreatureSpecies sp)
+    {
+        sp.BodyPlan = CreatureBodyPlan.Ray;
+        sp.Legs = 0;
+        sp.HasWings = true;
+        sp.HasTail = true;
+        sp.HasGasSac = false;
+        sp.HasCrest = false;
+        sp.EyeStalks = false;
+        sp.Tentacles = 0;
+        sp.Horns = rng.NextDouble() < 0.3 ? 2 : 0;                  // cephalic lobes on some
+        sp.BodySegments = 1 + rng.Next(2);                          // 1..2 — a disc, or a slightly longer one
+        sp.Eyes = Weighted(rng, 2, 80, 0, 10, 4, 10);
+        sp.Size = 1.2f + (float)rng.NextDouble() * 1.8f;            // 1.2..3
+        sp.Temperament = (CreatureTemperament)Weighted(rng,
+            (int)CreatureTemperament.Passive, 55,
+            (int)CreatureTemperament.Skittish, 30,
+            (int)CreatureTemperament.Territorial, 15);
+        sp.MaxHealth = 10f + sp.Size * 8f;
+        sp.AttackDamage = sp.Temperament == CreatureTemperament.Territorial ? 2f + (float)rng.NextDouble() * 3f : 0f;
+        sp.Speed = 1.2f + (float)rng.NextDouble() * 1.4f;           // 1.2..2.6 — an unhurried glide
+        sp.LocoStyle = sp.Habitat == CreatureHabitat.Air
+            ? LocomotionStyle.Glider                                // the sky ray swoops
+            : rng.NextDouble() < 0.6 ? LocomotionStyle.Drifter : LocomotionStyle.Schooler;
+        sp.SocialGroupSize = 1 + rng.Next(3);                       // 1..3
+        sp.Heads = 1;
+        sp.WingPairs = 1;
+        sp.FinPairs = 1;
+    }
+
+    /// <summary>The air fish (#1779): a fish body that lives in the air like a bird — legless, wingless, finned,
+    /// tailed, gliding on its swoop wave and never landing (a sky glider, see <see cref="CreatureMotion.IsSkyGlider"/>).
+    /// Everything else (colour, size, temperament, eyes, glow) stays as rolled.</summary>
+    private static void ApplyAirFish(System.Random rng, CreatureSpecies sp)
+    {
+        sp.Legs = 0;
+        sp.HasWings = false;
+        sp.HasTail = true;
+        sp.HasGasSac = false;
+        sp.EyeStalks = false;
+        sp.Tentacles = rng.NextDouble() < 0.15 ? 2 : 0;             // the odd barbel pair
+        sp.LocoStyle = LocomotionStyle.Glider;
+        sp.Heads = 1;
+        sp.WingPairs = 1;
     }
 
     /// <summary>Rolls whether this species gets a non-standard body plan (#637/#638) and, if so,

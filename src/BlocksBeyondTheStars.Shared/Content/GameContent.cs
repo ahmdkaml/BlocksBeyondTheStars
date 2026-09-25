@@ -60,8 +60,12 @@ public sealed class GameContent
     private Dictionary<string, List<StructureTemplate>> _stationsByTier = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, List<StructureTemplate>> _settlementsByTier = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>All distinct pack names present across both pools (for the world-creation pack picker).</summary>
+    /// <summary>All distinct pack names present across both pools and the kits (for the world-creation pack picker).</summary>
     public IReadOnlyList<string> StructurePacks { get; private set; } = System.Array.Empty<string>();
+
+    /// <summary>Structure kits (#1873): the module names with their entries. Set after the templates, since a kit's
+    /// entries resolve against them.</summary>
+    public IReadOnlyList<StructureKit> StructureKits { get; private set; } = System.Array.Empty<StructureKit>();
 
     /// <summary>Populates the optional structure-template pools (called by the content loader). Builds the
     /// tier-matched sub-pools + the distinct pack list used by selection and the creation UI.</summary>
@@ -72,11 +76,206 @@ public sealed class GameContent
 
         _stationsByTier = GroupByTier(StationTemplates);
         _settlementsByTier = GroupByTier(SettlementTemplates);
+        RefreshStructurePacks();
+    }
 
+    /// <summary>
+    /// Populates the kit pool (#1873), validating each kit against the template pools: an entry whose module key
+    /// resolves nowhere is dropped (with a warning), a required entry places at least one, a kit with an unknown
+    /// kind, no key or no usable entry is dropped. Pool order is kept — the composers draw by weight in this order.
+    /// </summary>
+    public void SetStructureKits(IReadOnlyList<StructureKit>? kits, Action<string>? warn = null)
+    {
+        var kept = new List<StructureKit>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var kit in kits ?? System.Array.Empty<StructureKit>())
+        {
+            if (kit == null || string.IsNullOrWhiteSpace(kit.Key))
+            {
+                warn?.Invoke("Skipping a structure kit without a key.");
+                continue;
+            }
+
+            string kind = kit.KindOrDefault;
+            if (System.Array.IndexOf(StructureKit.Kinds, kind) < 0)
+            {
+                warn?.Invoke($"Skipping structure kit '{kit.Key}': unknown kind '{kit.Kind}' (station | settlement | city).");
+                continue;
+            }
+
+            if (!seen.Add(kit.Key))
+            {
+                warn?.Invoke($"Skipping structure kit '{kit.Key}': a kit with that key is already loaded.");
+                continue;
+            }
+
+            kit.Kind = kind;
+            var entries = new List<KitEntry>();
+            foreach (var e in kit.Entries)
+            {
+                if (e == null || string.IsNullOrWhiteSpace(e.Module))
+                {
+                    continue;
+                }
+
+                if (TemplateByKey(kind, e.Module) is null)
+                {
+                    warn?.Invoke($"Structure kit '{kit.Key}': entry '{e.Module}' names no {kind} module — dropped.");
+                    continue;
+                }
+
+                if (e.Required && e.Min < 1)
+                {
+                    e.Min = 1;
+                }
+
+                if (e.Max < e.Min)
+                {
+                    e.Max = e.Min;
+                }
+
+                entries.Add(e);
+            }
+
+            kit.Entries = entries;
+            if (entries.Count == 0 && kind == StructureKit.KindStation)
+            {
+                warn?.Invoke($"Skipping structure kit '{kit.Key}': it has no usable entry."); // a station needs a start module
+                continue;
+            }
+
+            if (kit.Start.Length > 0 && TemplateByKey(kind, kit.Start) is null)
+            {
+                warn?.Invoke($"Structure kit '{kit.Key}': start module '{kit.Start}' does not exist — the first required entry starts the composition.");
+                kit.Start = string.Empty;
+            }
+
+            kept.Add(kit);
+        }
+
+        StructureKits = kept;
+        RefreshStructurePacks();
+    }
+
+    private void RefreshStructurePacks()
+    {
         var packs = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var t in StationTemplates) packs.Add(t.PackOrDefault);
         foreach (var t in SettlementTemplates) packs.Add(t.PackOrDefault);
+        foreach (var k in StructureKits) packs.Add(k.PackOrDefault);
         StructurePacks = packs.ToList();
+    }
+
+    /// <summary>A template of either pool by key — modules included (the kit entries resolve through here);
+    /// station kits look in the station pool, settlement and city kits in the settlement pool.</summary>
+    public StructureTemplate? TemplateByKey(string kind, string key)
+    {
+        var pool = kind == StructureKit.KindStation ? StationTemplates : SettlementTemplates;
+        foreach (var t in pool)
+        {
+            if (t.Key == key)
+            {
+                return t;
+            }
+        }
+
+        return null;
+    }
+
+    public StructureKit? KitByKey(string key)
+    {
+        foreach (var k in StructureKits)
+        {
+            if (k.Key == key)
+            {
+                return k;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The kits a slot may draw from (#1873): of <paramref name="kind"/>, of <paramref name="tier"/> (null = any
+    /// tier, for city kits), in the enabled packs and on the planet type, in pool order (the draw is weighted over
+    /// this order — never sort).
+    /// </summary>
+    public IReadOnlyList<StructureKit> KitsFor(string kind, string? tier, IReadOnlyCollection<string>? enabledPacks, string? planetType)
+    {
+        var list = new List<StructureKit>();
+        foreach (var k in StructureKits)
+        {
+            if (k.KindOrDefault != kind || k.PinOnly)
+            {
+                continue; // #1885: a pin-only kit is never drawn for a new structure (KitByKey still finds it)
+            }
+
+            if (tier != null && !string.Equals(string.IsNullOrWhiteSpace(k.Tier) ? "medium" : k.Tier, tier, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            bool packOk = enabledPacks is null || enabledPacks.Count == 0 || enabledPacks.Contains(k.PackOrDefault);
+            bool planetOk = k.PlanetTypes.Count == 0 || string.IsNullOrEmpty(planetType)
+                || k.PlanetTypes.Contains(planetType!, StringComparer.OrdinalIgnoreCase);
+            if (packOk && planetOk)
+            {
+                list.Add(k);
+            }
+        }
+
+        return list;
+    }
+
+    /// <summary>The COMPLETE templates of a tier a slot may draw from — non-module, not pin-only, in the enabled
+    /// packs and on the planet — for the joint random table with the kits (#1874).</summary>
+    public IReadOnlyList<StructureTemplate> CompleteTemplatesFor(string kind, string tier, IReadOnlyCollection<string>? enabledPacks, string? planetType)
+    {
+        var byTier = kind == StructureKit.KindStation ? _stationsByTier : _settlementsByTier;
+        var list = new List<StructureTemplate>();
+        if (!byTier.TryGetValue(string.IsNullOrWhiteSpace(tier) ? "medium" : tier, out var candidates))
+        {
+            return list;
+        }
+
+        foreach (var t in candidates)
+        {
+            bool packOk = enabledPacks is null || enabledPacks.Count == 0 || enabledPacks.Contains(t.PackOrDefault);
+            bool planetOk = t.PlanetTypes.Count == 0 || string.IsNullOrEmpty(planetType)
+                || t.PlanetTypes.Contains(planetType!, StringComparer.OrdinalIgnoreCase);
+            if (!t.PinOnly && packOk && planetOk)
+            {
+                list.Add(t);
+            }
+        }
+
+        return list;
+    }
+
+    /// <summary>The settlement building MODULES (#1826: templates with a <see cref="StructureTemplate.Role"/>)
+    /// a world may compose into its settlements and city: pack-filtered like whole templates, planet-type
+    /// filtered like settlements, in pool order (the composers pick by hash, so the order is part of the
+    /// determinism contract — never sort). Empty when no module fits.</summary>
+    public IReadOnlyList<StructureTemplate> SettlementModulesFor(IReadOnlyCollection<string>? enabledPacks, string? planetType)
+    {
+        var list = new List<StructureTemplate>();
+        foreach (var t in SettlementTemplates)
+        {
+            if (!t.IsModule || !StructureRoles.IsKnown(t.Role) || t.Width <= 0 || t.Height <= 0 || t.Length <= 0)
+            {
+                continue;
+            }
+
+            bool packOk = enabledPacks is null || enabledPacks.Count == 0 || enabledPacks.Contains(t.PackOrDefault);
+            bool planetOk = t.PlanetTypes.Count == 0 || string.IsNullOrEmpty(planetType)
+                || t.PlanetTypes.Contains(planetType!, StringComparer.OrdinalIgnoreCase);
+            if (packOk && planetOk)
+            {
+                list.Add(t);
+            }
+        }
+
+        return list;
     }
 
     private static Dictionary<string, List<StructureTemplate>> GroupByTier(IReadOnlyList<StructureTemplate> pool)
@@ -84,6 +283,11 @@ public sealed class GameContent
         var byTier = new Dictionary<string, List<StructureTemplate>>(StringComparer.OrdinalIgnoreCase);
         foreach (var t in pool)
         {
+            if (t.IsModule)
+            {
+                continue; // #1826: a building module is composed INTO a settlement, never rolled as one
+            }
+
             var tier = string.IsNullOrWhiteSpace(t.Tier) ? "medium" : t.Tier;
             if (!byTier.TryGetValue(tier, out var list))
             {
@@ -113,6 +317,10 @@ public sealed class GameContent
     public StructureTemplate? SettlementTemplateByKey(string key)
         => _settlementsByTier.Values.SelectMany(l => l).FirstOrDefault(t => t.Key == key);
 
+    /// <summary>A settlement building module by exact key (#1826), or null — whole templates never match.</summary>
+    public StructureTemplate? SettlementModuleByKey(string key)
+        => SettlementTemplates.FirstOrDefault(t => t.IsModule && t.Key == key);
+
     /// <summary>A station template by exact key (pinned replays, #1115), or null when it no longer exists.</summary>
     public StructureTemplate? StationTemplateByKey(string key)
         => _stationsByTier.Values.SelectMany(l => l).FirstOrDefault(t => t.Key == key);
@@ -131,6 +339,16 @@ public sealed class GameContent
             if (candidates.Count == 0)
             {
                 return null; // no legacy template in this tier — exactly the pre-#1115 outcome (no draw)
+            }
+        }
+        else
+        {
+            // #1874: a pin-only template stays for the worlds that pinned it (the legacy replay above still
+            // sees it) and is never rolled for a new structure.
+            candidates = candidates.Where(t => !t.PinOnly).ToList();
+            if (candidates.Count == 0)
+            {
+                return null;
             }
         }
 
@@ -296,8 +514,10 @@ public sealed class GameContent
         IEnumerable<ShipDefinition>? ships = null,
         IEnumerable<ShipLayout>? shipLayouts = null,
         IDictionary<GameLocale, Func<Dictionary<string, string>>>? lazyLocales = null,
-        IDictionary<GameLocale, double>? localeCoverage = null)
+        IDictionary<GameLocale, double>? localeCoverage = null,
+        IEnumerable<AuthoredCreature>? authoredCreatures = null)
     {
+        _authoredCreatures = (authoredCreatures ?? Enumerable.Empty<AuthoredCreature>()).ToDictionary(a => a.Key, StringComparer.OrdinalIgnoreCase);
         _blocks = blocks.ToDictionary(b => b.Key);
         _items = items.ToDictionary(i => i.Key);
         _recipes = recipes.ToDictionary(r => r.Key);
@@ -351,6 +571,27 @@ public sealed class GameContent
         }
     }
 
+    private readonly Dictionary<string, AuthoredCreature> _authoredCreatures;
+
+    /// <summary>The authored creature species (#1763, <c>data/creatures.json</c>), keyed case-insensitively.</summary>
+    public IReadOnlyDictionary<string, AuthoredCreature> AuthoredCreatures => _authoredCreatures;
+
+    /// <summary>The authored records a planet type names, in its own order (unknown keys are skipped — validation
+    /// reports them). Empty for every type that names none.</summary>
+    public IReadOnlyList<AuthoredCreature> AuthoredCreaturesFor(PlanetType planet)
+    {
+        var list = new List<AuthoredCreature>();
+        foreach (var key in planet.AuthoredCreatures)
+        {
+            if (_authoredCreatures.TryGetValue(key, out var record))
+            {
+                list.Add(record);
+            }
+        }
+
+        return list;
+    }
+
     private void AssignBlockIds()
     {
         ushort next = 1; // 0 reserved for air
@@ -373,8 +614,10 @@ public sealed class GameContent
     {
         "stone", "dirt", "basalt", "sand", "mud", "grass", "snow", "salt", "mycelium", "alien_grass",
         "deepslate", "granite", "ash", "wood_log",
+        "moss_stone", "sandstone", "scree", "bone", // #1647 landscape-variety terrain set (tar keeps its fluid look)
         "iron_wall", "steel_wall", "bronze_block", "brass_block", "steel_floor", "metal_panel", "concrete",
         "cargo_floor", "medbay_panel", "lab_panel", "engine_panel",
+        "ancient_brick", "rune_stone", // #1834 ruin masonry: a mined pillar keeps its form, a mined rune its glow
     };
 
     private void MarkTintableDefaults()
@@ -451,6 +694,22 @@ public sealed class GameContent
         foreach (var species in BlocksBeyondTheStars.Shared.Definitions.FloraCatalog.All)
         {
             foreach (var hostKey in species.Hosts)
+            {
+                if (_blocks.TryGetValue(hostKey, out var block))
+                {
+                    block.FloraHost = true;
+                }
+            }
+
+            foreach (var hostKey in species.LateHosts) // a late host block only exists on a new world
+            {
+                if (_blocks.TryGetValue(hostKey, out var block))
+                {
+                    block.FloraHost = true;
+                }
+            }
+
+            foreach (var hostKey in species.CaveHosts) // generation 11: the cave rock a species roots on underground
             {
                 if (_blocks.TryGetValue(hostKey, out var block))
                 {
@@ -697,9 +956,13 @@ public sealed class GameContent
     }
 
     /// <summary>
-    /// Mirrors client BlockTextureAtlas.Cols*Rows (16x16 tile atlas capacity).
+    /// The number of block slots in the client's texture atlas — numeric block ids must stay BELOW it. The atlas
+    /// has 32×32 = 1024 slots, but only the first band belongs to blocks (#1952): the client's <c>AtlasBands</c>
+    /// deals the rest to official extra tiles (400..511), animation strips of the local pack and of world
+    /// textures (512..989) and the derived variant / end-grain tiles (990..1023). Mirrors
+    /// <c>AtlasBands.BlockEnd</c>.
     /// </summary>
-    public const int AtlasTileCapacity = 256;
+    public const int AtlasTileCapacity = 400;
 
     /// <summary>
     /// Cross-validates all references between definitions. Throws
@@ -739,6 +1002,48 @@ public sealed class GameContent
             foreach (var drop in block.Drops)
             {
                 RequireItem($"Block '{block.Key}' drop", drop.Item);
+            }
+
+            // #1761: a weighted table needs at least one real row with a positive weight, and every named row
+            // must be an item (the empty item is the deliberate "nothing" outcome).
+            if (block.RandomDrops is { } table)
+            {
+                int weight = 0;
+                foreach (var row in table)
+                {
+                    RequireItem($"Block '{block.Key}' random drop", row.Item);
+                    if (row.Weight < 0)
+                    {
+                        problems.Add($"Block '{block.Key}' random drop '{row.Item}' has a negative weight.");
+                    }
+
+                    weight += System.Math.Max(0, row.Weight);
+                }
+
+                if (weight <= 0)
+                {
+                    problems.Add($"Block '{block.Key}' declares randomDrops without any positive weight.");
+                }
+            }
+        }
+
+        // #1763: an authored species must pass the same sanity band a rolled one always meets.
+        foreach (var creature in _authoredCreatures.Values)
+        {
+            if (string.IsNullOrWhiteSpace(creature.Key))
+            {
+                problems.Add("Authored creature has an empty key.");
+            }
+
+            RequireItem($"Authored creature '{creature.Key}' drop", creature.DropItem);
+            if (creature.Size < 0.3f || creature.Size > 6f || creature.Speed <= 0f || creature.SocialGroupSize < 1)
+            {
+                problems.Add($"Authored creature '{creature.Key}' has a size, speed or group size outside the sane band.");
+            }
+
+            foreach (var surface in creature.BiomeSurfaces)
+            {
+                RequireBlock($"Authored creature '{creature.Key}' biome surface", surface);
             }
         }
 
@@ -859,6 +1164,74 @@ public sealed class GameContent
             RequireBlock($"Planet '{planet.Key}' sub-surface", planet.SubSurfaceBlock);
             RequireBlock($"Planet '{planet.Key}' deep", planet.DeepBlock);
             RequireBlock($"Planet '{planet.Key}' beach", planet.BeachBlock);
+            RequireBlock($"Planet '{planet.Key}' seabed", planet.SeabedBlock); // #1757
+            if (planet.RuinsBias < 0 || planet.FactoriesBias < 0)
+            {
+                problems.Add($"Planet '{planet.Key}' has a negative ruins/factories bias.");
+            }
+
+            // Generation 8 (2026-09, Titas + Valuma).
+            if (planet.EnemyDensity < 0 || planet.SnowCoverDepth < 0 || planet.SnowCoverDepth > 32 || planet.IceSheetDepth < 0 || planet.IceSheetDepth > 16
+                || planet.HotZoneShare < 0 || planet.HotZoneShare > 0.5 || planet.WaterDamagePerSecond < 0
+                || planet.ExposureMinutesCold < 0 || planet.ExposureMinutesHot < 0 || planet.MaxAquaticSpecies < -1)
+            {
+                problems.Add($"Planet '{planet.Key}' has a generation-8 field out of range.");
+            }
+
+            if (planet.HotZoneShare > 0 && (!planet.Biomes.Any(b => b.HotZone) || !planet.Biomes.Any(b => !b.HotZone)))
+            {
+                problems.Add($"Planet '{planet.Key}' has a hot-zone share but not both a hot and a cool biome.");
+            }
+
+            foreach (var kind in planet.AllowedStructures)
+            {
+                if (kind is not ("sps_labs" or "net_fragments"))
+                {
+                    problems.Add($"Planet '{planet.Key}' allows unknown structure kind '{kind}'.");
+                }
+            }
+
+            // #1763: every authored key must exist, and an "authored" roster must name at least one.
+            foreach (var key in planet.AuthoredCreatures)
+            {
+                if (!_authoredCreatures.ContainsKey(key))
+                {
+                    problems.Add($"Planet '{planet.Key}' names unknown authored creature '{key}'.");
+                }
+            }
+
+            if (string.Equals(planet.CreatureAbundance, "authored", StringComparison.OrdinalIgnoreCase) && planet.AuthoredCreatures.Count == 0)
+            {
+                problems.Add($"Planet '{planet.Key}' has creatureAbundance \"authored\" but names no authored creature.");
+            }
+            // Terrain tags (#1644): resolved once here so worldgen reads a flags enum, never the string list.
+            planet.Tags = TerrainTags.Parse(planet.TerrainTags, out var unknownTag);
+            // City worlds (#1793): the composer key must be one the server knows, and every authored outfit
+            // must be a colour — parsed once here so the NPC caster never re-reads strings.
+            if (planet.CityWorld.Length > 0 && !string.Equals(planet.CityWorld, "gds", StringComparison.OrdinalIgnoreCase))
+            {
+                problems.Add($"Planet '{planet.Key}' names unknown city composer '{planet.CityWorld}'.");
+            }
+
+            var outfits = new List<uint>();
+            foreach (var hex in planet.NpcOutfits)
+            {
+                if (hex.Length == 6 && uint.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out uint rgb))
+                {
+                    outfits.Add(rgb);
+                }
+                else
+                {
+                    problems.Add($"Planet '{planet.Key}' has a malformed npcOutfits colour '{hex}' (expected RRGGBB).");
+                }
+            }
+
+            planet.NpcOutfitRgb = outfits.ToArray();
+            if (unknownTag is not null)
+            {
+                problems.Add($"Planet '{planet.Key}' carries unknown terrain tag '{unknownTag}'.");
+            }
+
             foreach (var biome in planet.Biomes)
             {
                 RequireBlock($"Planet '{planet.Key}' biome surface", biome.SurfaceBlock);

@@ -215,16 +215,43 @@ namespace BlocksBeyondTheStars.Client
         /// target has already despawned) costs nothing: it is simply not drawn.</summary>
         private void OnSentryShot(BlocksBeyondTheStars.Networking.Messages.SentryShot m)
         {
-            if (!_enemies.TryGetValue(m.TargetId, out var target))
+            // #1699: a sentry now also answers hostile WILDLIFE, and animals live in the creature list rather
+            // than in this view's enemy dictionary — resolve the tracer's far end from whichever holds it.
+            Vector3 hit;
+            if (_enemies.TryGetValue(m.TargetId, out var target))
+            {
+                hit = target.Root.transform.position;
+            }
+            else if (FindCreatureScenePos(m.TargetId) is { } creaturePos)
+            {
+                hit = creaturePos;
+            }
+            else
             {
                 return;
             }
 
             var muzzle = new Vector3(m.X, m.Y, m.Z);
             _weapons ??= FindAnyObjectByType<WeaponFx>();
-            _weapons?.Shoot(muzzle, target.Root.transform.position,
+            _weapons?.Shoot(muzzle, hit,
                 new Color(0.45f, 0.92f, 1f)); // the cyan the base machinery uses, not the enemies' red
             ClientAudio.Instance?.At("sentry_shot", muzzle, 1f);
+        }
+
+        /// <summary>Scene position of a live creature by id, or null when the id is not one (#1699). Reads the
+        /// same snapshot <see cref="CreatureView"/> draws from, so the tracer lands on the body the player
+        /// sees; a target that has already despawned simply gets no tracer.</summary>
+        private Vector3? FindCreatureScenePos(string id)
+        {
+            foreach (var c in Game.Creatures)
+            {
+                if (c.Id == id)
+                {
+                    return Game.ScenePos(c.X, c.Y, c.Z);
+                }
+            }
+
+            return null;
         }
 
         /// <summary>Whether a ranged attacker at <paramref name="shooter"/> has a clear sight line to the
@@ -241,12 +268,15 @@ namespace BlocksBeyondTheStars.Client
             }
 
             Vector3 chest = Game.PlayerPosition + Vector3.up * 0.9f; // where the beam aims
-            return SightLine.Clear(IsSightBlockingCell, shooter.x, shooter.y, shooter.z, chest.x, chest.y, chest.z);
+            return SightLine.Clear(IsSightBlockingCell, IsFluidCell,
+                BlocksBeyondTheStars.Shared.World.WorldConstants.FluidSightRange,
+                shooter.x, shooter.y, shooter.z, chest.x, chest.y, chest.z);
         }
 
-        /// <summary>Sight-blocking test for one world cell — the client twin of the server's
-        /// <c>IsSightBlockingCell</c>. <c>GetBlock</c> canonicalises seam coordinates and reads unloaded
-        /// chunks as air (clear), which is the right lenient default for a cosmetic effect.</summary>
+        /// <summary>Sight-blocking test for one world cell — the client twin of the server's sight march.
+        /// <c>GetBlock</c> canonicalises seam coordinates and reads unloaded chunks as air (clear), which is
+        /// the right lenient default for a cosmetic effect. Fluids are NOT counted here since #1698: they no
+        /// longer wall sight off, they spend it — see <see cref="IsFluidCell"/>.</summary>
         private bool IsSightBlockingCell(int wx, int wy, int wz)
         {
             var id = Game.World.GetBlock(wx, wy, wz);
@@ -256,7 +286,15 @@ namespace BlocksBeyondTheStars.Client
             }
 
             var def = Game.Content?.BlockById(id);
-            return def == null || def.Solid || def.Key is "water" or "lava";
+            return def == null || def.Solid;
+        }
+
+        /// <summary>Whether a cell is water or lava — murk that a sightline can cross a few cells of before it
+        /// closes (#1698), rather than a wall. Client twin of the server's fluid test.</summary>
+        private bool IsFluidCell(int wx, int wy, int wz)
+        {
+            var id = Game.World.GetBlock(wx, wy, wz);
+            return !id.IsAir && Game.Content?.BlockById(id) is { Key: "water" or "lava" };
         }
 
         /// <summary>A ranged attacker's shot: a short laser beam to the player (with a little scatter) plus the
@@ -409,7 +447,10 @@ namespace BlocksBeyondTheStars.Client
 
         /// <summary>Builds the flying scan-drone (P4): a small dark hovering pod with a single glowing RED
         /// scanner eye and three sensor fins — the ground counterpart of the space UFO. Dummy limb pivots keep
-        /// the shared <see cref="Animate"/> null-safe (drones skip limb posing).</summary>
+        /// the shared <see cref="Animate"/> null-safe (drones skip limb posing). The pod is grey plating and
+        /// vanished against grey asteroid rock (#1840), so it also carries self-lit red accents (same unlit
+        /// <see cref="_eyeMat"/> — red is the Guardian colour, never blue): an equatorial threat strip that
+        /// reads from every side, caps on the three fin tips, an emitter under the belly and a wider eye.</summary>
         private Entry BuildDrone(string id)
         {
             EnsureMaterials();
@@ -430,10 +471,20 @@ namespace BlocksBeyondTheStars.Client
             en.Body = Pivot(root.transform, new Vector3(0f, 0.5f, 0f));
             Cube(en.Body, "Pod", new Vector3(0f, 0f, 0f), new Vector3(0.5f, 0.34f, 0.5f), _hideMat);
             Cube(en.Body, "Underside", new Vector3(0f, -0.18f, 0f), new Vector3(0.3f, 0.12f, 0.3f), _hideDarkMat);
-            Cube(en.Body, "Eye", new Vector3(0f, -0.02f, 0.26f), new Vector3(0.16f, 0.1f, 0.06f), _eyeMat); // red scanner
+            Cube(en.Body, "Eye", new Vector3(0f, -0.02f, 0.26f), new Vector3(0.24f, 0.1f, 0.06f), _eyeMat); // red scanner (wider since #1840)
             Cube(en.Body, "FinL", new Vector3(-0.34f, 0.04f, 0f), new Vector3(0.2f, 0.05f, 0.16f), _clawMat);
             Cube(en.Body, "FinR", new Vector3(0.34f, 0.04f, 0f), new Vector3(0.2f, 0.05f, 0.16f), _clawMat);
             Cube(en.Body, "FinB", new Vector3(0f, 0.04f, -0.34f), new Vector3(0.16f, 0.05f, 0.2f), _clawMat);
+
+            // #1840: self-lit red accents so the grey pod never disappears against grey asteroid rock. All on
+            // the body pivot, so they bob and yaw with it. The strip pokes 0.01 out of the pod on every side
+            // at mid-height (visible from any angle); the caps sit just past the fin tips; the emitter hangs
+            // below the underside block.
+            Cube(en.Body, "ThreatStrip", new Vector3(0f, 0f, 0f), new Vector3(0.52f, 0.03f, 0.52f), _eyeMat);
+            Cube(en.Body, "FinCapL", new Vector3(-0.45f, 0.04f, 0f), new Vector3(0.04f, 0.06f, 0.17f), _eyeMat);
+            Cube(en.Body, "FinCapR", new Vector3(0.45f, 0.04f, 0f), new Vector3(0.04f, 0.06f, 0.17f), _eyeMat);
+            Cube(en.Body, "FinCapB", new Vector3(0f, 0.04f, -0.45f), new Vector3(0.17f, 0.06f, 0.04f), _eyeMat);
+            Cube(en.Body, "Emitter", new Vector3(0f, -0.26f, 0f), new Vector3(0.12f, 0.12f, 0.12f), _eyeMat);
 
             en.Head = en.Body; // the eye sits on the body
             // Dummy limb pivots so the shared Animate() never null-refs (drones skip limb posing).
@@ -692,8 +743,9 @@ namespace BlocksBeyondTheStars.Client
 
         private static Texture2D LoadTex(string key)
         {
-            var asset = Resources.Load<TextAsset>("textures/" + key);
-            if (asset == null || asset.bytes.Length != 64 * 64 * 4)
+            // The winning layer of the texture source (#1952): world texture, local pack, or the bundled tile.
+            byte[] raw = GameTextures.TileBytes(key);
+            if (raw == null || raw.Length != 64 * 64 * 4)
             {
                 return null;
             }
@@ -703,7 +755,7 @@ namespace BlocksBeyondTheStars.Client
                 wrapMode = TextureWrapMode.Repeat,
                 filterMode = FilterMode.Point,
             };
-            tex.LoadRawTextureData(asset.bytes);
+            tex.LoadRawTextureData(raw);
             tex.Apply();
             return tex;
         }

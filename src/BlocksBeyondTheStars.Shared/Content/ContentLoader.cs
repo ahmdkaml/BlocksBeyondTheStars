@@ -87,8 +87,11 @@ public static class ContentLoader
             }
         }
 
+        // #1763: the authored creature species are optional content — no creatures.json → none.
+        var authoredCreatures = LoadArray<AuthoredCreature>(Path.Combine(dataDir, "creatures.json"));
+
         var content = new GameContent(blocks, items, recipes, blueprints, modules, locales, planets, missions, ships, shipLayouts,
-            lazyLocales, LoadLocaleCoverage(Path.Combine(dataDir, "locale_coverage.json")));
+            lazyLocales, LoadLocaleCoverage(Path.Combine(dataDir, "locale_coverage.json")), authoredCreatures);
 
         // Optional hand-designed structure template pools (empty when the files are absent).
         var stationTemplates = LoadArray<StructureTemplate>(Path.Combine(dataDir, "station_templates.json"));
@@ -103,6 +106,15 @@ public static class ContentLoader
         }
 
         content.SetStructureTemplates(stationTemplates, settlementTemplates);
+
+        // Structure kits (#1873): the shipped pool plus one kit per file from the editor's user-content folder.
+        var kits = LoadArray<StructureKit>(Path.Combine(dataDir, "structure_kits.json"));
+        if (!string.IsNullOrEmpty(userContentDir) && Directory.Exists(userContentDir))
+        {
+            kits.AddRange(LoadUserKits(Path.Combine(userContentDir!, "structure_kits"), warn));
+        }
+
+        content.SetStructureKits(kits, warn);
         content.SetStories(stories);
 
         // Achievements are optional content: a data folder without the file just has none.
@@ -178,6 +190,42 @@ public static class ContentLoader
             catch (JsonException ex)
             {
                 warn?.Invoke($"Skipping unreadable user template '{file}': {ex.Message}");
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>Loads every kit file of the editor's user-content folder (#1873): one <see cref="StructureKit"/>
+    /// per file, the key defaulting to the file name; a malformed file is reported and skipped.</summary>
+    private static List<StructureKit> LoadUserKits(string dir, Action<string>? warn = null)
+    {
+        var result = new List<StructureKit>();
+        if (!Directory.Exists(dir))
+        {
+            return result;
+        }
+
+        foreach (var file in Directory.GetFiles(dir, "*.json"))
+        {
+            try
+            {
+                var k = JsonSerializer.Deserialize<StructureKit>(File.ReadAllText(file), JsonOptions);
+                if (k == null)
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(k.Key))
+                {
+                    k.Key = Path.GetFileNameWithoutExtension(file);
+                }
+
+                result.Add(k);
+            }
+            catch (JsonException ex)
+            {
+                warn?.Invoke($"Skipping unreadable user kit '{file}': {ex.Message}");
             }
         }
 

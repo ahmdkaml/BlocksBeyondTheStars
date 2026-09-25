@@ -82,6 +82,22 @@ public sealed class WorldMetadata
     public System.Collections.Generic.Dictionary<string, string> BodyPlanetTypes { get; set; } = new();
 
     /// <summary>
+    /// Pinned landing pads (#1989): bodyId → the pads of that body, one entry per pad as
+    /// <c>index,x,z,y,radius,depth,flags</c> (flags: 1 wet, 2 islet, 4 classic, 8 molten, 16 lava islet),
+    /// pads separated by <c>;</c>.
+    /// <para>Finding a body's pads means searching its terrain for dry, flat ground — thousands of column
+    /// queries, measured at 2.7 s on a meadow world and 7.9 s on a dune world, paid on EVERY load because
+    /// the pads were only ever held in memory. They are deterministic, so the search's answer is written
+    /// down the first time and read back afterwards.</para>
+    /// <para>Pinning is also the safer half: the old code comment put it plainly — "pads are not persisted,
+    /// the rule that re-derives them is the only thing holding them in place" — so any future change to the
+    /// pad rules could have moved the ground out from under a player's parked ship and their base. A body
+    /// absent from the map (every save written before this) searches once, exactly as before, and is frozen
+    /// from then on. Additive JSON field, no migration.</para>
+    /// </summary>
+    public System.Collections.Generic.Dictionary<string, string> BodyLandingPads { get; set; } = new();
+
+    /// <summary>
     /// VEGA's relay-network insight stages already spoken ("relay" / "lane" / "growth", F-2 of #1125) —
     /// each epilogue insight plays exactly once per save. Additive JSON field, no migration.
     /// </summary>
@@ -94,6 +110,14 @@ public sealed class WorldMetadata
     /// absent from the map replays against the legacy pool (the pre-#1115 behaviour, draw-for-draw).
     /// </summary>
     public System.Collections.Generic.Dictionary<string, string> StationTemplates { get; set; } = new();
+
+    /// <summary>
+    /// Pinned kit stations (#1874): station id → the composition (kit, seed, every module with its origin and turns)
+    /// the interior was baked from, written at the first stamp. <see cref="StationTemplates"/> holds
+    /// <c>"kit:&lt;key&gt;"</c> for such a station; replays bake the pinned modules and never re-run the kit, so
+    /// editing a kit or a module list never changes a station somebody has boarded. Additive JSON field.
+    /// </summary>
+    public System.Collections.Generic.Dictionary<string, StationKitRecord> StationKits { get; set; } = new();
 
     /// <summary>
     /// Growing galaxy (#1123): how many systems were appended BEYOND the description's
@@ -147,6 +171,34 @@ public sealed class WorldMetadata
     /// Null on saves from before world options existed (the launch config's rules apply then).
     /// </summary>
     public BlocksBeyondTheStars.Shared.Configuration.GameRules? RulesOverride { get; set; }
+
+    /// <summary>The local news a reporter keeps per place (2026-09): place key → the latest articles, newest last, at most
+    /// <see cref="NewsArticle.MaxPerPlace"/>. Written from player interviews, screened like chat.</summary>
+    public System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<NewsArticle>> News { get; set; } = new();
+
+    /// <summary>When the next Sreekmakra may appear per world (2026-09, Valuma): location id → unix seconds. Set when one is
+    /// defeated (a few in-game days) or fled (a day).</summary>
+    public System.Collections.Generic.Dictionary<string, long> SreekmakraBackAt { get; set; } = new();
+
+    /// <summary>When a defeated giant comes back (#1998): "locationId|colossus" / "locationId|sandworm0" → unix seconds.</summary>
+    public System.Collections.Generic.Dictionary<string, long> GiantBackAt { get; set; } = new();
+}
+
+/// <summary>One interview a player gave a reporter (2026-09).</summary>
+public sealed class NewsArticle
+{
+    /// <summary>The most articles a place keeps; older ones drop off.</summary>
+    public const int MaxPerPlace = 10;
+
+    /// <summary>The longest answer a player may give.</summary>
+    public const int MaxTextLength = 300;
+
+    public string PlayerName { get; set; } = string.Empty;
+
+    public string Text { get; set; } = string.Empty;
+
+    /// <summary>The in-game day index it was written on.</summary>
+    public long Day { get; set; }
 }
 
 /// <summary>Where one rolled structure instance landed (#586), pinned at first stamp so the placement search
@@ -170,10 +222,79 @@ public sealed class StructurePlacementRecord
     /// a growing pool never morphs their layout under the stamped blocks.</summary>
     public string Template { get; set; } = string.Empty;
 
+    /// <summary>Settlement records (#1827): whether authored building MODULES may be composed into this
+    /// instance's plots / districts. 0 = never (records from before modules existed, and legacy re-derives —
+    /// their layout must not change under the stamped blocks), 1 = plot + district modules. Written once at
+    /// the first stamp, never bumped afterwards. 2 = composed from a structure KIT (#1876), see <see cref="Kit"/>.</summary>
+    public int Modules { get; set; }
+
+    /// <summary>Settlement records (#1876): the structure kit this instance was composed from, "" for none.</summary>
+    public string Kit { get; set; } = string.Empty;
+
+    /// <summary>Settlement records (#1876): the grid the kit gave this instance (a settlement's cols, rows, plot stride,
+    /// building envelope, storeys, modules-only; a city's grid, district size, street, height, role map), pinned so a
+    /// replay lays the same grid whatever the kit says later.</summary>
+    public string KitLayout { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Settlement records (#1872): WHICH module went into each plot (settlements) or district (the city), in slot
+    /// order — the module key, "" for a procedural building or an empty plot. The composers replay this list and
+    /// never the pool: before it existed the pick was a hash over the pool AS LOADED, so adding or removing a module
+    /// (shipped data, a user-content export, a toggled pack) changed the buildings of an existing settlement on the
+    /// next load, stamped over its old blocks. Null on records from before the list existed — the loader freezes
+    /// their current picks into it once (the roster pattern, #1299), so nothing changes and later pool edits are safe.
+    /// </summary>
+    public System.Collections.Generic.List<string>? Composition { get; set; }
+
     /// <summary>Factory records only (#1299): the recipe roster this factory offers, frozen at first stamp so a
     /// growing factory recipe set never re-rolls what an existing (possibly claimed) factory makes. Null on
     /// records from before roster pinning — the loader freezes the current roll into it once.</summary>
     public System.Collections.Generic.List<string>? Roster { get; set; }
+}
+
+/// <summary>A kit station's pinned composition (#1874) — see <see cref="WorldMetadata.StationKits"/>.</summary>
+public sealed class StationKitRecord
+{
+    /// <summary>The furnishing revision a fresh composition is baked with: 1 = door lanes stay clear and a room ends at
+    /// its doorway (#1901).</summary>
+    public const int CurrentRevision = 1;
+
+    public string Kit { get; set; } = string.Empty;
+    public long Seed { get; set; }
+    public System.Collections.Generic.List<StationKitModuleRecord> Modules { get; set; } = new();
+
+    /// <summary>
+    /// The furnishing revision the station's stamped blocks were last brought up to (0 = absent in saves from before
+    /// #1901). A station stamps only its NON-air cells over the persisted world each session, so furniture an older
+    /// composer put where the current one leaves air — a chair in a cabin doorway — would stay forever; the stamp removes
+    /// such pieces once and raises this to <see cref="CurrentRevision"/>. Additive JSON field.
+    /// </summary>
+    public int Revision { get; set; }
+
+    /// <summary>
+    /// The exterior detail this station carries (#1918), pinned at its first compose — or, for a station composed before
+    /// the feature, at its first replay after it, from its kit as it was then — so editing the kit later never changes a
+    /// station that already exists. Null in saves from before #1918. Additive JSON field.
+    /// </summary>
+    public StationKitExteriorRecord? Exterior { get; set; }
+}
+
+/// <summary>A kit station's pinned exterior detail counts (#1918).</summary>
+public sealed class StationKitExteriorRecord
+{
+    public int SolarWings { get; set; }
+    public int Antennas { get; set; }
+    public int Domes { get; set; }
+}
+
+/// <summary>One placed module of a kit station: key, origin inside the station, quarter turns.</summary>
+public sealed class StationKitModuleRecord
+{
+    public string Key { get; set; } = string.Empty;
+    public int X { get; set; }
+    public int Y { get; set; }
+    public int Z { get; set; }
+    public int Turns { get; set; }
 }
 
 /// <summary>One player station's SPS relay conversion (#1125): what has been poured into it so far, and

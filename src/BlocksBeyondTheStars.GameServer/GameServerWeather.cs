@@ -60,6 +60,8 @@ public sealed partial class GameServer
     private int _cloudColor { get => _worlds.Active.CloudColor; set => _worlds.Active.CloudColor = value; }
     private int _skyColor { get => _worlds.Active.SkyColor; set => _worlds.Active.SkyColor = value; }
     private int _floraTint { get => _worlds.Active.FloraTint; set => _worlds.Active.FloraTint = value; }
+    private int _waterTint { get => _worlds.Active.WaterTint; set => _worlds.Active.WaterTint = value; }         // #1758
+    private int _waterTintMode { get => _worlds.Active.WaterTintMode; set => _worlds.Active.WaterTintMode = value; } // #1758
     private float _cloudDensity { get => _worlds.Active.CloudDensity; set => _worlds.Active.CloudDensity = value; }
     private bool _breathable { get => _worlds.Active.Breathable; set => _worlds.Active.Breathable = value; }
     private bool _spaceSky { get => _worlds.Active.SpaceSky; set => _worlds.Active.SpaceSky = value; }
@@ -71,6 +73,47 @@ public sealed partial class GameServer
 
     // Public accessors (HUD / tests).
     public float TimeOfDay => (float)_dayFraction;
+
+    /// <summary>The day fraction the sky shows at this position (#1865). The client draws the sun from
+    /// <c>TimeOfDay + X / Circumference</c> (<c>GameBootstrap.LocalTimeOfDay</c>), so everything on the server that
+    /// reacts to "night" — sleeping animals, VEGA's lamp tips, NPC routines — must ask the same question or it
+    /// contradicts the sky above the player. A void world (a station deck, a ship cabin) has no longitude: its
+    /// world clock is the local clock.</summary>
+    private double LocalDayFraction(BlocksBeyondTheStars.Shared.Geometry.Vector3f pos)
+    {
+        if (_world.Planet?.Void == true || _world.Circumference <= 0)
+        {
+            return _dayFraction;
+        }
+
+        double t = (_dayFraction + pos.X / (double)_world.Circumference) % 1.0;
+        return t < 0 ? t + 1.0 : t;
+    }
+
+    /// <summary>Night at this position: the local sun is below the horizon (the client's sunrise/sunset are 0.25/0.75).</summary>
+    private bool IsNightAt(BlocksBeyondTheStars.Shared.Geometry.Vector3f pos)
+    {
+        double t = LocalDayFraction(pos);
+        return t < 0.25 || t > 0.75;
+    }
+
+    /// <summary>Dawn or dusk at this position (crepuscular species are awake then).</summary>
+    private bool IsDawnOrDuskAt(BlocksBeyondTheStars.Shared.Geometry.Vector3f pos)
+    {
+        double t = LocalDayFraction(pos);
+        return (t >= 0.20 && t <= 0.30) || (t >= 0.70 && t <= 0.80);
+    }
+
+    /// <summary>Test seam (#1865): the local day fraction at longitude <paramref name="x"/>.</summary>
+    public double LocalDayFractionForTest(float x) => LocalDayFraction(new BlocksBeyondTheStars.Shared.Geometry.Vector3f(x, 0f, 0f));
+
+    /// <summary>Test seam (#1865): pins the WORLD clock so the LOCAL clock at longitude <paramref name="x"/> reads
+    /// <paramref name="fraction"/> — tests place things at arbitrary X and must not depend on the world clock.</summary>
+    public void SetLocalDayFractionForTest(double fraction, float x)
+    {
+        double shift = _world.Planet?.Void == true || _world.Circumference <= 0 ? 0.0 : x / (double)_world.Circumference;
+        _dayFraction = (((fraction - shift) % 1.0) + 1.0) % 1.0;
+    }
     public string Weather => _weatherState;
     public int SunColor => _sunColor;
 
@@ -94,6 +137,9 @@ public sealed partial class GameServer
 
     /// <summary>The planet's uniform flora base hue (0xRRGGBB) — all plant life is re-tinted to this.</summary>
     public int FloraTint => _floraTint;
+
+    /// <summary>The water colour mode the environment message carries (#1758: 0 classic, 1 tint, 2 rainbow) — test seam.</summary>
+    public int WaterTintMode => _waterTintMode;
 
     /// <summary>Whether the current planet's atmosphere is breathable (no suit-oxygen drain on the surface).</summary>
     public bool AtmosphereBreathable => _breathable;
@@ -178,12 +224,18 @@ public sealed partial class GameServer
         _dayFraction = InitialDayFraction;
         _sinceEnvBroadcast = 0;
 
-        var (system, _) = ActiveLocationNames();
+        var (system, _) = ActiveLocationNames(); // #1856: a station world resolves to its system too — no more "" star
         _sunColor = StarColor(system);
         // One uniform flora base hue per WORLD (green / brown / pink / purple …). Seeded from
         // LocationId ^ Seed like sky/cloud/gravity (#478) — it was the last per-TYPE hue, contradicting
-        // WORLD_GENERATION.md §3. Airless/floraless worlds still carry a value; it just goes unused.
-        _floraTint = FloraColor(unchecked((uint)(StableStringHash(_world.LocationId) ^ (int)_meta.Seed ^ 0x2F0A17)));
+        // WORLD_GENERATION.md §3. Airless/floraless worlds still carry a value; it just goes unused. The
+        // formula lives with the per-species colours (#1716) — one file for every flora colour.
+        _floraTint = Shared.World.FloraTints.ForWorld(_meta.Seed, _world.LocationId);
+        // #1758: the water colour, the same way — classic blue unless the type opts in (the rainbow planet, the
+        // "auto" palette of the water types) AND the save is generation 5: older saves keep their blue.
+        var (waterRgb, waterMode) = Shared.World.FluidTints.ForWorld(_meta.Seed, _world.LocationId, _world.Planet, _meta.Description.TerrainGeneration);
+        _waterTint = waterRgb;
+        _waterTintMode = (int)waterMode;
         // One seeded daytime sky hue per WORLD (blue → green → yellow → red, blue-dominant), so worlds with an
         // atmosphere don't all share the same blue sky. Seeded from LocationId ^ Seed (like AtmosphereDensity) so
         // two same-type worlds differ. Airless bodies (space sky) carry a value but the client ignores it.
@@ -303,6 +355,8 @@ public sealed partial class GameServer
             CloudColor = _cloudColor,
             SkyColor = _skyColor,
             FloraTint = _floraTint,
+            WaterTint = _waterTint,         // #1758
+            WaterTintMode = _waterTintMode, // #1758
             Circumference = _world.Circumference,
             LatitudeLimit = WorldConstants.LatitudeLimitFor(_world.Circumference),
             CloudDensity = _cloudDensity,
@@ -366,6 +420,23 @@ public sealed partial class GameServer
         double swing = _breathable ? 6.0 : 16.0; // airless worlds swing hard between day and night
         double dayNight = System.Math.Cos((timeOfDay - 0.5) * 2.0 * System.Math.PI) * swing;
         double t = baseT + weatherDelta + dayNight;
+
+        // Generation 8 (Titas): a hot zone reads its biome's own temperature (+100 °C), with a little of the day swing.
+        if (hasPos && planet is { HotZoneShare: > 0.0 }
+            && _generator.IsHotZoneAt(planet, (int)System.Math.Floor(pos.X), (int)System.Math.Floor(pos.Z)))
+        {
+            double hot = 100.0;
+            foreach (var biome in planet.Biomes)
+            {
+                if (biome.HotZone && biome.Temperature is { } biomeT)
+                {
+                    hot = biomeT;
+                    break;
+                }
+            }
+
+            t = hot + dayNight * 0.25;
+        }
 
         // Underground the day/night swing and the weather stop reaching you: blend toward the constant
         // ground temperature over the first blocks of depth (#667). Local heat/cold sources (lava, fire,
@@ -494,6 +565,14 @@ public sealed partial class GameServer
             env.Temperature = VacuumTemperature(_dayFraction);
             env.Precipitation = "none";
         }
+        else if (session.MoodUneasy && session.MoodLocationId == _world.LocationId)
+        {
+            // 2026-09 (Valuma): after a long stay the fog closes in around this player, whatever the sky does.
+            env.Weather = "fog";
+            env.WeatherFamily = "obscuring";
+            env.Intensity = System.Math.Max(env.Intensity, 0.85f);
+            env.IntensityRate = 0f;
+        }
 
         Send(session, env);
     }
@@ -521,7 +600,7 @@ public sealed partial class GameServer
     /// <summary>A deterministic, continuously-varying star colour for a system: the system's hash picks a
     /// weighted anchor on the hot→cool stellar ramp and a second hash blends it toward a neighbour, so colours
     /// span the full ramp (not just a handful of fixed swatches) while clustering on natural sun-like hues.</summary>
-    private static int StarColor(string system)
+    internal static int StarColor(string system)
     {
         uint h = (uint)StableStringHash(system);
         int total = 0;
@@ -566,51 +645,7 @@ public sealed partial class GameServer
         return (r << 16) | (g << 8) | bl;
     }
 
-    // Per-planet flora base hue: green-dominant, with rarer brown / pink / purple / amber exotics.
-    private static readonly (int Rgb, int Weight)[] FloraPalette =
-    {
-        (0x4FA63C, 30), // leaf green
-        (0x6FBF4A, 20), // bright green
-        (0x3E7D4F, 12), // deep teal-green
-        (0x8A7B3A, 12), // olive
-        (0x9C6B3A, 10), // brown
-        (0xB85C9E, 7),  // pink / magenta (exotic)
-        (0x7E4FB0, 6),  // violet / purple (exotic)
-        (0xC9A23A, 3),  // amber / yellow (rare)
-    };
-
-    /// <summary>A deterministic per-planet flora base hue: a weighted pick from a green-dominant palette (with
-    /// rarer brown / pink / purple / amber exotics) plus a small per-channel jitter, so most worlds are leafy
-    /// green but some are strikingly alien. One hue for all of a planet's plant life.</summary>
-    private static int FloraColor(uint h)
-    {
-        int total = 0;
-        foreach (var (_, w) in FloraPalette)
-        {
-            total += w;
-        }
-
-        int roll = (int)(h % (uint)total);
-        int i = 0;
-        for (; i < FloraPalette.Length; i++)
-        {
-            roll -= FloraPalette[i].Weight;
-            if (roll < 0)
-            {
-                break;
-            }
-        }
-
-        if (i >= FloraPalette.Length)
-        {
-            i = FloraPalette.Length - 1;
-        }
-
-        int anchor = FloraPalette[i].Rgb;
-        int r = (anchor >> 16) & 0xFF, g = (anchor >> 8) & 0xFF, b = anchor & 0xFF;
-        int Jit(int shift) => (int)((h >> shift) & 0x1F) - 16; // -16..+15
-        return (Clamp8b(r + Jit(3)) << 16) | (Clamp8b(g + Jit(8)) << 8) | Clamp8b(b + Jit(13));
-    }
+    // The world's flora base hue moved to Shared.World.FloraTints.ForWorld (#1716).
 
     private static int Clamp8b(int v) => v < 0 ? 0 : (v > 255 ? 255 : v);
 

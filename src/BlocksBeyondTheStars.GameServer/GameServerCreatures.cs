@@ -76,20 +76,22 @@ public sealed partial class GameServer
     public IReadOnlyList<CombatEntity> Creatures => _creatures;
 
     /// <summary>Wild fauna only (excludes tamed companions) — companions don't count against the world's cap.</summary>
-    private int WildCreatureCount => _creatures.Count(c => !c.IsCompanion);
+    private int WildCreatureCount => _creatures.Count(c => !c.IsCompanion && !c.IsGiant); // #1998: giants are outside the cap
 
     /// <summary>The procedural species this world derived from its seed + planet.</summary>
     public IReadOnlyList<CreatureSpecies> SpeciesRoster => _speciesRoster;
 
     private void InitCreatures()
     {
-        // Per-BODY roster (#478): the seed is salted with the location id (same formula as
-        // WorldGenerator.RosterSeed) so two worlds of the same planet type host different species.
+        // Per-BODY roster (#478): the seed is salted with the location id — THE formula (#1722: one shared
+        // function, not a hand copy) — so two worlds of the same planet type host different species.
         var planet = _content.GetPlanet(_worlds.Active.PlanetType);
-        long rosterSeed = _meta.Seed ^ BlocksBeyondTheStars.WorldGeneration.WorldGenerator.StableHash(_world.LocationId);
+        long rosterSeed = BlocksBeyondTheStars.WorldGeneration.WorldGenerator.RosterSeedFor(_meta.Seed, _world.LocationId);
+        // #1763: the save's generation and the type's authored species — on a generation-5 world they join the
+        // roster after the procedural slots (Leni on the ice worlds, the flowerling on the flower fields).
         _speciesRoster = planet is null
             ? System.Array.Empty<CreatureSpecies>()
-            : CreatureGenerator.GenerateRoster(planet, rosterSeed).ToArray();
+            : CreatureGenerator.GenerateRoster(planet, rosterSeed, _meta.Description.TerrainGeneration, _content.AuthoredCreaturesFor(planet)).ToArray();
 
         _speciesById.Clear();
         _locoProfiles.Clear();
@@ -109,21 +111,19 @@ public sealed partial class GameServer
         _creatureLavaId = _content.GetBlock("lava")?.NumericId.Value ?? 0;
         InitFences();
         InitHealTanks();
+        InitGiants(); // #1998: the colossus / the sandworms of this world, outside the roster
     }
 
     // --- Day/night activity (ties into the World-systems clock) ---
 
-    private bool IsNight => TimeOfDay < 0.25f || TimeOfDay > 0.75f;
-
-    private bool IsDawnOrDusk => (TimeOfDay >= 0.20f && TimeOfDay <= 0.30f)
-                                 || (TimeOfDay >= 0.70f && TimeOfDay <= 0.80f);
-
-    /// <summary>Whether a species is awake/active right now (else it is sleeping/resting).</summary>
-    private bool SpeciesActive(CreatureSpecies s) => s.Activity switch
+    /// <summary>Whether a species is awake/active right now at <paramref name="at"/> (else it is sleeping/resting).
+    /// Day and night are LOCAL (#1865): the sky a player sees is shifted by longitude, so an animal on the far side
+    /// of the planet keeps the hours of the sun above it, not of the world clock.</summary>
+    private bool SpeciesActive(CreatureSpecies s, Vector3f at) => s.Activity switch
     {
-        CreatureActivity.Diurnal => !IsNight,
-        CreatureActivity.Nocturnal => IsNight,
-        CreatureActivity.Crepuscular => IsDawnOrDusk,
+        CreatureActivity.Diurnal => !IsNightAt(at),
+        CreatureActivity.Nocturnal => IsNightAt(at),
+        CreatureActivity.Crepuscular => IsDawnOrDuskAt(at),
         _ => true, // Cathemeral
     };
 
@@ -198,15 +198,23 @@ public sealed partial class GameServer
             return;
         }
 
-        int cap = WorldCreatureCap(targets.Count);
+        // #1717: the cadence and the fill gate read the SAME ceiling the spawner enforces. The model alone can
+        // reach ~200 on a huge lush world with the Extreme rule and four players; TrySpawnCreatureNear clamps
+        // to the hard cap and refuses, so an unclamped gate here kept the 1.5 s fast fill (a full ring + roster
+        // walk with terrain probes) running forever against a world that was already full — the very shape of
+        // the old cap-of-12 bug, moved to a rarer threshold.
+        int cap = System.Math.Min(WorldCreatureCap(targets.Count), CreatureHardCap);
+        int wild = WildCreatureCount;
         _creatureSpawnTimer += dt;
         // Fill faster while the world is far below its cap (a freshly visited world comes alive quickly),
         // then ease to the slow trickle near the cap.
-        double interval = WildCreatureCount < cap / 2 ? 1.5 : CreatureSpawnInterval;
-        if (_creatureSpawnTimer >= interval && WildCreatureCount < cap)
+        double interval = wild < cap / 2 ? 1.5 : CreatureSpawnInterval;
+        if (_creatureSpawnTimer >= interval && wild < cap)
         {
             _creatureSpawnTimer = 0;
-            if (TrySpawnCreatureNear(targets[_creatures.Count % targets.Count].State, cap))
+            // #1720: the player who gets the next spawn rotates on the WILD population — companions used to
+            // skew the round robin, so a pet owner's surroundings filled faster than everyone else's.
+            if (TrySpawnCreatureNear(targets[wild % targets.Count].State, cap))
             {
                 BroadcastCreatures();
             }
@@ -218,6 +226,8 @@ public sealed partial class GameServer
         {
             BroadcastCreatures(); // a boxed-in sleeper was removed (#1320)
         }
+
+        TickCalmGifts(targets); // #1760: a calm flowerling spills a gift for a player who has not been mining
 
         // Despawn creatures that drifted far from every player so the cap frees up and fauna keeps
         // appearing around players as they explore — life is spread across the whole planet, not just
@@ -244,9 +254,9 @@ public sealed partial class GameServer
 
         foreach (var creature in _creatures)
         {
-            if (creature.IsCompanion)
+            if (creature.IsCompanion || creature.IsGiant)
             {
-                continue; // a tamed companion never harms anyone (even if its species is a hostile kind)
+                continue; // a tamed companion never harms anyone; a giant stomps and strikes by its own rules (#1998)
             }
 
             if (!_speciesById.TryGetValue(creature.SpeciesId, out var sp))
@@ -261,7 +271,9 @@ public sealed partial class GameServer
 
             // Hostile species attack; so do provoked (territorial) creatures fighting back.
             bool aggressiveNow = sp.Hostile || creature.ProvokeTimer > 0;
-            if (!aggressiveNow || !SpeciesActive(sp))
+            // #1997: a roused sleeper (hit, or woken by mining beside it) hunts per its temperament — and now bites too;
+            // the day/night gate alone left a woken hunter chasing the player all night without ever landing a bite.
+            if (!aggressiveNow || (!SpeciesActive(sp, creature.Position) && creature.AwakeOverrideTimer <= 0))
             {
                 continue;
             }
@@ -336,13 +348,14 @@ public sealed partial class GameServer
         (8, 0), (-8, 0), (0, 8), (0, -8),
     };
 
-    /// <summary>Finds the nearest water column (global sea or upland pond) to a spot, returning its
-    /// coordinates and the water-surface / seabed Y. False if no water is within the probe radius.</summary>
+    /// <summary>Finds the nearest water column (global sea, upland pond — or a pool the player built) to a
+    /// spot, returning its coordinates and the water-surface / seabed Y. False if no water is within the
+    /// probe radius.</summary>
     private bool TryFindWaterColumnNear(int x, int z, out int wx, out int wz, out int waterTopY, out int seabedY)
     {
         foreach (var (dx, dz) in WaterProbe)
         {
-            if (_generator.TryGetWaterSurface(_world.Planet, x + dx, z + dz, out waterTopY, out seabedY))
+            if (TryGetFluidColumn(x + dx, z + dz, _creatureWaterId, out waterTopY, out seabedY))
             {
                 wx = x + dx;
                 wz = z + dz;
@@ -363,7 +376,7 @@ public sealed partial class GameServer
     {
         foreach (var (dx, dz) in WaterProbe)
         {
-            if (_generator.TryGetLavaSurface(_world.Planet, x + dx, z + dz, out lavaTopY, out _))
+            if (TryGetFluidColumn(x + dx, z + dz, _creatureLavaId, out lavaTopY, out _))
             {
                 wx = x + dx;
                 wz = z + dz;
@@ -387,6 +400,7 @@ public sealed partial class GameServer
     /// </summary>
     private bool TrySpawnCreatureNear(Shared.State.PlayerState player, int cap)
     {
+        _spawnAttemptsForTest++;
         cap = System.Math.Min(cap, CreatureHardCap);
         if (WildCreatureCount >= cap)
         {
@@ -414,6 +428,11 @@ public sealed partial class GameServer
             for (int n = 0; n < _speciesRoster.Length; n++)
             {
                 var sp = _speciesRoster[(_creatureSpawnRotor + n) % _speciesRoster.Length];
+                if (sp.Id == SreekmakraSpeciesId)
+                {
+                    continue; // 2026-09: the shapeshifter never spawns as an animal — TickSreekmakra places the one
+                }
+
                 if (pass == 0 && sp.BiomeAffinity >= 0 && sp.BiomeAffinity != biome)
                 {
                     continue; // not native to this biome (relaxed on the second pass)
@@ -515,6 +534,13 @@ public sealed partial class GameServer
             return false; // its body would materialise inside a wall / ruin masonry (#855)
         }
 
+        // #1763: an exclusive species (Leni: snow and ice) stands only on its own ground — the real block under
+        // its feet where the column is streamed in, the generator's biome surface where it is not.
+        if (sp.BiomeExclusive && !OnExclusiveGround(sp, cell))
+        {
+            return false;
+        }
+
         // Titans need level ground (#638): a 3×3 clearance whose surface stays within ±1 of the
         // centre column, so a six-block giant doesn't materialise half-buried in a cliff face —
         // creatures have no colliders, so the spawn spot is the only terrain check they ever get.
@@ -532,6 +558,16 @@ public sealed partial class GameServer
             return false;
         }
 
+        // #1747: a room a player built is not a cave. The cave probe accepts any air pocket under the surface
+        // with a floor and headroom — which a hall carved out of a natural cave still is, seventy blocks from
+        // the base core where neither the spawn exclusion (24) nor the sealed-room fill (48) reaches, and the
+        // walled-yard gate below exempts cave dwellers on purpose (#1315). The player's own block edits around
+        // the spot settle it; only cave candidates pay the lookup.
+        if (sp.Habitat == CreatureHabitat.Cave && PlayerBuiltPocket(cell))
+        {
+            return false;
+        }
+
         // #1314: nothing spawns inside a base's sealed rooms — the volume the air fill already knows.
         if (InSealedBaseRoom(cell))
         {
@@ -541,6 +577,43 @@ public sealed partial class GameServer
         // #1315: nor inside a WALLED area of a base — an open-topped yard the outside-in fill cannot reach.
         // Ground-bound life only: a flier spawns above the wall, a cave dweller below it.
         return sp.Habitat is CreatureHabitat.Air or CreatureHabitat.Cave || !InWalledBaseArea(cell);
+    }
+
+    /// <summary>#1763: whether the ground under a spawn cell is one of the species' <see cref="CreatureSpecies.BiomeSurfaces"/>.
+    /// Real blocks first (a snow field the player paved over is not Leni country any more); where the column is
+    /// not loaded, the generator's biome surface answers. An empty surface list never rejects.</summary>
+    private bool OnExclusiveGround(CreatureSpecies sp, Vector3i cell)
+    {
+        if (sp.BiomeSurfaces.Length == 0)
+        {
+            return true;
+        }
+
+        string? ground = null;
+        if (_world.IsChunkLoaded(WorldConstants.WorldToChunk(cell)))
+        {
+            for (int dy = 1; dy <= 3 && ground is null; dy++)
+            {
+                var below = _world.GetBlockIfLoaded(new Vector3i(cell.X, cell.Y - dy, cell.Z));
+                if (!below.IsAir)
+                {
+                    ground = _content.BlockById(below)?.Key;
+                }
+            }
+        }
+
+        ground ??= _generator.BiomeSurfaceKeyAt(_world.Planet, cell.X, cell.Z);
+        return ground is not null && System.Array.IndexOf(sp.BiomeSurfaces, ground) >= 0;
+    }
+
+    /// <summary>#1747: player block edits in the 3×5×3 box around a cave spawn spot — the floor row, the two
+    /// cells of body room and the ceiling above. A built floor, a built ceiling or a built wall each make the
+    /// pocket a room, not a cave.</summary>
+    private bool PlayerBuiltPocket(Vector3i cell)
+    {
+        var c = WorldConstants.CanonicalBlock(cell, _world.Circumference);
+        return _repo.HasPlayerBlockEdits(_world.LocationId,
+            new Vector3i(c.X - 1, c.Y - 1, c.Z - 1), new Vector3i(c.X + 1, c.Y + 3, c.Z + 1));
     }
 
     /// <summary>How many live wild individuals of one species a world may hold (#1325): a share of the
@@ -614,20 +687,25 @@ public sealed partial class GameServer
             float y;
             if (sp.Habitat == CreatureHabitat.Water || sp.Habitat == CreatureHabitat.Amphibian)
             {
-                if (!_generator.TryGetWaterSurface(_world.Planet, mx, mz, out int waterTopY, out int seabedY))
+                // #1718: a member runs the leader's probe from its own spot. It used to ask only its own column,
+                // so beside a small pond the golden-angle spots landed on the bank and the school was the leader
+                // alone — the water four blocks away was never looked at.
+                if (!TryFindWaterColumnNear(mx, mz, out mx, out mz, out int waterTopY, out int seabedY))
                 {
-                    continue; // this member's spot is dry — the school stays smaller
+                    continue; // no water near this member's spot — the school stays smaller
                 }
 
+                surface = _generator.SurfaceHeight(_world.Planet, mx, mz);
                 y = sp.Habitat == CreatureHabitat.Water ? (seabedY + 1 + waterTopY) * 0.5f : waterTopY;
             }
             else if (sp.Habitat == CreatureHabitat.Lava)
             {
-                if (!_generator.TryGetLavaSurface(_world.Planet, mx, mz, out int lavaTop, out _))
+                if (!TryFindLavaColumnNear(mx, mz, out mx, out mz, out int lavaTop))
                 {
                     continue;
                 }
 
+                surface = _generator.SurfaceHeight(_world.Planet, mx, mz);
                 y = lavaTop;
             }
             else if (sp.Habitat == CreatureHabitat.Cave)
@@ -725,9 +803,10 @@ public sealed partial class GameServer
             case CreatureHabitat.Lava:
                 return BlockValueAt(at) == _creatureLavaId && _creatureLavaId != 0;
             case CreatureHabitat.Cave:
-                // a standable air pocket on solid ground (the spawn probe places it in a real cave)
-                return _world.GetBlock(new Vector3i((int)System.Math.Floor(at.X), (int)System.Math.Floor(at.Y), (int)System.Math.Floor(at.Z))).IsAir
-                    && !_world.GetBlock(new Vector3i((int)System.Math.Floor(at.X), (int)System.Math.Floor(at.Y) - 1, (int)System.Math.Floor(at.Z))).IsAir;
+                // a standable air pocket on solid ground (the spawn probe places it in a real cave); #1719: no-load
+                // reads — an unloaded column has no solid floor, so it is not a cave
+                return _world.GetBlockIfLoaded(new Vector3i((int)System.Math.Floor(at.X), (int)System.Math.Floor(at.Y), (int)System.Math.Floor(at.Z))).IsAir
+                    && !_world.GetBlockIfLoaded(new Vector3i((int)System.Math.Floor(at.X), (int)System.Math.Floor(at.Y) - 1, (int)System.Math.Floor(at.Z))).IsAir;
             case CreatureHabitat.Amphibian:
                 return BlockValueAt(at) == _creatureWaterId || WaterWithin(at, 2); // in or beside water
             default:
@@ -758,6 +837,11 @@ public sealed partial class GameServer
             {
                 MoveCompanion(creature, moveDt); // tamed companions follow their owner instead of wandering/hunting
                 continue;
+            }
+
+            if (creature.IsGiant)
+            {
+                continue; // #1998: the colossus and the sandworms move by their own rules (TickGiants)
             }
 
             if (!_speciesById.TryGetValue(creature.SpeciesId, out var sp))
@@ -799,12 +883,24 @@ public sealed partial class GameServer
             // A provoked territorial creature hunts like an aggressor until it calms down.
             var temperament = CreatureBehaviour.EffectiveTemperament(sp.Temperament, creature.ProvokeTimer > 0);
             Vector3f? nearest = NearestPlayerPosition(targets, creature.Position);
+            if (sp.BodyPlan == CreatureBodyPlan.Arachnid && !creature.IsCompanion)
+            {
+                AnnounceArachnid(creature, targets); // #2009: VEGA points out the first one a player gets near
+            }
 
             // Give-up leash: an aggressor that has been chasing within aggro range too long backs off for a
             // while — it wanders away and won't chase/attack — so creatures never hound the player forever.
             // Big species notice you from further away (#638): the range grows with size past 2.
-            bool aggressor = temperament is CreatureTemperament.Aggressive or CreatureTemperament.PackHunter;
+            bool hunting = SreekmakraHunting(creature); // 2026-09: the shapeshifter hunts in any shape
+            bool aggressor = hunting || temperament is CreatureTemperament.Aggressive or CreatureTemperament.PackHunter;
             float aggro = CreatureAggroRange + System.Math.Max(0f, sp.Size - 2f);
+            // #1997: a mining grudge reaches as far as the anger does — it was set out to 16 blocks but only hunted
+            // within 8, so a flowerling angered from 12 blocks flipped to "hostile" and wandered off.
+            bool miningGrudge = sp.AngeredByMining && creature.ProvokeTimer > 0;
+            if (miningGrudge)
+            {
+                aggro = System.Math.Max(aggro, MiningAngerRange);
+            }
             if (creature.GiveUpTimer > 0)
             {
                 creature.GiveUpTimer = System.Math.Max(0, creature.GiveUpTimer - dt);
@@ -816,7 +912,7 @@ public sealed partial class GameServer
                 // off rather than only stopping the bite.
                 bool sees = HasLineOfSight(creature.Position, np);
                 creature.ChaseTimer += dt * (sees ? 1.0 : CreatureBlindChaseGiveUpRate);
-                if (creature.ChaseTimer >= CreatureChaseGiveUpSeconds)
+                if (creature.ChaseTimer >= (miningGrudge ? MiningGrudgeChaseSeconds : CreatureChaseGiveUpSeconds))
                 {
                     creature.GiveUpTimer = CreatureGiveUpCooldownSeconds;
                     creature.ChaseTimer = 0;
@@ -828,10 +924,22 @@ public sealed partial class GameServer
             }
 
             var profile = ProfileFor(creature.SpeciesId);
+            if (miningGrudge)
+            {
+                profile.CruiseSpeed *= MiningGrudgeSpeedFactor; // #1997: an angry flowerling means it (still slower than a walk)
+                profile.BurstSpeed *= MiningGrudgeSpeedFactor;
+            }
+
+            if (hunting)
+            {
+                profile.CruiseSpeed *= SreekmakraSpeedFactor; // the shape's own speed ×1.5 (2026-09)
+                profile.BurstSpeed *= SreekmakraSpeedFactor;
+                profile.Accel *= SreekmakraSpeedFactor;
+            }
 
             // A creature in its off-phase is asleep — but a player coming within wake distance stirs it (being
             // hit does too, via ProvokeCreature). Once roused it stays alert for a while, then settles back.
-            if (!SpeciesActive(sp) && creature.AwakeOverrideTimer <= 0 && nearest is { } wakePos
+            if (!SpeciesActive(sp, creature.Position) && creature.AwakeOverrideTimer <= 0 && nearest is { } wakePos
                 && WrapDistSq(creature.Position, wakePos) <= CreatureWakeDistance * CreatureWakeDistance)
             {
                 creature.AwakeOverrideTimer = CreatureWakeSeconds;
@@ -843,7 +951,7 @@ public sealed partial class GameServer
             // falls through to normal temperament-driven behaviour (skittish ones flee, hunters seek, others
             // just wander).
             var motion = EffectiveMotion(creature, sp);
-            bool asleep = !SpeciesActive(sp) && creature.AwakeOverrideTimer <= 0;
+            bool asleep = !SpeciesActive(sp, creature.Position) && creature.AwakeOverrideTimer <= 0;
 
             // #1320: a sleeper skips every collision gate on the movement path, so a player building a wall
             // or floor THROUGH a sleeping herd left the bodies embedded in the masonry all night. Re-validate
@@ -853,6 +961,11 @@ public sealed partial class GameServer
             // #1357: an AWAKE animal walled in by the player never checked its own cell either — the swept
             // step check samples only the cells ahead, so every step out of the block read as blocked and a
             // cathemeral grazer stood inside the masonry for good. Same check, rate-limited per creature.
+            // #1854: a floating land grazer that got into the masonry is first put back on the nearest real
+            // floor THROUGH the rock — the sideways relocation below evicts an animal it finds no spot for,
+            // and a gas sac that drifted into a cave's ceiling has its floor right under it.
+            LiftEmbeddedHoverer(creature, sp, motion);
+
             if (asleep || _uptime >= creature.NextBodyCheckAt)
             {
                 creature.NextBodyCheckAt = _uptime + AwakeBodyCheckInterval;
@@ -867,7 +980,32 @@ public sealed partial class GameServer
             {
                 creature.Position = ResolveVertical(creature, sp, motion, creature.Position, 0f, profile, moveDt,
                     asleep: true, MoveMode.Roam, moving: false);
+                LiftEmbeddedHoverer(creature, sp, motion); // #1854: a sleeping gas sac does not sink either
                 continue;
+            }
+
+            // #2009: an arachnid ambusher lies in wait — motionless like a rock until a player comes within LurkRange, then
+            // it is provoked (a territorial one hunts like an aggressor for the provoke window, a hunter simply starts its
+            // chase) and rushes. It never roams on its own; after a chase gives up it wanders through the cooldown like any
+            // aggressor and settles back into the wait when that runs out. Companions never lurk.
+            creature.Lurking = false;
+            if (!creature.IsCompanion && creature.ProvokeTimer <= 0 && creature.GiveUpTimer <= 0 && creature.PanicTimer <= 0
+                && ArachnidRules.Lurks(sp))
+            {
+                if (nearest is { } lurkPrey && WrapDistSq(creature.Position, lurkPrey) <= ArachnidRules.LurkRange * ArachnidRules.LurkRange)
+                {
+                    creature.ProvokeTimer = CreatureProvokeSeconds;
+                    temperament = CreatureBehaviour.EffectiveTemperament(sp.Temperament, provoked: true);
+                    aggressor = true;
+                }
+                else
+                {
+                    creature.Lurking = true;
+                    creature.Position = ResolveVertical(creature, sp, motion, creature.Position, 0f, profile, moveDt,
+                        asleep: false, MoveMode.Roam, moving: false);
+                    LiftEmbeddedHoverer(creature, sp, motion);
+                    continue;
+                }
             }
 
             // Decide intent: hunters Seek a nearby player, skittish flee one, everyone else (and a give-up
@@ -891,6 +1029,7 @@ public sealed partial class GameServer
                     {
                         creature.Position = ResolveVertical(creature, sp, motion, creature.Position, 0f, profile, moveDt,
                             asleep: false, MoveMode.Seek, moving: false);
+                        LiftEmbeddedHoverer(creature, sp, motion); // #1854
                         continue;
                     }
 
@@ -1033,6 +1172,41 @@ public sealed partial class GameServer
 
         c.Position = ResolveVertical(c, sp, motion, new Vector3f(targetX, cur.Y, targetZ), vertWave, prof, dt,
             asleep: false, intent, moving, groundHint);
+        LiftEmbeddedHoverer(c, sp, motion);
+    }
+
+    /// <summary>#1854: a floating LAND grazer whose body ended up inside a block after the vertical resolve is
+    /// put back on the nearest real floor this very tick instead of easing out of the masonry over seconds —
+    /// its class has no gravity resolve to clamp it (walkers get <see cref="VerticalMotion.Ground"/>), and the
+    /// buoyant ease is slow on purpose. The floor is looked for through the rock in both directions (the
+    /// cave under it counts, the surface above it counts, whichever is nearer); with none in reach the
+    /// body is lifted to the first clear cell above. Air hoverers keep their canopy freedom and are left alone.</summary>
+    private void LiftEmbeddedHoverer(CombatEntity c, CreatureSpecies sp, MotionClass motion)
+    {
+        if (motion != MotionClass.Hoverer || sp.Habitat == CreatureHabitat.Air
+            || !CreatureBodyBlocked(sp, c.Position, foliagePasses: false))
+        {
+            return;
+        }
+
+        int x = (int)System.Math.Floor(c.Position.X), z = (int)System.Math.Floor(c.Position.Z);
+        int y = (int)System.Math.Floor(c.Position.Y);
+        if (TryNearestStandableThroughRock(x, z, y, CreatureHeadroom(sp), CreatureWideGroundScan, out int feet)
+            && !CreatureBodyBlocked(sp, new Vector3f(c.Position.X, feet, c.Position.Z), foliagePasses: false))
+        {
+            c.Position = new Vector3f(c.Position.X, feet, c.Position.Z);
+            return;
+        }
+
+        for (int dy = 1; dy <= CreatureWideGroundScan; dy++)
+        {
+            var lifted = new Vector3f(c.Position.X, y + dy, c.Position.Z);
+            if (!CreatureBodyBlocked(sp, lifted, foliagePasses: false))
+            {
+                c.Position = lifted;
+                return;
+            }
+        }
     }
 
     /// <summary>Every barrier a step must pass (#1331): ship hull, energy fence, the terrain gate (wild fauna;
@@ -1052,8 +1226,47 @@ public sealed partial class GameServer
             return true;
         }
 
+        // #1862: a shut door is a wall. A doorway is air in the block grid — the door fills it as an entity — so
+        // the body sweep never saw one and animals strolled through shut gates into the yard the fill had just
+        // declared fenced in (the fill counts shut doors as walls, #1315). NPCs have had this since #1775. Wild
+        // fauna is stopped by every shut door; a companion only by a hand-operated one, since a proximity door
+        // opens for its owner and never for the pet, and an owner who shut the gate behind them can open it.
+        if (_doors.Count > 0 && ClosedDoorOnPath(cur, cand, handOperatedOnly: c.IsCompanion))
+        {
+            return true;
+        }
+
         var from = needsRise ? new Vector3f(cur.X, cand.Y, cur.Z) : cur;
         return CreaturePathBlocked(sp, from, cand, motion == MotionClass.Flier && c.Vert.Flight == FlightPhase.Flying);
+    }
+
+    /// <summary>Whether a creature's horizontal step crosses a shut door's cells (#1862): sampled every
+    /// <see cref="CreatureSweepStep"/> like the body sweep, at the step's height, so a fast hunter cannot hop the
+    /// one-cell doorway between two samples. See <see cref="ClosedDoorBlocks"/> for what a door covers.</summary>
+    private bool ClosedDoorOnPath(Vector3f from, Vector3f to, bool handOperatedOnly)
+    {
+        float dx = to.X - from.X, dz = to.Z - from.Z;
+        float dist = (float)System.Math.Sqrt(dx * dx + dz * dz);
+        int steps = System.Math.Max(1, (int)System.Math.Ceiling(dist / CreatureSweepStep));
+        for (int s = 1; s <= steps; s++)
+        {
+            float f = s / (float)steps;
+            if (ClosedDoorBlocks(new Vector3f(from.X + dx * f, to.Y, from.Z + dz * f), handOperatedOnly))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Test seam (#1862): every barrier of <see cref="StepBlocked"/> — hull, fence, terrain gate, shut
+    /// doors, body sweep — for a wild creature stepping to <paramref name="next"/> from where it stands.</summary>
+    public bool CreatureStepBlockedForTest(string creatureId, Vector3f next)
+    {
+        var c = _creatures.First(x => x.Id == creatureId);
+        var sp = _speciesById[c.SpeciesId];
+        return StepBlocked(c, sp, EffectiveMotion(c, sp), c.Position, next, needsRise: false, terrainGates: true);
     }
 
     /// <summary>The jump that clears a one-block ledge on this world (Q9: lighter worlds jump higher, exactly
@@ -1284,9 +1497,12 @@ public sealed partial class GameServer
     /// <paramref name="knownNextFeet"/> is the target column's probe when the caller already ran it (#1367).</summary>
     private bool StepBlockedByTerrain(CreatureSpecies sp, MotionClass motion, Vector3f cur, Vector3f next, int? knownNextFeet = null)
     {
-        if (!CreatureMotion.IsGroundBound(motion) && motion != MotionClass.Swimmer)
+        // #1862: a LAND hoverer (a gas-sac grazer floating 0.8 above its feet) is held to the walker's rules —
+        // it drifted over two-block walls and across moats into a fortress. Air hoverers and fliers keep their freedom.
+        bool groundRules = CreatureMotion.ObeysGroundRules(sp, motion);
+        if (!groundRules && motion != MotionClass.Swimmer)
         {
-            return false; // fliers and hoverers keep their freedom
+            return false; // fliers and air hoverers keep their freedom
         }
 
         int cx = (int)System.Math.Floor(cur.X), cz = (int)System.Math.Floor(cur.Z);
@@ -1304,7 +1520,7 @@ public sealed partial class GameServer
         // walls invisible to fauna (NPCs have PathBlockedByWorld; creatures had nothing), so titans
         // pathed straight through masonry and bit the player from inside rooms. Titan-scale only, so
         // the extra block reads stay off the common path.
-        if (sp.Size >= LargeBodySize && CreatureMotion.IsGroundBound(motion)
+        if (sp.Size >= LargeBodySize && groundRules
             && !LargeBodyColumnOpen(sp, nx, nextFeet, nz))
         {
             return true;
@@ -1312,7 +1528,7 @@ public sealed partial class GameServer
 
         // #1367: only water was gated — a walker stepped down (≤ 3 blocks) onto the crust of a lava column
         // like onto any floor. The melt is a wall for everything that does not live in it.
-        if (CreatureMotion.IsGroundBound(motion) && sp.Habitat != CreatureHabitat.Lava && LavaUnderFeet(nx, nextFeet, nz))
+        if (groundRules && sp.Habitat != CreatureHabitat.Lava && LavaUnderFeet(nx, nextFeet, nz))
         {
             return true;
         }
@@ -1322,13 +1538,18 @@ public sealed partial class GameServer
         // (depth 0) and let a swimmer steer out of its lake instead of along the shore.
         int curDepth = WaterDepthAtFeet(cx, cz, refY);
         int nextDepth = WaterDepthAtFeet(nx, nz, nextFeet);
-        return CreatureBehaviour.TerrainStepBlocked(motion, CreatureMotion.IsGiant(sp), CreatureMotion.IsAmphibious(sp),
+        var gateClass = CreatureMotion.IsLandHoverer(sp, motion) ? MotionClass.Walker : motion; // #1862: a floating grazer is gated as a walker
+        return CreatureBehaviour.TerrainStepBlocked(gateClass, CreatureMotion.IsGiant(sp), CreatureMotion.IsAmphibious(sp),
             curFeet, nextFeet, curDepth, nextDepth);
     }
 
     /// <summary>Whether feet at <paramref name="feetY"/> in a column would rest on lava (real block, no-load read).</summary>
     private bool LavaUnderFeet(int x, int feetY, int z)
         => _creatureLavaId != 0 && _world.GetBlockIfLoaded(new Vector3i(x, feetY - 1, z)).Value == _creatureLavaId;
+
+    /// <summary>Test seam (#1711): the Y an airborne creature at <paramref name="refY"/> measures its band
+    /// from in this column.</summary>
+    public int RestSurfaceYForTest(int x, int z, int refY) => RestSurfaceYAt(x, z, refY);
 
     /// <summary>Test seam (#1367): the terrain gate's verdict for a creature stepping to <paramref name="next"/>
     /// from where it stands, in its current motion class.</summary>
@@ -1343,12 +1564,36 @@ public sealed partial class GameServer
     public (int Top, int Bed)? WaterSurfaceForTest(int x, int z)
         => _generator.TryGetWaterSurface(_world.Planet, x, z, out int top, out int bed) ? (top, bed) : null;
 
-    /// <summary>The generator's water depth in a column, but only when that water actually reaches the
-    /// creature's feet: a real floor built ABOVE a pond (a bridge, a floating platform, a filled-in shore)
-    /// is dry ground, not a swim — the old gate read the pond underneath and walled the animal at the
-    /// first column over water.</summary>
+    /// <summary>How far up or down a column a fluid body is followed. Deeper than any hand-dug moat and past
+    /// the wide ground scan, so a real body is measured whole rather than clipped.</summary>
+    private const int FluidColumnScan = 32;
+
+    /// <summary>The water standing on a creature's feet, read from REAL blocks (#1697): how many water cells
+    /// are stacked from the feet cell upward. 0 = dry ground, or a floor built ABOVE a pond (a bridge, a
+    /// floating platform, a filled-in shore) — that is dry ground, not a swim.
+    ///
+    /// <para>This used to ask the GENERATOR (<c>TryGetWaterSurface</c>), which knows only the water the world
+    /// was born with. A moat the player digs and floods by hand answered depth 0, so the walker gate
+    /// (<c>nextWaterDepth &gt; 1</c>) never fired and land animals strolled across a flooded trench — while
+    /// the lava gate right beside it, reading real blocks since #1367, held them back. That asymmetry was the
+    /// bug: ground heights moved onto real blocks in #650, water depth never followed.</para>
+    ///
+    /// <para>The generator remains the answer for a column whose chunk is not streamed in: there are no real
+    /// blocks to read there, and the old behaviour is the safe one.</para></summary>
     private int WaterDepthAtFeet(int x, int z, int feetY)
     {
+        if (_creatureWaterId != 0 && _world.IsChunkLoaded(WorldConstants.WorldToChunk(new Vector3i(x, feetY, z))))
+        {
+            int depth = 0;
+            while (depth < FluidColumnScan
+                   && _world.GetBlockIfLoaded(new Vector3i(x, feetY + depth, z)).Value == _creatureWaterId)
+            {
+                depth++;
+            }
+
+            return depth;
+        }
+
         if (!_generator.TryGetWaterSurface(_world.Planet, x, z, out int top, out int bed))
         {
             return 0;
@@ -1357,10 +1602,227 @@ public sealed partial class GameServer
         return top >= feetY - 1 ? top - bed : 0;
     }
 
+    /// <summary>The fluid body of one kind (water or lava) in a column, for the SPAWN probes (#1718): real
+    /// blocks first, the generator only where nothing is streamed in — the #1697 rule applied to placement.
+    /// A loaded column is scanned around its generator surface for the topmost cell of that fluid; the bed
+    /// is the first non-fluid cell under it. A body the player drained reads dry, a pool the player built
+    /// reads wet. Where the column's chunk is not loaded (or the fluid lies outside the scanned band) the
+    /// generator answers as it always did.</summary>
+    private bool TryGetFluidColumn(int x, int z, ushort fluidId, out int topY, out int bedY)
+    {
+        topY = 0;
+        bedY = 0;
+        if (fluidId == 0)
+        {
+            return false;
+        }
+
+        int surface = _generator.SurfaceHeight(_world.Planet, x, z);
+        if (_world.IsChunkLoaded(WorldConstants.WorldToChunk(new Vector3i(x, surface, z))))
+        {
+            for (int y = surface + FluidColumnScan; y >= surface - FluidColumnScan; y--)
+            {
+                if (_world.GetBlockIfLoaded(new Vector3i(x, y, z)).Value != fluidId)
+                {
+                    continue;
+                }
+
+                topY = y;
+                bedY = y - 1;
+                while (y - bedY < FluidColumnScan && _world.GetBlockIfLoaded(new Vector3i(x, bedY, z)).Value == fluidId)
+                {
+                    bedY--;
+                }
+
+                return true;
+            }
+        }
+
+        bool generated = fluidId == _creatureWaterId
+            ? _generator.TryGetWaterSurface(_world.Planet, x, z, out topY, out bedY)
+            : _generator.TryGetLavaSurface(_world.Planet, x, z, out topY, out bedY);
+        if (!generated)
+        {
+            return false;
+        }
+
+        // The generator's body, where its top cell is streamed in and is NOT that fluid any more, was drained
+        // or built over — offering it would only be rejected by HabitatSuitable one step later.
+        var top = new Vector3i(x, topY, z);
+        return !_world.IsChunkLoaded(WorldConstants.WorldToChunk(top)) || _world.GetBlockIfLoaded(top).Value == fluidId;
+    }
+
+    /// <summary>The top cell of the fluid body filling this column at <paramref name="fromY"/>, or
+    /// <see cref="int.MinValue"/> when that cell holds no fluid. Real blocks, no-load reads.</summary>
+    private int FluidTopAt(int x, int z, int fromY)
+    {
+        if (!IsFluid(_world.GetBlockIfLoaded(new Vector3i(x, fromY, z)).Value))
+        {
+            return int.MinValue;
+        }
+
+        int top = fromY;
+        while (top - fromY < FluidColumnScan && IsFluid(_world.GetBlockIfLoaded(new Vector3i(x, top + 1, z)).Value))
+        {
+            top++;
+        }
+
+        return top;
+    }
+
+    /// <summary>The feet cell on the BED of a fluid body — the submerged floor a body sinking through the
+    /// column would come to rest on (#1697) — or <see cref="int.MinValue"/> when the column holds no fluid
+    /// body standing on real ground within <paramref name="maxScan"/>.
+    ///
+    /// <para>Needed because <see cref="StandableAt"/> can never accept a submerged cell: a fluid counts as
+    /// colliding for a body, so every cell inside the water fails the headroom test, the probe gave up, and
+    /// the caller then answered with the generator's PRE-EXCAVATION surface — which for a moat dug into the
+    /// terrain and filled flush is exactly the waterline. That is what let animals walk on water. The bed is
+    /// the honest answer; whether the animal may go in at all is the water-depth gate's decision, not the
+    /// probe's.</para></summary>
+    private int SubmergedFeetYAt(int x, int z, int refY, int maxScan)
+    {
+        int start = refY;
+        if (!IsFluid(_world.GetBlockIfLoaded(new Vector3i(x, start, z)).Value))
+        {
+            // The reference sits above the surface (a walker on the bank looking into the moat): find the
+            // body below it, but never past real ground — a pond under a floor is not this column's answer.
+            int found = int.MinValue;
+            for (int r = 1; r <= maxScan; r++)
+            {
+                if (IsSupportCell(x, start - r, z))
+                {
+                    break;
+                }
+
+                if (IsFluid(_world.GetBlockIfLoaded(new Vector3i(x, start - r, z)).Value))
+                {
+                    found = start - r;
+                    break;
+                }
+            }
+
+            if (found == int.MinValue)
+            {
+                return int.MinValue;
+            }
+
+            start = found;
+        }
+
+        for (int y = start; y > start - maxScan; y--)
+        {
+            if (IsSupportCell(x, y - 1, z))
+            {
+                return y; // feet on the bed
+            }
+
+            if (!IsFluid(_world.GetBlockIfLoaded(new Vector3i(x, y - 1, z)).Value))
+            {
+                return int.MinValue; // an air pocket under the water — not a bed this probe can vouch for
+            }
+        }
+
+        return int.MinValue;
+    }
+
+    /// <summary>The Y an AIRBORNE creature measures its altitude band from (#1697): the surface of the fluid
+    /// filling the column when there is one, otherwise the ground feet cell. "The ground" under a pond is its
+    /// bed, and an animal that measures its band from the bed floats INSIDE the water — a player found one of
+    /// her flying creatures asleep below the surface of her moat. What a flier would come down onto is the
+    /// water, so that is what the band is measured from.</summary>
+    private int RestSurfaceYAt(int x, int z, int refY)
+    {
+        if (TryGroundFeetYAt(x, z, refY, out int feet))
+        {
+            return feet; // dry standable ground — a probe hit never lands inside a fluid
+        }
+
+        int bed = SubmergedFeetYAt(x, z, refY, CreatureWideGroundScan);
+        int top = bed != int.MinValue ? FluidTopAt(x, z, bed) : int.MinValue;
+        if (top != int.MinValue)
+        {
+            return top + 1;
+        }
+
+        // #1854: the reference cell is INSIDE a block — a gas-sac grazer that bobbed into a player's concrete
+        // floor, a cave hoverer that eased into the rock. The narrow probe breaks at the first solid cell going
+        // down and finds only masonry or hillside in the six above, and the answer used to be refY, the
+        // creature's own sunk cell: refY + 0.8 is where the next tick eased it to, a stable fixed point 0.2
+        // under the block top (the reported 6.6023 on a floor with its top at 7, −11.1965 in the rock). Look
+        // THROUGH the rock for the nearest real floor in either direction, within the wide window a ground
+        // mover's own probe uses (#1320), so the animal comes back onto its floor or down into its cave.
+        if (IsSupportCell(x, refY, z)
+            && TryNearestStandableThroughRock(x, z, refY, CreatureBodyMinHeight, CreatureWideGroundScan, out int through))
+        {
+            return through;
+        }
+
+        // #1711: the last resort is the generator's noise surface — the height this column has where nothing
+        // has been dug. For a creature under a ROOF that Y is on the far side of solid rock, and handing it
+        // back parks the animal inside the ceiling: a player photographed one asleep halfway into the stone
+        // above her cave, with water above that. Its sibling GroundFeetFor already refuses to answer the noise
+        // surface for a cave dweller; this probe never got the same guard. Keyed on the rock rather than on
+        // Habitat, because Habitat is a single value — the creature stuck in her ceiling was a hoverer, not a
+        // cave species, and any animal below a ceiling has the same problem.
+        int surface = _generator.SurfaceHeight(_world.Planet, x, z) + 1;
+        return RoofBetween(x, z, refY, surface) ? refY : surface;
+    }
+
+    /// <summary>The nearest standable feet cell to <paramref name="refY"/> in either direction, looking THROUGH
+    /// solid cells (#1854) — for a body that is already embedded, where <see cref="TryGroundFeetYAt(int, int, int, int, int, out int)"/>
+    /// stops at the first block under it. Distance decides, and at equal distance up wins (a creature 0.2 below
+    /// a floor belongs on that floor, not in the cellar under it). Both directions reach <paramref name="maxScan"/>
+    /// cells; a feet cell needs <paramref name="headroom"/> air cells. No-load reads: an unloaded column has no
+    /// support anywhere and answers false, so the caller keeps its noise-surface fallback for those.</summary>
+    private bool TryNearestStandableThroughRock(int x, int z, int refY, int headroom, int maxScan, out int feetY)
+    {
+        for (int r = 1; r <= maxScan; r++)
+        {
+            if (StandableAt(x, refY + r, z, headroom))
+            {
+                feetY = refY + r;
+                return true;
+            }
+
+            if (StandableAt(x, refY - r, z, headroom))
+            {
+                feetY = refY - r;
+                return true;
+            }
+        }
+
+        feetY = refY;
+        return false;
+    }
+
+    /// <summary>True when the column between a creature and a candidate rest Y above it is not open (#1711):
+    /// solid ground in the way, or the candidate further off than the probe is willing to vouch for. Either
+    /// way the noise surface is not a place this animal could come to rest, and the caller holds its depth
+    /// instead. Cheap no-load reads, bounded by <see cref="FluidColumnScan"/>.</summary>
+    private bool RoofBetween(int x, int z, int fromY, int toY)
+    {
+        if (toY <= fromY)
+        {
+            return false; // the candidate is at or below us — nothing to pass through
+        }
+
+        int scanTo = System.Math.Min(toY, fromY + FluidColumnScan);
+        for (int y = fromY + 1; y <= scanTo; y++)
+        {
+            if (IsSupportCell(x, y, z))
+            {
+                return true;
+            }
+        }
+
+        return toY > scanTo; // surface further up than we looked — do not teleport blind
+    }
+
     /// <summary>The feet cell a ground mover of this species stands on in a column, nearest to
-    /// <paramref name="refY"/>: real blocks first (#650); a cave dweller with no standable cell near its depth
-    /// holds that depth (it never pops up to the noise surface); everyone else falls back to the generator
-    /// surface for unloaded columns.</summary>
+    /// <paramref name="refY"/>: real blocks first (#650), then the bed of a fluid body (#1697); a cave dweller
+    /// with no standable cell near its depth holds that depth (it never pops up to the noise surface);
+    /// everyone else falls back to the generator surface for unloaded columns.</summary>
     private int GroundFeetFor(CreatureSpecies sp, int x, int z, int refY)
     {
         // Species-aware headroom + the wide real-ground scan (#1320), so a titan never "stands" in a two-cell
@@ -1368,6 +1830,16 @@ public sealed partial class GameServer
         if (TryGroundFeetYAt(x, z, refY, CreatureHeadroom(sp), CreatureWideGroundScan, out int feet))
         {
             return feet;
+        }
+
+        // #1697: a flooded column has no DRY standable cell — every cell inside the water fails the headroom
+        // test — but its bed is real ground. Answering the noise surface here handed back the height the
+        // column had BEFORE it was dug out, i.e. the waterline of a hand-filled moat, and the animal walked
+        // across it. The bed keeps the step deltas honest; the water-depth gate does the deciding.
+        int bed = SubmergedFeetYAt(x, z, refY, CreatureWideGroundScan);
+        if (bed != int.MinValue)
+        {
+            return bed;
         }
 
         return sp.Habitat == CreatureHabitat.Cave ? refY : _generator.SurfaceHeight(_world.Planet, x, z) + 1;
@@ -1380,8 +1852,9 @@ public sealed partial class GameServer
     /// <summary>How many cells tall a creature's body is for collision purposes (its render height is
     /// <c>Size × 1.8</c>), clamped so tiny fauna still gets a head cell and a titan can still duck under an
     /// overhang instead of being walled in by its own crown.</summary>
-    private static int CreatureBodyHeight(CreatureSpecies sp) => System.Math.Clamp(
-        (int)System.Math.Ceiling(sp.Size * 1.8f), CreatureBodyMinHeight, CreatureBodyMaxHeight);
+    private static int CreatureBodyHeight(CreatureSpecies sp) => sp.BodyPlan == CreatureBodyPlan.Arachnid
+        ? ArachnidRules.BodyHeightCells(sp.Size, CreatureBodyMinHeight, CreatureBodyMaxHeight) // #2009: low and wide, not tall
+        : System.Math.Clamp((int)System.Math.Ceiling(sp.Size * 1.8f), CreatureBodyMinHeight, CreatureBodyMaxHeight);
 
     /// <summary>Whether a creature's BODY would sit inside colliding blocks at a spot (#855). Creatures have no
     /// colliders and the server tracks a single point, so before this gate a wall was only ever seen indirectly —
@@ -1702,11 +2175,44 @@ public sealed partial class GameServer
         c.Loco.Speed = 0f;
     }
 
+    private int _spawnAttemptsForTest;
+
+    /// <summary>Test-only: how many times the spawner has been asked to place something since start — the
+    /// #1717 gate must stop asking once the world holds the hard cap.</summary>
+    public int SpawnAttemptsForTest => _spawnAttemptsForTest;
+
+    /// <summary>Test-only: the UNCLAMPED population model for this many surface players (#1717).</summary>
+    public int WorldCreatureCapForTest(int players) => WorldCreatureCap(players);
+
+    /// <summary>Test-only: the water probe (#1718) — the column it would seat an aquatic spawn in, or null.</summary>
+    public (int X, int Z, int Top, int Bed)? WaterColumnNearForTest(int x, int z)
+        => TryFindWaterColumnNear(x, z, out int wx, out int wz, out int top, out int bed) ? (wx, wz, top, bed) : null;
+
+    /// <summary>Test-only: places the herd of a species around a spot exactly as the spawner does after the
+    /// leader stands (#1718), against a cap of the hard cap.</summary>
+    public void SpawnGroupAroundForTest(string speciesId, int x, int z)
+        => SpawnGroupAround(_speciesById[speciesId], x, z, CreatureHardCap);
+
+    /// <summary>Test-only: the cave-floor probe (#1719) at a column, −1 when it finds no open cave.</summary>
+    public int CaveFloorForTest(int x, int z) => FindCaveFloorY(x, z, _generator.SurfaceHeight(_world.Planet, x, z));
+
+    /// <summary>Test seam (#1862): the generator's surface height for a column — no chunk is loaded or generated,
+    /// so a test can size a large build above the terrain without streaming a hundred chunk columns first.</summary>
+    public int SurfaceHeightForTest(int x, int z) => _generator.SurfaceHeight(_world.Planet, x, z);
+
     /// <summary>The spawner's full reject list for the first roster species at a spot (#1314 seam).</summary>
     public bool SpawnSpotClearForTest(Vector3f at)
     {
         int x = (int)System.Math.Floor(at.X), z = (int)System.Math.Floor(at.Z);
         return SpawnSpotClear(_speciesRoster[0], at, x, z, _generator.SurfaceHeight(_world.Planet, x, z));
+    }
+
+    /// <summary>#1747 seam: the spawner's full reject list for a synthetic cave dweller at a spot.</summary>
+    public bool CaveSpawnSpotClearForTest(Vector3f at)
+    {
+        int x = (int)System.Math.Floor(at.X), z = (int)System.Math.Floor(at.Z);
+        var sp = new CreatureSpecies { Id = "test_cave", Habitat = CreatureHabitat.Cave };
+        return SpawnSpotClear(sp, at, x, z, _generator.SurfaceHeight(_world.Planet, x, z));
     }
 
     /// <summary>The per-species share of this world's live cap for one player on foot (#1325 seam).</summary>
@@ -1734,6 +2240,7 @@ public sealed partial class GameServer
     private const float FlierClimbRate = 5f;     // blocks/s a flier climbs back to its hover band
     private const float FlierCruiseRate = 4f;    // blocks/s the hover target is eased at (#652)
     private const float HovererEaseRate = 2f;    // slower — a gas sac lags the terrain instead of tracing it
+    private const float SkyGliderEaseRate = 3.5f; // #1778/#1779: a sky ray / air fish never lands, but it cruises like a flier
     private const float LandHovererHeight = 0.8f; // a floating land grazer rides this far above its feet
     private const float PerchReach = 2f;         // a perch may sit this far below the hover band's floor
     private const float TakeOffSettle = 0.3f;    // within this of the hover target → cruising again
@@ -1749,7 +2256,8 @@ public sealed partial class GameServer
         {
             case CreatureHabitat.Air:
                 float hover = sp.HoverAltitude > 0f ? sp.HoverAltitude : CreatureFlyAltitude;
-                return new Vector3f(p.X, GroundFeetYAt(x, z, (int)System.Math.Floor(p.Y - hover)) + hover, p.Z);
+                // #1697: over a pond the band is measured from the water, not from the bed underneath it.
+                return new Vector3f(p.X, RestSurfaceYAt(x, z, (int)System.Math.Floor(p.Y - hover)) + hover, p.Z);
             case CreatureHabitat.Water:
                 return new Vector3f(p.X, WaterColumnY(x, z, 0f, surface), p.Z);
             case CreatureHabitat.Lava:
@@ -1783,18 +2291,34 @@ public sealed partial class GameServer
             case MotionClass.Swimmer:
                 c.Vert.Airborne = false;
                 return new Vector3f(p.X, WaterColumnY(x, z, vertWave, surface,
-                    holdY: sp.Habitat == CreatureHabitat.Amphibian ? p.Y : null), p.Z);
+                    holdY: sp.Habitat == CreatureHabitat.Amphibian ? p.Y : null,
+                    bottom: CreatureMotion.IsBottomDweller(sp)), p.Z);
 
             case MotionClass.Hoverer:
                 {
                     // Buoyant (Q5): never lands, never sinks — asleep it simply holds its band. The target eases
                     // slowly, so a gas sac visibly lags the terrain instead of contour-tracing it.
                     c.Vert.Airborne = false;
-                    float baseY = sp.Habitat == CreatureHabitat.Air
-                        ? GroundFeetYAt(x, z, (int)System.Math.Floor(p.Y - HoverOf(sp))) + HoverOf(sp)
-                        : GroundFeetYAt(x, z, (int)System.Math.Floor(p.Y)) + LandHovererHeight;
+                    // #1697: the band rides on what the creature would come down onto — the surface of a
+                    // fluid body when the column holds one, the ground otherwise. Measuring from the BED
+                    // parked gas sacs and sleeping fliers inside a player's water moat.
+                    bool airborne = sp.Habitat == CreatureHabitat.Air;
+                    int rest = airborne
+                        ? RestSurfaceYAt(x, z, (int)System.Math.Floor(p.Y - HoverOf(sp)))
+                        : RestSurfaceYAt(x, z, (int)System.Math.Floor(p.Y));
+                    float baseY = rest + (airborne ? HoverOf(sp) : LandHovererHeight);
                     float target = baseY + prof.VertAmp * vertWave;
-                    return new Vector3f(p.X, VerticalMotion.Ease(p.Y, target, dt, HovererEaseRate, 24f), p.Z);
+                    if (!airborne)
+                    {
+                        // #1854: a floating land grazer rides 0.8 above its feet cell, but its vertical-life
+                        // wave can be a full block (the glider cadence) — at the trough the target sat 0.2
+                        // INSIDE the floor, floor() moved the reference cell into the block, and from there the
+                        // probe walked the animal down a cell at a time. The feet never go below the rest cell.
+                        target = System.Math.Max(target, rest);
+                    }
+
+                    float ease = CreatureMotion.IsSkyGlider(sp) ? SkyGliderEaseRate : HovererEaseRate;
+                    return new Vector3f(p.X, VerticalMotion.Ease(p.Y, target, dt, ease, 24f), p.Z);
                 }
 
             case MotionClass.Flier:
@@ -1854,7 +2378,8 @@ public sealed partial class GameServer
     {
         int x = (int)System.Math.Floor(p.X), z = (int)System.Math.Floor(p.Z);
         float hover = HoverOf(sp);
-        float airTarget = GroundFeetYAt(x, z, (int)System.Math.Floor(p.Y - hover)) + hover + prof.VertAmp * vertWave;
+        // #1697: over water the cruise band rides on the SURFACE, not on the bed under it.
+        float airTarget = RestSurfaceYAt(x, z, (int)System.Math.Floor(p.Y - hover)) + hover + prof.VertAmp * vertWave;
         bool mustFly = intent is MoveMode.Seek or MoveMode.Flee || c.PanicTimer > 0 || c.ProvokeTimer > 0;
         bool wantsDown = !mustFly && (asleep || c.Loco.Mode == MoveMode.Pause);
         ref var v = ref c.Vert;
@@ -1888,7 +2413,7 @@ public sealed partial class GameServer
                 // landed there it takes off again (#1332 as decided, #1367): a bird whose branch went does not
                 // simply sit on the ground below; it flushes and looks for a perch afresh.
                 bool wasAirborne = v.Airborne;
-                float sit = VerticalMotion.Ground(ref v, p.Y, GroundFeetYAt(x, z, (int)System.Math.Floor(p.Y)),
+                float sit = VerticalMotion.Ground(ref v, p.Y, RestSurfaceYAt(x, z, (int)System.Math.Floor(p.Y)),
                     VerticalMotion.Gravity(_gravityFactor), dt);
                 if (wasAirborne && !v.Airborne)
                 {
@@ -1938,35 +2463,69 @@ public sealed partial class GameServer
             return false;
         }
 
+        // #1697: a dry standable cell with water standing on it is no perch — a shallow pool over a real
+        // floor passes the probe, and the bird was then set down under the surface. Nothing perches in a puddle.
+        if (FluidTopAt(x, z, feet) != int.MinValue)
+        {
+            return false;
+        }
+
         perchY = feet;
         return true;
     }
 
-    /// <summary>The Y inside a column's LOCAL water body (sea or upland pond — not just the global sea level,
-    /// so swimmers stay in the lakes they spawned in): porpoising on the creature's own wave, clamped to the
-    /// column (shallow water just keeps them low). A dry column rests on the bed (or holds
-    /// <paramref name="holdY"/> when given — an amphibian in a player-made pool the generator knows nothing about).</summary>
-    private float WaterColumnY(int x, int z, float vertWave, int surface, float? holdY = null)
+    /// <summary>The Y inside a column's LOCAL water body (sea, upland pond, or a pool the PLAYER built —
+    /// not just the global sea level, so swimmers stay in the water they spawned in): porpoising on the
+    /// creature's own wave, clamped to the column (shallow water just keeps them low). A dry column rests on
+    /// the bed (or holds <paramref name="holdY"/> when given — an amphibian ashore).
+    ///
+    /// <para>#1697: real blocks first. The generator only knows the water the world was born with, so a
+    /// swimmer in a hand-dug pool snapped to the noise surface — the pre-excavation ground — instead of
+    /// porpoising in the water it was standing in.</para></summary>
+    private float WaterColumnY(int x, int z, float vertWave, int surface, float? holdY = null, bool bottom = false)
     {
-        if (_generator.TryGetWaterSurface(_world.Planet, x, z, out int waterTopY, out int seabedY)
-            && waterTopY > seabedY + 1)
+        int waterTopY = int.MinValue, seabedY = int.MinValue;
+        int bedFeet = SubmergedFeetYAt(x, z, (int)System.Math.Round(holdY ?? surface + 1f), FluidColumnScan);
+        if (bedFeet != int.MinValue)
         {
-            float lo = seabedY + 1f, hi = waterTopY - 0.5f;
-            return lo + (hi - lo) * (0.5f + 0.45f * vertWave);
+            waterTopY = FluidTopAt(x, z, bedFeet);
+            seabedY = bedFeet - 1;
         }
 
-        return holdY ?? surface + 1f;
+        if (waterTopY == int.MinValue
+            && !_generator.TryGetWaterSurface(_world.Planet, x, z, out waterTopY, out seabedY))
+        {
+            return holdY ?? surface + 1f;
+        }
+
+        if (waterTopY <= seabedY + 1)
+        {
+            return holdY ?? surface + 1f; // a puddle is no column to porpoise in
+        }
+
+        float lo = seabedY + 1f, hi = waterTopY - 0.5f;
+        if (bottom)
+        {
+            // #1778: a ray hugs the bed — a low band just above the seabed, lifting a little on its wave.
+            float band = System.Math.Min(hi - lo, 1.5f);
+            return System.Math.Min(hi, lo + 0.3f + band * 0.6f * (0.5f + 0.5f * vertWave));
+        }
+
+        return lo + (hi - lo) * (0.5f + 0.45f * vertWave);
     }
 
     /// <summary>Finds a standable cave floor (an air pocket on solid ground, with headroom) in a column, scanning
     /// from just below the surface downward. Returns the floor's air-cell Y, or -1 if the column has no open cave.</summary>
     private int FindCaveFloorY(int x, int z, int surface)
     {
+        // #1719: no-load reads. An unloaded column reads as air all the way down, so it has no solid floor and
+        // yields no cave spawn — the safe answer, and no chunk is generated on the tick thread for an animal
+        // that may not even spawn.
         for (int y = surface - 3; y > surface - 50; y--)
         {
-            if (!_world.GetBlock(new Vector3i(x, y - 1, z)).IsAir   // solid floor
-                && _world.GetBlock(new Vector3i(x, y, z)).IsAir      // feet in air
-                && _world.GetBlock(new Vector3i(x, y + 1, z)).IsAir) // headroom
+            if (!_world.GetBlockIfLoaded(new Vector3i(x, y - 1, z)).IsAir   // solid floor
+                && _world.GetBlockIfLoaded(new Vector3i(x, y, z)).IsAir      // feet in air
+                && _world.GetBlockIfLoaded(new Vector3i(x, y + 1, z)).IsAir) // headroom
             {
                 return y;
             }
@@ -1989,7 +2548,7 @@ public sealed partial class GameServer
             for (int dz = -r; dz <= r; dz++)
                 for (int dy = -1; dy <= 1; dy++)
                 {
-                    if (_world.GetBlock(new Vector3i(x + dx, y + dy, z + dz)).Value == _creatureWaterId)
+                    if (_world.GetBlockIfLoaded(new Vector3i(x + dx, y + dy, z + dz)).Value == _creatureWaterId) // #1719: no-load read
                     {
                         return true;
                     }
@@ -2022,6 +2581,74 @@ public sealed partial class GameServer
         }
     }
 
+    /// <summary>#2009: VEGA points out an arachnid the first time one comes within <see cref="ArachnidRules.SightingRange"/> of a
+    /// player — once per session, so the line is a sighting, not a nag.</summary>
+    private void AnnounceArachnid(CombatEntity creature, List<PlayerSession> targets)
+    {
+        float rangeSq = ArachnidRules.SightingRange * ArachnidRules.SightingRange;
+        foreach (var s in targets)
+        {
+            if (!s.ArachnidSighted && WrapDistSq(creature.Position, s.State.Position) <= rangeSq)
+            {
+                s.ArachnidSighted = true;
+                SendVegaLine(s, "vega.sys.arachnid_sighted", 3);
+            }
+        }
+    }
+
+    /// <summary>#2009: <c>/arachnid</c> — puts an arachnid of this world near an admin for testing. The roster's own species
+    /// when the world rolled one; otherwise a rolled one joins the roster (so it can be scanned, tamed and respawned like
+    /// any species): this world's Land roll with the plan forced. Placed 12–22 blocks out on a spot the spawner would
+    /// accept (habitat, body volume, ship margin, sealed rooms).</summary>
+    private void AdminSummonArachnid(PlayerSession session)
+    {
+        var sp = _speciesRoster.FirstOrDefault(s => s.BodyPlan == CreatureBodyPlan.Arachnid);
+        if (sp is null)
+        {
+            var planet = _content.GetPlanet(_worlds.Active.PlanetType);
+            if (planet is null)
+            {
+                return;
+            }
+
+            sp = CreatureGenerator.GenerateArachnid(planet,
+                BlocksBeyondTheStars.WorldGeneration.WorldGenerator.RosterSeedFor(_meta.Seed, _world.LocationId));
+            _speciesRoster = _speciesRoster.Append(sp).ToArray();
+            _speciesById[sp.Id] = sp;
+            _locoProfiles[sp.Id] = LocomotionController.ForSpecies(sp);
+        }
+
+        var at = session.State.Position;
+        var rng = new System.Random(unchecked((int)(_uptime * 1000.0)));
+        bool placed = false;
+        for (int attempt = 0; attempt < 24 && !placed; attempt++)
+        {
+            double angle = rng.NextDouble() * System.Math.PI * 2.0;
+            float dist = 12f + (float)rng.NextDouble() * 10f;
+            int x = (int)System.Math.Floor(at.X + System.Math.Cos(angle) * dist);
+            int z = (int)System.Math.Floor(at.Z + System.Math.Sin(angle) * dist);
+            int surface = _generator.SurfaceHeight(_world.Planet, x, z);
+            var pos = new Vector3f(x + 0.5f, GroundFeetYAt(x, z, surface + 1), z + 0.5f);
+            if (SpawnSpotClear(sp, pos, x, z, surface))
+            {
+                SpawnCreature(sp, pos);
+                placed = true;
+            }
+        }
+
+        Send(session, new ServerMessage { Text = placed ? "@srv.admin.arachnid_summoned" : "@srv.admin.arachnid_no_room" });
+        CheatLog(session.State, $"summoned an arachnid ({(placed ? "placed" : "no room")})");
+    }
+
+    /// <summary>Test seam: /arachnid without the chat.</summary>
+    public void SummonArachnidForTest(string playerId)
+    {
+        if (FindSessionByPlayerId(playerId) is { } s)
+        {
+            AdminSummonArachnid(s);
+        }
+    }
+
     private const float TitanDespawnRange = 110f; // a landmark animal must not evaporate mid-approach (#638)
 
     /// <summary>Removes creatures farther than <see cref="CreatureDespawnRange"/> from every player
@@ -2042,12 +2669,13 @@ public sealed partial class GameServer
         float titanSq = titanRange * titanRange;
         int removed = _creatures.RemoveAll(c =>
         {
-            if (c.IsCompanion)
+            if (c.IsCompanion || c.IsGiant)
             {
-                return false; // companions are managed by ReconcileCompanions, never far-pruned
+                return false; // companions are managed by ReconcileCompanions, giants by TickGiants (#1998) — never far-pruned
             }
 
-            float limitSq = _speciesById.TryGetValue(c.SpeciesId, out var sp) && sp.BodyPlan == CreatureBodyPlan.Titan
+            float limitSq = _speciesById.TryGetValue(c.SpeciesId, out var sp)
+                            && sp.BodyPlan is CreatureBodyPlan.Titan or CreatureBodyPlan.Arachnid // #2009: a speeder-sized silhouette keeps the titan's leash
                 ? titanSq
                 : maxSq;
             var nearest = NearestPlayerPosition(targets, c.Position);
@@ -2072,7 +2700,7 @@ public sealed partial class GameServer
             // Farthest-from-any-player first, out-of-sight members only — the animals in view stay put, and so
             // does a hunter mid-charge (#1356: a Seek intent is a live hunt/approach, not just a provoked one).
             var shed = _creatures
-                .Where(c => !c.IsCompanion && c.SpeciesId == sp.Id && c.ProvokeTimer <= 0 && c.Loco.Mode != MoveMode.Seek)
+                .Where(c => !c.IsCompanion && !c.IsGiant && c.SpeciesId == sp.Id && c.ProvokeTimer <= 0 && c.Loco.Mode != MoveMode.Seek)
                 .Select(c => (Creature: c, DistSq: NearestPlayerPosition(targets, c.Position) is { } np ? WrapDistSq(np, c.Position) : double.MaxValue))
                 .Where(t => t.DistSq > crowdSq)
                 .OrderByDescending(t => t.DistSq)
@@ -2125,10 +2753,12 @@ public sealed partial class GameServer
     private void SendCreatures(PlayerSession session)
         => Send(session, new CreatureList { Creatures = _creatures.Select(ToNetCreature).ToArray() });
 
-    private NetCreature ToNetCreature(CombatEntity e)
+    private NetCreature ToNetCreature(CombatEntity e) => WithGiantWire(ToNetCreatureCore(e), e); // #1998
+
+    private NetCreature ToNetCreatureCore(CombatEntity e)
     {
         _speciesById.TryGetValue(e.SpeciesId, out var sp);
-        bool asleep = sp != null && !SpeciesActive(sp) && e.AwakeOverrideTimer <= 0 && !e.IsCompanion; // roused or companion → not asleep
+        bool asleep = sp != null && !SpeciesActive(sp, e.Position) && e.AwakeOverrideTimer <= 0 && !e.IsCompanion; // roused or companion → not asleep
 
         // Motion class + vertical state on the wire (#1333, additive): a walker is airborne mid-jump/fall (with
         // its velocity so the client can integrate the arc between updates), a flier is airborne unless perched,
@@ -2186,9 +2816,18 @@ public sealed partial class GameServer
             Tentacles = sp?.Tentacles ?? 0,
             EyeStalks = sp?.EyeStalks ?? false,
             HasGasSac = sp?.HasGasSac ?? false,
+            // Through the helper, not the raw flag: a companion tamed before fins existed carries a snapshot
+            // with the flag false, and every input the derivation needs is in that snapshot.
+            HasFins = CreatureMotion.HasFins(sp),
             BodyPlan = (sp?.BodyPlan ?? CreatureBodyPlan.Standard).ToString(),
+            Hide = sp?.Hide ?? string.Empty, // #1763: an authored species' fixed hide tile
             NeckLength = sp?.NeckLength ?? 0,
             HasTrunk = sp?.HasTrunk ?? false,
+            HeadShape = (sp?.HeadShape ?? CreatureHeadShape.Box).ToString(), // #2009
+            Lurking = e.Lurking,                                              // #2009: an ambusher sitting in wait
+            Heads = System.Math.Max(1, sp?.Heads ?? 1),         // #1780-#1782 (generation 6); a pre-wave snapshot carries 0
+            WingPairs = System.Math.Max(1, sp?.WingPairs ?? 1),
+            FinPairs = System.Math.Max(1, sp?.FinPairs ?? 1),
             VoiceSeed = sp?.VoiceSeed ?? 0, // 0 → client falls back to hashing the trait tuple (#907)
         };
     }

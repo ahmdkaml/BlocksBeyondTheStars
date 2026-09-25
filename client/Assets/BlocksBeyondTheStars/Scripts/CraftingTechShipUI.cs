@@ -11,6 +11,7 @@ using BlocksBeyondTheStars.Client.Portal;
 using BlocksBeyondTheStars.Shared.Definitions;
 using BlocksBeyondTheStars.Shared.State;
 using BlocksBeyondTheStars.Networking.Messages;
+using BlocksBeyondTheStars.Shared.World;
 
 namespace BlocksBeyondTheStars.Client
 {
@@ -103,6 +104,14 @@ namespace BlocksBeyondTheStars.Client
 
         private const float W = 1920f, H = 1080f;
 
+        // Holo chrome (the HUD's UiHolo panels, not the bitmap sprite) for the three frames, so the menu can
+        // boot the way the HUD does: each frame wipes on left→right with a short stagger while its pane's
+        // content fades up behind the wipe. Frames in sidebar → list → detail order; a null Shape means the
+        // holo shader is unavailable (bitmap fallback) and only the fades play.
+        private readonly Image[] _frames = new Image[3];
+        private readonly CanvasGroup[] _paneGroups = new CanvasGroup[3];
+        private CanvasGroup _headerGroup;
+
         // --- public control (from GameMenu) ---
 
         public void ShowMode(Mode mode)
@@ -129,7 +138,70 @@ namespace BlocksBeyondTheStars.Client
             RebuildSidebar();
             RebuildList();
             RebuildDetail();
-            UiKit.TransitionIn(_canvas.gameObject); // fade-in on open + tab change
+            PlayReveal(); // the HUD's boot-up feel on open + tab change
+        }
+
+        /// <summary>
+        /// The menu's take on the HUD's boot reveal (<see cref="HudUi"/> → <see cref="UiHolo.PlayReveal"/>):
+        /// the whole screen still fades (backdrop, logo, footer — the old TransitionIn), the header fades
+        /// first, then the three holo frames wipe on left→right one after another and each pane's content
+        /// fades up once its frame's wipe is past the half-way mark. Played on open AND on every tab change
+        /// (ShowMode) — never on the live rebuilds Update triggers, those would flicker. Timings are kept
+        /// short enough that LB/RB cycling through the tabs stays snappy; a re-trigger mid-play restarts
+        /// cleanly because every tween is keyed to its target. Instant under reduced motion.
+        /// </summary>
+        private void PlayReveal()
+        {
+            UiKit.TransitionIn(_canvas.gameObject);
+            if (UiKit.ReducedMotion)
+            {
+                if (_headerGroup != null)
+                {
+                    _headerGroup.alpha = 1f;
+                }
+
+                for (int i = 0; i < _frames.Length; i++)
+                {
+                    var s = _frames[i] != null ? _frames[i].GetComponent<UiHolo.Shape>() : null;
+                    if (s != null)
+                    {
+                        s.Reveal = 1f;
+                    }
+
+                    if (_paneGroups[i] != null)
+                    {
+                        _paneGroups[i].alpha = 1f;
+                    }
+                }
+
+                return;
+            }
+
+            const float wipe = 0.30f, stagger = 0.07f, lead = 0.04f, contentFade = 0.22f;
+            if (_headerGroup != null)
+            {
+                _headerGroup.alpha = 0f;
+                UiTween.Alpha(_headerGroup, 1f, 0.18f, UiTween.Ease.OutQuad);
+            }
+
+            for (int i = 0; i < _frames.Length; i++)
+            {
+                float at = lead + i * stagger;
+                var shape = _frames[i] != null ? _frames[i].GetComponent<UiHolo.Shape>() : null;
+                if (shape != null)
+                {
+                    UiTween.Kill(shape);
+                    shape.Reveal = 0f;
+                    UiTween.To(0f, 1f, wipe, r => { if (shape != null) { shape.Reveal = r; } }, UiTween.Ease.OutCubic, at, null, shape);
+                }
+
+                var group = _paneGroups[i];
+                if (group != null)
+                {
+                    group.alpha = 0f;
+                    UiTween.Alpha(group, 1f, contentFade, UiTween.Ease.OutQuad, at + wipe * 0.45f);
+                }
+            }
         }
 
         private string _pendingCategory; // a category to select when the mode next opens (e.g. "market")
@@ -156,6 +228,10 @@ namespace BlocksBeyondTheStars.Client
         {
             if (_canvas != null)
             {
+                // #1804: this screen closes programmatically (GameMenu.CloseForTransition on a hyperjump / transit
+                // arrival) while the player may be typing a Funk line or a photo note. A field left focused under a
+                // disabled canvas throws in the next caret rebuild — hand focus back before the canvas goes.
+                UiKit.ReleaseTextFieldFocus(_canvas.transform);
                 _canvas.enabled = false;
             }
 
@@ -182,7 +258,7 @@ namespace BlocksBeyondTheStars.Client
             // the world, but an open screen freezes player control, so they are free here (the same way B
             // is both crouch and cancel). Not while the on-screen keyboard has the pad, and not while the
             // appearance editor sits on top of the Character tab — LB is its fill modifier.
-            if (!UiKit.TextFieldFocused() && Menu?.AppearanceEditorOpen != true)
+            if (!UiKit.TextFieldFocused() && Menu?.AppearanceEditorOpen != true && Menu?.TextureEditorOpen != true)
             {
                 if (InputMap.PadDown(PadButton.Rb))
                 {
@@ -235,6 +311,9 @@ namespace BlocksBeyondTheStars.Client
                     // Companions tab: roster length + present-count + the "new companion" badge flag.
                     + (Game.Companions?.Companions.Length ?? 0) * 907 + (Game.NewCompanionUnseen ? 1409 : 0)
                     + (Game.Companions?.Companions.Count(c => c.Present) ?? 0) * 67
+                    // Notes (#1844): count + the server-answer counter only — never the note text, or every
+                    // keystroke echoed by the server would rebuild the editor under the player's cursor.
+                    + (Game.Notes?.Length ?? 0) * 1511 + Game.NotesVersion * 1523
                     // The local custom pixel face + body paintings: applying one in the editor must rebuild the
                     // Character tab so the live preview re-applies it (SetFace/SetBodyPaint run on rebuild).
                     + (Game.FacePixels?.GetHashCode() ?? 0)
@@ -498,14 +577,22 @@ namespace BlocksBeyondTheStars.Client
             _header.SetParent(root, false);
             UiKit.Place(_header.gameObject, 0, 0, W, 132);
 
-            // Panels.
-            UiKit.AddPanel(root, 40, 150, 320, 820, UiKit.Panel);    // sidebar
-            UiKit.AddPanel(root, 380, 150, 820, 820, UiKit.Panel);   // list
-            UiKit.AddPanel(root, 1220, 150, 660, 820, UiKit.Panel);  // detail
+            // Panels — holo chrome (same shader + colour family as the HUD's panels), see PlayReveal.
+            _frames[0] = UiHolo.AddPanel(root, 40, 150, 320, 820, UiKit.Panel, 12f, 1.5f, 1f);    // sidebar
+            _frames[1] = UiHolo.AddPanel(root, 380, 150, 820, 820, UiKit.Panel, 12f, 1.5f, 1f);   // list
+            _frames[2] = UiHolo.AddPanel(root, 1220, 150, 660, 820, UiKit.Panel, 12f, 1.5f, 1f);  // detail
 
             _sidebar = MakeScroll(root, 50, 162, 300, 796);
             _listContent = MakeScroll(root, 392, 220, 796, 742);
             _detail = MakeScroll(root, 1232, 162, 636, 796);
+
+            // One CanvasGroup per scroll VIEW (the content under it is rebuilt per tab; the view survives),
+            // so a pane's content can fade up behind its frame's wipe. Header likewise — BuildHeader clears
+            // its children, not the header object itself.
+            _paneGroups[0] = _sidebar.parent.gameObject.AddComponent<CanvasGroup>();
+            _paneGroups[1] = _listContent.parent.gameObject.AddComponent<CanvasGroup>();
+            _paneGroups[2] = _detail.parent.gameObject.AddComponent<CanvasGroup>();
+            _headerGroup = _header.gameObject.AddComponent<CanvasGroup>();
 
             // Gate row between the tab bar and the panels (#1071/#1072): "what do I need" (hint), "where is it"
             // (live distance + arrow), a Show-on-compass button and a "craft one" jump. Used to sit INSIDE the
@@ -663,7 +750,20 @@ namespace BlocksBeyondTheStars.Client
                     t.GetComponent<Image>().color = UiKit.Cyan;
                 }
             }
+            else if (_mode == Mode.Inventory && CatalogAvailable())
+            {
+                AddSearchBox(p, 392, 168, 470, 44); // filters the Sandbox "All items" page (#1930)
+            }
         }
+
+        /// <summary>#1930: the "All items" page exists while the player plays the Creative game mode (Sandbox, or their own
+        /// Creative override) — the rules the server sends are already the player's effective ones.</summary>
+        private bool CatalogAvailable() => FreeCrafting();
+
+        /// <summary>#1936: true while this player crafts for FREE — the Creative game mode (world Sandbox, or their own
+        /// Creative override). The server then produces any recipe without materials, blueprint, station or market, so
+        /// the menu must not keep the button grey: the world-create hint promises "crafting costs no materials".</summary>
+        private bool FreeCrafting() => Game?.Rules != null && Game.Rules.GameMode == "Creative";
 
         private void OnTab(int tab) => Menu?.SwitchFromUi(tab); // GameMenu owns the active tab
 
@@ -854,6 +954,11 @@ namespace BlocksBeyondTheStars.Client
                     list.Add(("personal", L("ui.inventory.backpack"), "cat_inventory"));
                     list.Add(("suit", L("ui.inventory.suit"), "cat_suit")); // the backpack filtered to suit gear + its effects (#1270/#1271)
                     list.Add(("cargo", L("ui.cargo.title"), "cat_cargo"));
+                    if (CatalogAvailable())
+                    {
+                        list.Add(("catalog", L("ui.inventory.catalog"), "cat_all")); // Sandbox: every item, nothing to craft (#1930)
+                    }
+
                     break;
                 case Mode.Missions:
                     list.Clear();
@@ -920,7 +1025,13 @@ namespace BlocksBeyondTheStars.Client
                     break;
                 case Mode.Story:
                     list.Clear();
+                    if (_category != "log" && _category != "notes")
+                    {
+                        _category = "log"; // the tab opens with "all" by default — land on the log
+                    }
+
                     list.Add(("log", L("ui.story.cat_log"), "cat_mission")); // the Story Log (read-only)
+                    list.Add(("notes", L("ui.notes.category"), "cat_inventory")); // the player's own notes (#1844)
                     break;
                 case Mode.Companions:
                     list.Clear();
@@ -968,7 +1079,7 @@ namespace BlocksBeyondTheStars.Client
                 case Mode.Missions: y = BuildMissionsList(); break;
                 case Mode.Character: y = _category == "people" ? BuildPeopleList() : BuildCharacterList(); break;
                 case Mode.Alliances: y = BuildAlliancesList(); break;
-                case Mode.Story: y = BuildStoryList(); break;
+                case Mode.Story: y = _category == "notes" ? BuildNotesList() : BuildStoryList(); break;
                 case Mode.Companions: y = BuildCompanionsList(); break;
                 case Mode.Photos: y = BuildPhotosList(); break;
                 case Mode.Achievements: y = BuildAchievementList(); break;
@@ -1205,15 +1316,8 @@ namespace BlocksBeyondTheStars.Client
 
         // The forms the always-available "Shape" action can craft (shape index → locale key). 0 = plain cube
         // (reverts a shaped material). Indices match BlocksBeyondTheStars.Shared.World.BlockShape.
-        private static readonly (int Shape, string Loc)[] ShapeOptions =
-        {
-            (0, "ui.shape.cube"), (1, "ui.shape.slab"), (2, "ui.shape.pyramid"), (3, "ui.shape.dome"),
-            (4, "ui.shape.sphere"), (5, "ui.shape.ramp"), (6, "ui.shape.stairs"), (7, "ui.shape.cone"),
-            (8, "ui.shape.cylinder"), (9, "ui.shape.panel"), (10, "ui.shape.post"), (11, "ui.shape.beam"),
-            (12, "ui.shape.lowramp"), (13, "ui.shape.quartercube"),
-            (14, "ui.shape.table"), (15, "ui.shape.chair"), (16, "ui.shape.fence"),
-            (17, "ui.shape.sheet"), (18, "ui.shape.pot"),
-        };
+        // The pickable forms are the shared BuiltInForms.Options (#1975): one list for this tab, the hotbar's form
+        // menu and the build editors' form picker.
 
         /// <summary>Lists the player's shapeable building materials for the always-available Shape action.</summary>
         private float BuildShapeList()
@@ -1278,9 +1382,10 @@ namespace BlocksBeyondTheStars.Client
         {
             const int cols = 2;
             const float bw = 300f, bh = 50f, gap = 10f;
-            for (int i = 0; i < ShapeOptions.Length; i++)
+            for (int i = 0; i < BuiltInForms.Options.Count; i++)
             {
-                var (shape, loc) = ShapeOptions[i];
+                int shape = BuiltInForms.Options[i].Shape;
+                string loc = BuiltInForms.Options[i].LocKey;
                 float bx = 8 + (i % cols) * (bw + gap);
                 float by = y + (i / cols) * (bh + gap);
                 bool isCurrent = shape == current;
@@ -1293,7 +1398,7 @@ namespace BlocksBeyondTheStars.Client
                 }
             }
 
-            int rows = (ShapeOptions.Length + cols - 1) / cols;
+            int rows = (BuiltInForms.Options.Count + cols - 1) / cols;
             y += rows * (bh + gap) + 16f;
             return AddCustomFormSection(y, src, current);
         }
@@ -1564,7 +1669,7 @@ namespace BlocksBeyondTheStars.Client
                     }
 
                     bool fitted = ModuleFitted(m);
-                    bool can = HasAll(m.BuildCost) && BlueprintOk(m.RequiredBlueprint);
+                    bool can = FreeCrafting() || (HasAll(m.BuildCost) && BlueprintOk(m.RequiredBlueprint));
                     if (_craftableOnly && !can && !fitted)
                     {
                         continue;
@@ -1587,7 +1692,7 @@ namespace BlocksBeyondTheStars.Client
                         continue;
                     }
 
-                    bool can = HasAll(s.CraftCost) && BlueprintOk(s.RequiredBlueprint);
+                    bool can = FreeCrafting() || (HasAll(s.CraftCost) && BlueprintOk(s.RequiredBlueprint));
                     if (_craftableOnly && !can)
                     {
                         continue;
@@ -1706,6 +1811,16 @@ namespace BlocksBeyondTheStars.Client
 
         private float BuildInventoryList()
         {
+            if (_category == "catalog")
+            {
+                if (CatalogAvailable())
+                {
+                    return BuildCatalogList();
+                }
+
+                _category = "personal"; // the world left Sandbox while the page was open
+            }
+
             var items = _category == "cargo" ? Game.Cargo : Game.Personal;
             if (_category == "suit" && items != null)
             {
@@ -1767,6 +1882,67 @@ namespace BlocksBeyondTheStars.Client
             }
 
             return y;
+        }
+
+        /// <summary>#1930 ("please unlock everything in Sandbox — you shouldn't have to craft anything any more"): every item of
+        /// the game, tools first and raw materials last, filtered by the search box. Picking one opens the take buttons.</summary>
+        private float BuildCatalogList()
+        {
+            float y = 0f;
+            var hint = UiKit.AddText(_listContent, 8, y, 752, 52, L("ui.inventory.catalog_hint"), 17, UiKit.CyanDim, TextAnchor.UpperLeft);
+            hint.horizontalOverflow = HorizontalWrapMode.Wrap;
+            y += 60f;
+            var entries = Game.Content.Items.Values
+                .Select(d => (Def: d, Name: ItemName(d.Key)))
+                .Where(e => MatchesSearch(e.Name))
+                .OrderBy(e => CatalogRank(e.Def.Category))
+                .ThenBy(e => e.Name, System.StringComparer.CurrentCultureIgnoreCase);
+            foreach (var (def, name) in entries)
+            {
+                string key = def.Key;
+                AddCard(y, name, IconFor(key), L("ui.inventory.catalog_take"), UiKit.CyanDim, "cat:" + key,
+                    () => { _selected = "cat:" + key; RebuildDetail(); }, contentKey: key);
+                y += 88f;
+            }
+
+            return y;
+        }
+
+        private static int CatalogRank(BlocksBeyondTheStars.Shared.Definitions.ItemCategory category) => category switch
+        {
+            BlocksBeyondTheStars.Shared.Definitions.ItemCategory.Tool => 0,
+            BlocksBeyondTheStars.Shared.Definitions.ItemCategory.Consumable => 1,
+            BlocksBeyondTheStars.Shared.Definitions.ItemCategory.Block => 2,
+            BlocksBeyondTheStars.Shared.Definitions.ItemCategory.Component => 3,
+            _ => 4,
+        };
+
+        /// <summary>The take buttons of a catalog item (#1930): one, or a full stack. The server hands it out.</summary>
+        private float DetailCatalog()
+        {
+            string item = _selected.Substring(4);
+            float y = 0f;
+            UiKit.AddText(_detail, 8, y, 620, 40, ItemName(item), 30, UiKit.TextCol, TextAnchor.UpperLeft, FontStyle.Bold);
+            y += 48f;
+            string desc = Desc($"item.{item}.desc");
+            if (!string.IsNullOrEmpty(desc))
+            {
+                var t = UiKit.AddText(_detail, 8, y, 620, 80, desc, 20, UiKit.CyanDim, TextAnchor.UpperLeft);
+                t.horizontalOverflow = HorizontalWrapMode.Wrap;
+                y += 84f;
+            }
+
+            UiKit.AddText(_detail, 8, y, 620, 28, $"{L("ui.craft.source")}: {Owned(item)}", 20, UiKit.Cyan, TextAnchor.UpperLeft);
+            y += 40f;
+            int stack = Mathf.Max(1, Game.Content.MaxStackOf(item));
+            UiKit.AddButton(_detail, 8, y, 300, 50, L("ui.inventory.catalog_take_one"), () => Game.Network?.SendCreativeTakeItem(item, 1));
+            if (stack > 1)
+            {
+                UiKit.AddButton(_detail, 320, y, 300, 50, L("ui.inventory.catalog_take_stack").Replace("{count}", stack.ToString()),
+                    () => Game.Network?.SendCreativeTakeItem(item, stack));
+            }
+
+            return y + 58f;
         }
 
         /// <summary>The suit's current passive effects — armour, maximum oxygen, insulation — computed with the
@@ -1831,26 +2007,28 @@ namespace BlocksBeyondTheStars.Client
                 y = BuildFlightAction();
             }
 
-            // A distant system you've NEVER entered hides its bodies — it's a single "hyperjump here" target.
-            if (!isCurrent && !Game.KnowsSystem(sys.Id))
+            // Every OTHER system is a "hyperjump here" target — you arrive in flight and fly to its worlds.
+            // A system you've never entered hides its bodies, so the jump entry is all it shows. A KNOWN system
+            // (entered before, #1638) lists its bodies below, but with Instant Travel off they stay locked until
+            // you have LANDED on them — so a system you only ever jumped into would otherwise be unreachable again.
+            if (!isCurrent)
             {
-                UiKit.AddText(_listContent, 8, y, 760, 56, L("ui.map.system_unexplored"), 19, UiKit.CyanDim, TextAnchor.UpperLeft);
+                bool knownSystem = Game.KnowsSystem(sys.Id);
+                UiKit.AddText(_listContent, 8, y, 760, 56, L(knownSystem ? "ui.map.system_known_jump" : "ui.map.system_unexplored"), 19, UiKit.CyanDim, TextAnchor.UpperLeft);
                 y += 64f;
-                var jump = UiKit.AddButton(_listContent, 0, y, 760, 60, L("ui.map.hyperjump_here"), () => Game.Network?.SendHyperjumpSystem(sys.Id));
-                jump.GetComponent<Image>().color = new Color(0.30f, 0.18f, 0.46f); // hyperspace-violet accent
-                if (!AboardShipNow())
-                {
-                    SetInteractable(jump, false); // travel happens from your ship — board it first
-                }
-
-                y += 76f;
+                y = AddSystemJumpButton(_listContent, 0, y, 760, sys.Id);
                 if (HasClientLane(CurrentSystemId(), sys.Id))
                 {
                     UiKit.AddText(_listContent, 8, y, 760, 24, "⇄ " + L("ui.map.lane_hint"), 16, UiKit.Cyan, TextAnchor.UpperLeft);
                     y += 30f;
                 }
 
-                return y;
+                if (!knownSystem)
+                {
+                    return y;
+                }
+
+                y += 12f; // then the system's bodies (landed ones are quick-travel targets)
             }
 
             // The selected system's bodies (reachable targets).
@@ -1916,6 +2094,10 @@ namespace BlocksBeyondTheStars.Client
                     else if (!string.IsNullOrEmpty(b.PlanetType))
                     {
                         status += "   · " + L("ui.map.fly_to_unlock");
+                    }
+                    else if (b.Kind == "Wreck")
+                    {
+                        status += "   · " + L("ui.map.wreck_hint"); // #1664: a derelict is flown to, never travelled to
                     }
                 }
 
@@ -2142,6 +2324,43 @@ namespace BlocksBeyondTheStars.Client
                 visorOn ? UiKit.Ok : UiKit.CyanDim, TextAnchor.MiddleLeft, FontStyle.Bold);
             y += 96f;
 
+            // Textures (#1959): the editor, and the two per-player switches. "Show this world's textures" is the
+            // safety valve — whatever an admin published, a player (or a parent) can turn it off for themselves.
+            UiKit.AddText(_listContent, 16, y, 760, 30, L("ui.settings.textures_title"), 22, UiKit.Cyan, TextAnchor.MiddleLeft, FontStyle.Bold);
+            y += 40f;
+            var texEditorBtn = UiKit.AddButton(_listContent, 0, y, 780, 78, string.Empty, () => Menu?.OpenTextureEditor());
+            UiKit.AddText(texEditorBtn.transform, 16, 0, 520, 78, L("ui.menu.texture_editor"), 24, UiKit.TextCol, TextAnchor.MiddleLeft, FontStyle.Bold);
+            UiKit.AddText(texEditorBtn.transform, 600, 0, 170, 78, L("ui.face.open"), 18, UiKit.Cyan, TextAnchor.MiddleLeft);
+            y += 96f;
+
+            void TextureToggle(string label, bool on, System.Action<bool> apply)
+            {
+                var btn = UiKit.AddButton(_listContent, 0, y, 780, 78, string.Empty, () =>
+                {
+                    if (Menu?.Settings != null)
+                    {
+                        apply(!on);
+                        Menu.Settings.Save();
+                        RebuildList();
+                    }
+                });
+                UiKit.AddText(btn.transform, 16, 0, 520, 78, label, 24, UiKit.TextCol, TextAnchor.MiddleLeft, FontStyle.Bold);
+                UiKit.AddText(btn.transform, 560, 0, 200, 78, on ? L("ui.toggle.on") : L("ui.toggle.off"), 22,
+                    on ? UiKit.Ok : UiKit.CyanDim, TextAnchor.MiddleLeft, FontStyle.Bold);
+                y += 96f;
+            }
+
+            TextureToggle(string.Format(L("ui.settings.use_texture_pack"), GameTextures.LocalCount), Menu?.Settings?.UseTexturePack ?? true, v =>
+            {
+                Menu.Settings.UseTexturePack = v;
+                GameTextures.UseLocalPack = v;
+            });
+            TextureToggle(string.Format(L("ui.settings.show_world_textures"), GameTextures.WorldCount), Menu?.Settings?.ShowWorldTextures ?? true, v =>
+            {
+                Menu.Settings.ShowWorldTextures = v;
+                GameTextures.ShowWorldTextures = v;
+            });
+
             // World rules (world options, live edit): creatures + the three enemy activities. The server
             // enforces the admin gate (non-admins get a reject toast); the rows re-render when the
             // re-broadcast ServerRules lands.
@@ -2232,6 +2451,23 @@ namespace BlocksBeyondTheStars.Client
             UiKit.AddText(starterTpBtn.transform, 560, 0, 200, 78, starterTp ? L("ui.toggle.on") : L("ui.toggle.off"), 22,
                 starterTp ? UiKit.Ok : UiKit.CyanDim, TextAnchor.MiddleLeft, FontStyle.Bold);
             y += 96f;
+
+            // World textures (#1959): may the admins of this world publish textures for everyone? Off also takes
+            // the published ones away from every client (they stay stored and return when it is switched on).
+            // An older server sends no value — then there is nothing to switch.
+            if (!string.IsNullOrEmpty(rules?.WorldTextures))
+            {
+                bool worldTex = string.Equals(rules.WorldTextures, "Admins", System.StringComparison.Ordinal);
+                var worldTexBtn = UiKit.AddButton(_listContent, 0, y, 780, 78, string.Empty, () =>
+                {
+                    Game?.Network?.SendSetWorldRules(worldTextures: worldTex ? "Off" : "On");
+                    Invoke(nameof(RebuildList), 0.35f);
+                });
+                UiKit.AddText(worldTexBtn.transform, 16, 0, 520, 78, L("ui.worldopt.world_textures"), 24, UiKit.TextCol, TextAnchor.MiddleLeft, FontStyle.Bold);
+                UiKit.AddText(worldTexBtn.transform, 560, 0, 200, 78, worldTex ? L("ui.worldopt.world_textures_admins") : L("ui.toggle.off"), 22,
+                    worldTex ? UiKit.Ok : UiKit.CyanDim, TextAnchor.MiddleLeft, FontStyle.Bold);
+                y += 96f;
+            }
 
             // Frontier danger (#1122, opt-in): tougher machines out in the frontier tier. Only offered
             // when planet enemies exist at all — on peaceful/family worlds (PlanetEnemies Off) the row is
@@ -3107,6 +3343,197 @@ namespace BlocksBeyondTheStars.Client
             return y + 60f;
         }
 
+        // --- Story → Notes (#1844): titled free-text notes with a small editor + §-markup preview ---
+
+        /// <summary>Selection key of the not-yet-saved note the "+ New note" button opens.</summary>
+        private const string NewNoteKey = "note:new";
+        private const int NoteMaxCount = 20;
+        private const int NoteTitleMax = 40;
+        private const int NoteBodyMax = 2000;
+        private const float NoteBodyHeight = 420f;
+
+        /// <summary>Unsaved edits per note id (or <see cref="NewNoteKey"/>): a rebuild of the pane — a server
+        /// list arriving, a category click — recreates the input fields, and these are what they are refilled
+        /// from, so no typed text is ever lost. Dropped once the server confirms the save.</summary>
+        private readonly System.Collections.Generic.Dictionary<string, string> _noteDraftTitle = new();
+        private readonly System.Collections.Generic.Dictionary<string, string> _noteDraftBody = new();
+
+        /// <summary>True while the body pane shows the rendered markup instead of the text field.</summary>
+        private bool _notePreview;
+
+        /// <summary>The note a save is pending for (null = none) and the notes version at that moment: once the
+        /// server's answer bumps the version, the draft is dropped (the pane then shows the stored, possibly
+        /// masked, text) and a NEW note is selected. A refused save bumps nothing, so the draft stays.</summary>
+        private string _noteSaveKey;
+        private int _noteSaveVersion;
+
+        private NetNote[] NotesNow() => Game?.Notes ?? System.Array.Empty<NetNote>();
+
+        private float BuildNotesList()
+        {
+            var notes = NotesNow();
+            float y = 0f;
+
+            // A pending save the server has answered: forget the draft, land on the new note.
+            if (_noteSaveKey != null && Game != null && Game.NotesVersion != _noteSaveVersion)
+            {
+                _noteDraftTitle.Remove(_noteSaveKey);
+                _noteDraftBody.Remove(_noteSaveKey);
+                if (_noteSaveKey == NewNoteKey && notes.Length > 0)
+                {
+                    _selected = notes[0].Id; // the server orders newest first
+                }
+
+                _noteSaveKey = null;
+            }
+
+            bool full = notes.Length >= NoteMaxCount;
+            var add = UiKit.AddButton(_listContent, 0, y, 780, 52, L("ui.notes.new"), () =>
+            {
+                UiKit.ReleaseTextFieldFocus(_detail);
+                _notePreview = false;
+                _selected = NewNoteKey;
+                RebuildList();
+                RebuildDetail();
+            });
+            add.interactable = !full;
+            y += 58f;
+            if (full)
+            {
+                var fullHint = UiKit.AddText(_listContent, 8, y, 760, 28, L("ui.notes.full"), 15, UiKit.Warn, TextAnchor.MiddleLeft);
+                fullHint.horizontalOverflow = HorizontalWrapMode.Wrap;
+                y += 34f;
+            }
+
+            if (notes.Length == 0)
+            {
+                if (_selected != NewNoteKey)
+                {
+                    var empty = UiKit.AddText(_listContent, 8, y, 760, 80, L("ui.notes.empty"), 18, UiKit.CyanDim, TextAnchor.UpperLeft);
+                    empty.horizontalOverflow = HorizontalWrapMode.Wrap;
+                    y += 90f;
+                }
+
+                return y;
+            }
+
+            // Nothing (or a vanished note) selected? Land on the newest so the editor isn't empty on open.
+            if (_selected != NewNoteKey && (string.IsNullOrEmpty(_selected) || notes.All(n => n.Id != _selected)))
+            {
+                _selected = notes[0].Id;
+            }
+
+            foreach (var n in notes)
+            {
+                string id = n.Id;
+                var card = UiKit.AddButton(_listContent, 0, y, 780, 78, string.Empty, () =>
+                {
+                    UiKit.ReleaseTextFieldFocus(_detail);
+                    _selected = id;
+                    RebuildList();
+                    RebuildDetail();
+                });
+                if (_selected == id)
+                {
+                    card.GetComponent<Image>().color = UiKit.Cyan;
+                }
+
+                bool untitled = string.IsNullOrEmpty(n.Title);
+                UiKit.AddText(card.transform, 16, 8, 748, 34, untitled ? L("ui.notes.title_ph") : n.Title, 22,
+                    untitled ? UiKit.CyanDim : UiKit.TextCol, TextAnchor.MiddleLeft, FontStyle.Bold);
+                UiKit.AddText(card.transform, 16, 44, 748, 28, NoteMarkup.FirstLine(n.Body), 16, UiKit.CyanDim, TextAnchor.MiddleLeft);
+                y += 86f;
+            }
+
+            return y;
+        }
+
+        private float BuildNotesDetail()
+        {
+            var notes = NotesNow();
+            bool isNew = _selected == NewNoteKey;
+            var note = isNew ? null : notes.FirstOrDefault(n => n.Id == _selected);
+            if (!isNew && note == null)
+            {
+                var hint = UiKit.AddText(_detail, 8, 16, 620, 120, L("ui.notes.empty"), 16, UiKit.CyanDim, TextAnchor.UpperLeft);
+                hint.horizontalOverflow = HorizontalWrapMode.Wrap;
+                return 140f;
+            }
+
+            string key = isNew ? NewNoteKey : note.Id;
+            string title = _noteDraftTitle.TryGetValue(key, out var dt) ? dt : (note?.Title ?? string.Empty);
+            string body = _noteDraftBody.TryGetValue(key, out var db) ? db : (note?.Body ?? string.Empty);
+
+            float y = 8f;
+            UiKit.AddInput(_detail, 8, y, 624, 44, title, v => _noteDraftTitle[key] = v, L("ui.notes.title_ph"), NoteTitleMax, 20);
+            y += 52f;
+
+            // Preview ⇄ Edit toggle + the one-line markup cheat sheet.
+            UiKit.AddButton(_detail, 8, y, 170, 38, L(_notePreview ? "ui.notes.edit" : "ui.notes.preview"), () =>
+            {
+                UiKit.ReleaseTextFieldFocus(_detail);
+                _notePreview = !_notePreview;
+                RebuildDetail();
+            });
+            var cheat = UiKit.AddText(_detail, 190, y, 442, 38, L("ui.notes.markup_hint"), 14, UiKit.CyanDim, TextAnchor.MiddleLeft);
+            cheat.horizontalOverflow = HorizontalWrapMode.Wrap;
+            y += 46f;
+
+            if (_notePreview)
+            {
+                // Rendered markup as a column of wrapped rich-text blocks at ABSOLUTE rows (no LayoutGroup —
+                // a VerticalLayoutGroup overflows wrapped text here), chunked under the uGUI vertex limit.
+                var panel = UiKit.AddPanel(_detail, 8, y, 624, NoteBodyHeight, new Color(0.043f, 0.10f, 0.20f, 0.95f));
+                float ty = y + 8f;
+                string rendered = NoteMarkup.Render(body);
+                foreach (string chunk in UiTextChunks.Split(rendered.Length == 0 ? " " : rendered))
+                {
+                    var t = UiKit.AddText(_detail, 18, ty, 604, 100, chunk, 17, UiKit.TextCol, TextAnchor.UpperLeft);
+                    t.horizontalOverflow = HorizontalWrapMode.Wrap;
+                    t.verticalOverflow = VerticalWrapMode.Overflow;
+                    float th = t.preferredHeight;
+                    ((RectTransform)t.transform).sizeDelta = new Vector2(604f, th + 10f);
+                    ty += th;
+                }
+
+                float panelH = Mathf.Max(NoteBodyHeight, ty + 8f - y);
+                ((RectTransform)panel.transform).sizeDelta = new Vector2(624f, panelH);
+                y += panelH + 8f;
+            }
+            else
+            {
+                UiKit.AddInput(_detail, 8, y, 624, NoteBodyHeight, body, v => _noteDraftBody[key] = v, L("ui.notes.body_ph"), NoteBodyMax, 17, multiline: true);
+                y += NoteBodyHeight + 8f;
+            }
+
+            UiKit.AddButton(_detail, 8, y, 200, 46, L("ui.notes.save"), () =>
+            {
+                string t = _noteDraftTitle.TryGetValue(key, out var a) ? a : (note?.Title ?? string.Empty);
+                string b = _noteDraftBody.TryGetValue(key, out var bb) ? bb : (note?.Body ?? string.Empty);
+                UiKit.ReleaseTextFieldFocus(_detail);
+                _noteSaveKey = key;
+                _noteSaveVersion = Game?.NotesVersion ?? 0;
+                Game?.Network?.SendNoteSet(isNew ? string.Empty : key, t, b);
+                if (_feedback != null) _feedback.text = L("ui.notes.saved"); // the server's list answer rebuilds the pane
+            });
+
+            if (!isNew)
+            {
+                var del = UiKit.AddButton(_detail, 432, y, 200, 46, L("ui.notes.delete"), () =>
+                {
+                    UiKit.ReleaseTextFieldFocus(_detail);
+                    _noteDraftTitle.Remove(key);
+                    _noteDraftBody.Remove(key);
+                    _noteSaveKey = null;
+                    _selected = string.Empty; // the list answer picks the newest remaining note
+                    Game?.Network?.SendNoteRemove(key);
+                });
+                del.GetComponent<Image>().color = new Color(0.5f, 0.22f, 0.22f);
+            }
+
+            return y + 60f;
+        }
+
         // --- Story Log tab (read-only: progress meter + VEGA beats + recovered net fragments + memories) ---
 
         /// <summary>
@@ -3231,6 +3658,11 @@ namespace BlocksBeyondTheStars.Client
                 UiKit.AddText(_listContent, 20, y, RowW - 28f, 26, line, 18, UiKit.TextCol, TextAnchor.MiddleLeft);
                 y += 28f;
             }
+
+            // The discoveries count is only a number here — the list itself, with WHERE each was found (#1843),
+            // is the Codex "Discoveries" chapter. One button deep-links straight into it.
+            UiKit.AddButton(_listContent, 20, y + 4f, 400, 40, L("ui.wiki.discoveries.open"), () => Menu?.OpenWiki("discoveries"));
+            y += 50f;
 
             // Journey: the raw counters, two per row. Only counters the server has actually reported show up,
             // so a fresh save reads short rather than as a wall of zeros.
@@ -3593,6 +4025,14 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
+            // Story → Notes (#1844): the detail pane is the note editor (title + body / preview + save/delete),
+            // shown with a hint when there is no note yet.
+            if (_mode == Mode.Story && _category == "notes")
+            {
+                SetContentHeight(_detail, BuildNotesDetail());
+                return;
+            }
+
             if (string.IsNullOrEmpty(_selected))
             {
                 UiKit.AddText(_detail, 8, 20, 620, 30, L("ui.craft.pick"), 22, UiKit.CyanDim, TextAnchor.UpperLeft);
@@ -3606,7 +4046,7 @@ namespace BlocksBeyondTheStars.Client
                 case Mode.Crafting: y = DetailCrafting(); break;
                 case Mode.Tech: y = DetailTech(); break;
                 case Mode.Ship: y = DetailShip(); break;
-                case Mode.Inventory: y = DetailInventory(); break;
+                case Mode.Inventory: y = _selected.StartsWith("cat:", System.StringComparison.Ordinal) ? DetailCatalog() : DetailInventory(); break;
                 case Mode.Missions: y = DetailMissions(); break;
             }
 
@@ -3684,6 +4124,12 @@ namespace BlocksBeyondTheStars.Client
             }
 
             y += 10f;
+            if (FreeCrafting())
+            {
+                UiKit.AddText(_detail, 8, y, 620, 26, L("ui.craft.free"), 18, UiKit.Ok, TextAnchor.UpperLeft);
+                y += 30f;
+            }
+
             bool can = CanCraft(r, out string reason);
             if (!can)
             {
@@ -3719,6 +4165,11 @@ namespace BlocksBeyondTheStars.Client
         private int MaxCraftable(RecipeDefinition r)
         {
             int cap = BlocksBeyondTheStars.Shared.Definitions.ItemDefinition.DefaultMaxStack;
+            if (FreeCrafting())
+            {
+                return cap; // nothing is consumed — a full stack per order, the same ceiling the server clamps to
+            }
+
             int m = cap;
             foreach (var inp in r.Inputs)
             {
@@ -3910,7 +4361,7 @@ namespace BlocksBeyondTheStars.Client
                 }
 
                 y = CostBlock(m.BuildCost, m.RequiredBlueprint, y);
-                bool ready = HasAll(m.BuildCost) && BlueprintOk(m.RequiredBlueprint);
+                bool ready = FreeCrafting() || (HasAll(m.BuildCost) && BlueprintOk(m.RequiredBlueprint));
                 // Modules are built aboard, at the workshop module (#1074) — say so instead of a failing toast.
                 bool can = ready && ShipBuildOkNow();
                 if (ready && !ShipBuildOkNow())
@@ -3937,7 +4388,7 @@ namespace BlocksBeyondTheStars.Client
                 y += 48f;
                 y = ShipStats(def, y);
                 y = CostBlock(def.CraftCost, def.RequiredBlueprint, y);
-                bool can = HasAll(def.CraftCost) && BlueprintOk(def.RequiredBlueprint);
+                bool can = FreeCrafting() || (HasAll(def.CraftCost) && BlueprintOk(def.RequiredBlueprint));
                 var btn = UiKit.AddButton(_detail, 8, y, 280, 56, L("ui.action.craft"), () => { Game.Network.SendCraftShip(def.Key); });
                 SetInteractable(btn, can);
                 y += 70f;
@@ -4341,6 +4792,14 @@ namespace BlocksBeyondTheStars.Client
                 y = AddRenameRow(y, myBase, L("ui.map.rename_base"), name => Game.Network?.SendSetBaseName(body.Id, name));
             }
 
+            // The system's derelict (#1664): not a place you travel to but one you fly to — its manifest is
+            // read on approach and its plating carved in flight. Say so instead of silently offering nothing.
+            if (body.Kind == "Wreck")
+            {
+                UiKit.AddText(_detail, 8, y, 600, 90, L("ui.map.wreck_detail"), 18, new Color(1f, 0.8f, 0.45f), TextAnchor.UpperLeft);
+                return y + 98f;
+            }
+
             if (here || string.IsNullOrEmpty(body.PlanetType))
             {
                 return y; // you're already here, or it isn't a landable world (belts dock differently)
@@ -4370,12 +4829,35 @@ namespace BlocksBeyondTheStars.Client
             }
             else
             {
-                // Locked: never landed here + Instant Travel off — you must fly there and land manually.
-                UiKit.AddText(_detail, 8, y, 600, 56, L("ui.map.locked_hint"), 18, new Color(1f, 0.8f, 0.45f), TextAnchor.UpperLeft);
+                // Locked: never landed here + Instant Travel off — you must fly there and land manually. In
+                // ANOTHER system "fly there" means: hyperjump into the system first (#1638) — offer that jump here,
+                // so a world you've only ever seen from orbit still has a way back onto the screen.
+                var lockedSystem = map.Systems.FirstOrDefault(s => s.Bodies.Any(b => b.Id == body.Id));
+                bool lockedCrossSystem = lockedSystem != null && lockedSystem.Id != CurrentSystemId();
+                UiKit.AddText(_detail, 8, y, 600, 56, L(lockedCrossSystem ? "ui.map.locked_cross_hint" : "ui.map.locked_hint"), 18, new Color(1f, 0.8f, 0.45f), TextAnchor.UpperLeft);
                 y += 64f;
+                if (lockedCrossSystem)
+                {
+                    y = AddSystemJumpButton(_detail, 8, y, 280, lockedSystem.Id);
+                }
             }
 
             return y;
+        }
+
+        /// <summary>The violet "Hyperjump to this system" button (arrive in flight, then fly to its worlds) — the
+        /// same entry the system list and the locked-body detail share (#1638). Disabled off the ship. Returns the
+        /// y below it.</summary>
+        private float AddSystemJumpButton(RectTransform parent, float x, float y, float width, string systemId)
+        {
+            var jump = UiKit.AddButton(parent, x, y, width, 60, L("ui.map.hyperjump_here"), () => Game.Network?.SendHyperjumpSystem(systemId));
+            jump.GetComponent<Image>().color = new Color(0.30f, 0.18f, 0.46f); // hyperspace-violet accent
+            if (!AboardShipNow())
+            {
+                SetInteractable(jump, false); // travel happens from your ship — board it first
+            }
+
+            return y + 76f;
         }
 
         /// <summary>An inline name field + confirm button for renaming an owned station or base from the Map detail
@@ -4657,6 +5139,20 @@ namespace BlocksBeyondTheStars.Client
 
         private bool CanCraft(RecipeDefinition r, out string reason)
         {
+            if (FreeCrafting())
+            {
+                // Everything the server skips in this mode is skipped here too — only the room for the result is
+                // real (the server refuses a craft that does not fit, so the button would lie).
+                if (!ResultFits(r))
+                {
+                    reason = L("ui.craft.inventory_full");
+                    return false;
+                }
+
+                reason = string.Empty;
+                return true;
+            }
+
             if (!BlueprintOk(r.RequiredBlueprint))
             {
                 reason = L("ui.craft.need_blueprint");
@@ -4807,6 +5303,11 @@ namespace BlocksBeyondTheStars.Client
         /// around; the station only keeps gating the status colour and the craft button.</summary>
         private int ReachTier(string requiredBlueprint, List<BlocksBeyondTheStars.Shared.Definitions.ItemAmount> cost)
         {
+            if (FreeCrafting())
+            {
+                return 0; // everything is craftable now
+            }
+
             if (!BlueprintOk(requiredBlueprint))
             {
                 return 2;

@@ -18,6 +18,20 @@ public sealed class JoinAndStreamingTests
     private static GameContent LoadContent() => ContentLoader.LoadFromDirectory(ClientTestPaths.DataDir());
 
     [Fact]
+    public void RainbowStart_DeliversTheRainbowWaterModeToTheClient()
+    {
+        // #1758: the water colour rides in WorldEnvironment. A rainbow-sea start must reach the CLIENT as mode 2
+        // through the real codec — the message class is contractless, so a new field that silently dropped out
+        // of the wire format would leave the client painting the classic blue (Marcel's playtest 2026-09-11).
+        using var h = new ClientServerHarness(LoadContent(), c => c.StartPlanet = "rainbow_sea");
+        Networking.Messages.WorldEnvironment? env = null;
+        h.Client.WorldEnvironmentReceived += m => env = m;
+        h.Join("Sophie");
+        Assert.True(h.PumpUntil(() => env != null, maxTicks: 60), "no WorldEnvironment reached the client after join");
+        Assert.Equal(2, env!.WaterTintMode);
+    }
+
+    [Fact]
     public void Join_RaisesJoinAccepted_OnTheClient()
     {
         using var h = new ClientServerHarness(LoadContent());
@@ -82,12 +96,18 @@ public sealed class JoinAndStreamingTests
 
         // A column 2 east is inside the client's radius-3 view but outside the host's radius-1 default — it only
         // reaches the client because the slider value travelled in the JoinRequest and drove server streaming.
+        // Both probe columns are wrapped at the longitude seam: streamed chunk keys are canonical, and the
+        // dry-pad preference (#1621) put this seed's spawn pad two columns short of the seam, where an
+        // unwrapped "center + 2" names a column that can never arrive.
+        int circumference = h.Server.World.Circumference;
+        int withinX = Shared.World.WorldConstants.CanonicalChunkX(center.X + 2, circumference);
+        int beyondX = Shared.World.WorldConstants.CanonicalChunkX(center.X + 5, circumference);
         bool gotWithinClientView = false;
         bool gotBeyondClientView = false;
         foreach (var key in h.Chunks.Keys)
         {
-            if (key.Item1 == center.X + 2) gotWithinClientView = true;
-            if (key.Item1 == center.X + 5) gotBeyondClientView = true; // beyond radius 3 + the one-ring load-ahead (4) — must never stream
+            if (key.Item1 == withinX) gotWithinClientView = true;
+            if (key.Item1 == beyondX) gotBeyondClientView = true; // beyond radius 3 + the one-ring load-ahead (4) — must never stream
         }
 
         Assert.True(gotWithinClientView, "client's radius-3 view should stream terrain past the host's radius-1 default");

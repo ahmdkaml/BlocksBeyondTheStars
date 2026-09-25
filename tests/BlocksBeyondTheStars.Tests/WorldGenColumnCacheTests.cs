@@ -154,4 +154,103 @@ public class WorldGenColumnCacheTests
         Assert.Equal(WorldGenerationGoldenTests.HashChunk(cold.Generate(planet, coord)),
             WorldGenerationGoldenTests.HashChunk(gen.Generate(planet, coord)));
     }
+
+    [Fact]
+    public void ReapplyingTheSameWorldMode_KeepsTheColumnProfiles_ButAMutatedPadListDropsThem()
+    {
+        // #1816: ServerWorld re-applies the mode before every chunk; the identical mode must not wipe the memos.
+        var planet = Content.GetPlanet("varied")!;
+        var gen = new WorldGenerator(424242, Content);
+        var pads = new List<LandingPadFlatten> { new LandingPadFlatten(8, 8, 80, 6) };
+        gen.SetWorldMode(5472, cratered: false, landingPads: pads, locationId: "cache-test:body");
+        gen.Generate(planet, new ChunkCoord(0, 3, 0));
+        Assert.Equal(256, gen.CachedColumnProfiles);
+
+        gen.SetWorldMode(5472, cratered: false, landingPads: pads, locationId: "cache-test:body");
+        Assert.Equal(256, gen.CachedColumnProfiles);
+
+        // The server's pad list is mutable and grows in place — same reference, new content → a real change.
+        pads.Add(new LandingPadFlatten(200, 40, 90, 6));
+        gen.SetWorldMode(5472, cratered: false, landingPads: pads, locationId: "cache-test:body");
+        Assert.Equal(0, gen.CachedColumnProfiles);
+
+        gen.SetWorldMode(5472, cratered: false, landingPads: pads, locationId: "cache-test:body", frontierOreBoost: 1.5);
+        gen.Generate(planet, new ChunkCoord(0, 3, 0));
+        gen.SetWorldMode(5472, cratered: false, landingPads: pads, locationId: "cache-test:body", frontierOreBoost: 1.0);
+        Assert.Equal(0, gen.CachedColumnProfiles);
+    }
+
+    [Fact]
+    public void ServerWorld_StackedChunksOfAColumn_ShareTheColumnProfiles()
+    {
+        // #1816: the real server path — GetOrLoadChunk re-applies the world mode before every Generate.
+        var planet = Content.GetPlanet("varied")!;
+        var gen = new WorldGenerator(424242, Content);
+        string root = Path.Combine(Path.GetTempPath(), "bbts_colcache_" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            using var repo = new BlocksBeyondTheStars.Persistence.MemoryWorldRepository(
+                new BlocksBeyondTheStars.Persistence.SaveGamePaths(root, "colcache"));
+            var world = new BlocksBeyondTheStars.GameServer.ServerWorld(Content, gen, repo, planet, "cache-test:server", 5472);
+            world.GetOrLoadChunk(new ChunkCoord(2, 3, 2));
+            Assert.Equal(256, gen.CachedColumnProfiles);
+            world.GetOrLoadChunk(new ChunkCoord(2, 4, 2)); // the chunk above: same 256 columns, no new profile
+            Assert.Equal(256, gen.CachedColumnProfiles);
+            world.GetOrLoadChunk(new ChunkCoord(3, 4, 2)); // the neighbour column set adds its own 256
+            Assert.Equal(512, gen.CachedColumnProfiles);
+
+            // And a stacked chunk served from the memos is the chunk a cold generator makes.
+            var cold = new WorldGenerator(424242, Content);
+            cold.SetWorldMode(5472, cratered: false, landingPads: null, locationId: "cache-test:server");
+            var coord = new ChunkCoord(2, 4, 2);
+            Assert.Equal(WorldGenerationGoldenTests.HashChunk(cold.Generate(planet, coord)),
+                WorldGenerationGoldenTests.HashChunk(world.GetOrLoadChunk(coord)));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("varied", 424242L, 0)]
+    [InlineData("desert", 20260905L, 1)]
+    [InlineData("ocean", 20260907L, 3)]
+    [InlineData("karst", 20260907L, 3)]
+    [InlineData("frozen_ocean", 20260907L, 3)]
+    public void SurfaceHeightAndChunks_AreTheSame_AcrossBothSeams(string planetKey, long seed, int generation)
+    {
+        // #1724: the column memos key on the WRAPPED column, so a column and its seam twin share one entry. That
+        // is only correct if every landform family wraps — this pins it for the classic, generation-1 and
+        // generation-3 families (a family that did not wrap would be a seam bug, not a cache bug).
+        var planet = Content.GetPlanet(planetKey)!;
+        var gen = new WorldGenerator(seed, Content);
+        gen.SetWorldMode(5472, cratered: false, landingPads: null, locationId: "seam-test:body");
+        gen.SetTerrainGeneration(generation);
+        int circ = gen.Circumference;
+        int lat = WorldConstants.LatitudePeriodFor(circ);
+
+        var rng = new Random(20260909);
+        for (int i = 0; i < 200; i++)
+        {
+            int x = rng.Next(-circ, 2 * circ);
+            int z = rng.Next(-lat, 2 * lat);
+            int h = gen.SurfaceHeight(planet, x, z);
+            Assert.Equal(h, gen.SurfaceHeight(planet, x + circ, z));
+            Assert.Equal(h, gen.SurfaceHeight(planet, x - circ, z));
+            Assert.Equal(h, gen.SurfaceHeight(planet, x, z + lat));
+            Assert.Equal(h, gen.SurfaceHeight(planet, x, z - lat));
+        }
+
+        // Whole chunks across the X seam and the Z seam equal the home chunk, blocks and all.
+        int cs = WorldConstants.ChunkSize;
+        var home = new ChunkCoord(3, 3, 2);
+        ulong expected = WorldGenerationGoldenTests.HashChunk(gen.Generate(planet, home));
+        Assert.Equal(expected, WorldGenerationGoldenTests.HashChunk(gen.Generate(planet, new ChunkCoord(3 + circ / cs, 3, 2))));
+        Assert.Equal(expected, WorldGenerationGoldenTests.HashChunk(gen.Generate(planet, new ChunkCoord(3 - circ / cs, 3, 2))));
+        Assert.Equal(expected, WorldGenerationGoldenTests.HashChunk(gen.Generate(planet, new ChunkCoord(3, 3, 2 + lat / cs))));
+    }
 }

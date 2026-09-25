@@ -23,6 +23,10 @@ internal sealed class SettlementInstance
     public string Name { get; set; } = string.Empty;
     public string Inhabitant { get; set; } = string.Empty;
     public bool OnIsland { get; set; } // stands on a floating sky island rather than the terrain surface
+    public int GroundY { get; set; }   // world Y of structure-local y = 0 (the foundation row)
+    /// <summary>The stamped layout, so protection can tell the settlement's own blocks from whatever else
+    /// stands inside its box (a natural tree in a lane is not the village's — #1659).</summary>
+    public SettlementStructure? Layout { get; set; }
     public List<(string Type, Vector3f Pos)> Markers { get; } = new();
     public HashSet<string> MissionIds { get; } = new();
 }
@@ -88,6 +92,44 @@ internal sealed class MonumentInstance
 /// landing zones). GameServer reaches this state through forwarding properties pointing at the active
 /// world, so several bodies can be resident at once (one per occupied location) with isolated content.
 /// </summary>
+/// <summary>#1821: one far-terrain tile on a world — the last built message and whether an edit invalidated it.</summary>
+internal sealed class FarTerrainTileState
+{
+    public int Version;
+    public bool Dirty = true;
+    public BlocksBeyondTheStars.Networking.Messages.FarTerrainTile? Message;
+}
+
+/// <summary>An abandoned SPS research station on the active world (2026-09, Titas) — re-derived every load.</summary>
+internal sealed class SpsLabInstance
+{
+    public Vector3i Min { get; set; }
+    public Vector3i Max { get; set; }
+    public Vector3f Center { get; set; }
+}
+
+/// <summary>A door a stamped structure asks for, measured on the structure's layout (#1994): the wall axis, the
+/// width of the opening and the world position of its centre — everything the door registry would otherwise
+/// have to re-measure against the world's blocks.</summary>
+internal readonly struct AuthoredDoor
+{
+    public AuthoredDoor(bool axisX, float width, Vector3f centre)
+    {
+        AxisX = axisX;
+        Width = width;
+        Centre = centre;
+    }
+
+    /// <summary>True when the wall runs along X (the passage through it along Z).</summary>
+    public bool AxisX { get; }
+
+    /// <summary>Gap width in blocks along the wall axis.</summary>
+    public float Width { get; }
+
+    /// <summary>The doorway gap's centre in world space, at floor level.</summary>
+    public Vector3f Centre { get; }
+}
+
 internal sealed class LoadedWorld
 {
     public required ServerWorld World { get; init; }
@@ -99,6 +141,9 @@ internal sealed class LoadedWorld
     public List<CombatEntity> PlanetEnemies { get; } = new();
     public List<CombatEntity> Bandits { get; } = new();               // lone robbers + camp guards on this world
     public List<BanditCampInstance> BanditCamps { get; } = new();     // 0..N stamped bandit camps
+    public List<SpsLabInstance> SpsLabs { get; } = new();
+    public GiantWorldState Giants { get; } = new();                   // the colossus, the sandworms and the thumpers (#1998)
+    public SreekmakraState Sreekmakra { get; } = new();                // the one shapeshifter of a Valuma world (2026-09)             // 0..N abandoned SPS research stations (2026-09, Titas)
     public List<MonumentInstance> Monuments { get; } = new();         // 0..N stamped rune monuments
     public List<GameServer.ServerNpc> Npcs { get; } = new();
     public List<GameServer.ServerDoor> Doors { get; } = new();
@@ -108,6 +153,17 @@ internal sealed class LoadedWorld
     public List<GameServer.ServerSpeeder> Speeders { get; } = new(); // deployed hover speeders (materialised per present owner)
     public List<GameServer.ServerNetFragment> NetFragments { get; } = new(); // story net fragments scattered on the surface (P2)
     public List<(string Type, Vector3f Pos)> SettlementMarkers { get; } = new(); // union of EVERY settlement's markers (doors + proximity)
+
+    /// <summary>
+    /// #1986/#1994: the door a stamped structure asks for, by its block cell — the wall it was cut into and
+    /// how wide the opening is, both read off the structure's own layout while it is in hand.
+    /// <para>The door registry used to measure this against the WORLD, which meant 232 block probes across a
+    /// city at every boot and pulled the whole footprint's chunks into memory for 4.8 s. The layout says the
+    /// same thing for free — it is what the blocks were stamped from.</para>
+    /// </summary>
+    public Dictionary<Vector3i, AuthoredDoor> SettlementDoorFits { get; } = new();
+    public List<(int BaseId, string Type, Vector3f Pos)> BaseMarkers { get; } = new(); // #1865: staffed trading posts + boards of planet bases
+    public Queue<int> NpcPathQueue { get; } = new(); // #1866: NPC ids waiting for a path search (one per tick)
     public List<SettlementInstance> Settlements { get; } = new();                 // 0..N settlements on this world
     public List<(string Type, Vector3f Pos)> WreckMarkers { get; } = new();
     public Dictionary<Vector3i, (ushort FloraId, double Timer)> FloraRegrow { get; } = new();
@@ -141,6 +197,16 @@ internal sealed class LoadedWorld
     public long PresenceViewerSignature { get; set; }
     public Dictionary<Vector3i, byte> FluidLevel { get; } = new();
     public HashSet<Vector3i> ActiveFluid { get; } = new();
+
+    /// <summary>#1821: far-terrain tile summaries built on request, by tile index; rebuilt when an edit dirties them.</summary>
+    public Dictionary<(int Tx, int Tz), FarTerrainTileState> FarTiles { get; } = new();
+
+    /// <summary>#1824: woken fluid cells whose neighbourhood reaches into an unloaded chunk. They sit out the
+    /// automaton (it must never generate terrain) until a chunk load makes their neighbourhood whole again.</summary>
+    public HashSet<Vector3i> ParkedFluid { get; } = new();
+
+    /// <summary>#1824: <see cref="ServerWorld.ChunkLoads"/> when the parked set was last re-checked.</summary>
+    public long ParkedFluidCheckedAt { get; set; } = -1;
     public HashSet<Vector3i> FallingFluid { get; } = new(); // flowing cells filled from above (feed a waterfall)
     public HashSet<Vector3i> ActiveGranular { get; } = new(); // loose blocks woken by a mutation (#1319) — transient, never saved
     public int FluidStep { get; set; } // fluid steps so far — lava advances on every second one (#1316)
@@ -204,6 +270,10 @@ internal sealed class LoadedWorld
     public Vector3i CoreChamberCenter { get; set; }
     public bool HasCoreChamber { get; set; }
 
+    // The city world's one walled city (#1793): its world-space footprint (inclusive X/Z bounds), set when the
+    // composer stamps it. The temperature hazard reads it — a roofed cell inside the walls is climate-controlled.
+    public (int MinX, int MinZ, int MaxX, int MaxZ)? CityFootprint { get; set; }
+
     // Per-world simulation timers/counters (so each resident world ticks independently). Weather + time
     // stay global for now (all resident worlds share the sky — a temporary limitation, refined in P7).
     public double CreatureSpawnTimer { get; set; }
@@ -223,6 +293,7 @@ internal sealed class LoadedWorld
     public double SinceGranular { get; set; } // granular settle cadence (#1319) — the fluid interval, own timer
     public double SinceFire { get; set; }
     public double SinceDropSweep { get; set; } // ground drop-packet auto-pickup throttle (#853)
+    public double SinceDropResettle { get; set; } // packets near a player re-check their footing (#1752)
     // These three run once per occupied world each tick, so their accumulate-and-reset throttles MUST be
     // per-world — a single shared field lets whichever world is iterated first reset it before the others
     // reach their interval, starving every world but one of presence/enemy syncs and the void rescue.
@@ -253,6 +324,8 @@ internal sealed class LoadedWorld
     public int CloudColor { get; set; } = 0xEDEFF2;
     public int SkyColor { get; set; } = 0x8CBFF2;
     public int FloraTint { get; set; } = 0xFFFFFF;
+    public int WaterTint { get; set; } = 0x336BD9; // #1758: the water colour of this world (mode 1)
+    public int WaterTintMode { get; set; }         // #1758: 0 classic, 1 tint, 2 rainbow
     public float CloudDensity { get; set; } = 0.45f;
     public bool Breathable { get; set; }
     public bool SpaceSky { get; set; }

@@ -192,12 +192,26 @@ namespace BlocksBeyondTheStars.Client
         public int WindowedWidth = 1600;
         public int WindowedHeight = 900;
 
-        // Default render distance in 16-block chunks (slider range 1–8 in the settings menu). Raised from the old
+        // Default render distance in 16-block chunks (slider range 1–16 in the settings menu). Raised from the old
         // default of 2 (≈32 m — a near, foggy horizon) to 4 (≈64 m) so the world reads farther out of the box; the
         // per-planet/weather haze still scales off this (Sky.ApplyFog), so denser-atmosphere worlds stay hazier.
         // Singleplayer forwards this to the bundled server as the streaming radius (AppShell → --view-distance),
         // and the server now reclaims out-of-range chunks (far-chunk sweep), so the larger radius stays bounded.
+        // This field default is the conservative fallback (browser/tablet first run, a settings file recovered
+        // from scratch); a native desktop first run gets DesktopDefaultViewDistanceChunks instead (Load).
         public int ViewDistanceChunks = 4;
+
+        /// <summary>View distance a native desktop client starts with on a genuine first run.</summary>
+        public const int DesktopDefaultViewDistanceChunks = 8;
+
+        /// <summary>"Far view" (#1820): how far the low-resolution far terrain beyond the streamed chunks reaches, in
+        /// blocks — 0 (off), 512 or 1024. Stored as -1 until resolved: <see cref="Load"/> then picks the platform
+        /// default (native desktop 1024; every browser build and phone/tablet 512) for new AND existing installs, and
+        /// the resolved value is what gets saved from then on.</summary>
+        public int FarViewBlocks = BlocksBeyondTheStars.Client.FarTerrain.FarViewRange.Unset;
+
+        /// <summary>Whether this device gets the lighter far-view default.</summary>
+        public static bool FarViewLightDevice => Application.platform == RuntimePlatform.WebGLPlayer || Application.isMobilePlatform;
 
         /// <summary>Player UI-scale multiplier for the HUD (0.8–1.6, 1 = shipped default). Applied in
         /// <see cref="Apply"/> via <see cref="UiKit.SetUserScale"/>, which divides the HUD canvases'
@@ -466,6 +480,50 @@ namespace BlocksBeyondTheStars.Client
         /// older settings files, which therefore load with an empty list.</summary>
         public List<AvatarOutfit> Outfits = new List<AvatarOutfit>();
 
+        /// <summary>The player's own looks for tools (#1963): base item key → look payload. A list, because
+        /// JsonUtility stores no dictionaries. Sent to the server on join; the server keeps at most
+        /// <c>ToolLook.MaxLooksPerPlayer</c>.</summary>
+        public List<ToolLookSetting> ToolLooks = new List<ToolLookSetting>();
+
+        /// <summary>The preview material the form editor was last left on (#1969), a block key; empty = plain
+        /// stone. Only a convenience of that screen — a form never stores a material.</summary>
+        public string FormEditorMaterial = "";
+
+        public string GetToolLook(string itemKey)
+        {
+            if (ToolLooks != null)
+            {
+                foreach (var look in ToolLooks)
+                {
+                    if (look != null && look.item == itemKey)
+                    {
+                        return look.model ?? string.Empty;
+                    }
+                }
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>Sets or (empty model) removes the look for a tool. False when the limit is reached.</summary>
+        public bool SetToolLook(string itemKey, string model)
+        {
+            ToolLooks ??= new List<ToolLookSetting>();
+            ToolLooks.RemoveAll(l => l == null || l.item == itemKey);
+            if (string.IsNullOrEmpty(model))
+            {
+                return true;
+            }
+
+            if (ToolLooks.Count >= BlocksBeyondTheStars.Shared.State.ToolLook.MaxLooksPerPlayer)
+            {
+                return false;
+            }
+
+            ToolLooks.Add(new ToolLookSetting { item = itemKey, model = model });
+            return true;
+        }
+
         /// <summary>The currently applied look as an outfit named <paramref name="name"/> (a detached copy).</summary>
         public AvatarOutfit CaptureOutfit(string name) => new AvatarOutfit
         {
@@ -508,6 +566,11 @@ namespace BlocksBeyondTheStars.Client
         /// always shows until the tutorial is finished or skipped; this mutes the optional coaching.</summary>
         public bool VegaHints = true;
 
+        /// <summary>#1663: whether VEGA has explained the flight chart (M) once — that clicking a disc there
+        /// sets the waypoint the radar and autopilot follow. A client-side one-shot UI lesson, not world
+        /// progress, so it lives here rather than in a server milestone.</summary>
+        public bool ChartWaypointHintShown;
+
         /// <summary>Show floating health bars over enemies and creatures in combat (#692) — planet surface
         /// and space flight alike. Purely cosmetic (the values are replicated either way); off hides them.</summary>
         public bool ShowEnemyHealthBars = true;
@@ -520,6 +583,15 @@ namespace BlocksBeyondTheStars.Client
 
         /// <summary>Let VEGA remind you to take a break after a long unbroken session, repeating each interval.</summary>
         public bool PlaytimeReminder = true;
+
+        // Textures (#1952). The local pack is the player's own "use for me" folder; world textures are what an
+        // admin published for everyone in a save. Both default on; the second switch is the safety valve against
+        // a world texture someone should not have published.
+        /// <summary>Apply the local texture pack (<c>texture_overrides/</c>).</summary>
+        public bool UseTexturePack = true;
+
+        /// <summary>Show the textures an admin published for the current world.</summary>
+        public bool ShowWorldTextures = true;
 
         /// <summary>Minutes of continuous session play between break reminders (also the first reminder's delay).</summary>
         public int ReminderMinutes = 60;
@@ -853,7 +925,17 @@ namespace BlocksBeyondTheStars.Client
                         settings.MusicMode = MusicMode.Synth;
                     }
                 }
+                else
+                {
+                    // A native desktop client starts with a far horizon (8 of the 1–16 slider). The browser and
+                    // tablets keep the conservative field default (4, phone/tablet browsers 3 above).
+                    settings.ViewDistanceChunks = DesktopDefaultViewDistanceChunks;
+                }
             }
+
+            // #1820: resolve the far view — an unset value (every install from before, and a fresh one) takes the
+            // platform default; anything else snaps to a supported step.
+            settings.FarViewBlocks = BlocksBeyondTheStars.Client.FarTerrain.FarViewRange.Normalize(settings.FarViewBlocks, FarViewLightDevice);
 
             bool tokenChanged = false;
             if (string.IsNullOrEmpty(settings.PlayerToken))
@@ -1243,5 +1325,12 @@ namespace BlocksBeyondTheStars.Client
                 e == t || string.Equals(e, t, System.StringComparison.OrdinalIgnoreCase));
             return removed > 0;
         }
+    }
+    /// <summary>One entry of <see cref="ClientSettings.ToolLooks"/>.</summary>
+    [System.Serializable]
+    public sealed class ToolLookSetting
+    {
+        public string item;
+        public string model;
     }
 }

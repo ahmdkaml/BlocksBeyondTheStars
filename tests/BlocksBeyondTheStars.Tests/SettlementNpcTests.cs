@@ -77,11 +77,14 @@ public sealed class SettlementNpcTests : IDisposable
             foreach (var npc in npcs)
             {
                 // Every NPC has a known role and stands exactly on a matching settlement marker.
-                string markerType = npc.Role switch
+                // #1887: a settler lives in a bed and starts at its post (greenhouse, workshop, tavern) or at the
+                // settlers' spot nearest to home.
+                string[] markerTypes = npc.Role switch
                 {
-                    "vendor" => "vendor",
-                    "quartermaster" => "mission_board",
-                    "settler" => "npc",
+                    "vendor" => new[] { "vendor", "doctor", "grocer", "arms_dealer", "sage", "tamer", "blockfarmer" }, // 2026-09: trading professions
+                    "quartermaster" => new[] { "mission_board" },
+                    "settler" => new[] { "npc", "greenhouse", "workshop", "tavern", "vendor", "mission_board", "streamer", "reporter" },
+                    "guardian" => new[] { "guard_post" },
                     _ => throw new Xunit.Sdk.XunitException($"Unexpected NPC role '{npc.Role}'."),
                 };
 
@@ -90,7 +93,7 @@ public sealed class SettlementNpcTests : IDisposable
                 // floored Y — an NPC hovering half a block over the floor is the #711 regression.
                 Assert.Contains(
                     server.SettlementMarkers,
-                    m => m.Type == markerType
+                    m => markerTypes.Contains(m.Type)
                          && System.Math.Abs(m.Pos.X - npc.Home.X) < 0.001f
                          && System.Math.Abs(m.Pos.Z - npc.Home.Z) < 0.001f
                          && System.Math.Abs(System.Math.Floor(m.Pos.Y) - npc.Home.Y) < 0.001f);
@@ -158,6 +161,8 @@ public sealed class SettlementNpcTests : IDisposable
                 bool anyMoved = false;
                 for (int i = 0; i < 60; i++)
                 {
+                    // #1867: midday at the settlement — at dusk the residents walk off to their chairs and beds.
+                    server.SetLocalDayFractionForTest(0.45, p.State.Position.X);
                     server.TickForTest(0.5);
                     foreach (var n in server.NpcSnapshots)
                     {
@@ -181,6 +186,40 @@ public sealed class SettlementNpcTests : IDisposable
         }
 
         throw new Xunit.Sdk.XunitException("No inhabited settlement had a strolling NPC across 80 seeds.");
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public void AtNight_TheVillagersGoToBed_InTheirFurnishedHouses()
+    {
+        // #1867 (Marcel 2026-09-13: "villages too"): every furnished settlement house has a bed (#1828), and at night
+        // the people who live there walk to one and lie down.
+        for (long seed = 1; seed <= 80; seed++)
+        {
+            var server = Start(seed, out var repo);
+            using (repo)
+            {
+                if (!server.HasSettlement || server.SettlementRuined || server.NpcCount == 0)
+                {
+                    continue;
+                }
+
+                var p = server.AddLocalPlayer("Visitor");
+                p.State.AboardShip = false;
+                p.State.Position = server.NpcSnapshots[0].Home;
+                for (int i = 0; i < 360; i++)
+                {
+                    server.SetLocalDayFractionForTest(0.9, p.State.Position.X);
+                    server.TickForTest(0.25);
+                    if (server.NpcSnapshots.Any(n => server.NpcRoutineForTest(n.Id).Pose == 2))
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+
+        throw new Xunit.Sdk.XunitException("No villager went to bed at night across 80 seeds.");
     }
 
     public void Dispose()

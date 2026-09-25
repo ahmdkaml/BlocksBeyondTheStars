@@ -41,6 +41,15 @@ public sealed class BlockDefinition
     /// <summary>Items produced when this block is mined.</summary>
     public List<ItemAmount> Drops { get; set; } = new();
 
+    /// <summary>
+    /// A weighted table from which ONE entry is drawn when the block is mined, on top of <see cref="Drops"/>
+    /// (school club wave 3, #1761: scrap yields "whatever is inside"). The draw is a hash of the cell and the
+    /// world seed, never a random stream, so a block re-placed on the same cell yields the same thing again —
+    /// nothing to farm by placing and breaking. An entry with an empty item is the "nothing" outcome. Null or
+    /// empty = the classic fixed drops only.
+    /// </summary>
+    public List<WeightedDrop>? RandomDrops { get; set; }
+
     // --- Optional render hints (data-driven appearance for custom materials) ---
     // When null the client falls back to its built-in per-key look; when set they let a
     // material authored in the Material Editor render correctly without any code change.
@@ -56,6 +65,23 @@ public sealed class BlockDefinition
 
     /// <summary>Base RGB tint (0xRRGGBB) used for the procedural texture + color fallback, or null for the built-in palette.</summary>
     public int? Color { get; set; }
+
+    /// <summary>
+    /// What the block's tile shows (#1900): <c>"material"</c> (a surface — stone, planks, steel; the default) or
+    /// <c>"picture"</c> (a drawing of the whole object — the bed seen from above, a flower pot). A picture only fits
+    /// the face it was drawn for, so a picture block that renders as a non-cube form declares <see cref="Faces"/>.
+    /// Every block the server stamps with a form must say which one it is (a content test holds that).
+    /// </summary>
+    public string? TileKind { get; set; }
+
+    /// <summary>Texture slots per part and side of the block's built-in form (#1900), see
+    /// <see cref="BlockFaceTexture"/>. Null = every face shows the slice of the block's own tile it covers.</summary>
+    public List<BlockFaceTexture>? Faces { get; set; }
+
+    /// <summary>Animation of the block's OFFICIAL texture (#1957): the speed of the frames bundled as
+    /// <c>Resources/textures/&lt;key&gt;__anim.bytes</c> (frames 2..n; frame 1 is the ordinary tile). Null = a still
+    /// tile. <c>tools/merge_texture.py</c> writes it when it adopts an animated texture.</summary>
+    public BlockAnimation? Anim { get; set; }
 
     /// <summary>
     /// Whether this block may be re-coloured by the player (the always-available "Dye"/"Glow" crafting
@@ -114,4 +140,11 @@ public sealed class BlockDefinition
 
     /// <summary>Dense numeric id assigned at load time; what chunks actually store.</summary>
     public BlockId NumericId { get; internal set; }
+}
+
+/// <summary>How a block's official texture animates (#1957).</summary>
+public sealed class BlockAnimation
+{
+    /// <summary>Frames per second — one of <c>TextureTiles.AllowedFps</c> (2, 4, 8, 12).</summary>
+    public int Fps { get; set; }
 }

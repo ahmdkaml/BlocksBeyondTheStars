@@ -30,6 +30,37 @@ namespace BlocksBeyondTheStars.Client
         public int Port { get; private set; } = DefaultPort;
         public bool IsRunning => _process != null && !_process.HasExited;
 
+        // Set from the stdout reader thread when the server prints its "started on port" line — the
+        // moment it accepts connections. Volatile: read on the main thread by GameBootstrap's retry loop.
+        private volatile bool _ready;
+
+        /// <summary>True once the spawned server has reported that it listens (its startup log line). A
+        /// fresh world can take 15 s+ to generate first; this is what lets the client connect the instant the
+        /// server is there instead of guessing with a fixed retry budget (see <see cref="ConnectRetryPolicy"/>).</summary>
+        public bool Ready => _ready;
+
+        // #1988: the server reports every boot pass as "[boot] 4/12 landing pads (4120 ms)". Read off the same
+        // stdout reader as the ready line, this is how far the world actually is — the loading bar used to be a
+        // timer with no relation to the work.
+        private volatile int _bootStage;
+        private volatile int _bootStages;
+
+        /// <summary>How far the spawned server's boot has come, 0..1 — or a negative value while it has not
+        /// reported a pass yet (an older server, or the very first moments). Snaps to 1 with <see cref="Ready"/>.</summary>
+        public float BootProgress
+        {
+            get
+            {
+                if (_ready)
+                {
+                    return 1f;
+                }
+
+                int stages = _bootStages;
+                return stages > 0 ? Math.Min(1f, _bootStage / (float)stages) : -1f;
+            }
+        }
+
         /// <summary>Root folder holding the singleplayer save worlds (one subfolder per world).</summary>
         public static string SavesRoot => Path.Combine(AppPaths.Root, "singleplayer-saves");
 
@@ -138,6 +169,10 @@ namespace BlocksBeyondTheStars.Client
             {
                 return true;
             }
+
+            _ready = false; // a previous run's ready flag must not pass as this one's (the shell gates the loading screen on it)
+            _bootStage = 0;
+            _bootStages = 0;
 
             Port = port;
             if (string.IsNullOrWhiteSpace(worldName))
@@ -258,8 +293,30 @@ namespace BlocksBeyondTheStars.Client
                 return false;
             }
 
+            _ready = false;
             var proc = new Process { StartInfo = _pendingPsi, EnableRaisingEvents = true };
-            proc.OutputDataReceived += (_, e) => { if (!string.IsNullOrEmpty(e.Data)) Debug.Log($"[server] {e.Data}"); };
+            proc.OutputDataReceived += (_, e) =>
+            {
+                if (string.IsNullOrEmpty(e.Data))
+                {
+                    return;
+                }
+
+                Debug.Log($"[server] {e.Data}");
+
+                // #1988: "[boot] 4/12 landing pads (4120 ms)" — how far the world build has come.
+                if (LoadingHandoffPolicy.TryParseBootStage(e.Data, out int stage, out int stages))
+                {
+                    _bootStages = stages;
+                    _bootStage = stage;
+                }
+
+                // GameServer.Start's final line: "Server '<name>' started on port <n>, world '<w>' (...)".
+                if (!_ready && e.Data.Contains("started on port"))
+                {
+                    _ready = true;
+                }
+            };
             proc.ErrorDataReceived += (_, e) => { if (!string.IsNullOrEmpty(e.Data)) Debug.LogWarning($"[server] {e.Data}"); };
 
             try
@@ -315,6 +372,7 @@ namespace BlocksBeyondTheStars.Client
             {
                 _process.Dispose();
                 _process = null;
+                _ready = false;
             }
         }
 

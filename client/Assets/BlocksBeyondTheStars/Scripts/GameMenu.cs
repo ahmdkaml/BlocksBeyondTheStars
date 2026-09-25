@@ -1,6 +1,7 @@
 // Blocks Beyond the Stars — Copyright (c) 2026 Justus Dütscher & Marcel Dütscher (JuMaVe Games)
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -70,6 +71,17 @@ namespace BlocksBeyondTheStars.Client
                     && !Game.MenuInputHandledThisFrame)
                 {
                     Game.MarkMenuInputHandled();
+                    if (TextureSubmitDialog.OwnsCancel)
+                    {
+                        return; // the submit dialog (#1965) takes this press
+                    }
+
+                    if (_textureEditor != null)
+                    {
+                        CloseTextureEditor(); // back to the settings list, not out of the menu (#1959)
+                        return;
+                    }
+
                     SetOpen(false);
                     return;
                 }
@@ -103,7 +115,8 @@ namespace BlocksBeyondTheStars.Client
                 _ui?.Hide();
                 _arcadeUi?.Hide();
                 EnsureWikiUi();
-                _wikiUi.Show();
+                _wikiUi.Show(_wikiChapter);
+                _wikiChapter = null; // consumed by this one call (see the field)
                 return;
             }
 
@@ -134,8 +147,14 @@ namespace BlocksBeyondTheStars.Client
         /// as the Tab key does (at the current tab), so a marketing shot can show the Tab menu over the cockpit.</summary>
         public void SetMenuOpen(bool open) => SetOpen(open);
 
-        /// <summary>Opens the in-game Wiki ("Codex") screen — an always-available menu point.</summary>
-        public void OpenWiki() { _browser = BrowserScreen.Wiki; SetOpen(true); }
+        /// <summary>Codex chapter a deep link asked for (#1843), handed to the FIRST <c>WikiUI.Show</c> after
+        /// <see cref="OpenWiki"/> and cleared — Show runs every frame while the Codex is open, so a sticky
+        /// value would drag the reader back each time they clicked another chapter.</summary>
+        private string _wikiChapter;
+
+        /// <summary>Opens the in-game Wiki ("Codex") screen — an always-available menu point.
+        /// <paramref name="chapter"/> deep-links to a chapter id ("discoveries"); null keeps the last one.</summary>
+        public void OpenWiki(string chapter = null) { _wikiChapter = chapter; _browser = BrowserScreen.Wiki; SetOpen(true); }
 
         /// <summary>Opens the Arcade collection screen — an always-available menu point.</summary>
         public void OpenArcade() { Game?.MarkArcadeSeen(); _browser = BrowserScreen.Arcade; SetOpen(true); }
@@ -196,6 +215,7 @@ namespace BlocksBeyondTheStars.Client
                 Game.MenuTabKey = null; // the music director's "crafting/tech tab open" signal (#1174)
                 _browser = BrowserScreen.None;
                 CloseFaceEditor(); // the modal face editor is owned by the menu — don't let it linger after close
+                CloseTextureEditor();
                 _ui?.OnMenuClosed(); // #1072: a located station gets a through-wall marker once the menu is gone
                 _ui?.Hide();
                 _wikiUi?.Hide();
@@ -207,6 +227,7 @@ namespace BlocksBeyondTheStars.Client
         private void SwitchTo(Tab tab)
         {
             CloseFaceEditor(); // navigating to any tab dismisses the (Character-tab) face editor overlay
+            CloseTextureEditor();
             _tab = tab;
             Game.MenuTabKey = tab.ToString().ToLowerInvariant(); // music director: crafting / tech beds (#1174)
             if (tab == Tab.Map)
@@ -389,6 +410,190 @@ namespace BlocksBeyondTheStars.Client
                 GetAppearanceColor, SetAppearanceColor);
             _faceEditor.PreviewState = () => AppearanceSubjects.Snapshot(
                 GetAppearanceColor, () => Settings.FacePixels, part => Settings.GetBodyPaint(part));
+            _faceEditor.OutfitNames = OutfitNames;
+            _faceEditor.OnWearOutfit = WearOutfit;
+            _faceEditor.OnSaveOutfit = SaveOutfit;
+            _faceEditor.OnRenameOutfit = RenameOutfit;
+            _faceEditor.OnDeleteOutfit = DeleteOutfit;
+        }
+
+        // ── outfits ──────────────────────────────────────────────────────────────────────────────
+        //
+        // Saved looks used to be a main-menu affair: you could keep eight of them in the Avatar Designer
+        // and there was no way to put one on without leaving the world. They live in the same settings
+        // file; the difference in here is that wearing one is immediate and has to reach everyone else,
+        // which the appearance send queue above already paces (a whole outfit is five payloads, so the
+        // last painting lands on other screens about ten seconds later — the local figure changes at once).
+
+        private string L(string key) => Game?.Localizer?.Get(key) ?? key;
+
+        /// <summary>The saved outfits' names, in order — the editor's outfit column asks for these.</summary>
+        public List<string> OutfitNames()
+        {
+            var names = new List<string>();
+            if (Settings?.Outfits == null)
+            {
+                return names;
+            }
+
+            foreach (var outfit in Settings.Outfits)
+            {
+                names.Add(outfit.Name ?? string.Empty);
+            }
+
+            return names;
+        }
+
+        /// <summary>Puts a saved look on: colours, face and all four paintings at once, each down its normal
+        /// path so the figure, the settings file and the other players all end up agreeing.</summary>
+        public string WearOutfit(int index)
+        {
+            if (Settings?.Outfits == null || index < 0 || index >= Settings.Outfits.Count)
+            {
+                return string.Empty;
+            }
+
+            var outfit = Settings.Outfits[index];
+            Settings.ApplyOutfit(outfit);
+            ApplyAppearance();                  // colours: figure + save + one message
+            ApplyFace(outfit.FacePixels);
+            for (int part = 0; part < BodyPaintKit.PartCount; part++)
+            {
+                ApplyBodyPaint(part, outfit.GetBodyPaint(part));
+            }
+
+            return L("ui.avatar.outfit_worn").Replace("{name}", outfit.Name ?? string.Empty);
+        }
+
+        /// <summary>Saves what the player is wearing under a name — overwriting the outfit that already
+        /// carries it (case-insensitively), otherwise adding one up to the cap.</summary>
+        public string SaveOutfit(string name)
+        {
+            if (Settings == null)
+            {
+                return string.Empty;
+            }
+
+            name = (name ?? string.Empty).Trim();
+            if (name.Length == 0)
+            {
+                return L("ui.avatar.need_name");
+            }
+
+            Settings.Outfits ??= new List<AvatarOutfit>();
+            int existing = Settings.Outfits.FindIndex(o => string.Equals(o.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (existing >= 0)
+            {
+                Settings.Outfits[existing] = Settings.CaptureOutfit(Settings.Outfits[existing].Name);
+                Settings.Save();
+                return L("ui.avatar.outfit_updated").Replace("{name}", Settings.Outfits[existing].Name);
+            }
+
+            if (Settings.Outfits.Count >= ClientSettings.MaxOutfits)
+            {
+                return L("ui.avatar.outfit_limit").Replace("{max}", ClientSettings.MaxOutfits.ToString());
+            }
+
+            Settings.Outfits.Add(Settings.CaptureOutfit(name));
+            Settings.Save();
+            return L("ui.avatar.outfit_saved").Replace("{name}", name);
+        }
+
+        /// <summary>Renames the outfit the player last clicked (its pixels stay put).</summary>
+        public string RenameOutfit(int index, string name)
+        {
+            if (Settings?.Outfits == null)
+            {
+                return string.Empty;
+            }
+
+            if (index < 0 || index >= Settings.Outfits.Count)
+            {
+                return L("ui.avatar.outfit_select_first");
+            }
+
+            name = (name ?? string.Empty).Trim();
+            if (name.Length == 0)
+            {
+                return L("ui.avatar.need_name");
+            }
+
+            int clash = Settings.Outfits.FindIndex(o => string.Equals(o.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (clash >= 0 && clash != index)
+            {
+                return L("ui.avatar.outfit_name_taken").Replace("{name}", Settings.Outfits[clash].Name);
+            }
+
+            Settings.Outfits[index].Name = name;
+            Settings.Save();
+            return L("ui.avatar.outfit_renamed").Replace("{name}", name);
+        }
+
+        /// <summary>Drops a saved outfit. What the player is wearing is a separate copy, so deleting even the
+        /// outfit they have on changes nothing about the figure — which is why this needs no confirmation.</summary>
+        public string DeleteOutfit(int index)
+        {
+            if (Settings?.Outfits == null || index < 0 || index >= Settings.Outfits.Count)
+            {
+                return string.Empty;
+            }
+
+            string name = Settings.Outfits[index].Name ?? string.Empty;
+            Settings.Outfits.RemoveAt(index);
+            Settings.Save();
+            return L("ui.avatar.outfit_deleted").Replace("{name}", name);
+        }
+
+        // ── texture editor in a world (#1959) ────────────────────────────────────────────────────
+
+        private TextureEditor _textureEditor;
+
+        /// <summary>True while the texture editor overlays the menu — the tab screen's shortcuts stand down.</summary>
+        public bool TextureEditorOpen => _textureEditor != null;
+
+        /// <summary>Opens the texture editor over the menu. Everything the main-menu editor can do works here too
+        /// (paint, use for me, export, submit); a world admin additionally gets "publish for everyone".</summary>
+        public void OpenTextureEditor()
+        {
+            if (_textureEditor != null || Game == null)
+            {
+                return;
+            }
+
+            var go = new GameObject("TextureEditor");
+            go.transform.SetParent(transform, false);
+            _textureEditor = go.AddComponent<TextureEditor>();
+            _textureEditor.Shell = FindAnyObjectByType<AppShell>(); // settings + the palette list's icons
+            _textureEditor.WorldHost = new WorldTextureHost(Game);
+            _textureEditor.OnClose = CloseTextureEditor;
+        }
+
+        private void CloseTextureEditor()
+        {
+            if (_textureEditor != null)
+            {
+                Destroy(_textureEditor.gameObject);
+                _textureEditor = null;
+            }
+        }
+
+        /// <summary>What the running world adds to the editor: its content and the publish route.</summary>
+        private sealed class WorldTextureHost : ITextureEditorWorldHost
+        {
+            private readonly GameBootstrap _game;
+
+            public WorldTextureHost(GameBootstrap game)
+            {
+                _game = game;
+            }
+
+            public BlocksBeyondTheStars.Shared.Content.GameContent Content => _game.Content;
+
+            public bool CanPublish => _game.CanPublishWorldTextures;
+
+            public void Publish(string key, byte[][] frames, int fps) => _game.Network?.SendPublishWorldTexture(key, frames, fps);
+
+            public void Unpublish(string key) => _game.Network?.SendRemoveWorldTexture(key);
         }
 
         /// <summary>Kept for the older entry points (and any host that only wants the face): the appearance
@@ -470,8 +675,46 @@ namespace BlocksBeyondTheStars.Client
 
         /// <summary>Sends the next queued appearance payload if the rate-limit window is open. Called from the
         /// menu's Update, so a queue left behind by a closed editor still drains.</summary>
+        private readonly Queue<(string Item, string Model)> _pendingToolLooks = new Queue<(string, string)>();
+        private bool _toolLooksQueued;
+
+        /// <summary>Tool looks (#1963) are edited in the main menu and announced once per world entry. They share the
+        /// server's appearance throttle, so they ride this queue — after the face and the paintings, and only from
+        /// a few seconds after the join, whose own face/painting sends may already have used the first window.</summary>
+        private void QueueToolLooksOnce()
+        {
+            if (_toolLooksQueued || Game == null || string.IsNullOrEmpty(Game.LocalPlayerId) || Settings?.ToolLooks == null)
+            {
+                return;
+            }
+
+            _toolLooksQueued = true;
+            foreach (var look in Settings.ToolLooks)
+            {
+                if (look != null && !string.IsNullOrEmpty(look.item) && !string.IsNullOrEmpty(look.model))
+                {
+                    _pendingToolLooks.Enqueue((look.item, look.model));
+                }
+            }
+
+            if (_pendingToolLooks.Count > 0)
+            {
+                _nextAppearanceSend = System.Math.Max(_nextAppearanceSend, Time.unscaledTimeAsDouble + 2.5);
+            }
+        }
+
         private void PumpAppearanceQueue()
         {
+            QueueToolLooksOnce();
+            if (_pendingAppearance.Count == 0 && _pendingToolLooks.Count > 0 && Game?.Network != null
+                && Time.unscaledTimeAsDouble >= _nextAppearanceSend)
+            {
+                var (item, model) = _pendingToolLooks.Dequeue();
+                _nextAppearanceSend = Time.unscaledTimeAsDouble + AppearanceSendInterval;
+                Game.Network.SendToolLook(item, model);
+                return;
+            }
+
             if (_pendingAppearance.Count == 0 || Game?.Network == null || Time.unscaledTimeAsDouble < _nextAppearanceSend)
             {
                 return;

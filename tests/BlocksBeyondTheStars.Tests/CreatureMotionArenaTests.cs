@@ -672,4 +672,261 @@ public sealed class CreatureMotionArenaTests : IDisposable
                 "a swimmer must never leave its water body — the old gate read the ledge above as its dry feet (#1367)");
         }
     }
+
+    // ---------------- a moat the PLAYER dug is water too (#1697) ----------------
+
+    /// <summary>Builds a solid plateau and cuts a trench through it along Z, filled with
+    /// <paramref name="depth"/> cells of water. Returns the Y a body walks on atop the plateau; the topmost
+    /// water cell is one below it. Nothing here is known to the generator — this is a hand-built moat,
+    /// exactly what a player digs around a base.</summary>
+    private int BuildFloodedMoat(SvGameServer server, int cx, int cz, int r, int padY, int depth)
+    {
+        var water = _content.GetBlock("water")!.NumericId;
+        for (int dy = 0; dy <= depth; dy++)
+        {
+            BuildPad(server, cx, cz, r, padY + dy);
+        }
+
+        for (int dz = -r; dz <= r; dz++)
+            for (int dx = -1; dx <= 1; dx++)
+                for (int dy = 1; dy <= depth; dy++)
+                {
+                    server.World.SetBlock(new Vector3i(cx + dx, padY + dy, cz + dz), water);
+                }
+
+        return padY + depth + 1; // the walking surface of the banks
+    }
+
+    /// <summary>The report this came from: a player dug a wide moat around her spaceport, filled it by hand,
+    /// and the attacking animals walked straight across the surface — "they do a Jesus impression here". The
+    /// depth gate asked the GENERATOR, which knows nothing about a trench a player dug, so a flooded moat read
+    /// as depth 0 and was not water at all.</summary>
+    [Fact]
+    public void AWalker_IsStoppedByAMoatTheGeneratorNeverMade()
+    {
+        var server = Started(out var repo);
+        using (repo)
+        {
+            Force(server, CreatureHabitat.Land, legs: 4, LocomotionStyle.Grazer);
+            int cx = 1200, cz = 1200;
+            int padY = MaxTopY(server, cx, cz, 12) + 8;
+            int bankY = BuildFloodedMoat(server, cx, cz, 10, padY, depth: 3);
+
+            string id = server.SpawnCreatureAtForTest(new Vector3f(cx - 4.5f, bankY, cz + 0.5f));
+
+            Assert.True(server.TerrainStepBlockedForTest(id, new Vector3f(cx + 0.5f, bankY, cz + 0.5f)),
+                "a hand-filled moat three blocks deep must be a wall to a land walker, exactly like a generated pond");
+        }
+    }
+
+    /// <summary>…but wading still works: one cell of water is a puddle, not a swim, and walling animals out of
+    /// every shallow pool would be a different bug.</summary>
+    [Fact]
+    public void AWalker_StillWadesThroughAHandBuiltPuddle()
+    {
+        var server = Started(out var repo);
+        using (repo)
+        {
+            Force(server, CreatureHabitat.Land, legs: 4, LocomotionStyle.Grazer);
+            int cx = 1400, cz = 1400;
+            int padY = MaxTopY(server, cx, cz, 12) + 8;
+            int bankY = BuildFloodedMoat(server, cx, cz, 10, padY, depth: 1);
+
+            string id = server.SpawnCreatureAtForTest(new Vector3f(cx - 4.5f, bankY, cz + 0.5f));
+
+            Assert.False(server.TerrainStepBlockedForTest(id, new Vector3f(cx + 0.5f, bankY, cz + 0.5f)),
+                "one cell of water is a puddle to wade through, not a moat");
+        }
+    }
+
+    /// <summary>#1862: a gas-sac LAND grazer is a hoverer, and hoverers were exempt from the terrain gate — so it
+    /// drifted over a two-block wall and across a moat into a walled base. It is gated as a walker now: one block
+    /// up, three down, no water deeper than a puddle. An AIR hoverer keeps its freedom — it is above the walls.</summary>
+    [Fact]
+    public void LandHoverer_IsWalledByATwoBlockLedge_AndAMoat_LikeAWalker_AnAirHovererIsNot()
+    {
+        var server = Started(out var repo);
+        using (repo)
+        {
+            var sp = Force(server, CreatureHabitat.Land, legs: 2, LocomotionStyle.Drifter, gasSac: true);
+            Assert.Equal(MotionClass.Hoverer, CreatureMotion.ClassOf(sp));
+
+            // A two-block ledge on a pad.
+            const int cx = 2000, cz = 2000;
+            int padY = MaxTopY(server, cx, cz, 10) + 8;
+            BuildPad(server, cx, cz, 8, padY);
+            BuildLedge(server, cx, cz, 8, padY, fromDx: 1, height: 2);
+            string atLedge = server.SpawnCreatureAtForTest(new Vector3f(cx - 0.5f, padY + 1, cz + 0.5f));
+            var ontoLedge = new Vector3f(cx + 1.5f, padY + 1, cz + 0.5f);
+            Assert.True(server.TerrainStepBlockedForTest(atLedge, ontoLedge), "a two-block ledge is a wall to a floating land grazer");
+
+            // A moat two deep, and a puddle one deep.
+            const int mx = 2200, mz = 2200;
+            int moatBankY = BuildFloodedMoat(server, mx, mz, 10, MaxTopY(server, mx, mz, 12) + 8, depth: 2);
+            string atMoat = server.SpawnCreatureAtForTest(new Vector3f(mx - 4.5f, moatBankY, mz + 0.5f));
+            var acrossMoat = new Vector3f(mx + 0.5f, moatBankY, mz + 0.5f);
+            Assert.True(server.TerrainStepBlockedForTest(atMoat, acrossMoat), "a moat two deep is a wall to a floating land grazer");
+
+            const int px = 2400, pz = 2400;
+            int puddleBankY = BuildFloodedMoat(server, px, pz, 10, MaxTopY(server, px, pz, 12) + 8, depth: 1);
+            string atPuddle = server.SpawnCreatureAtForTest(new Vector3f(px - 4.5f, puddleBankY, pz + 0.5f));
+            Assert.False(server.TerrainStepBlockedForTest(atPuddle, new Vector3f(px + 0.5f, puddleBankY, pz + 0.5f)),
+                "a one-deep puddle is waded, by a floating grazer as by a walker");
+
+            // The same bodies as an AIR hoverer: nothing on the ground gates them.
+            sp.Habitat = CreatureHabitat.Air;
+            Assert.Equal(MotionClass.Hoverer, CreatureMotion.ClassOf(sp));
+            Assert.False(server.TerrainStepBlockedForTest(atLedge, ontoLedge), "an air hoverer drifts over a ledge");
+            Assert.False(server.TerrainStepBlockedForTest(atMoat, acrossMoat), "an air hoverer drifts over a moat");
+        }
+    }
+
+    /// <summary>A player found one of her flying animals asleep UNDER the surface of her moat: an air creature
+    /// measured its altitude band from "the ground", and the ground under a pool is its bed.</summary>
+    [Fact]
+    public void AHoverer_RidesAboveAHandBuiltPool_NotInsideIt()
+    {
+        var server = Started(out var repo);
+        using (repo)
+        {
+            Force(server, CreatureHabitat.Air, legs: 0, LocomotionStyle.Drifter, gasSac: true, hover: 2f);
+            int cx = 1600, cz = 1600;
+            int padY = MaxTopY(server, cx, cz, 12) + 8;
+            int bankY = BuildFloodedMoat(server, cx, cz, 10, padY, depth: 3);
+            float waterTop = bankY - 1; // the topmost water cell
+
+            // Creatures only step while somebody is there to see them: stand a player on the bank.
+            var p = server.AddLocalPlayer("Watcher");
+            p.State.AboardShip = false;
+            p.State.Position = new Vector3f(cx - 4.5f, bankY, cz + 0.5f);
+
+            // Start it low over the middle of the moat, where the old code parked it just above the bed.
+            string id = server.SpawnCreatureAtForTest(new Vector3f(cx + 0.5f, waterTop, cz + 0.5f));
+            var c = server.Creatures.First(x => x.Id == id);
+            for (int i = 0; i < 80; i++)
+            {
+                server.Tick(0.1);
+            }
+
+            Assert.True(c.Position.Y > waterTop + 0.5f,
+                $"a hoverer over a hand-built pool must ride above the water (y={c.Position.Y}, surface={waterTop})");
+        }
+    }
+
+    // ---------------- #1854: a gas-sac LAND grazer sinks into floors and rock ----------------
+
+    /// <summary>A land species with a gas sac is a hoverer that rides 0.8 above its feet cell — and its
+    /// vertical-life wave can be a full block (the glider cadence). At the trough the target sat 0.2 INSIDE
+    /// the floor, floor() moved the reference cell into the block, and from there the rest probe walked the
+    /// animal down a cell at a time: the reported 6.6023 on a concrete floor with its top at 7. Placed 0.2
+    /// below a floor it comes up onto it, and the wave never dips it back in.</summary>
+    [Fact]
+    public void LandHoverer_PlacedJustBelowAFloor_RisesOntoIt_AndNeverDipsBackIn()
+    {
+        var server = Started(out var repo);
+        using (repo)
+        {
+            var p = server.AddLocalPlayer("Watcher");
+            p.State.AboardShip = false;
+            Force(server, CreatureHabitat.Land, legs: 2, LocomotionStyle.Glider, gasSac: true); // Glider: the full-block wave
+
+            const int cx = 200, cz = 200;
+            int padY = MaxTopY(server, cx, cz, 8) + 8;
+            BuildPad(server, cx, cz, 6, padY);
+            p.State.Position = new Vector3f(cx + 20, padY + 1, cz);
+            string id = server.SpawnCreatureAtForTest(new Vector3f(cx + 0.5f, padY + 0.8f, cz + 0.5f)); // feet cell = the floor block
+            server.PauseCreatureForTest(id, 60f);
+
+            for (int i = 0; i < 300; i++)
+            {
+                server.TickForTest(0.1);
+                var c = Assert.Single(server.Creatures, x => x.Id == id);
+                if (i >= 5)
+                {
+                    Assert.True(c.Position.Y >= padY + 1 - 1e-3f, $"its feet dipped into the floor: Y {c.Position.Y:F3} at tick {i}");
+                }
+            }
+        }
+    }
+
+    /// <summary>The other half of #1854, "a creature in a cave keeps sinking into the rock": under a low
+    /// ceiling the probe found no standable cell, the fallback answered the creature's own cell, and the wave
+    /// took it down a block per period (−7.2, −8.4, −9.1, −11.2 in the reports). A gas sac that is in the
+    /// rock above a cave comes back down INTO the cave — through the rock, onto the nearest real floor —
+    /// instead of sinking further or being evicted as boxed in, and it stays there.</summary>
+    [Fact]
+    public void LandHoverer_InTheRockOverACave_ComesBackIntoTheCave_NotDeeper()
+    {
+        var server = Started(out var repo);
+        using (repo)
+        {
+            var p = server.AddLocalPlayer("Watcher");
+            p.State.AboardShip = false;
+            Force(server, CreatureHabitat.Land, legs: 2, LocomotionStyle.Drifter, gasSac: true);
+
+            const int cx = 240, cz = -240;
+            int padY = MaxTopY(server, cx, cz, 10) + 8;
+            BuildPad(server, cx, cz, 8, padY);
+            var stone = _content.GetBlock("stone")!.NumericId;
+            // A 15×15 block of rock sixteen layers tall on the pad, with a 5×5, 3-high cave hollowed out of its base.
+            for (int dx = -7; dx <= 7; dx++)
+            {
+                for (int dz = -7; dz <= 7; dz++)
+                {
+                    for (int dy = 1; dy <= 16; dy++)
+                    {
+                        bool cave = Math.Abs(dx) <= 2 && Math.Abs(dz) <= 2 && dy <= 3;
+                        if (!cave)
+                        {
+                            server.World.SetBlock(new Vector3i(cx + dx, padY + dy, cz + dz), stone);
+                        }
+                    }
+                }
+            }
+
+            int caveFloor = padY + 1; // the feet level inside the cave
+            p.State.Position = new Vector3f(cx + 20, padY + 1, cz);
+            // In the rock: five cells above the cave floor, eleven below the top of the block.
+            string id = server.SpawnCreatureAtForTest(new Vector3f(cx + 0.5f, caveFloor + 5.8f, cz + 0.5f));
+
+            for (int i = 0; i < 300; i++)
+            {
+                server.TickForTest(0.1);
+                var c = Assert.Single(server.Creatures, x => x.Id == id); // never evicted as "boxed in"
+                int fx = (int)Math.Floor(c.Position.X), fy = (int)Math.Floor(c.Position.Y), fz = (int)Math.Floor(c.Position.Z);
+                Assert.True(server.World.GetBlock(new Vector3i(fx, fy, fz)).IsAir && server.World.GetBlock(new Vector3i(fx, fy + 1, fz)).IsAir,
+                    $"its body is inside the rock at tick {i}: Y {c.Position.Y:F2}");
+                Assert.True(c.Position.Y >= caveFloor - 1e-3f && c.Position.Y < caveFloor + 3,
+                    $"it is not in the cave: Y {c.Position.Y:F2} at tick {i} (cave floor {caveFloor})");
+            }
+        }
+    }
+
+    /// <summary>The probe itself (#1854): for a reference cell INSIDE the rock the rest surface used to be
+    /// that very cell (the #1711 roof guard, meant for a creature under a ceiling, kept the depth). It now
+    /// answers the nearest real floor through the rock — here the cave floor six cells down, not the
+    /// surface fifteen cells up and not the cell itself.</summary>
+    [Fact]
+    public void RestSurface_ForAReferenceCellInsideTheRock_AnswersTheNearestRealFloor()
+    {
+        var server = Started(out var repo);
+        using (repo)
+        {
+            const int x = 300, z = 300;
+            var stone = _content.GetBlock("stone")!.NumericId;
+            int top = SurfaceTopY(server, x, z);
+            int caveFloor = top - 20;
+            for (int y = caveFloor - 2; y <= top; y++)
+            {
+                server.World.SetBlock(new Vector3i(x, y, z), stone); // solid all the way up …
+            }
+
+            for (int y = caveFloor; y < caveFloor + 3; y++)
+            {
+                server.World.SetBlock(new Vector3i(x, y, z), BlockId.Air); // … with a 3-high cave in it
+            }
+
+            Assert.Equal(caveFloor, server.RestSurfaceYForTest(x, z, caveFloor + 6));
+        }
+    }
 }

@@ -52,19 +52,27 @@ public sealed class LandingPadTests : IDisposable
         Assert.Equal(AlienActivity.Off, peaceful.PlanetEnemies);
     }
 
-    [Fact]
-    public void OceanWorld_RaisesAnIsletUnderSomePads_AndFlagsTheSeabedOnes()
+    private SvGameServer NewOceanServer(string tag, int seed)
     {
-        // #1453/#1454: an ocean-class world floods 78–97 % of its columns, and the pad march (±180 blocks along
-        // one latitude) regularly finds no land. Such pads now either carry a seeded sand islet (surface two
-        // blocks above the sea, air above it) or stay on the seabed and are flagged Wet for the chooser.
-        var repo = new SqliteWorldRepository(new SaveGamePaths(_root, "islet"));
+        var repo = new SqliteWorldRepository(new SaveGamePaths(_root, tag));
         var st = new LoopbackServerTransport(new LoopbackLink());
-        var config = new ServerConfig { WorldName = "islet", Seed = 7, StartPlanet = "ocean", AutoSaveIntervalMinutes = 9999, PlaceStarterShip = false };
+        var config = new ServerConfig { WorldName = tag, Seed = seed, StartPlanet = "ocean", AutoSaveIntervalMinutes = 9999, PlaceStarterShip = false };
         var server = new SvGameServer(config, _content, st, repo);
         server.Start();
         server.AddLocalPlayer("Pilot"); // loads the ocean body + builds its pads
+        return server;
+    }
 
+    [Fact]
+    public void OceanWorld_RaisesAnIsletUnderDeepPads_AndOnlyShallowOnesStayOnTheSeabed()
+    {
+        // #1453/#1454/#1619/#1620: an ocean-class world floods 78–97 % of its columns. A pad whose
+        // footprint is still all water after the 2-D nudge carries an islet (plateau three blocks above the
+        // sea, air above it) unless the water there is shallow (≤ 8 blocks) — only then does the ship park
+        // in a seabed shaft, flagged Wet with its depth for the chooser. Deep shafts are gone.
+        // The 2-D nudge (#1618) finds real land for most pads, so the test walks the wettest probe seeds
+        // (9 = 97 % water) until a world still needs an islet.
+        var server = NewOceanServer("islet9", 9);
         int seaLevel = server.SeaLevelForTest();
         int islets = 0, wet = 0, dry = 0;
         for (int i = 0; i < server.LandingPadCenters.Count; i++)
@@ -74,26 +82,80 @@ public sealed class LandingPadTests : IDisposable
             {
                 islets++;
                 Assert.False(pad.Wet, "an islet pad is dry by definition");
-                Assert.Equal(seaLevel + 2, pad.Y);
-                // The mound exists in the generated world: a beach block at the levelled height, air above.
+                Assert.Equal(0, pad.Depth);
+                Assert.Equal(seaLevel + 3, pad.Y);
+                // The mound exists in the generated world: a solid block at the levelled height, air above.
                 Assert.False(server.World.GetBlock(new Vector3i(pad.X, pad.Y, pad.Z)).IsAir);
                 Assert.True(server.World.GetBlock(new Vector3i(pad.X, pad.Y + 1, pad.Z)).IsAir);
                 Assert.True(server.World.GetBlock(new Vector3i(pad.X, pad.Y + 2, pad.Z)).IsAir);
+                // The plateau reaches beyond the reserved pad (#1620): level ground 9 blocks out (the rim
+                // wobbles ±3 around radius 12, so 9 is always plateau).
+                Assert.False(server.World.GetBlock(new Vector3i(pad.X + 9, pad.Y, pad.Z)).IsAir);
+                Assert.True(server.World.GetBlock(new Vector3i(pad.X + 9, pad.Y + 2, pad.Z)).IsAir);
             }
             else if (pad.Wet)
             {
                 wet++;
                 Assert.True(pad.Y < seaLevel, "a wet pad sits on the seabed");
+                Assert.InRange(seaLevel - pad.Y, 1, 8); // shallow only (#1619)
+                Assert.InRange(pad.Depth, 1, 8);
             }
             else
             {
                 dry++;
+                Assert.Equal(0, pad.Depth);
             }
         }
 
         Assert.True(islets + wet + dry == server.LandingPadCenters.Count);
-        Assert.True(islets > 0 || wet > 0, "an ocean world is expected to produce at least one all-water pad");
-        Assert.True(islets > 0, "the seeded roll (~60 %) should raise at least one islet across the pads");
+        Assert.True(islets > 0, "an ocean world is expected to raise at least one islet (seed 7 has deep all-water pads)");
+    }
+
+    [Fact]
+    public void PadNudge_FindsLandNorthOrSouth_NotOnlyAlongTheLatitude()
+    {
+        // #1618: on ocean seed 1 the planned column of pad 4 (x 3920, z −685) is all water along its whole
+        // latitude band (the old X-only march gave up and rolled an islet), but dry ground lies a few blocks
+        // north/south. The ring search must find it.
+        var server = NewOceanServer("nudge", 1);
+        var (x, z, dry) = server.NudgePadForTest(3920, -685, 300);
+        Assert.True(dry, $"the 2-D nudge should end on dry ground (got {x},{z})");
+        Assert.True(z != -685 || x != 3920, "the pad moved off its all-water column");
+    }
+
+    [Fact]
+    public void PlayerPadPreference_DryBeforeIsletBeforeSeabed_TiesByIndex()
+    {
+        // #1621: pads 0 = seabed, 1 = islet, 2 = dry, 3 = dry.
+        var pads = new List<(bool Wet, bool Islet)> { (true, false), (false, true), (false, false), (false, false) };
+        Assert.Equal(2, SvGameServer.PreferredPadIndexForTest(pads, Array.Empty<int>()));      // first dry pad
+        Assert.Equal(3, SvGameServer.PreferredPadIndexForTest(pads, new[] { 2 }));             // next dry pad
+        Assert.Equal(1, SvGameServer.PreferredPadIndexForTest(pads, new[] { 2, 3 }));          // islet before seabed
+        Assert.Equal(0, SvGameServer.PreferredPadIndexForTest(pads, new[] { 1, 2, 3 }));       // seabed last
+        Assert.Equal(-1, SvGameServer.PreferredPadIndexForTest(pads, new[] { 0, 1, 2, 3 }));   // full
+    }
+
+    [Fact]
+    public void NewPlayer_SpawnsOnAPadNoWorseThanTheBestFreeOne()
+    {
+        // #1621: a new player's first pad is never worse (seabed < islet < dry) than the best free pad.
+        var server = NewOceanServer("spawn", 5);
+        int bestRank = int.MaxValue, spawnRank = int.MaxValue;
+        var me = server.AddLocalPlayer("Newbie");
+        var pos = me.State.Position;
+        for (int i = 0; i < server.LandingPadCenters.Count; i++)
+        {
+            var pad = server.LandingPadInfoForTest(i);
+            int rank = pad.Wet ? 2 : pad.Islet ? 1 : 0;
+            bestRank = Math.Min(bestRank, rank);
+            if (Math.Abs(pos.X - (pad.X + 0.5f)) < 0.01f && Math.Abs(pos.Z - (pad.Z + 0.5f)) < 0.01f)
+            {
+                spawnRank = Math.Min(spawnRank, rank);
+            }
+        }
+
+        Assert.NotEqual(int.MaxValue, spawnRank); // the spawn IS a pad centre
+        Assert.Equal(bestRank, spawnRank);
     }
 
     [Fact]
@@ -130,6 +192,72 @@ public sealed class LandingPadTests : IDisposable
         Assert.Equal(worldPads, server.ApproachMapPadCountForTest());
         Assert.Equal(worldPads, server.LandingPadCenters.Count);
         Assert.Equal(server.LandingPadCenters, server.ApproachMapPadsForTest());
+    }
+
+    private (SvGameServer Server, SqliteWorldRepository Repo) NewOceanServerOfGeneration(string tag, int seed, int generation)
+    {
+        var repo = new SqliteWorldRepository(new SaveGamePaths(_root, tag));
+        var st = new LoopbackServerTransport(new LoopbackLink());
+        var config = new ServerConfig { WorldName = tag, Seed = seed, StartPlanet = "ocean", AutoSaveIntervalMinutes = 9999, PlaceStarterShip = false };
+        config.World.TerrainGeneration = generation;
+        var server = new SvGameServer(config, _content, st, repo);
+        server.Start();
+        server.AddLocalPlayer("Pilot");
+        return (server, repo);
+    }
+
+    [Fact]
+    public void ASaveFromBeforeTheOceanPadWave_KeepsItsClassicPads_AndTheSameSeedCreatedTodayDoesNot()
+    {
+        // #1665: pads are not persisted — they are re-derived from the seed on every load, so the RULE is the
+        // only thing holding them in place. A world created before the ocean-pad wave (#1618–#1622) keeps the
+        // longitude-only march (pad 0 stays on the equator), the rolled ocean islet two blocks over the sea and
+        // the plain sand mound; the same seed created today plans by the generation-2 rules.
+        var (classic, classicRepo) = NewOceanServerOfGeneration("classic9", 9, 1);
+        int seaLevel = classic.SeaLevelForTest();
+        var classicPads = classic.LandingPadCenters;
+        Assert.Equal(0, classicPads[0].Z);
+        int classicIslets = 0;
+        for (int i = 0; i < classicPads.Count; i++)
+        {
+            var pad = classic.LandingPadInfoForTest(i);
+            if (pad.Islet)
+            {
+                classicIslets++;
+                Assert.Equal(seaLevel + 2, pad.Y);
+                Assert.False(classic.World.GetBlock(new Vector3i(pad.X, pad.Y, pad.Z)).IsAir);
+                Assert.True(classic.World.GetBlock(new Vector3i(pad.X, pad.Y + 1, pad.Z)).IsAir);
+            }
+            else if (pad.Wet)
+            {
+                Assert.True(pad.Y < seaLevel, "a classic wet pad sits on the seabed, however deep");
+            }
+        }
+
+        Assert.True(classicIslets > 0, "the 97 % water seed rolls at least one classic islet");
+        classicRepo.Dispose();
+
+        // Reopening the save (a config that now asks for the current generation) keeps the stored generation
+        // and therefore the very same pads.
+        var (again, againRepo) = NewOceanServerOfGeneration("classic9", 9, BlocksBeyondTheStars.Shared.World.WorldDescription.CurrentTerrainGeneration);
+        Assert.Equal(classicPads, again.LandingPadCenters);
+        againRepo.Dispose();
+
+        // The same seed created today: generation-2 islets stand three blocks over the sea.
+        var (modern, modernRepo) = NewOceanServerOfGeneration("modern9", 9, BlocksBeyondTheStars.Shared.World.WorldDescription.CurrentTerrainGeneration);
+        int modernIslets = 0;
+        for (int i = 0; i < modern.LandingPadCenters.Count; i++)
+        {
+            var pad = modern.LandingPadInfoForTest(i);
+            if (pad.Islet)
+            {
+                modernIslets++;
+                Assert.Equal(seaLevel + 3, pad.Y);
+            }
+        }
+
+        Assert.True(modernIslets > 0);
+        modernRepo.Dispose();
     }
 
     [Fact]
@@ -203,6 +331,128 @@ public sealed class LandingPadTests : IDisposable
         var (ok, _) = server.TryClaimPadForTest(me, 0); // a free pad is fine
         Assert.Equal(0, ok);
     }
+
+    // ---- lava pads ("landed in the lava", 2026-09-15) ---------------------------------------------------------
+
+    private (SvGameServer Server, SqliteWorldRepository Repo) NewLavaServer(string tag, int seed, int generation, bool ship = false)
+    {
+        var repo = new SqliteWorldRepository(new SaveGamePaths(_root, tag));
+        var st = new LoopbackServerTransport(new LoopbackLink());
+        var config = new ServerConfig
+        {
+            WorldName = tag,
+            Seed = seed,
+            StartPlanet = "ashen_ocean",
+            AutoSaveIntervalMinutes = 9999,
+            PlaceStarterShip = ship,
+            PlaceSettlements = false,
+            PlaceWrecks = false,
+        };
+        config.World.TerrainGeneration = generation;
+        var server = new SvGameServer(config, _content, st, repo);
+        server.Start();
+        return (server, repo);
+    }
+
+    [Fact]
+    public void LavaWorld_NewWorlds_RaiseABasaltIsletOverLava_NeverAShaftInIt()
+    {
+        // Generation 8: the dry test reads every lava body, and a pad still standing in lava after the nudge stands on
+        // a basalt islet three blocks over the melt — never the shaft with molten walls Justus landed in. Pinned to the
+        // generation that introduced it (every later one takes the same path): the seed is chosen for that galaxy, and
+        // a later generation's new planet types (generation 9's sand sea) re-roll which world the seed lands on.
+        var (server, repo) = NewLavaServer("lava8", LavaIsletSeed, BlocksBeyondTheStars.Shared.World.WorldDescription.LavaPadsGeneration);
+        using (repo)
+        {
+            server.AddLocalPlayer("Pilot");
+            var basalt = _content.GetBlock("basalt")!.NumericId;
+            int lavaIslets = 0;
+            for (int i = 0; i < server.LandingPadCenters.Count; i++)
+            {
+                var (molten, lavaIslet) = server.LandingPadLavaForTest(i);
+                Assert.False(molten, $"pad {i + 1}: a generation-8 pad never stands in lava");
+                if (!lavaIslet)
+                {
+                    continue;
+                }
+
+                lavaIslets++;
+                var pad = server.LandingPadInfoForTest(i);
+                Assert.True(pad.Islet);
+                Assert.False(pad.Wet);
+                Assert.Equal(basalt, server.World.GetBlock(new Vector3i(pad.X, pad.Y, pad.Z)));
+                Assert.Equal(basalt, server.World.GetBlock(new Vector3i(pad.X, pad.Y - 3, pad.Z)));
+                Assert.True(server.World.GetBlock(new Vector3i(pad.X, pad.Y + 1, pad.Z)).IsAir);
+                // The plateau reaches beyond the reserved pad, basalt too (radius 12 ± 3 wobble → 9 is always plateau).
+                Assert.Equal(basalt, server.World.GetBlock(new Vector3i(pad.X + 9, pad.Y, pad.Z)));
+            }
+
+            Assert.True(lavaIslets > 0, $"seed {LavaIsletSeed} is expected to need at least one lava islet");
+        }
+    }
+
+    [Fact]
+    public void LavaWorld_AnOldSave_KeepsItsPads_ButRefusesAndLeavesTheLavaOnes()
+    {
+        // A generation-7 save keeps the pads it was created with (they are re-derived, never persisted): its lava pads
+        // are only flagged. A player never gets one while a better pad is free, an explicit choice is refused, and a
+        // ship saved on one is parked on a dry pad the next time the world loads — the player wakes aboard.
+        var (probe, probeRepo) = NewLavaServer("lava7", MoltenPadSeed, 7, ship: true);
+        int molten = -1;
+        using (probeRepo)
+        {
+            var kid = probe.AddLocalPlayer("Kid");
+            for (int i = 0; i < probe.LandingPadCenters.Count && molten < 0; i++)
+            {
+                if (probe.LandingPadLavaForTest(i).Molten)
+                {
+                    molten = i;
+                }
+            }
+
+            Assert.True(molten >= 0, $"seed {MoltenPadSeed} is expected to plan a pad in lava under the generation-7 rules");
+            Assert.False(probe.LandingPadLavaForTest(probe.AssignedPadForTest("Kid")).Molten, "a new player never spawns on a lava pad");
+
+            var (chosen, reason) = probe.TryClaimPadForTest(kid, molten);
+            Assert.Equal(-1, chosen);
+            Assert.Equal("@srv.land.pad_lava", reason);
+
+            // Save the player the way the report shows him: his ship's pad is the lava one, he stands in the shaft.
+            var (mx, my, mz) = probe.LandingPadForTest(molten);
+            kid.AssignedPadIndex = molten;
+            kid.State.AboardShip = false;
+            kid.State.Position = new Vector3f(mx + 0.5f, my + 2f, mz + 0.5f);
+            probe.Stop();
+        }
+
+        var (server, repo) = NewLavaServer("lava7", MoltenPadSeed, 7, ship: true);
+        using (repo)
+        {
+            var kid = server.AddLocalPlayer("Kid");
+            int pad = server.AssignedPadForTest("Kid");
+            Assert.NotEqual(molten, pad);
+            Assert.False(server.LandingPadLavaForTest(pad).Molten);
+            Assert.True(kid.State.AboardShip, "the player wakes aboard the re-parked ship");
+            var (px, _, pz) = server.LandingPadForTest(pad);
+            Assert.True(Math.Abs(kid.State.Position.X - px) < 12 && Math.Abs(kid.State.Position.Z - pz) < 12,
+                $"the player is at the new pad ({px},{pz}), not in the old shaft (at {kid.State.Position})");
+        }
+    }
+
+    [Fact]
+    public void PadPreference_ALavaPadRanksBelowEveryOtherKind()
+    {
+        // 0 = lava, 1 = seabed, 2 = islet, 3 = dry.
+        var pads = new List<(bool Wet, bool Islet, bool Molten)> { (false, false, true), (true, false, false), (false, true, false), (false, false, false) };
+        Assert.Equal(3, SvGameServer.PreferredPadIndexWithLavaForTest(pads, Array.Empty<int>()));
+        Assert.Equal(1, SvGameServer.PreferredPadIndexWithLavaForTest(pads, new[] { 2, 3 }));
+        Assert.Equal(0, SvGameServer.PreferredPadIndexWithLavaForTest(pads, new[] { 1, 2, 3 }));
+    }
+
+    /// <summary>Seeds found by probing (see the two lava tests): an ashen-ocean start world whose generation-8 pads need a
+    /// lava islet, and one whose generation-7 pads include a pad standing in lava.</summary>
+    private const int LavaIsletSeed = 1;
+    private const int MoltenPadSeed = 1;
 
     public void Dispose()
     {

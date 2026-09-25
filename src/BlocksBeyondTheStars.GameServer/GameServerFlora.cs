@@ -25,20 +25,34 @@ public sealed partial class GameServer
 {
     private const double FloraRegrowSeconds = 30.0;
 
+    /// <summary>Seconds a planted sapling takes to become a tree (#1774), and how long it waits before looking
+    /// again when the room above it is taken.</summary>
+    private const double SaplingGrowSeconds = 150.0;
+    private const double SaplingRetrySeconds = 30.0;
+
     private readonly HashSet<ushort> _floraIds = new();
     private readonly Dictionary<ushort, HashSet<ushort>> _floraHostIds = new();
     private readonly Dictionary<ushort, BlocksBeyondTheStars.Shared.Definitions.FloraSpecies> _floraSpeciesByBlock = new();
 
-    // This world's single tree species + the block ids (trunk + leaves) it covers, so a scan of either
-    // reads as the same coined, edible/toxic tree (built in InitFlora; see TreeSpeciesForBlock).
-    private BlocksBeyondTheStars.Shared.Definitions.TreeSpecies? _treeSpecies;
-    private readonly HashSet<ushort> _treeBlockIds = new();
+    // This world's tree species by block id: the trunk + leaves of the ordinary trees share one coined,
+    // edible/toxic tree, the giant trees' blocks (#1783, generation 6) a second one — so a scan of a trunk or
+    // a leaf reads as the tree it belongs to (built in InitFlora; see TreeSpeciesForBlock).
+    private readonly Dictionary<ushort, BlocksBeyondTheStars.Shared.Definitions.TreeSpecies> _treeSpeciesByBlock = new();
     private Dictionary<Vector3i, (ushort FloraId, double Timer)> _floraRegrow => _worlds.Active.FloraRegrow;
+
+    private readonly HashSet<ushort> _floraHangingIds = new(); // #1759: species whose host is the block above
+
+    // #1774: the sapling — flora for placement and harvest (host + hull rules), but no catalog species: it sits in
+    // no world roster, no greenhouse grows it, and instead of regrowing it turns into a tree.
+    private ushort _saplingId;
+    private ushort _saplingLogId;
+    private ushort _saplingLeafId;
 
     private void InitFlora()
     {
         _floraIds.Clear();
         _floraHostIds.Clear();
+        _floraHangingIds.Clear();
         foreach (var sp in BlocksBeyondTheStars.Shared.Definitions.FloraCatalog.All)
         {
             if (_content.GetBlock(sp.Key) is not { } flora || flora.NumericId.Value == 0)
@@ -47,7 +61,22 @@ public sealed partial class GameServer
             }
 
             _floraIds.Add(flora.NumericId.Value);
-            _floraHostIds[flora.NumericId.Value] = HostIds(sp.Hosts);
+            // Regrow on a late host too, and — generation 11 — on the cave rock a species grows on underground.
+            _floraHostIds[flora.NumericId.Value] = HostIds(sp.Hosts.Concat(sp.LateHosts).Concat(sp.CaveHosts).Distinct().ToArray());
+            if (sp.Hanging)
+            {
+                _floraHangingIds.Add(flora.NumericId.Value); // #1759: roots in the block ABOVE
+            }
+        }
+
+        _saplingId = 0;
+        if (_content.GetBlock("flora_sapling") is { } sapling && sapling.NumericId.Value != 0)
+        {
+            _saplingId = sapling.NumericId.Value;
+            _floraIds.Add(_saplingId);
+            _floraHostIds[_saplingId] = HostIds("dirt", "grass", "mud");
+            _saplingLogId = _content.GetBlock("wood_log")?.NumericId.Value ?? 0;
+            _saplingLeafId = _content.GetBlock("tree_leaves")?.NumericId.Value ?? 0;
         }
 
         // Per-BODY flora roster (#478): each archetype block gets this world's coined name + edible/toxic
@@ -56,10 +85,12 @@ public sealed partial class GameServer
         // worldgen actually planted. (Previously every world of the same planet type shared one roster.)
         _floraSpeciesByBlock.Clear();
         var planet = _content.GetPlanet(_worlds.Active.PlanetType);
-        long rosterSeed = _meta.Seed ^ BlocksBeyondTheStars.WorldGeneration.WorldGenerator.StableHash(_world.LocationId);
+        long rosterSeed = BlocksBeyondTheStars.WorldGeneration.WorldGenerator.RosterSeedFor(_meta.Seed, _world.LocationId); // #1722: THE formula
         if (planet != null)
         {
-            foreach (var fs in BlocksBeyondTheStars.WorldGeneration.FloraGenerator.GenerateRoster(planet, rosterSeed))
+            // #1715: the roster reads the world's generation — from generation 4 the biome themes take part in
+            // the activation roll, exactly as worldgen's ResolveFlora rolls it.
+            foreach (var fs in BlocksBeyondTheStars.WorldGeneration.FloraGenerator.GenerateRoster(planet, rosterSeed, _meta.Description.TerrainGeneration))
             {
                 if (_content.GetBlock(fs.BlockKey) is { } b && b.NumericId.Value != 0)
                 {
@@ -69,18 +100,29 @@ public sealed partial class GameServer
         }
 
         // Per-body tree species (#478): the trunk (wood_log) and crown (tree_leaves) share this world's one
-        // coined name + edible/toxic trait, surfaced when the player scans a tree.
-        _treeSpecies = null;
-        _treeBlockIds.Clear();
+        // coined name + edible/toxic trait, surfaced when the player scans a tree. The giant trees (#1783) are a
+        // second species on their own blocks — only on a generation-6 world, where they can actually grow.
+        _treeSpeciesByBlock.Clear();
         if (planet != null && BlocksBeyondTheStars.WorldGeneration.TreeGenerator.Generate(planet, rosterSeed) is { } tree)
         {
-            _treeSpecies = tree;
-            foreach (var key in new[] { "wood_log", "tree_leaves" })
+            MapTreeBlocks(tree, "wood_log", "tree_leaves");
+        }
+
+        if (planet != null
+            && _meta.Description.TerrainGeneration >= BlocksBeyondTheStars.Shared.World.WorldDescription.NewKindsGeneration
+            && BlocksBeyondTheStars.WorldGeneration.TreeGenerator.GenerateGiant(planet, rosterSeed) is { } giant)
+        {
+            MapTreeBlocks(giant, BlocksBeyondTheStars.WorldGeneration.WorldGenerator.GiantLogKey, BlocksBeyondTheStars.WorldGeneration.WorldGenerator.GiantLeavesKey);
+        }
+    }
+
+    private void MapTreeBlocks(BlocksBeyondTheStars.Shared.Definitions.TreeSpecies tree, params string[] keys)
+    {
+        foreach (var key in keys)
+        {
+            if (_content.GetBlock(key) is { } b && b.NumericId.Value != 0)
             {
-                if (_content.GetBlock(key) is { } b && b.NumericId.Value != 0)
-                {
-                    _treeBlockIds.Add(b.NumericId.Value);
-                }
+                _treeSpeciesByBlock[b.NumericId.Value] = tree;
             }
         }
     }
@@ -89,7 +131,7 @@ public sealed partial class GameServer
     /// (trunk or leaves), else null. Trunk and leaves both map to the same species — one tree, one identity.
     /// Used by the scanner to name + classify a scanned tree.</summary>
     public BlocksBeyondTheStars.Shared.Definitions.TreeSpecies? TreeSpeciesForBlock(string blockKey)
-        => _treeSpecies != null && _content.GetBlock(blockKey) is { } b && _treeBlockIds.Contains(b.NumericId.Value) ? _treeSpecies : null;
+        => _content.GetBlock(blockKey) is { } b && _treeSpeciesByBlock.TryGetValue(b.NumericId.Value, out var tree) ? tree : null;
 
     /// <summary>This world's generated flora species for a block key (name + toxic trait), or null if the
     /// block isn't flora here. Used by the scanner to name + classify a scanned plant.</summary>
@@ -112,7 +154,102 @@ public sealed partial class GameServer
 
     private bool IsFlora(ushort id) => id != 0 && _floraIds.Contains(id);
 
-    /// <summary>True if the flora may be planted at the cell — the block below must be a valid host.</summary>
+    /// <summary>The planted young tree (#1774): flora that grows UP instead of back.</summary>
+    private bool IsSapling(ushort id) => id != 0 && id == _saplingId;
+
+    /// <summary>A sapling was planted: its growth rides the regrow queue (persisted like a harvest), so a tree
+    /// planted before a restart still comes. No sprout cue — the sapling itself is the cue.</summary>
+    private void ScheduleSaplingGrowth(Vector3i pos)
+    {
+        _floraRegrow[pos] = (_saplingId, SaplingGrowSeconds);
+        _repo.SaveFloraRegrow(_world.LocationId, pos, _saplingId, SaplingGrowSeconds);
+    }
+
+    /// <summary>A sapling picked up before it grew is gone for good (it is in the pocket now) — drop its timer.</summary>
+    private void ForgetSaplingGrowth(Vector3i pos)
+    {
+        if (_floraRegrow.Remove(pos))
+        {
+            _repo.DeleteFloraRegrow(_world.LocationId, pos);
+        }
+    }
+
+    /// <summary>Test seam (#1774): how the world's tree from a sapling is shaped at a cell.</summary>
+    public bool TryGrowTreeForTest(int x, int y, int z) => TryGrowTree(new Vector3i(x, y, z));
+
+    /// <summary>Turns the sapling at <paramref name="pos"/> into a small tree (#1774): a trunk of four or five
+    /// logs and a round crown of leaves, the shape the world generator's broadleaf uses. The trunk column must
+    /// be free (a ceiling two blocks up keeps the sapling waiting); leaves only ever fill air, so a crown pressed
+    /// against a wall is simply flatter on that side. On a void world the trunk top must sit inside the hull
+    /// like any planted cell. Returns false when the tree could not grow yet.</summary>
+    private bool TryGrowTree(Vector3i pos)
+    {
+        if (_saplingLogId == 0 || _saplingLeafId == 0 || _world.GetBlock(pos).Value != _saplingId)
+        {
+            return false;
+        }
+
+        int height = 4 + (System.Math.Abs(pos.X * 31 + pos.Z * 17 + pos.Y) % 2); // 4 or 5, fixed per cell
+        for (int dy = 1; dy < height; dy++)
+        {
+            var c = new Vector3i(pos.X, pos.Y + dy, pos.Z);
+            if (!_world.GetBlock(c).IsAir || ShipInteriorContains(new Vector3f(c.X, c.Y, c.Z)))
+            {
+                return false; // no room for the trunk yet
+            }
+        }
+
+        // #1835: on a void world the hall must hold the tree — judged at the SAPLING's cell, which has the floor the
+        // enclosure probe starts from. The old check ran the probe at the crown cell, whose "floor" is the trunk
+        // column just verified to be air, so it read every sapling on a station as "opens to the void" and retried
+        // for ever ("Warum werden die Setzlinge nicht größer?"). The crown column itself is checked for room above.
+        if (!IsFloraEnclosedForVoidWorld(pos))
+        {
+            return false; // a station hall must hold the tree as well
+        }
+
+        var top = new Vector3i(pos.X, pos.Y + height - 1, pos.Z);
+
+        var log = new BlockId(_saplingLogId);
+        var leaf = new BlockId(_saplingLeafId);
+        for (int dy = 0; dy < height; dy++)
+        {
+            var c = new Vector3i(pos.X, pos.Y + dy, pos.Z);
+            _world.SetBlock(c, log);
+            MirrorStationCellDeferred(c, log); // #1857: a tree grown aboard a player station is part of its build
+            BroadcastToWorld(new BlockChanged { X = c.X, Y = c.Y, Z = c.Z, Block = log.Value });
+        }
+
+        // The crown: two full rings around the top two trunk cells (corners clipped), a smaller ring above, a cap.
+        for (int dy = -1; dy <= 2; dy++)
+        {
+            int r = dy <= 0 ? 2 : dy == 1 ? 1 : 0;
+            for (int dx = -r; dx <= r; dx++)
+                for (int dz = -r; dz <= r; dz++)
+                {
+                    if (r == 2 && System.Math.Abs(dx) == 2 && System.Math.Abs(dz) == 2)
+                    {
+                        continue; // clipped corners keep the crown round
+                    }
+
+                    var c = new Vector3i(top.X + dx, top.Y + dy, top.Z + dz);
+                    if (!_world.GetBlock(c).IsAir || ShipInteriorContains(new Vector3f(c.X, c.Y, c.Z)))
+                    {
+                        continue; // leaves fill air only — never the trunk, a wall or a neighbour's crown
+                    }
+
+                    _world.SetBlock(c, leaf);
+                    MirrorStationCellDeferred(c, leaf); // #1857
+                    BroadcastToWorld(new BlockChanged { X = c.X, Y = c.Y, Z = c.Z, Block = leaf.Value });
+                }
+        }
+
+        FlushMirroredStationCells(); // #1857: one row write + one design refresh for the whole tree
+        return true;
+    }
+
+    /// <summary>True if the flora may be planted at the cell — the block below must be a valid host (for a hanging
+    /// species, #1759, the block ABOVE).</summary>
     private bool IsValidFloraHost(ushort floraId, Vector3i pos)
     {
         if (!_floraHostIds.TryGetValue(floraId, out var hosts))
@@ -120,8 +257,9 @@ public sealed partial class GameServer
             return false;
         }
 
-        ushort below = _world.GetBlock(new Vector3i(pos.X, pos.Y - 1, pos.Z)).Value;
-        return hosts.Contains(below);
+        int hostY = _floraHangingIds.Contains(floraId) ? pos.Y + 1 : pos.Y - 1;
+        ushort host = _world.GetBlock(new Vector3i(pos.X, hostY, pos.Z)).Value;
+        return hosts.Contains(host);
     }
 
     private static readonly Vector3i[] FloraHorizontalDirs =
@@ -313,6 +451,22 @@ public sealed partial class GameServer
                 continue;
             }
 
+            // #1774: a sapling's timer means "try to grow", not "come back": gone → forget it; no room → ask again later.
+            if (IsSapling(floraId))
+            {
+                if (_world.GetBlock(pos).Value != floraId || TryGrowTree(pos))
+                {
+                    (done ??= new List<Vector3i>()).Add(pos);
+                }
+                else
+                {
+                    _floraRegrow[pos] = (floraId, SaplingRetrySeconds);
+                    _repo.SaveFloraRegrow(_world.LocationId, pos, floraId, SaplingRetrySeconds);
+                }
+
+                continue;
+            }
+
             (done ??= new List<Vector3i>()).Add(pos);
 
             // Regrow only if the cell is still air, not inside a landed ship, and the host below is a
@@ -323,9 +477,14 @@ public sealed partial class GameServer
                 && IsValidFloraHost(floraId, pos) && IsFloraEnclosedForVoidWorld(pos))
             {
                 _world.SetBlock(pos, new BlockId(floraId));
+                // #1857: the harvest wrote Air into the station's cell grid (see WriteBackStationCell in the mine
+                // path); the regrowth puts the plant back there too, so the hull seen from outside keeps its garden.
+                MirrorStationCellDeferred(pos, new BlockId(floraId));
                 BroadcastToWorld(new BlockChanged { X = pos.X, Y = pos.Y, Z = pos.Z, Block = floraId });
             }
         }
+
+        FlushMirroredStationCells(); // #1857: one row write + one design refresh per step, however many cells regrew
 
         if (done != null)
         {

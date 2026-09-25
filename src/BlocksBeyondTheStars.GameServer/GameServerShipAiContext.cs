@@ -4,6 +4,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using BlocksBeyondTheStars.Networking.Messages;
+using BlocksBeyondTheStars.Shared.Content;
 using BlocksBeyondTheStars.Shared.Definitions;
 using BlocksBeyondTheStars.Shared.Geometry;
 using BlocksBeyondTheStars.Shared.State;
@@ -69,6 +70,10 @@ public sealed partial class GameServer
     private const double VegaTipShipFarDistance = 150.0;
     private const double VegaTipShipNearDistance = 30.0;
 
+    /// <summary>Within this many flight units of an unvisited wreck the "how to reach the wreck" tip stays quiet
+    /// (#1882) — twice the approach reading's range, i.e. the pilot is already arriving.</summary>
+    private const double VegaTipWreckQuietRange = SpaceWreckApproachRange * 2.0;
+
     /// <summary>The kind byte for a REPEATED context tip. The first occurrence of any tip goes out as a Kind-1
     /// advisor line (teaching moment, appended to the tips log); repeats use Kind 5 so the client can drop
     /// them when its speech queue is already busy. Both obey the VegaHints settings mute.</summary>
@@ -96,6 +101,9 @@ public sealed partial class GameServer
         new("torch_underground", VegaTipPriority.Equipment, 15, 900, 2, false),
         new("eat_now",        VegaTipPriority.Equipment,   5,  600, 3, false),
         new("wrong_tool",     VegaTipPriority.Equipment,   0,  600, 3, false),
+        // #1686: a tool-tier gate turned a swing away. The reject toast already names the tool; VEGA adds the
+        // WHY once, because the gate is the first wall a new player meets that no amount of persistence opens.
+        new("tier_gate",      VegaTipPriority.Equipment,   0,  600, 3, false),
         new("scanner_idle",   VegaTipPriority.Equipment,   0,  900, 2, true),
         new("speeder_far",    VegaTipPriority.Equipment,  10,  900, 2, true),
         // #1594: on foot and a long walk from the landed ship — tells a first-time player what the blue
@@ -122,6 +130,10 @@ public sealed partial class GameServer
         new("asteroid_near",  VegaTipPriority.Opportunity, 5,  900, 3, true),
         new("asteroid_no_tool", VegaTipPriority.Opportunity, 5, 900, 2, true),
         new("station_near",   VegaTipPriority.Opportunity, 5,  900, 2, true),
+        // #1882: the system's derelict drifts on no planet, and pilots flew right under it — say how to get there:
+        // the chart click + autopilot with an AI core Mk2 or better, else the radar's ▲/▼ height cue.
+        new("wreck_signal",   VegaTipPriority.Opportunity, 5,  900, 2, true),
+        new("wreck_signal_manual", VegaTipPriority.Opportunity, 5, 900, 2, true),
         new("jump_ready",     VegaTipPriority.Opportunity, 0, 1800, 2, true),
     };
 
@@ -164,6 +176,16 @@ public sealed partial class GameServer
             return;
         }
 
+        if (session.State.Milestones.Add(VegaTipDoneKey(id)))
+        {
+            _repo.SavePlayer(session.State);
+        }
+    }
+
+    /// <summary>Retires a tip for the save outright, with no reaction window — for a goal the server witnesses
+    /// itself and that teaches the lesson on its own, like reaching a wreck (#1882).</summary>
+    private void RetireVegaTip(PlayerSession session, string id)
+    {
         if (session.State.Milestones.Add(VegaTipDoneKey(id)))
         {
             _repo.SavePlayer(session.State);
@@ -358,6 +380,14 @@ public sealed partial class GameServer
 
         SendVegaLine(session, "vega.hint." + spec.Id, count == 0 ? (byte)1 : VegaTipRepeatKind, arg);
 
+        // The tool-tier gate (#1686) is armed by a refused swing and disarmed once it has been explained —
+        // the collector deliberately leaves it standing so a losing cadence slot does not swallow the tip.
+        if (spec.Id == "tier_gate")
+        {
+            session.VegaTierGateBlock = string.Empty;
+            session.VegaTierGateTool = string.Empty;
+        }
+
         // The fragment signal (#1109) also marks the spoken-of fragment on everyone's map — the mention
         // carries its key ("frag:<key>"), and the POI drops off on its own once the fragment is picked up.
         if (spec.Id == "fragment_signal" && mention.StartsWith("frag:", System.StringComparison.Ordinal))
@@ -388,6 +418,17 @@ public sealed partial class GameServer
         bool onFoot = !p.AboardShip && !p.InEva && !inSpace && !docked && p.InSpeeder.Length == 0
                       && !ShipInteriorContains(p.Position);
         bool onSurface = !p.AboardShip && !inSpace && !docked; // on foot OR driving
+
+        // #1686: the player just hit a tool-tier gate — anywhere, because asteroid ore gates the same way.
+        // The arming SURVIVES this call: candidates are collected every tick but at most one tip fires per
+        // cadence slot, so clearing here would drop the tip whenever a safety hint outranked it. FireVegaTip
+        // clears it once the line actually goes out; the mention key keeps a player hammering the same wall
+        // to one telling rather than one per swing.
+        if (session.VegaTierGateBlock.Length > 0)
+        {
+            Add("tier_gate", session.VegaTierGateBlock + VegaArgSeparator + session.VegaTierGateTool,
+                "tier:" + session.VegaTierGateBlock);
+        }
 
         // --- Vitals (#1082) ---
         if (p.Oxygen < 25f)
@@ -425,7 +466,7 @@ public sealed partial class GameServer
         {
             RefreshVegaProbe(session);
             var probe = session.VegaProbe;
-            bool night = _dayFraction < 0.15 || _dayFraction > 0.85;
+            bool night = LocalDayFraction(session.State.Position) is < 0.15 or > 0.85; // #1865: the local sun
             bool underground = probe.SolidAbove >= VegaTipUndergroundSolid;
             bool dark = (night || underground) && !probe.LightNear;
             bool hasLamp = p.Inventory.Has("suit_lamp", 1);
@@ -679,6 +720,7 @@ public sealed partial class GameServer
 
         var pos = instance.PlayerPoses.TryGetValue(p.PlayerId, out var pose) ? pose.Pos : instance.ShipPosition;
         bool asteroidNear = false, stationNear = false;
+        CombatEntity? wreck = null;
         foreach (var e in instance.Entities)
         {
             if (e.Kind == CombatEntityKind.Asteroid && !asteroidNear && DistSq(pos, e.Position) <= 80.0 * 80.0)
@@ -689,6 +731,18 @@ public sealed partial class GameServer
             {
                 stationNear = true;
             }
+            else if (e.Kind == CombatEntityKind.Wreck && wreck is null && !p.Scanned.Contains(SpaceWreckScanPrefix + e.Id)
+                     && DistSq(pos, e.Position) > VegaTipWreckQuietRange * VegaTipWreckQuietRange)
+            {
+                wreck = e; // not visited yet, and not already right in front of the nose
+            }
+        }
+
+        if (wreck is not null)
+        {
+            // #1882: the autopilot (AI core Mk2+) flies the pitch too once the wreck is the chart waypoint; without
+            // it the pilot has to read the radar's height cue.
+            add(VegaCoreTier(session) >= 2 ? "wreck_signal" : "wreck_signal_manual", wreck.Name, "wreck:" + wreck.Id);
         }
 
         if (asteroidNear)
@@ -817,6 +871,22 @@ public sealed partial class GameServer
 
     private string ItemDisplayName(PlayerSession session, string key)
         => LocalizedName(session.Locale, _content.GetItem(key)?.NameKey ?? _content.GetBlock(key)?.NameKey, key);
+
+    /// <summary>
+    /// Remembers that a tool-tier gate just refused a swing (#1686) so VEGA can explain it on the next cadence
+    /// slot. Only armed when the content set actually HAS a tool that opens the gate — "you need something
+    /// better" is worthless advice when nothing better exists.
+    /// </summary>
+    private void NoteTierGate(PlayerSession session, BlockDefinition block)
+    {
+        if (MiningRules.CheapestToolFor(_content, block) is not { } wanted)
+        {
+            return;
+        }
+
+        session.VegaTierGateBlock = LocalizedName(session.Locale, block.NameKey, block.Key);
+        session.VegaTierGateTool = LocalizedName(session.Locale, wanted.NameKey, wanted.Key);
+    }
 
     /// <summary>The name of something the player could make or unlock if only they had more of this ore:
     /// a known recipe using it directly (player short of the amount) or an unlockable blueprint whose

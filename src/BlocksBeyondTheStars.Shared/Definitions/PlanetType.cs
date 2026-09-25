@@ -20,6 +20,23 @@ public sealed class Biome
 
     /// <summary>Per-biome multiplier on tree density (1.0 = the planet's tree density; 0 = a treeless biome).</summary>
     public double TreeDensityMul { get; set; } = 1.0;
+
+    /// <summary>Per-biome multiplier on the RELIEF under it (#1645, terrain generation 1 only): a mud marsh at
+    /// 0.35 lies flat next to stone country at 1.5 on the same world. Applies to the style/archetype relief,
+    /// never to the baseline (continents, escarpments) or landmarks. 1.0 = the planet's relief.</summary>
+    public double ReliefMul { get; set; } = 1.0;
+
+    /// <summary>A hot zone (2026-09, Titas): this biome is the volcanic region of its world — basalt and ash, lava in its
+    /// ponds, never snow or ice — laid out by <see cref="PlanetType.HotZoneShare"/> instead of the altitude mix.</summary>
+    public bool HotZone { get; set; }
+
+    /// <summary>The sand sea (generation 9, #2000): this biome is the deep-sand sea of its world, laid out by
+    /// <see cref="PlanetType.SandSeaShare"/> instead of the altitude mix — flat dunes, sand to
+    /// <see cref="PlanetType.SandSeaDepth"/>, no caves under it; the sandworm's habitat.</summary>
+    public bool SandSea { get; set; }
+
+    /// <summary>The air temperature of this biome in °C (a hot zone's +100), or null to use the planet's.</summary>
+    public double? Temperature { get; set; }
 }
 
 /// <summary>An ore vein generation rule for a planet type.</summary>
@@ -67,9 +84,42 @@ public sealed class PlanetType
     /// "mesa" (terraced plateaus + cliffs), "dunes" (parallel sand ridges), "spires" (sparse tall spikes).</summary>
     public string TerrainStyle { get; set; } = string.Empty;
 
+    /// <summary>The style POOL (#1645, terrain generation 1): a world of this type rolls 1–3 of these styles
+    /// and lays them out as regions blended in offset space, so one desert is a dune sea, the next badlands
+    /// with dune fields, the third flats with buttes. Empty = the single <see cref="TerrainStyle"/> (every
+    /// generation-0 world ignores the pool). Same style names as <see cref="TerrainStyle"/> plus the
+    /// generation-1 styles ("archipelago", "fjordlands", "downs", "shattered", "terraces", "drumlins", "glacial").</summary>
+    public List<string> TerrainStyles { get; set; } = new();
+
+    /// <summary>The first terrain generation whose galaxies may roll this type (#1649). 0 = every galaxy; the
+    /// eight data-only types of the landscape-variety package carry 1, so a classic-generation galaxy (every
+    /// existing save, every test world pinned to generation 0) keeps its exact planet roll — "new worlds only"
+    /// holds for the planet mix as well as for the terrain.</summary>
+    public int MinTerrainGeneration { get; set; }
+
+    /// <summary>Terrain feature tags this type opts into (#1644): "volcanic", "salt", "buttes", "hoodoos",
+    /// "crystal", "wind", "wetland", "glacial", "inselbergs", plus "karst" and "reef" (terrain generation 3;
+    /// see <see cref="TerrainTag"/>). The generator gates
+    /// its landform families on these — never on the type key — so a data-only type can carry any family.</summary>
+    public List<string> TerrainTags { get; set; } = new();
+
+    /// <summary>Computed at content load from <see cref="TerrainTags"/>, never from data (#1644).</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public TerrainTag Tags { get; set; }
+
+    /// <summary>True when the type carries <paramref name="tag"/> (#1644).</summary>
+    public bool HasTag(TerrainTag tag) => (Tags & tag) != 0;
+
     /// <summary>Signature alien terrain (item 21 V5): when true, chunks of solid land float in the sky high
     /// above the surface — drifting voxel islands you reach by flying up or building a tower. Off by default.</summary>
     public bool FloatingIslands { get; set; }
+
+    /// <summary>Islands afloat on the sea (#1757, generation 5): lens-shaped land bodies whose top rises a few
+    /// blocks above the waterline and whose keel hangs a few blocks below it, with open water between the keel
+    /// and the seabed — the "schwimmende Inseln" of the rainbow planet. The world's own terrain stays almost
+    /// entirely submerged (the calibration floods 95–98 % of it), so the islands ARE the land. Off by default;
+    /// unrelated to <see cref="FloatingIslands"/> (the sky islands).</summary>
+    public bool BuoyantIslands { get; set; }
 
     /// <summary>Airless barren bodies (landable asteroids, and — set per-world — airless moons): replace the
     /// rolling terrain with mostly flat regolith pocked with round impact craters (item 33).</summary>
@@ -147,6 +197,32 @@ public sealed class PlanetType
     /// Beaches only form where the shore's fluid is water — lava seas keep their volcanic coasts.</summary>
     public string BeachBlock { get; set; } = string.Empty;
 
+    // --- School club wave 3 (#1756, generation 5). Every field defaults to its classic no-op. ---
+
+    /// <summary>The floor block of every submerged column beyond the beach apron (#1757: a seabed of sand you can
+    /// dig in). Empty = the classic rule (the biome's own surface block). Read on generation-5 worlds only.</summary>
+    public string SeabedBlock { get; set; } = string.Empty;
+
+    /// <summary>When true, the seabed kelp and seagrass grow in tall forest patches (#1757) instead of the 2–4 cell
+    /// stalks — generation 5 only.</summary>
+    public bool UnderwaterForests { get; set; }
+
+    /// <summary>The colour of this type's water (#1758): empty = the classic blue on every world; "auto" = one
+    /// seeded hue per world from a blue-dominant palette; "rainbow" = static rainbow bands by position; or a
+    /// fixed 0xRRGGBB written as "#rrggbb". Read by <c>FluidTints.ForWorld</c>.</summary>
+    public string WaterTint { get; set; } = string.Empty;
+
+    /// <summary>Multiplies the per-body ruins roll (#1761): 1.0 = the classic draw; the hard cap stays.</summary>
+    public double RuinsBias { get; set; } = 1.0;
+
+    /// <summary>Multiplies the per-body factories roll (#1761): 1.0 = the classic draw; the hard cap stays.</summary>
+    public double FactoriesBias { get; set; } = 1.0;
+
+    /// <summary>Keys into <c>data/creatures.json</c> (#1763): authored species appended to this type's roster on
+    /// generation-5 worlds, after the procedural slots. With <see cref="CreatureAbundance"/> "authored" the roster
+    /// is these and nothing else.</summary>
+    public List<string> AuthoredCreatures { get; set; } = new();
+
     /// <summary>0..1 — how much surface lava this world has (lava seas in basins on volcanic/airless worlds).
     /// <c>null</c> = auto (volcanic worlds get a moderate amount). Watery worlds get no lava SEA — their
     /// molten side comes from volcanoes (summit crater pools + vents, #477) and the deep lava table
@@ -167,7 +243,8 @@ public sealed class PlanetType
 
     /// <summary>
     /// How much life this world has: "none" (barren), "few" or "many". Drives how many
-    /// procedural <see cref="CreatureSpecies"/> the world derives and the live spawn caps.
+    /// procedural <see cref="CreatureSpecies"/> the world derives and the live spawn caps. "authored" (#1763)
+    /// = no procedural species at all, only <see cref="AuthoredCreatures"/>.
     /// </summary>
     public string CreatureAbundance { get; set; } = "few";
 
@@ -233,4 +310,77 @@ public sealed class PlanetType
     /// structure in the void (space sky, life support — see the station planet type).
     /// </summary>
     public bool Void { get; set; }
+
+    /// <summary>The city composer this world type runs instead of the settlement roll (#1793): "" = the ordinary
+    /// hospitality-driven settlements; "gds" = exactly ONE gigantic walled city centred on landing pad 0, the
+    /// G.D.S. city of the lava desert. Never combined with the classic roll.</summary>
+    public string CityWorld { get; set; } = string.Empty;
+
+    /// <summary>Outfit colours (RRGGBB hex, no prefix) this type's inhabitants wear instead of their trade's
+    /// palette (#1793) — the G.D.S. city dresses in purple and red. Empty = the classic per-trade wardrobe.</summary>
+    public List<string> NpcOutfits { get; set; } = new();
+
+    /// <summary>The <see cref="NpcOutfits"/> parsed once at content load; empty when none are authored.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public uint[] NpcOutfitRgb { get; set; } = System.Array.Empty<uint>();
+
+    // --- Generation 8 (2026-09): Titas and Valuma, Justus' planets. Every field defaults to its classic no-op and is
+    // read on generation-8 worlds only, so every older type stays bit-identical. ---
+
+    /// <summary>At most one body of this type in a galaxy (Titas): the first one rolled in the original systems keeps it,
+    /// every other roll becomes another generation type.</summary>
+    public bool OncePerGalaxy { get; set; }
+
+    /// <summary>A fixed body name (Titas): every body of this type is called exactly this, in every language.</summary>
+    public string FixedName { get; set; } = string.Empty;
+
+    /// <summary>When true only the structures named in <see cref="AllowedStructures"/> stamp on this type (and no
+    /// world-generation ruin props): Titas keeps its SPS research stations, Valuma nothing at all.</summary>
+    public bool RestrictStructures { get; set; }
+
+    /// <summary>The structure kinds a <see cref="RestrictStructures"/> type still stamps: "sps_labs", "net_fragments".</summary>
+    public List<string> AllowedStructures { get; set; } = new();
+
+    /// <summary>Multiplies the planet machines' cap ("Wächter", Titas 2.5); 1 = classic.</summary>
+    public double EnemyDensity { get; set; } = 1.0;
+
+    /// <summary>A fixed snow blanket this many blocks deep over the sub-surface block (Titas 10); 0 = the classic altitude
+    /// snow/ice rule.</summary>
+    public int SnowCoverDepth { get; set; }
+
+    /// <summary>A fixed ice sheet this many blocks thick over liquid water (Titas 5); 0 = the classic freezing rule.</summary>
+    public int IceSheetDepth { get; set; }
+
+    /// <summary>Share of the surface that is hot zone (Titas 0.15) — needs one <see cref="Biome.HotZone"/> biome; 0 = none.</summary>
+    public double HotZoneShare { get; set; }
+
+    /// <summary>Only leafless dead trees grow, on snow and bare ground too, and past the tree line (Titas).</summary>
+    public bool DeadForests { get; set; }
+
+    /// <summary>Damage per second to anyone in this type's water after a 3 s grace (Titas' toxic water 2); 0 = harmless.</summary>
+    public double WaterDamagePerSecond { get; set; }
+
+    /// <summary>The most water or amphibian species the roster may hold (Titas 1); -1 = no cap.</summary>
+    public int MaxAquaticSpecies { get; set; } = -1;
+
+    /// <summary>Minutes outside until the cold kills (Titas 40): an exposure meter replaces the classic temperature drain on
+    /// this type; 0 = the classic model.</summary>
+    public double ExposureMinutesCold { get; set; }
+
+    /// <summary>Minutes in a hot zone until the heat kills (Titas 30).</summary>
+    public double ExposureMinutesHot { get; set; }
+
+    /// <summary>Calm terrain (Valuma): no massifs, volcanoes, escarpments or tilted/stepped regimes — wide plains.</summary>
+    public bool CalmTerrain { get; set; }
+
+    /// <summary>Peaceful fauna (Valuma): every procedural species is passive or skittish and bites for nothing.</summary>
+    public bool PeacefulFauna { get; set; }
+
+    // --- Generation 9 (2026-09, #2000): the sand-sea planet class. No-op defaults; read on generation-9 worlds only. ---
+
+    /// <summary>Share of the surface that is sand sea (≈0.5) — needs one <see cref="Biome.SandSea"/> biome; 0 = none.</summary>
+    public double SandSeaShare { get; set; }
+
+    /// <summary>How deep the sand of the sea reaches (blocks); the cave shield covers the same band.</summary>
+    public int SandSeaDepth { get; set; } = 24;
 }

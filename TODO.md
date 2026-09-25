@@ -24,6 +24,2239 @@ envelope at the WebSocket edge; deterministic seed world-gen; SQLite default per
 
 ---
 
+### 🍄 Cave flora — plants in caves, glowers that light their surroundings, the rainbow glow class, wild frostflowers (#2013, 2026-09-25, branch feat/cave-flora, terrain generation 11)
+
+Marcel's request: the frostflower must grow in the wild; caves get plants (mushrooms and glowing plants) as a new
+plant class; a new glowing class that is colourful (random colours) and also grows on the surface. His decisions:
+cold species survive the cold AND snow caps host them; caves everywhere with a certain probability (barren worlds
+too); the new glowers light up their surroundings; the four proposed species + the surface fungi in caves; the
+rainbow class on every world with plant life; cave glow colour per world; ~10–15 % of cave floor cells.
+
+- **✅ Generation 11** (`WorldDescription.CaveFloraGeneration`, `CurrentTerrainGeneration` 10 → 11). Every rule below
+  is gated on it; the four new species carry `MinGeneration` 11 and sit after `flora_hangkelp`, before the crops, so no
+  older roster id moves. The golden groups of every older generation stay pinned.
+- **✅ Habitat class** (`FloraHabitat` Surface / Cave / Both, `Species.CaveHosts`, `Rainbow`, `Light`). Cave-only
+  species never join the surface pools or the surface coverage rule; the surface fungi (mushroom, glowcap, puffball,
+  sporepod) are `Both` with cave rock as `CaveHosts` (kept apart from `Hosts`, so they never start growing on
+  mountain stone). New species: `flora_cavecap` (dome, no glow), `flora_glowmoss` (floor carpet, glow 0.6, light
+  0.30), `flora_glowthread` (hangs from a cave ceiling, glow 0.8, light 0.45), `flora_prismbloom` (sphere, glow 0.85,
+  light 0.50, every plant its own colour).
+- **✅ Rosters** (`FloraGenerator`). A plant world always keeps one cave species active and grows the rainbow class
+  (`EnsureCaveCoverage`); a barren / airless world with caves rolls cave flora at `BarrenCaveFloraChance` (0.5) and
+  then carries only cave-capable species (`CaveOnlyRoster`, same per-species streams). Cave-only species roll without
+  the flower planet's strict rule.
+- **✅ The cave pass** (`WorldGenerator.CaveFloraGen11.cs`, after the column loop — the y-loop is untouched): a floor is
+  an air cell on cave rock ≥ 6 below the column's ground top, a ceiling an air cell under cave rock with open air
+  below; patch fields make grottoes and bare stretches (floor ~11 % of cells on average, ceiling ~5 %, barren worlds
+  half). Weighted picks: cave species 3, surface fungi 2, rainbow 2. Measured: 13–66 cave plants per 1000 surface
+  columns on plant worlds, 3–18 on the barren ones that grow them.
+- **✅ Rainbow clusters on the surface**: rare patches (cluster field > 0.74, 35 % fill, not on frozen ground) on grass /
+  dirt / mud / alien grass / mycelium / stone / crystal — measured 0–5 per 1000 columns.
+- **✅ Cold flora**: a Cold-tagged species (frostflower, snow bush, ice reed, lichen) fades only between −30 and −45 °C
+  (at 60 % of the ground's density on frozen ground), and altitude snow / ice host their own pool instead of the
+  biome's grass plants. Tundra 0 → ~19, ice 0 → ~7, boreal ~12 → ~74 land plants per 1000 columns.
+- **✅ Client**: the rainbow class takes `FloraTints.RainbowAt(cell)` instead of the species hue (mesher trait
+  `TraitRainbowFlora`, sRGB→linear by hand because the mesher may run on a worker); the new glowers are light sources
+  (`ClientWorld.SetCellLightResolver`, registered in `GameBootstrap.RebuildPlantLights`): this world's species colour
+  or the cell's rainbow colour, scaled by `Light` — a dim colour is a short reach in the existing flood fill. The
+  classic glowers keep their self-glow only. AI tiles (`gen_textures.py`, moss + threads baked as cutouts; code-painted
+  fallbacks in the atlas); the server
+  regrows cave plants on their cave rock.
+- **Tests:** `CaveFloraTests` (catalog order + gates, rosters on plant / barren worlds, cave plants only underground on
+  cave rock, cold flora incl. the frostflower, rainbow clusters rare, rainbow colour), golden groups `karst-gen11` +
+  `tundra-gen11`.
+- ⚠ Open: Marcel's playtest (a NEW world: a cave, a tundra, a jungle; light in the caves, frame time in a planted cave
+  — WebGL too); a look at the four AI tiles in the game (re-roll with `gen_textures.py --only <key>` if one reads wrong).
+
+### 🕷️ Arachnid — a speeder-sized eight-legger with a rolled head shape (sometimes a pyramid), rolled looks and temper, an ambush, solid to bump into (#2009, 2026-09-25, branch feat/arachnid)
+
+Marcel's request: a new eight-legged creature class, about the size of the speeder, sometimes with a pyramid head,
+eyes / colour / behaviour rolled. His decisions: Land only; rarer than the titan; apex up, but not always the same
+pyramid; the normal temperament roll; solid; every extra (fangs, own voice, ambush, scan line, VEGA line); tamable.
+
+- **✅ The plan (`CreatureBodyPlan.Arachnid`, `ApplyArachnidPlan`).** Rolled LAST in `MakeSpecies` behind the new
+  `WorldDescription.ArachnidGeneration = 10` (`CurrentTerrainGeneration` 9 → 10, no terrain change): one draw per
+  standard-plan Land species, 1 in 12. Size 3.0–3.6 (unit 1.5–1.8 → a body of about the speeder hull 3 × 2 × 5),
+  8 legs in four rows, cephalothorax + abdomen, eyes 2/4/6/8, fangs (`Horns` = 2) on 65 %, a hide from chitin /
+  plated / spined / banded / shaggy / mottled, HP ×2.5 (≈ 85–110), speed 2–4, drops 2–4, the gait re-rolled for the
+  body, solitary unless a pack hunter. Temperament, activity, colours and glow stay the normal roll.
+  `CreatureArachnidTests` proves a generation-9 roster carries none and every unconverted gen-10 species is
+  bit-for-bit its gen-9 self.
+- **✅ Head shapes (`CreatureHeadShape`, `CreatureSpecies.HeadShape`).** Box 50 %, Pyramid 18, Spire 12, Frustum 10,
+  Ziggurat 10 — all apex up. The tiers live in `ArachnidRules.HeadTiers` (Shared, tested); the client builds a
+  flat-shaded mesh per shape (`ArachnidHeadMesh`, cached) through the new `CreatureBuilder.AddMeshPart`, and the
+  eye clusters sit ON the slope, pushed out along its normal (`ArachnidRules.FootprintAt`). Additive wire fields
+  `NetCreature.HeadShape` / `NetCompanion.HeadShape` (default "Box", no protocol bump); `AuthoredCreature.HeadShape`
+  so a worksheet entry can use the plan.
+- **✅ Ambush.** `ArachnidRules.Lurks` (aggressive, pack hunter, territorial): the server holds the creature
+  motionless (`CombatEntity.Lurking`, on the wire) until a player is within `LurkRange` 6 blocks, then provokes
+  it — a territorial one hunts like an aggressor for the 12 s window, a hunter starts its chase; after a give-up it
+  roams the cooldown and settles back into the wait. The client (`CreatureAnimator.SetLurking`) flattens the body,
+  spreads the legs and stops every flourish. Passive / skittish ones roam. `ArachnidServerTests` covers both
+  tempers on a live server.
+- **✅ Solid + hit on the body.** `BuildArachnid` keeps the thorax, abdomen and head colliders (`MakeGiantBody`,
+  layer 20) and `CreatureView` registers them like a giant's, so the player bumps into it and aims at where the ray
+  meets it; the legs stay render-only.
+- **✅ Server gates.** `CreatureBodyHeight` is plan-aware (`ArachnidRules.BodyHeightCells`: Size × 0.8 → 3 cells,
+  not 6–7); the titan's 110-block despawn leash covers the plan; the Sreekmakra never disguises as one; the
+  large-body checks engage by themselves at Size ≥ 3.
+- **✅ Voice, scan, VEGA.** `CreatureVoices`: an `Arachnid` pool (hiss / sizzle / chitter / click), 2–4 pulses,
+  cadence 9–20 s — before the size rule that would have made it bellow. Scan traits `ui.scan.body.arachnid` +
+  `ui.scan.body.ambush` (EN + DE). `vega.sys.arachnid_sighted` once per session when one comes within 40 blocks.
+- **✅ `/arachnid`** (admin, `summon_arachnid`): places the roster's arachnid near you, or rolls one
+  (`CreatureGenerator.GenerateArachnid`) into the roster first — so a world that did not roll the plan can still
+  show it.
+- **✅ Animator.** `RigDescription.LeggedCrawler`: the arachnid is a crawler by leg count (tripod / metachronal
+  gait, never jumps) but strides at full amplitude without the beetle weave; titan-style cadence.
+- **Tests:** `CreatureArachnidTests` (plan invariants + occurrence, the gen-10 gate, determinism, authored head
+  shape, lurk rule, body height, head tiers, voice), `ArachnidServerTests` (ambush in both tempers, a passive one
+  roams, scan traits, summon), `NetCodecTests` round trip, `CreatureMotionTests`.
+- ⚠ Open: Marcel's playtest (`/arachnid` on a fresh world — look, gait, the pyramid heads, the ambush, the collision).
+
+### 🐛 The world picker scrolls — every save is listed, not just the newest nine (#2010, 2026-09-25, branch fix/save-select-scroll)
+
+- **✅ No more hidden saves.** `UiSaveSelect` stopped at the nine rows its panel holds (`Mathf.Min(worlds.Length, 9)`,
+  there since the picker's first version). `ListWorlds` sorts newest first, so from the tenth world on the player's
+  OLDEST saves were never built — unplayable and undeletable from the game, while "New world" still called their
+  names taken. Singleplayer and Host Game (same screen).
+- **✅ A scrolling list.** The rows sit in a clipped `ScrollRect` (mouse wheel, drag, the gamepad's `UiNav`
+  scroll-into-view); a long list gets the full-size draggable scrollbar and slightly narrower rows. A list that fits
+  looks exactly as before.
+- **✅ Delete keeps your place.** The delete confirmation rebuilds the screen (B59); the scroll offset is carried
+  across that rebuild, so clearing out old worlds far down the list no longer jumps back to the top.
+- **Open:** playtest with 10+ saves (wheel, scrollbar, gamepad, delete further down).
+
+### 🎓 Theo joins the school club in the credits (2026-09-25, branch docs/credits-theo)
+
+- **✅ Credits:** Theo added to the school club's children in the README and the in-game Credits
+  (`ui.credits.body`, 14 languages; the names stay in Latin script, as in every other language).
+- **✅ README catch-up:** the club list still read Damian / Noa — now Daimien / Noah, as #1985 already fixed in the game.
+
+### ⚖️ Factory polymer yields 2 — and one test holds every factory recipe to the 2× rule (#575, 2026-09-25, PR #1993 by @Jay-Hu911)
+
+The first PR out of the community balance review (#575). The findings slices compared the refinery and all 18
+factory recipes with their workshop / refinery chains; `factory_polymer` was the one outlier against both.
+
+- **✅ `factory_polymer`: 3 carbon + 2 sulfur_ore → 2 polymer** (was 1): 1.5× carbon and 2× sulfur_ore of the
+  workshop chain instead of 3× / 4×. Same inputs, so a factory batch stays worth running; no market recipe touches polymer.
+- **✅ The #1200 rule as a test.** `MaterialEconomyTests.FactoryRecipes_StayWithinTwiceTheirReferenceRawMaterialCost_OrAreExplicitlyExempt`:
+  10 factory recipes are compared with a reference chain written into the test (no raw input above 2× per output
+  unit; `factory_diamond`'s carbon counts as a catalyst), the rest are exempt by name, and a factory recipe that is
+  neither fails the test. Exempt: the six pre-#1200 outliers `factory_iron_plate`, `factory_metal_panel`,
+  `factory_steel`, `factory_cable`, `factory_energy_cell`, `factory_circuit_board` (each waits for its own review —
+  the list only gets shorter), and `factory_glass` / `factory_power_cell` (no comparable chain).
+- **Open (#575):** the reference chains mix smelt stations — `factory_magnet` against `refine_iron`, bronze and brass
+  against the workshop `copper_wire`. Against `refine_copper` (1 ore → 3 wire) their copper side input is 3×.
+- **Credits:** @Jay-Hu911 in the README contributors list and the in-game Credits (`ui.credits.body`, 14 languages).
+
+### 🐛 Giants — a procedural colossus and sandworm on a new sand-sea planet class; the flowerling's face and temper (#2004: #1997–#2002, 2026-09-24, branch feat/giants)
+
+The school club invented creatures as tall as high-rise buildings: a giant four-legged animal and a sandworm that
+lives in a sand sea, reacts to vibrations and surfaces partly or completely. Marcel's decisions: **60 blocks**,
+**procedural**, a **new sand-sea planet class**, **effects only** (no block changes), **players bump into them**, a
+**thumper** lures worms, **defeatable but very tough**, the colossus **only on very flat, very light worlds and very
+rare**, sandworms **only on sand-sea worlds**. Everything is **terrain generation 9** — older worlds are unchanged.
+
+- **✅ The flowerling (#1997).** Its maw, teeth and calm grin sat *inside* the head cubes since #1766 — invisible. The
+  face now comes from `FloralFaceLayout` (Shared, tested): a dark-red open maw with teeth, a held snarl, red flared
+  petals. Its mining grudge was set out to 16 blocks but hunted only within 8 (from 12 blocks it flipped "hostile" and
+  wandered off); now it hunts the whole range, gives up after 15 s instead of 7, runs 40 % faster (still below a walk),
+  wakes when mined beside, and a roused creature now bites at night.
+- **✅ Giant foundation (#1998).** `GameServerGiants`: one-per-world giants outside the spawner, the far prune and the
+  fauna cap, placed 130–210 blocks from a player on foot, a return time in `WorldMetadata.GiantBackAt` after a defeat.
+  Shared, pure: `GiantRules` (world gates, vibration), `ColossusBody` (layout + hit capsules), `SandwormPath` (the
+  breach/rear curve both sides run). Hits aim at the nearest body point; the client gives giants colliders on layer 20
+  (the player bumps into them; ground snap and camera boom ignore it), picks and scans them by collider, scales their
+  LOD with size, and plays the new `WorldFx` message (dust, shake, knock-back). `/giant colossus|sandworm` summons one.
+- **✅ Procedural colossus (#1999).** 40–60 blocks, rolled temperament (passive / skittish / territorial / aggressive),
+  legs, necks and heads, tusks, back (plates, spikes, crystals, a forest), colours; 3000–4500 health; a macro walker on
+  the heightfield that avoids water, steep ground, settlements and bases; telegraphed stomps (a ring, then the foot) —
+  a player under a roof or in a cave is safe. Hosted when the type is very flat (amplitude ≤ 10, only flats/downs/dunes),
+  the world's gravity ≤ 0.70 (the lighter moons), the fauna is not none/authored-only, and a one-in-three roll.
+- **✅ Sand-sea planet class (#2000).** `sand_sea` (min generation 9): a calibrated sea region (`SandSeaShare` 0.5) of
+  broad dunes, lifted above the sea level once it is known (never floods), 24 blocks of sand with a cave shield
+  (no caves, tunnels or caverns under it), rock islands where a butte or inselberg rises; mountains, canyons, mesas,
+  lava and water around it, rolled per world.
+- **✅ Procedural sandworm (#2001).** The fixed archetype (ring segments, mandible petals, tooth rings) with rolled
+  size, girth, length, mandibles, plates, glow, hearing and temper; 2500–4000 health, hittable only above the sand. It
+  hears steps (not sneaking), mining, drills, blasts, hard landings, speeders — **only on sand-sea sand**, so rock, a
+  pad or a floor is safe — comes with a ripple and a rumble, breaches (a warning arc) or rears and strikes. The buried
+  body is drawn inside the terrain, which hides it: **no block ever moves**.
+- **✅ Thumper (#2002).** Workshop recipe; on sand-sea ground it thumps every 2 s for 90 s, the worm comes, rears and
+  swallows it (the block goes, no drop). On rock nothing hears it; mining it back stops it.
+- **⚠ Maintainer:** real sounds (stomp, rumble, roar, breach, thump — the thunder and rumble calls are placeholders),
+  the thumper's icon and block texture (a copy of the radio beacon tile for now). **⚠ Playtest:** a flat moon with a
+  colossus (or `/giant colossus`), a sand-sea world with its worm, the thumper; the flowerling's face and temper.
+- **Follow-up (#2003):** the club's worksheets — an authored sand-sea planet, colossus and sandworm — become data
+  entries (every rolled trait is already a plain species field).
+
+### 🚪 A structure measures its own doors — the city boot stops loading its whole footprint (#1994, 2026-09-24, branch perf/settlement-doors)
+
+Straight out of #1990's measurement: with the re-stamping gone, **`doors` was 4810 ms of a 4885 ms
+`settlements` pass** (the NPCs: 18 ms). `RegisterDoors` measured every one of the city's 232 doorways against
+the *world*, and each probe loaded the chunk it landed in until the whole 256×256 footprint was resident — at
+boot, before anybody had walked a step.
+
+- **✅ Measured on the layout instead.** `RecordAuthoredDoor` runs the same `DoorProbe.Measure` over the
+  structure's own blocks while it is in hand and stores wall axis, gap width and gap centre per world cell
+  (`LoadedWorld.SettlementDoorFits`); `RegisterDoors` builds the door from that and reads no world block.
+  Ship, station and player-built doors keep their probe, and a marker without a record falls back to it.
+- **✅ Proven identical.** `CityWorldTests.EveryCityDoor_IsTheDoorTheStampedBlocksWouldGive`: for every one of
+  the city's doorways the hung door is exactly what the stamped blocks produce — wall, width and centre.
+- **📏 `doors` 4810 ms → 20 ms**, `settlements` 4885 → **104 ms**, `structures` 4902 → **295 ms**,
+  boot of the city save **5.3 s → 2.9 s**.
+
+### 🧱 A building stays the way the players left it — structures are stamped once (#1990, 2026-09-24, branch perf/no-restamp)
+
+Follow-up to #1992. Settlements, cities and factories wrote their whole structure into the world on **every**
+server start; vaults, monuments, ruins and bandit camps have been stamped once for a long time ("a mined vault
+stays mined"). Two consequences: a 256×256 city re-wrote 405 332 cells per load, and **a wall a player had mined
+was standing again after a restart**.
+
+- **✅ Stamped once.** `StructureBlocksFeature(origin, groundY)` records the instance in
+  `WorldMetadata.StampedFeatures` after its voxels are committed (after the transaction, so a crash re-stamps
+  rather than half-marking); later loads skip the write. Covers settlements, the city and factories — the two
+  commit paths that were left. Old saves stamp once more and are marked from then on; no migration.
+  **Marcel decided this (2026-09-24): no self-repair, for all structures.**
+- **✅ The boot says where its seconds go.** The `structures` pass reports each stamper under itself
+  (`[boot]   · settlements (4095 ms)`), which is how the rest of this entry was measured at all.
+- **📏 Measured** on a copy of Marcel's real `Glutweite` save, interleaved runs of the same copy:
+  ready **7.1 s / 12.9 s** before → **4.2 s / 5.2 s** after.
+- **🔎 Finding for the next round:** composing the whole city costs **~20 ms**. Nearly all of the remaining
+  `settlements` time is the passes that *read world blocks* — hanging the 232 doors and populating the place —
+  which pull the footprint's chunks into memory at boot. A door's width still comes from a world probe even
+  though the layout that was just generated knows it (see #1994).
+
+### ⏱️ Loading a world, crooked city doors and two misspelled names (#1985–#1991, 2026-09-23, branch fix/load-doors-credits)
+
+Marcel reported "loading a world takes an eternity", crooked sliding doors in his `Glutweite` city save, and two
+wrong names in the credits; a school-club player reported a white walk-through surface in the browser build.
+Measured first (installed 2026.9.13, four worlds): **20–23 s of server boot before the client can even join**,
+and it barely depended on the save — an empty flower world cost as much as a city world with 405 332 persisted
+block edits.
+
+- **✅ The boot reports itself (#1988).** Every pass now logs `[boot] 4/12 landing pads (4120 ms)`
+  (`BootProgress`, `GameServer.BootStage`) — there were **no log lines at all** between "content loaded" and
+  "started on port". The desktop launcher parses `k/n` off the server's stdout and the loading bar follows the
+  real passes instead of a clock (`LoadingHandoffPolicy.Progress` + `TryParseBootStage`, EditMode-tested). The
+  browser host gets the same lines through its `IGameLogger`, but its boot blocks the single thread, so there
+  they are a measurement tool, not yet a moving bar. Recipe in
+  [DEVELOPER.md](docs/developer/DEVELOPER.md#why-is-a-world-taking-so-long-to-load-boot-timings).
+- **✅ The NetCodec warm-up no longer blocks the boot (#1987).** Compiling 249 MessagePack formatters is 7–8 s
+  of Reflection.Emit that depends on nothing and is needed only when the port opens — the last step of
+  `Start()`. It now runs on a background thread beside the galaxy + world build and is joined before
+  `_transport.Start`. A platform without threads (the **in-browser** build runs this same server in-process)
+  falls back to inline, the pattern `ChunkGenerationPool.TryStart` established in #1817; there the warm-up is
+  cheap anyway because IL2CPP cannot build the dynamic formatters and the codec drops to JSON on first encode.
+- **✅ Landing pads are pinned in the save (#1989).** The single biggest pass: **7.9 s** on the dune world,
+  2.7 s on a meadow world, **every load**, because the ring search for dry, flat ground only ever cached its
+  answer in memory. `WorldMetadata.BodyLandingPads` writes it down (**7947 ms → 2 ms** on reload) — and pinning
+  also closes the old comment's worry that "the rule that re-derives them is the only thing holding them in
+  place". Details: [WORLD_GENERATION.md](docs/developer/WORLD_GENERATION.md) §22.
+- **✅ A stamp no longer rewrites rows that do not change (#1990).** `ServerWorld.SetBlock` compares first:
+  identical block + tint + glow + shape and no owner ⇒ no `block_edit` row. A settlement re-stamps its whole
+  structure on every start, so `Glutweite` had **405 332 persisted "player changes" after 69 s of play**. A
+  freshly created test world now carries **20 295 instead of 29 541 rows (−31 %)** with an identical world
+  (same wreck, same settlements, same seed), and its `structures` pass dropped 4.4 s → 3.4 s. A player's build
+  always writes, so ownership stays authoritative.
+- **✅ City doors hang in the wall they were cut into (#1986).** A door marker is one cell and the server
+  re-derived the wall from the neighbouring blocks; with jambs on both axes that probe fell back to "X".
+  Measured on the generated `gds` city: **21 of 259 doors (8 %) took the wrong axis and 20 of them ended up
+  4 blocks wide instead of 2** — the leaf standing across its doorway, stretched into the room ("the sliding
+  doors stand crooked"). The generator knows the side it cut, so `SettlementMarker.DoorAxis` (`DoorWall`) now
+  carries it, `CommitSettlements` records it per world cell and `RegisterDoors` hands it to the probe as the
+  forced axis. Templates and player-placed doors keep the probe. Two tests in `CityWorldTests` pin it (the
+  markers agree with the blocks; no stamped door is wider than its opening). #1983 did *not* cover this — that
+  was door *blocks* in templates.
+- **✅ No far-terrain patch in the near field (#1991).** A school-club player (browser build, Intel UHD 730)
+  reported "a white texture with noclip" at a landing pad. Far patches are flat, untextured and have **no
+  collider** by design; they are hidden by a mask that marks a column covered only when a drawn chunk holds the
+  surface *the sampler computes* — which does not know about levelled landing pads or stamped structures, so at
+  a pad the column stayed unmasked and the patch was drawn over ground the player stands on. Within
+  `NearCoverChunks` (6) of the player a drawn chunk is now proof enough; the horizon rule is unchanged.
+- **✅ Credits: Noa → Noah, Damian → Daimien (#1985).** Both in `ui.credits.body` and in
+  `planet.flower_fields.desc` ("dreamed up by … from the school club"), across all 14 locales including the
+  transliterations (ja ダイミアン, ru Даймиеном, uk Даймієн).
+
+Measured end to end on Marcel's `Glutweite` save (copy): boot **23 s → ~15 s**. On an ordinary world
+(`PadTest`, meadowlands, four settlements) a reload is **5.9–7.1 s** over three runs, and there the boot is
+now bounded by the **warm-up itself**: the world build finishes in ~4.3 s while the 249 formatters still need
+5.8–7.0 s, so the tail is spent waiting for the thread that used to run in front of everything. Two levers remain:
+the `structures` pass, which re-generates and re-stamps a settlement on every start (open in #1990), and the
+warm-up's own 7 s, which would want a narrower warm set or a cached one (noted on #1987).
+
+⚠ **Playtest open** for all of it, and the browser fix (#1991) needs a WebGL build to confirm.
+
+### 🚪 Editors show the real door, bed and prop before placing — form picker, in-game door hologram, template doors fixed (#1975: #1976–#1982, 2026-09-21, branch feat/editor-door-ghost)
+
+The ship, station and town editors showed one cube for everything and exported beds and props as cubes; a door
+was a small cube although the game hangs a 1–7 wide, 2.8 tall door there. Now:
+
+- **One door rule for everyone.** The jamb probe (axis) and gap scan (width), the door kinds and the door's box
+  geometry are shared statics (`DoorProbe`, `DoorBlocks` in Shared; `DoorGeometry` in Client.Core); the server,
+  `DoorView`, the in-game placement ghost and both editors use them, so a preview can never promise a door the
+  world then hangs differently. The in-game form list is one shared `BuiltInForms` list.
+- **Editors.** The ghost shows the block's form (a bed as head + foot), the door the server would hang (red with a
+  status hint when no wall is beside it or the two cells above are taken), or a marker's silhouette (`MarkerSilhouettes`:
+  a figure on NPC posts, a board, a chest, a terminal, a floor plate, the ship hatch frame, ship-station decor).
+  Placed doors, silhouettes and decor are drawn by `EditorPropOverlay` and re-fit when a cell within reach changes.
+- **Editors.** A **form picker** (the in-game form grid, *Automatic* first) replaces the −/+ stepper.
+  `EditorPlacementRules` stamps the block's own form on placement like the server does in-game (bed pair, campfire
+  slab, rug sheet, pot, ladder against the clicked wall, stairs, stretcher); removing one bed half removes both.
+  Door blocks left the block palette (the marker / element is the door); the Station editor keeps them as labelled
+  **hull airlock** blocks.
+- **In-game.** A held door shows a closed door hologram in the target cell, turned by the wall beside it.
+- **Data.** Eight settlement templates (`river_hamlet`, `stone_roundhouse`, `stilt_hamlet`, `walled_market` and their
+  `_home` modules) carried the door as a block cell — a solid wall in every new world. `tools/fix_template_door_blocks.py`
+  turned them into markers with a walkable doorway; a content test keeps door blocks out of settlement templates and
+  allows them in station templates only on the outer hull (the airtight airlock block).
+
+### 🔣 Raw `{count?100:100}` in the ja/zh oxygen-tank texts — and the checks that let it through (#1973, 2026-09-21, branch fix/1973-locale-stray-tokens)
+
+Reported by Camembert1001 (a Japanese UI preflight run over the public EN/JA catalogs). A machine pass (#1278) wrote
+`{count?100:100}` / `{count?200:200}` into `item.oxygen_tank_2/3.desc` in **ja and zh**; English has the plain number,
+and the game substitutes tokens by plain replacement, so players saw the raw token.
+
+- **Data:** the four values now carry the plain numbers. A scan of every locale file (game, VEGA story, web portal —
+  14 languages each) found no other brace outside a token and no `{key:…}` parity break.
+- **Why CI missed it:** `CommunityLocaleTests`, `tools/locale_report.py` and `tools/translate_locale.py` matched tokens
+  with `\{[A-Za-z0-9_]+\}`, so a mangled token compared as "no placeholders" on both sides. All three now share one
+  grammar — `{0}`, `{name}`, `{key:Action}` — and reject any brace left outside it
+  (`EveryLocaleFile_HasNoStrayBraces` over all three locale directories; `--check` class "brace outside a token";
+  the translate validator drops such values and its prompt forbids plural/conditional syntax).
+- **Credits:** Camembert1001 in the README contributors list and the in-game Credits (`ui.credits.body`, 14 languages).
+
+### 🎨 Creator suite — paint any texture, design forms over several blocks, give your tools a look, send a texture in (#1950: #1951–#1967, 2026-09-20, branch feat/creator-suite)
+
+Three menu editors whose results are the player's at once, on any install — none of them needs the original source
+assets. In the world nothing changed: shaping tool, its small editor and dyeing work as before. Details:
+[docs/developer/CREATOR_SUITE.md](docs/developer/CREATOR_SUITE.md).
+
+- **Texture Editor** (menu + in a world): every tile of the game, the picture tiles of furniture with their face
+  areas, plants, hides, the door/machine parts and — icon mode — the item icons. "Use for me" (a PNG pack folder),
+  export, share codes, hold-to-compare, up to eight animation frames, gamepad.
+- **Three texture layers** — official < the player's pack < the world. **World textures**: admins publish for
+  everyone (*World textures: Admins / Off*), the world wins, every player can switch them off for themselves;
+  paged join list, `/reporttexture`, `/texturewipe`. **Animated tiles play in the world** (vertex-stage UV shift
+  onto a frame strip). **Doors, factory machines, the station terminal** take textures (one shared material per part).
+- **Form Editor** (menu): large layer canvas, undo, material + dye preview, a library with delete/duplicate — and
+  **forms over several blocks** (≤ 3×3×3, ≤ 8 cells, one registry slot, cell index in descriptor bits 27–30): every
+  cell is checked before the item is consumed, the form turns but never tips, falls as one piece whatever removes a
+  cell, and is made from N blocks for N cells.
+- **Tools:** the eleven hand-built tool models moved into `data/items.json` (`heldModel`); **My Tools** gives
+  the player's own drill / pistol / blade / scanner a look (fixed 15-colour palette with glow, bound to the player
+  like body paint, ≤ 16, relayed to everyone).
+- **Submit to the developers:** three explicit consents, a nickname instead of a name, no e-mail / location /
+  machine facts; the inbox files it under category `texture` with the files attached and deletes what was not
+  adopted after twelve months; `tools/pull_texture_submissions.py` → `tools/merge_texture.py`. F1 and crash
+  reports name the replaced texture keys. Privacy page (14 languages) and the parents' guide say so.
+- **Plumbing:** extended message tags (tag 254 + two-byte id — the one-byte space was full; no protocol bump),
+  provenance manifest so generator scripts never paint over hand-made tiles, one alpha rule shared by loader,
+  editor, server and test.
+- **Open:** playtest of all of it (especially gamepad in the three editors, animated world textures on WebGL,
+  a multi-block form next to fire/fluids); a WebGL build was not run locally; the build ships no animated tiles
+  yet; the 64×64 icon canvas; CHANGELOG + what's-new follow with the release.
+- **Follow-up after the first playtest (#1969, 2026-09-20):** the Form Editor's preview material is no longer stepped
+  through with ◀ ▶ — the left column is split, *My forms* above, a **searchable material list with tile pictures**
+  below (`PaletteListUi`), sorted by the shown name; the editor opens on stone and remembers the last material.
+- **Chat filter (#1970, same PR):** a regex timeout in the personal-data patterns escaped `ChatScreen.Screen`
+  (`Regex.Matches` is lazy — the loop stood outside the `try`); it turned one full-tier `main` run red. The matches
+  are now walked inside the `try` (`ChatScreen.MatchSpans`).
+
+### 🚀 A lost ship is a world change (#1945, 2026-09-17, branch fix/ship-loss-recovery-1945)
+
+Follow-up to the fourth report of 2026-09-17 ("I crashed and I am hanging in the air on the planet"). The ship had been
+shot down after a walkabout inside the hull; reloading the world fixed that session, but the cause sat in the code.
+
+- **`DisableShip` recovered its pilots with two field writes** (`p.Position = p.RespawnPoint; p.AboardShip = true`) plus
+  `SpaceClosed`. That is no world change: stepping into the ship interior sends a `WorldReset` and taking the helm again
+  deliberately does not, so the client stayed on the interior world, dropped every arriving chunk of the planet it now
+  stood on (`AcceptWorldStream`) and never got ground; a position in a plain state update is ignored (#414 N17), so only
+  the entombment rescue moved the player — into mid-air. The keep-ship branch never re-parked the hull either, so
+  `UpdateAboard` returned early, `aboardShip` stayed true and the helm prompt did nothing: no way out.
+- **Every pilot is now recovered the way a death is** — `RecoverToShip(…, died: false)`: leave the flight view, forget the
+  walkabout, load the ship's body, park the ship, land on its heal tank, arm the spawn adopt, then `WorldReset`,
+  `RespawnNotice` and every per-world list the client drops with them. Both rule outcomes (keep the ship / leave a wreck)
+  and non-owner pilots included; no death flash, because nobody died.
+- **A ship no longer remembers the interior as its parking spot.** Switching ships while inside wrote `shipint:<id>` into
+  the hull's location, which would send a later recovery into a world with no ground; the body the interior was entered
+  from is stored instead.
+- Tests: `ShipLossRecoveryTests` (2: destroyed after a walkabout → world reset + notice, back on the ship's body, not in
+  the interior; a plain shoot-down parks the hull again).
+
+### 🛋️ Player reports 2026-09-17 — Sandbox crafting blocked by the menu, the sage's post becomes a computer, the ship cabin gets a real bed (#1936 #1937 #1938 #1939 #1940 #1941 #1942 #1943, 2026-09-17, branch fix/justus-reports-0917)
+
+Four reports from Justus ("Screelit", v2026.9.10). His crash report needed no fix — the ship was shot down and a
+reload put it right — so it is closed as answered; everything else is below, side findings included.
+
+- **Sandbox still asked for materials (#1936).** The server has crafted for free in the Creative game mode since #662
+  (`HandleCraft` skips blueprint, station, market and materials), but the crafting menu never looked at the mode:
+  `CanCraft` failed on `HasAll(inputs)` and greyed the button with "Materials missing" — the creative starter kit
+  only hid it for simple recipes. `FreeCrafting()` (the mode test the All-items catalog already used) now skips the
+  blueprint, input, market, factory and station checks, offers a full stack per order, sorts everything as craftable
+  and says "Sandbox: crafting is free" instead of a ✗ list; new ships and modules in the ship tab follow. The one
+  refusal left is a full inventory. Tests: `GameModeTests` (+1 server; the client branch rides on the Unity build).
+- **A free craft could destroy its own output (#1937, side finding).** The free path added the result without the fit
+  check the paid path runs, so a craft into a full backpack reported success and dropped the surplus. It refuses with
+  "inventory full" now, like every other path. Test: `GameModeTests.CreativeMode_RefusesACraftThatDoesNotFit`.
+- **The sage's post is a computer now (#1938, report "Weisen Pult?").** `sage_lectern` was a lectern drawn on a dark
+  background, painted on all six faces of a cube ("just a texture on blocks"). Marcel's call: make it a terminal — a
+  computer IS a box, and the sage sells data fragments from an archive. New edge-to-edge terminal tile, new name
+  ("Sage's terminal" / "Terminal des Weisen") in all 14 locales, dialog line and blueprint text with it. The block
+  KEY stays `sage_lectern`: a key that no longer exists decodes to air, which would delete every post ever built.
+- **Three more posts were scene pictures (#1939, side finding).** `press_desk`, `streamer_post` and `quarry_post`
+  showed furniture with legs on a floor; redrawn as the block itself (cabinet, console, crate), filling the tile.
+- **NPCs could climb their own post (#1940, side finding).** The eight profession posts were missing from
+  `NpcFootings.NoFloorBlocks`; the list is derived from the profession table now, so a future post cannot be
+  forgotten. Tests: `NpcFootingTests` (+2).
+- **The ship cabin's bed is a real bed (#1941, report "Das Bett im Schiff").** Ship station cells were written without
+  a form, so the quarters bed was a cube with the bed picture on every face — the two-cell bed (#1846) had never
+  reached ship building. The builder now stamps head + foot: the foot half takes a free floor cell beside the marker
+  that is no station, not the medbay walkway a respawning player lands on and outside every doorway corridor,
+  preferring a wall or corner; a cabin without such a cell keeps one cell. Existing saves pick it up (the structure
+  is rebuilt from its layout on every placement). Tests: `ShipCabinBedTests` (7).
+- **The starter ship gets a crew bunk (#1942, Justus' own idea).** The 5×7 box cabin has no room for a second bed
+  cell, so its quarters stamp the new one-cell `crew_bunk` ("Schlafkoje") — craftable at the workshop, a bed for the
+  home spawn and the slow rest heal wherever a bed does not fit. Tests: `ShipCabinBedTests` (2).
+- **Furniture built into a ship keeps its form (#1943, side finding).** A ship edit stored the block id alone, so a
+  bed, campfire, rug or staircase built aboard turned into a cube. `StructureEditIntent` carries the orientation the
+  placement ghost showed (additive), the server stamps the prop form (bed: head + foot), `structure_edit` has a
+  `shape` column (older saves default to the cube they stored) and mining one bed half takes the other.
+- **i18n.** The new and changed texts in all 14 locales (hand-written, no machine pass).
+
+### 🛰️ Player reports 2026-09-16 — /help cut by the chat, /tp city, no station at the start, the station forgotten on quit; taming the Sreekmakra, switching the world mode, the Sandbox catalog, a look for every tool (#1922 #1923 #1924 #1925 #1926 #1927 #1928 #1930 #1931, 2026-09-16, branch fix/justus-reports-0916)
+
+Five reports from Justus ("Flash der Miner-BBTS" and "Screelit", v2026.9.9) plus his answer to the Valuma question.
+Marcel's decisions 2026-09-16: all recommendations taken.
+
+- **/help cut by the chat window; `/tp` errors never in the chat (#1922).** The help texts were unchanged, but since the chat
+  yields to VEGA's speech panel (9.7) and became a 360 px holo box (#1801) `ChatUi.RefreshLog` dropped the oldest lines to fit
+  — with VEGA speaking ~90 px, so `/help` lost its first line and `/help admin` its teleport line. While the chat box is open,
+  and for the fade time after a typed command, the chat now keeps its whole lane (it draws above VEGA); the mouse wheel and
+  PageUp/PageDown scroll back through the recent lines (`ChatScrollback`, Client.Core), with dim hint rows where lines are out
+  of view. Admin rejections that are `@srv.*` tokens (every `/tp` rejection since #822) are resolved and written to the chat —
+  the #642 promise had silently stopped working. Tests: `ChatScrollbackTests` (4), `ChatHelpTextTests` keys.
+- **`/tp city` (#1923).** Settlements of the city, town and metropolis tiers are their own `/tp` kind `city` (numbered like
+  every kind); `cities/town/stadt/städte` → city, `dorf/dörfer/siedlung/siedlungen` → village. A body without a city answers
+  "no city on this planet — try /tp village". Tests: `AdminNamedTeleportTests` (3 new, fast).
+- **No space station in the start system (#1924).** Both home guarantees (the synthesized fallback station, no Desolate/Pirate
+  start) were hard-coded to `sys0`, but the start planet is the first planet of the start type anywhere — 37.5 % of new worlds
+  had no station reachable from the start orbit and VEGA's "dock at the station — see it on the radar?" led nowhere.
+  `UniverseGenerator.EnsureStartSystemStation` adds a real `<sys>-st` over the start planet when the system rolled none
+  (angle hashed from the system id — no generator draw moves); every save gets it except an older save starting in sys0, which
+  keeps its synthesized station (`WorldDescription.StartStationGeneration` = 8). VEGA's dock lesson points to the star map in a
+  system without a station (`vega.s.dock.start_far`). Tests: `StartSystemStationTests` (3).
+- **Quit on a station → back on the planet (#1925).** `RestoreJoinBody` discarded a saved `station:<id>` on purpose, and
+  `OnClientDisconnected` ran `LeaveStation` before saving (the planet got saved — and the leaver was relaunched into a space
+  instance `LeaveSpace` had just cleared). The disconnect now only forgets the boarding (`ForgetStationBoarding`); a join onto a
+  saved station parks the ship at the planet the station undocks to and re-boards the station after the join burst
+  (`RestoreStationOnJoin`, the docking transition) at the saved spot when it is still standing room. NPC and player stations.
+  Tests: `SpaceStationBoardingTests` (+2: disconnect/rejoin, server restart).
+- **Taming the Sreekmakra; the scanner reads its name (#1926, Justus' Valuma follow-up).** The disguised shapeshifter can be tamed
+  with the translator (also while it hunts you); taming ANY animal of the shape it wears brings it along as a second companion
+  beside the player. It stays in its true form, opens its Codex entry and counts the new achievement *Shapeshifter's Friend*;
+  the next wild one comes after three in-game days; one per player; revealed or fleeing it refuses. `ScanIntent.EntityId`
+  (additive) lets the scanner read exactly the aimed creature: the disguise shows "Sreekmakra" with the anomaly readout and
+  counts as its discovery (older clients keep the nearest-of-its-kind guess). Tests: `SreekmakraTests` (+4).
+- **World mode by chat command (#1927, report "Der Modus").** `/gamemode explorer|creative|sandbox` (also `/mode <mode>`,
+  `/modus`, the German words) sets on a running world what the new-world screen bakes in — Explorer = Survival; Creative =
+  Survival + flight + all blueprints, ships and the kit; Sandbox = the Creative game mode + all of that — saved with the world
+  and sent to everyone online at once; back to Explorer keeps what was granted. World admin role, not the cheats option.
+  Tests: `AdminWorldModeTests` (4).
+- **Sandbox "All items" catalog (#1930, report "Biiiiiitte").** In the Creative game mode the Tab menu's inventory gets an
+  **All items** page (search box, every item with its icon); "Take 1" / "Take a stack" hands it out via the new
+  `CreativeTakeItemIntent` (tag 244) — refused outside that mode. Tests: `CreativeCatalogTests` (3).
+- **Every tool looks like itself in the hand (#1931, report "Das Item Hand Design").** `HeldItemShapes` (Client.Core) gives each
+  drill (basic, titanium, diamond, mining beam), gun (scrap, gauss, laser, plasma blaster), blade (machete, vibro knife, plasma
+  sword) and scanner (hand, advanced) its own cube parts; the base items keep their kind's old model, NPC tools are unchanged.
+  First-person hand, own avatar and other players. Tests: `HeldItemShapesTests` (9).
+- **i18n (#1928).** The new and changed texts in the twelve community languages (machine pass + hand review), coverage 100 %.
+
+### 🌋 Player reports 2026-09-15, late — landed in lava, the caret crash again, cut feedback text; Titas, Valuma and eight NPC professions (#1906 #1907 #1908 #1909 #1910 #1911 #1912 #1913 #1914 #1915, 2026-09-16, branch fix/justus-reports-0915-late)
+
+Twelve reports + one crash from Justus ("Flash der Miner-BBTS", v2026.9.9) and the side findings of their analysis.
+Marcel's decisions 2026-09-16: all recommendations taken; the per-world weapon switch is removed (weapons are not
+configurable); the new professions also appear in newly generated settlements, are placeable in the structure editor and
+can be staffed at your own station/base like the existing posts; textures are generated with the OpenAI scripts.
+
+- **Caret crash (client, 2026.9.9).** `InputField.GenerateCaret` threw again although #1805 guarded every field: the guard read
+  the Text's cached `Graphic.canvas` from the field's own `OnCanvasHierarchyChanged` (it sits above the Text, so the cache
+  could still hold the disabled canvas), missed a focus requested in the same frame the canvas went off (uGUI focuses in its
+  `LateUpdate`) and a field focused under an already hidden canvas. `InputFocusGuard` now walks the parent canvases itself
+  (`HasLiveCanvas`) in `OnCanvasHierarchyChanged` AND a `LateUpdate` ordered after uGUI's. The chat box — the one runtime
+  field built without `UiKit.AddInput` — gets the guard and turns its canvas on BEFORE focusing (in the flight view it stayed
+  off until the next frame: the likeliest path of the report). PlayMode: `InputFocusGuardPlayModeTests` (4).
+- **F1 feedback text cut at 1500 characters.** A long idea text arrived ending mid-sentence: the dialog's field stopped
+  accepting keys and pasted text at 1500 without any hint. Description and reply answer now take **4800** characters
+  (below the inbox's 5000 even with the /bump twin's "[feedback] title — " prefix, so the two rows still pair), a live
+  "used / 4800" count sits next to the label (warning colour from 90 %), and a text that filled the field asks once
+  ("reached the maximum length — click Send again"). The server's /bump description cap went from 2000 to 5100.
+  Test: `BumpTests.BumpReport_FullLengthFeedbackText_ReachesTheInboxTwinUncut`.
+- **The per-world weapon switch is gone (side finding).** `GameRules.WeaponMode` (None/ToolsOnly/NonLethal/Lasers/All) was
+  never read by any code — every world always had all hand weapons — and was not in the world options; only the unused
+  server presets set it, and the parents page + age-rating checklist claimed "combat is opt-in per world". Marcel's
+  decision: whether a world has weapons is not configurable. Removed the enum, the property, the preset lines and the
+  `ServerRules.WeaponMode` wire field (contractless map → older clients simply see it missing); a save whose baked
+  `RulesOverride` still carries the field loads unchanged (`GameModeTests.SavedRules_FromBeforeTheWeaponModeRemoval_StillLoad`).
+  Docs corrected: `docs/user/PARENTS.md` + `.de.md` (what a family world does switch: robots, bandits, space enemies, UFOs,
+  wildlife), `docs/developer/AGE_RATING_CHECKLIST.md`.
+- **Vendors: trade AND talk; the theme of the vendor you stand at (side findings).** E at a vendor NPC always opened the
+  market — a vendor is the "market" station — so vendor dialogues (the favour chain, recurring faces) were only reachable
+  from 3.6–4.5 m away. E now asks *Trade or talk?* (`VendorChoicePrompt`, E/Enter = trade, the old one-key habit stays;
+  market blocks still open at once). Server: `VendorThemeAt` took the nearest vendor NPC anywhere on the world once any
+  stall marker was in reach; it now requires that vendor within 6 blocks (`VendorThemeReach`). USER_MANUAL updated.
+- **Landed in the lava (terrain generation 8).** Justus' ship stood in a lava lake on the ashen world Naispae V: a
+  radius-8 shaft with lava walls, the floor flooded as soon as something woke the melt. The #1619 islet only rose out of
+  WATER (`SeaIsWater`), and the dry test knew lava seas and craters but not lava rivers, caldera/shield lakes or gen-3
+  flows. A probe over twelve `ashen_ocean` seeds found 1–10 of 12–16 pads per world in lava. **New worlds (generation 8,
+  `LavaPadsGeneration`):** a 13-sample dry test over every water and lava body; a pad still over lava gets a **basalt
+  islet** (`LandingPadFlatten.Molten`: plateau + slope of basalt, lava cells filled, no flora), never a shaft.
+  **Older saves** keep their pads: lava pads are flagged `Molten` — ranked last, refused as an explicit choice while
+  another pad is free (`srv.land.pad_lava`), and a ship saved on one is parked on a free pad on load, the player waking
+  aboard (`RestoreLandingPad` + `LeaveMoltenPad`); the chooser/map show them orange-red "lava!" (`NetLandingPad.Lava`),
+  VEGA line `vega.hint.lava_pad`. `CurrentTerrainGeneration` 7 → 8 (shared with Titas/Valuma below). Tests: three in
+  `LandingPadTests`. Docs: WORLD_GENERATION.md §19, USER_MANUAL (landing pads).
+- **NPC professions, part 1 — the table, their buildings in new settlements, editor markers, base/station staffing.**
+  Justus' eight job ideas become professions (`NpcProfessions`, Shared): **doctor, grocer (shopkeeper), arms dealer, sage,
+  animal tamer, blockfarmer** trade (Role `vendor` with their own job + market theme `medics/grocer/arms/sage/tamer/blocks`,
+  so the market and the trade-or-talk question work unchanged), **streamer** and **reporter** are settlers. Each has a post
+  marker (= its job key), a post block for bases/stations, a settlement building function (`clinic, shop, armory, library,
+  stable, quarry, studio, newsroom` → `StructureRoles.PlotRoles`) and a furnished room (medbay, market, workshop, hall,
+  storage, lounge, board). **Settlements:** 32 new modules (village + town, human + alien; generator
+  `tools/gen_settlement_modules.py` / `settlement_module_shapes.py` — every existing module byte-identical, pool order kept)
+  as optional max-1 entries in every modular kit, so only freshly placed settlements draw them (compositions are pinned per
+  record). `SpawnProfessionResidents` staffs each post AFTER the bed-bound residents with its own seeded generator — a
+  settlement without profession posts spawns exactly the people it always did. **Editor:** the eight markers in the station
+  and settlement palettes (`ui.marker.*`), the eight functions in the "use as" stepper (`ui.role.*`). **Stations:** generated
+  (authored templates) and kit crews staff profession markers (no `vendorIndex` step, so classic vendor themes never shift);
+  a player station registers profession post blocks as markers and staffs them like the trading post (air check).
+  **Bases:** `BaseIndex.ProfessionPosts` → jobs right after vendor/quartermaster, base markers per profession. **Trade
+  gates** (settlement / station / base) accept every trading profession's post. Locales en+de: `npc.role.*`,
+  `npc.activity.*`, `npc.greet.*`, `ui.marker.*`, `ui.role.*`. Tests: `NpcProfessionTests` (table, kits, fresh settlement
+  staffing) + marker whitelists / resident counts in the settlement tests.
+- **NPC professions, part 2 — posts to build, their goods, their talk, the streamer's photo, the reporter's news, the
+  tamer's pet.** **Post blocks** (`clinic_post`, `shop_counter`, `arms_rack`, `sage_lectern`, `tamer_post`,
+  `quarry_post`, `streamer_post`, `press_desk`, appended to blocks.json so block ids stay) behind one blueprint
+  `station_profession_posts` (Station tree after the trading post), plus a `stretcher` furniture block (Table shape);
+  textures generated with the OpenAI scripts (+ Titas' `sulfur_stone`). **Offers:** 26 market recipes on the six new
+  themes ("expensive" = diamonds/gold); `RecipeDefinition.MarketRotation` (+ `OfferedOnDay`) puts the doctor's bed and
+  stretcher in stock every other in-game day (server check `srv.craft.not_today`, client filter); the grocer sells only
+  inside the shop (`InSameClosedRoom`, `srv.craft.shop_only`). **Dialogues:** `DialogDefinition.Job`, one dialogue per
+  profession; a profession never takes a role dialogue. **Streamer:** asks each passer-by once per in-game day
+  (`npc.streamer.ask`); "yes" poses and `NpcDialogState.Action = "photo"` takes a HUD-free photo, "never" stops the asking.
+  **Reporter:** "interview me" → `InterviewUi` (≤ 300 chars, screened like chat; Safe chat mode = four ready answers) →
+  `InterviewAnswerIntent` (tag 243) → `WorldMetadata.News` per place (latest 10); "what's in the news?" reads them back.
+  **Tamer:** a tame land animal of the planet follows them (`npc:<id>` owner, not attackable, gone with the tamer, none on
+  stations). **Blockfarmer:** works 10 blocks beyond the settlement edge / base walls. Client: held items
+  (`HeldItem.ForNpc`), profession greetings by nameplate key. Balance tests adjusted: a bought weapon is the deliberate
+  shortcut past the upgrade chain (crafting-only rule), the posts blueprint costs 45. Tests: `NpcProfessionTests` (+9).
+  Docs: NPC_ROUTINES.md §11, USER_MANUAL (professions), STATION_SETTLEMENT_EDITOR.md, NOTICES.md.
+- **NPC professions, part 3 — generated stations and the G.D.S. city (Marcel, 2026-09-16).** Station kits offer six
+  profession rooms (doctor, grocer, arms dealer, sage, streamer, reporter — no tamer or blockfarmer in space) per tier,
+  each with its keeper's cabin behind a partition; modules with a cabin dock on the hall deck only (the crew cannot climb);
+  profession posts are staffed before settler posts; profession rooms are furnished like their buildings. The G.D.S. city
+  gets two services districts with the same six. Every existing module and kit entry is unchanged (new entries appended),
+  pinned stations and cities replay as before. Editor: six station functions (`ui.function.*`, all languages). Tests:
+  `NpcProfessionTests` (+3), module count in `SettlementModuleContentTests`.
+- **Titas (generation 8).** Justus' frozen planet, at most once per galaxy and always called "Titas": ten blocks of snow
+  over the new `sulfur_stone`, toxic yellow water under five blocks of ice, volcanic hot zones (15 %, basalt, lava ponds,
+  +100 °C), leafless dead forests, at most one water species, no settlements/ruins/camps/wrecks/unique sites — only
+  3–6 abandoned **SPS research stations** (rusted modules, ship pad + "H" pad, salvage, a log terminal with three lore
+  texts; no air and −90 °C inside) and net fragments, and the planet machines ×2.5, gathering at the labs. Survival: an
+  **exposure meter** (40 min cold, 30 min heat, roof half speed, liners/tier factors, ship/station/base/campfire refill,
+  rising damage at full, VEGA at 50/75/90 %, HUD row) and **toxic water** (2 HP/s after 3 s). All new `PlanetType` fields
+  are no-ops on every other type and read on generation-8 worlds only (goldens unchanged, new `titas-gen8`). Tests:
+  `TitasWorldTests` (7), `TitasSurvivalTests` (5). Docs: WORLD_GENERATION.md §20, USER_MANUAL (survival).
+- **"Port Sex" — no more rude coined names, and no rude station names typed by players (Marcel, 2026-09-16).** A hub
+  station was called "Port Sex": `NameGenerator.Port` is "Port " + a coined word, and "s" + "e" + "x" is an ordinary
+  onset/vowel/coda syllable; the generator's block list knew "rape"/"porn"/… but not "sex". Every coined name (stars,
+  regions, planets, twins, moons, asteroids, ports, wrecks, NPC persons/robots, creatures, flora, trees) now leaves
+  through `NameGenerator.Clean`: a letter run with a blocked substring (the old list + sexual/insulting additions) is
+  replaced by a clean word from a LOCAL generator seeded by that run — the naming stream is not touched, so every other
+  name stays identical and an existing save simply shows a new name for the offending body on its next start (galaxy
+  names are regenerated from the seed). Player-given names (stations, bases, beacons, companions): the chat screen masks
+  the sexual terms (names refuse masked words), and `ScreenPlayerName` also refuses a few unambiguous sexual stems inside
+  compounds ("Sexstation"). Tests: `NameGeneratorTests` (+2), `NameAndAiScreeningTests` (+1).
+- **Valuma and the Sreekmakra (generation 8).** Justus' rare plains planet (his text was cut at 1500 characters — ask him
+  for the rest): flat grass plains without volcanoes, massifs, rifts, escarpments or tilted/stepped regimes
+  (`CalmTerrain`), hardly a tree, a peaceful roster (`PeacefulFauna`), no structures but net fragments. **Sreekmakra**
+  (authored creature): one per world, disguised as a land animal with 3× its health, changes shape unobserved every
+  150–240 s; killing an animal of its current shape or hitting it makes it hunt that player (the shape's speed and bite
+  ×1.5) until they leave or it falls; at zero the disguise breaks and the true form fights on; its defeat gives the
+  Codex entry, the achievement *Unmasked* and keeps the next one away three in-game days; with planet enemies off it
+  reveals itself and flees; untameable; the hand scanner reads an anomaly. Client rebuilds a creature's body and voice
+  on a species change. **Mood:** VEGA feels watched after 20 minutes on the planet, after 35 fog and darker music
+  (`PlayerStateUpdate.Uneasy`), reset on leaving. HUD: exposure row icon `vital_exposure` (gen_hud_icons.py). Tests:
+  `ValumaWorldTests` (3), `SreekmakraTests` (5), golden `valuma-gen8`. Docs: WORLD_GENERATION.md §21, USER_MANUAL.
+
+### 🛏️ Player reports 2026-09-15, evening — several beds on one bed, a chair in the cabin door, breathing in kelp, foam at the old coast; trader ships on the map (#1900 #1901 #1902 #1903 #1904, 2026-09-15, branch fix/justus-reports-0915)
+
+Five reports from Justus ("Flash der Miner-BBTS", v2026.9.9, fresh singleplayer world) plus Marcel's question how the
+flying traders behave. Marcel's decisions 2026-09-15: generic texture solution without new art, clear the door lanes
+(existing worlds too), water drawn around plants, no minimum foam, traders stay longer / wait for nearby players / show
+on the planet map.
+
+- **#1900 Picture tiles on built-in forms.** Built-in shape faces had no texture coordinates, so every face showed the
+  whole tile: two drawn beds on a two-cell mattress, mini beds on pillow and boards, pots on pots. Every built-in form
+  face now gets form-local proportional UVs (`Face.Finish`: the "cut material" micro boxes already had), a `ShapePart`
+  and a `FaceSide`. `data/blocks.json` gains `tileKind` (`material`/`picture`) and `faces` slots (part, side, tile,
+  image region the face is stretched onto; `BlockFaceTextures`, client table `ShapeFaceTextures`). Bed, flower pot,
+  campfire, rug and ladder are dressed from their existing drawings — the two mattress tops continue ONE bed; stairs
+  are `material`. `BlockFaceTextureTests` fails when a stamped prop declares no `tileKind` or a picture prop no slots.
+  Editor voxel view gets real UVs (it read unset ones → one texel). Docs:
+  [docs/developer/CUSTOM_SHAPES.md](docs/developer/CUSTOM_SHAPES.md).
+- **#1902 Air pockets under water.** A cell holds one block id, so a plant, ladder or form in water deleted its water:
+  the server's oxygen check (head cell == water) let divers breathe inside kelp stalks, the mesher drew a dry hole. One
+  shared rule (`WetCell`, Shared): water, or a non-full block with water above or on ≥2 sides. Used by `HeadUnderwater`,
+  the client wash, audio muffle (no longer matching `water_spout`) and swimming (`WaterProbe`, Client.Core); the mesher
+  draws the water volume inside wet plant/prop cells and shows water faces toward dry bank plants. Tests: `WetCellTests`,
+  `OxygenTests` (kelp, ladder, post form), `WaterProbeTests`.
+- **#1901 A chair in the cabin door.** `StationKitComposer.Bake` reserved lanes only at module joints and did not seal the
+  room flood at door markers: the table's chair landed right behind a cabin door, and all four cabins plus the corridor
+  were furnished as ONE region (doubled algae tanks). One shared rule `RoomFurnisher.DoorLaneAt` (door gap = the flood
+  wall; Clear = gap + two rows each side; `BlockedDoorLanes`) for kit stations, settlements, cities and the editor
+  preview; the structure editor's seal check/export paints blocked lanes red (`ui.ed.door_lanes_blocked`, 14 locales).
+  Templates: station hydro modules and `village_greenhouse_1` lost the trays/crops in front of a door (generators +
+  regenerated data). The lamp post stands beside the module's real door; perimeter fence, garden flora and lamp posts
+  are cleared from lanes. **Existing worlds:** `StationKitRecord.Revision` — a replayed kit station at revision 0
+  removes stale generated furniture where the current bake leaves air, once (never beds, lights, walls, doors,
+  ladders, player-attributed cells or crates holding a container). Tests: `DoorLaneTests` (14), the migration in
+  `StationKitServerTests`. Docs: [docs/developer/STATION_SETTLEMENT_EDITOR.md](docs/developer/STATION_SETTLEMENT_EDITOR.md).
+  ⚠ Open (decision): existing kit SETTLEMENTS re-stamp upstairs rooms with interior doors with new furniture positions
+  and are not cleaned — a v2026.9.9 world may show a second set there (town house/market variant 1, G.D.S. hall
+  bedrooms, city tall house).
+- **#1904 Trader ships.** A landed trader stays 600–900 s (was 180–360), a docked one 420–720 s (was 150–300). When its
+  time is up a landed trader waits while any player is within 32 blocks of its pilot or hull and leaves 30 s after the
+  last one walked off (`LastPlayerNearAt`); bodies nobody is on (also unloaded ones) are still swept. While landed the
+  planet POI list carries a live `trader_ship` marker at the pilot ("Trader ship {name}", `poi.trader_ship`, 14
+  locales): gold ship icon + label on the planet map, gold blip on the HUD compass. Landing and lift-off re-broadcast
+  pads and POIs to everyone on the body (the stale pad list). Tests: `LandedTraderStayTests` (8), `SpaceTraderTests`.
+  Docs: [docs/developer/NPC_TRADER_SHIPS.md](docs/developer/NPC_TRADER_SHIPS.md), manual trader section.
+- **#1903 Shore foam at the old coastline.** Foam reads cells up to 13 blocks away, but a block change re-meshed only its
+  chunk and face neighbours. Water edits now park every meshed chunk within `WaterSurface.MeshReach` for one coalesced
+  refresh after 0.5 s (`GameBootstrap.MarkWaterReachDirty`). Tests: `WaterSurfaceTests`.
+- Mesher goldens re-pinned (`ChunkMesherGoldenEditModeTests`); local Unity build Success, EditMode 162/162.
+- **Open: Marcel's playtest** — a station cabin bed + pot, stairs/campfire/rug/ladder, a kelp forest dive (oxygen drops,
+  swimming, no holes around plants), flood a coast (old foam line gone), cabin doors free in a fresh AND in Justus'
+  world `z`, a landed trader on the planet map/compass that waits while you stand next to it.
+
+### 🛰️ Stations look like themselves — real voxel hulls in flight, solar wings / antennae / domes per kit, docking at the hangar (#1921: #1917 #1918 #1919 #1920, 2026-09-16, branch feat/station-hulls)
+
+Marcel's question: do stations look like their models? No — every generated station flew as the same hard-coded placeholder
+(`SpaceView.BuildStationModel`, a hub with cross arms, pods, blue wings, a beacon, spinning, scaled by tier) while its
+interior was a kit composition, template or `StationGenerator` build of a different shape and size, and the ship docked at
+the model's centre. Player stations and The Long Quiet already flew as their own cells. Decisions: real hull 1:1, layout
+fixed at first sight, exterior detail (solar wings, antennae, domes) set per kit in the editor, dock at the hangar.
+
+- **#1917 Server.** `EnsureStationStructure` (split out of `StampStation`) picks + pins a station's layout when it is first
+  added to a space instance; "fresh" now asks `HasAnyBlockEdits("station:<id>")`, so flight and travel-screen boarding agree.
+  `StationHull.VisibleCells` (outside + 12 cells through windows / the mouth / shaped cells) becomes a `station`
+  `SpaceStructure` in the instance, sent as `SpaceShipDesign` with the hangar mouth (`StationHull.FindDock`: the force-field
+  patch nearest the `hangar` marker; `HasDock`/`DockX..DockOutZ`, contractless-additive — no protocol bump).
+  `LayoutHullCentres` spaces the hulls by size (30 apart, lowest block ≥ 44 over the plane). Boarding range is measured to
+  the hull box (player builds too); traders fly to the mouth. Shipped kit stations measure up to 128 × 19 × 110 blocks and
+  ~15 k visible cells.
+- **#1918 Kits.** `StructureKit.SolarWings/Antennas/Domes` (shipped: small 2/2/1 … colossal 8/6/3), pinned per station in
+  `StationKitRecord.Exterior`. `StationKitExterior` adds a 3-block margin (modules composed inside `maxExtent − 6`): wings on
+  solid wall rows (glass tinted `0x2A4B9C`, carbon frame), domes on free roofs (start module = hull cupola), antenna masts on
+  free roof corners; never in a module box or in front of a force-field mouth. A kit station pinned before gets its kit's
+  counts once; its modules bake 3 further in, `StationStructure.ModuleShift` moves the stamp origin back, nothing moves in
+  the world.
+- **#1919 Client.** Station hulls mesh with tints + shapes (one per frame), unload only 900 from their box, the flight clamp
+  grows to take them in; the ship collides with hull cells (axis-separated, radius 2.5); dock prompt, autopilot and chart
+  targets use the hull / the point in front of the mouth; `PlanDockApproach` flies there (over / under the hull box when
+  it is in the way) and into the mouth, fading only at the end.
+- **#1920 Editor.** Kit panel fields *Solar wings / Antennas / Domes*; **Assemble** keeps tints + shapes. Labels in all 14
+  locales.
+- Tests: `StationHullTests` (8), `StationHullServerTests` (5). Docs: `STATION_AS_LOCATION.md` (in flight),
+  `STATION_SETTLEMENT_EDITOR.md` (exterior detail), manual (stations, E, kit panel).
+- **Open: Marcel's playtest** — fly to a station in a fresh world (hull, wings/domes/antennae, collision, prompt at the
+  hull, dock animation into the hangar, autopilot `P`), an existing save's kit station (layout unchanged inside, detail
+  added outside), the kit panel fields + Assemble.
+
+### 🌀 Loading screen: spinner and text centred on any screen shape (#1898, 2026-09-15, branch fix/loading-overlay-centred)
+
+Marcel: in the WebGL build the world-loading spinner sat right of the destination name and "Loading world…"; the desktop
+build looked right. `WorldLoadingOverlay` placed the three labels top-left anchored in the 1920×1080 reference space
+(`UiKit.Place`) but the spinner centre anchored, and the `Expand` canvas scaler gives a non-16:9 screen its extra width
+on the right. In a ~2:1 browser viewport the text sat ~120 units left of the spinner (a windowed or ultrawide desktop
+client too; on 4:3 the text would have sat too high). The labels now hang off the screen centre as well (title +85,
+subtitle +24, spinner −28, footer −146 — the same layout as before at 16:9). ⚠ Open: Marcel's check in the browser.
+
+### 🪑 NPCs keep off the furniture — and walk on rugs, not above them (#1895, 2026-09-14, branch fix/npc-furniture-floor)
+
+Marcel: NPCs stepped onto tables and chairs and stood on them like on a block. The server's NPC walk read the block id
+only, so every form was a cube. A table was a one-block step, and the route even preferred it (2.6 over it, 4.0 around
+it). A rug was a block the NPC crossed one block above the floor. Marcel's decisions: furniture forms, furniture and
+device blocks and fences are never a floor; creatures, bandits and enemies stay as they are; the rug fix too.
+
+- **Rules** (`NpcFootings`, Shared): `NoFloor` covers the table, chair, bench, bed halves, fence and pot forms on any
+  material, the furniture/device keys (`NoFloorBlocks`: bed, campfire, crates, station container, flower pot,
+  workbench, forge, matter forge, detoxifier, algae/heal tank, data cache, factory terminal, gaming set, vendor post,
+  mission board, radio beacon, sentry post) and plates hung on a wall. `FloorPlate` covers a sheet or panel lying on the
+  floor: walked through, and it carries the feet in its cell. `CeilingPlate` covers a hung plate: walked through.
+  Slabs, stairs, ramps, the hydroponics tray, cores and pipes stay floors.
+- **Server** (`GameServerNpcFooting`): the route (`NpcStandableAt`, `Free`) and the stroll probe
+  (`TryNpcGroundFeetYAt`) use no-load reads (`ServerWorld.GetShapeIfLoaded`). The movement sweep (`BlockedByWorld`) and
+  every spot helper (`StandableSpot`: bed side, seat approach, work, home, patrol, garden, station crew, speeder deploy)
+  use `NpcBodyBlockedAt`. `SeatApproach` tries the chair's sides after its front, because the furnisher puts the table
+  there. The shared `StandableAt` is untouched.
+- Tests: `NpcFootingTests` (rules, predicates on a pad, a walker around a furniture row, a stroller boxed in by
+  furniture, a walker over a rug, a boxed chair).
+- **Open: Marcel's playtest** (a furnished village house and tavern in the evening, a base with crates and a rug).
+- Docs: [docs/developer/NPC_ROUTINES.md](docs/developer/NPC_ROUTINES.md) §5.
+
+### 🏘️ Settlements and cities from modules — furnished buildings, a bed for every resident (#1891: #1884 #1885 #1886 #1887 #1888 #1889 #1890, 2026-09-14, branch feat/settlement-modules)
+
+Marcel after #1879: villages and cities should be built from modules like the stations, with interiors and residents —
+"ich will alles umsetzen in einem rutsch". Every design choice was his (8 × 8 houses, walls following the planet, a bed
+for every resident with a cap, the NPC list only within sight, existing worlds keep their buildings, the template option
+as the share of complete templates, taverns and workshops, 2–3 variants with alien variants).
+
+- **#1884 NPC list within sight.** `SendNpcList` / `SendNpcs` send each player only the NPCs within their streaming radius
+  + two chunks (`NpcsInReachOf`); the G.D.S. city used to push all 324 to everyone five times a second.
+- **#1885 Contract.** Plot functions `tavern` / `workshop` (house slots), `StructureTemplate.Style` (human / `alien`,
+  kit assignment keeps the settlement's inhabitants), material tokens `@wall @accent @roof @floor @path`
+  (`ModuleMaterials.ForSettlement` / `ForCity` — the procedural buildings' own rules), `StructureKit.PinOnly`,
+  `RoomFurnisher` roles Tavern / Workshop; interior doorways keep rooms apart for the furnisher, stairwell edges stay
+  free.
+- **#1886 Content.** `tools/settlement_module_shapes.py` + `gen_settlement_modules.py`: 62 modules (village and town
+  sets — houses, market, notice house, greenhouse, tavern, workshop — each human + alien, a city tall house, ten G.D.S.
+  districts), storeys joined by staircases (NPCs walk steps), a room with a bed in every building people live in;
+  `*_modular_1/2` kits per size (plot 10, building 8, modules only, one service variant set each) and
+  `city_gds_modular_1`; the `*_default_1` kits pin-only. Revision-1 kit grids keep the plaza and the garden patches out
+  of the buildings (`SettlementLayoutSpec.Revision`; six-field grids unchanged).
+- **#1887 Residents per bed.** `GameServerSettlementResidents`: beds of the stamped layout = residents, capped hamlet 6 /
+  village 10 / town 20 / city 32 / G.D.S. 80; posts staffed in order (vendor, quartermaster, gardener, craftsman,
+  innkeeper) with the free bed nearest the post; tavern chairs as evening seats; vendor + quartermaster kept without a
+  bed; guardians extra. Existing worlds: blocks unchanged, the residents follow the beds.
+- **#1888 Template share.** `PickTemplateOrKit`: the option's probability picks a complete template, else a kit
+  (settlements on the `kitpick` lane, stations on the legacy coin); Off = procedural.
+- **#1889 Furnished copies.** `river_hamlet_home`, `stone_roundhouse_home`, `stilt_hamlet_home`, `walled_market_home`
+  with rooms and beds; the originals pin-only (existing worlds replay them unchanged).
+- **#1890 Editor.** *Kits…* on the *Use as* row in both editors, a module picker in the kit panel, the planet-material
+  palette, the *Built for* (human / alien) stepper, tavern / workshop / lounge / guardian markers, the 8 × 8 envelope
+  hint for kit modules; the merge tool carries `style`.
+- **Open: Marcel's playtest** (a fresh world's villages and towns from modules on different planets, taverns in the
+  evening, residents in their beds, a fresh G.D.S. city, the editor picker and planet materials).
+- Docs: [docs/developer/STATION_SETTLEMENT_EDITOR.md](docs/developer/STATION_SETTLEMENT_EDITOR.md) §3c,
+  [docs/developer/WORLD_GENERATION.md](docs/developer/WORLD_GENERATION.md) §18, [docs/developer/NPC_ROUTINES.md](docs/developer/NPC_ROUTINES.md) §10.
+
+### 🌍 Translation gap closed — 140 keys × 12 languages (#1892, 2026-09-14, branch chore/translate-missing-locale-keys)
+
+The kit editor, player notes, NPC routines, base posts, zero-g station building, furniture shapes and a few HUD strings
+(#1861, #1863, #1870, #1879) shipped English + German only, so the other 12 languages sat at 96.8 %.
+
+- **Machine pass:** `tools/translate_locale.py` translated all 1 680 strings; placeholders were checked against `en.json`.
+- **Hand review:** 178 strings corrected where the machine read the game term wrong:
+  - the bench as a *workbench*
+  - the docking port as a *harbour*
+  - the kit key as a *keyboard key*
+  - the base guard as the *Guardian* boss
+  - a staffed post as a *notice board* (ja/ko)
+  - the Guardian-core hint with its meaning reversed (ja)
+  - the gardener's count read as an item name
+  - "Hanger" for hangar (nl), "hospital" for medbay (tr)
+  - Russian and Ukrainian grammar and register slips
+- **Consistency:** field-name references now match the translated labels.
+- `data/locale_coverage.json` is regenerated: every language at 100 %.
+
+### 🛰️ The unreachable wreck — the radar's lost height, an ALT readout, VEGA's way to the derelict (#1880 #1881 #1882, 2026-09-14, branch fix/space-wreck-height-cues)
+
+Lyxette, v2026.9.8: "the wrecks still can't be reached — I fly at the orange marker, it sits in the middle of the display, and
+I fly past it". The snapshot put the ship at y −217 and the wreck at y +12, **19 units apart horizontally and 229 vertically**:
+she hovered right under it. The wreck (#1664) was there all along; nothing on the HUD knew about height.
+
+- **#1880 The radar dropped height** — `SpaceRadar` projected targets onto the tilted chase camera, so 229 units overhead was
+  the centre of the disc, and the camera's ≈17° tilt drew anything above as *behind*. The disc now turns with the heading (the
+  view flattened onto the flight plane, `SpaceRadarMath.Project`) and measures from the pilot (`SpaceView.PilotPosition`: ship,
+  or suit on EVA), not from the camera 13 units back. Station and wreck blips carry a ▲/▼ mark past 10 units of height. The
+  readout names the wreck when it is nearer than any planet, and station, wreck and waypoint lines print the climb:
+  `Vruklouxy · 2 300 km · ▲ 2 290 km`.
+- **#1881 ALT readout** — the instruments show the pilot's height over the flight plane in instrument kilometres
+  (`ALT -2 170 km`) on a line above SPD/THR/HDG. The controls hint starts right after HDG, so it cannot share that line.
+- **#1882 VEGA explains the way** — a space context tip while an unvisited wreck drifts in the system (quiet within 90 units):
+  `wreck_signal` with an AI core Mk2+ (map click, then autopilot, which flies the pitch too), `wreck_signal_manual` without
+  (orange blip, ▲/▼). Opportunity priority, 900 s cooldown, 2 per save. Both retire for the save on the first arrival at a
+  wreck. 14 locales.
+- Tests: `SpaceRadarMathTests` (projection, pitch independence, fallback heading, height band, readouts, ALT), `VegaTextTests`
+  (journal order + retired tip), `SpaceWreckTests.VegaTip_…` (core-tier variant, quiet range, retirement on arrival).
+
+### 🧩 Modular structure kits — stations from docking modules, settlement and city kits, the far-tile stall (#1878: #1871 #1872 #1873 #1874 #1875 #1876 #1877, 2026-09-13/14, branch feat/modular-kits)
+
+Marcel's model: a structure is either **complete** (today's templates) or a **module** of a **kit** — the module name every
+segment that fits together shares ("Small Station 1"). A kit entry says how many modules, which are mandatory and which
+random; station modules dock **airtight** through wall **ports**; villages and cities use the same kit table and the kit
+shapes their grid. Every composition is **pinned**, so nothing looks different after a reload.
+
+- **#1871 Far-tile fix (first).** The far-terrain column query let SQLite scan every edit of the planet per tile
+  (50–90 ms on the city save, empty tiles included) and tiles were built inside the request handler, 48 a second after
+  joining — the tick stalled for a minute and doors opened seconds late. `CROSS JOIN` pins the join order (0–19 ms),
+  PostgreSQL uses `DISTINCT ON`, requests queue per session and `ServeFarTiles` builds them under a 4 ms per-tick budget.
+- **#1872 Pinned plots.** `StructurePlacementRecord.Composition` lists the module per plot / district; the composers
+  replay the list, never the pool (a pool change used to re-deal the buildings of an existing settlement); pre-#1872
+  records freeze their current picks once.
+- **#1873 Contract.** `StructureTemplate.Kit/Function/PinOnly`, `TemplateCell.Port` (`tag[:slide|energy|hinge|open]`),
+  `StructureKit` (`data/structure_kits.json`, `usercontent/structure_kits/`), `TemplateTransform.RotateY`,
+  `StructurePorts` (collect/validate/compatible), `StructureSeal.FindLeaks`.
+- **#1874 Station composer.** `StationKitComposer`: required modules first, weighted draws, four rotations, no overlap,
+  eight attempts then the procedural fallback; joints opened on both sides with a door marker per port, ladder shafts
+  for vertical ports, rooms furnished by function, `lounge` markers in canteens and bars. Fresh stations draw from ONE
+  joint table of complete templates and kits (Off = procedural), pin `kit:<key>` + `WorldMetadata.StationKits`, and
+  replay the pinned modules. Crew = one resident per `cabin` marker with its own bed, the posts staffed by residents,
+  the canteen in the evening, no filler crew. Station path limits (96, 16, 8000).
+- **#1875 Content.** `tools/gen_station_modules.py`: 43 modules in three sizes, kits small … colossal (crew 4 / 6 / 10 /
+  14 / 20, two decks from large up); the four original templates are `pinOnly` and return as room modules.
+- **#1876 Ground kits.** `SettlementLayoutSpec` / `CityLayoutSpec` (pinned as `KitLayout`), `AssignKitModules` fills
+  plots and districts (required first, weighted draws, modules-only squares), `CityGenerator.RoleAtFor` with a district
+  map, default kits per tier + the G.D.S. city kit (`tools/gen_settlement_modules.py`).
+- **#1877 Editor.** Station and Town editor: *Use as* whole structure / kit module with kit field and function
+  stepper, port brushes (door / wide / ladder) + port-door option, *Check seal* paints leaks red and gates the export,
+  *Kits…* panel (`KitEditorPanel`: shipped + user kits, entries table, save to user content + `kit.json` bundle),
+  *Assemble* previews the kit with the real composer; `tools/merge_structure.py` merges kits, functions and ports.
+- Verified: non-Slow server suite 3164/3164, local Unity build green. **Open: Marcel's playtest** (city save doors,
+  fresh-world stations with cabins and docked modules, reload stability, editor ports / seal / kits).
+- Docs: [docs/developer/STATION_SETTLEMENT_EDITOR.md](docs/developer/STATION_SETTLEMENT_EDITOR.md) §3c,
+  [docs/developer/WORLD_GENERATION.md](docs/developer/WORLD_GENERATION.md) §18, [docs/developer/NPC_ROUTINES.md](docs/developer/NPC_ROUTINES.md).
+
+### 🏡 Living NPCs — beds bring residents, posts at home, a daily routine with routes and doors, jobs with yield, the station night (#1851: #1865 #1866 #1867 #1868 #1869, 2026-09-13, branch feat/living-npcs-1851)
+
+Lyxette asked where her settler should walk, whether a big base attracts more people and what they do all day. Every
+design choice was Marcel's (beds as homes, 1 + beds up to 5, barter at home, work/sit/sleep, pathfinding with a teleport
+only as the emergency exit, NPCs open doors, stations and villages too with a dimmed station night, jobs visible and
+with yield, the guard on the night shift). Developer map: [docs/developer/NPC_ROUTINES.md](docs/developer/NPC_ROUTINES.md).
+
+- **#1865 Base life.** Local time on the server (`LocalDayFraction` = the client's longitude-shifted clock; void worlds
+  use the world clock) — creature activity and VEGA's night tips used the world clock, so animals on the far side slept
+  under a noon sun. A **base index** per base from one filtered block-edit query (`IWorldRepository.ListBlockEditsMatching`,
+  all three repositories): beds (head only), chairs/benches, trading posts, boards, crates, workbenches, forges, crops,
+  trays, saplings, sentry posts — counted only inside the base (core zone, walled yard beside the thing, sealed base
+  room or a closed room: walls, roof, door). Residents = min(5, 1 + beds) once the first settler earned the base;
+  slot 0 keeps the founding settler's key, slot n is `base_<id>#n:settler`. A trading post / mission board inside the
+  base is staffed by a resident: barter (`MarketAvailable`, `VendorThemeAt`) and a base board (`home_<hash>_…`, keyed by
+  the core cell) with accept/turn-in at the board; placing a post says why it is not staffed (`srv.base.post_*`).
+- **#1866 Pathfinding.** `NpcGridPath` (Shared, pure A*: standable feet cells, 4 moves, up 1 / down 2, doors dearer,
+  ±48×±8 box, 3000 nodes) — one search per tick (`TickNpcPaths`), waypoint following in `MoveNpcs`, re-route after 4 s
+  stuck, unobserved teleport after 3 failures (nobody within 24 blocks). Slide/energy doors open for walking NPCs; a
+  walker swings a hinge/wood door open (`OpenDoorForNpc`) and it closes behind them (`ServerDoor.NpcHeldUntil`), a
+  player's door is left alone. On a player station a route stays in sealed pockets and doorways.
+- **#1867 Routine.** `TickNpcRoutine`: day (≥ 0.22) at work, evening (≥ 0.68) on a chair/bench, night (≥ 0.78) in their
+  bed — by the local sun; stations by the station clock. Base residents get beds and seats from the index, villagers
+  and crew find theirs within 8 blocks of their marker; guardians and visiting traders keep their posts. Wire additive:
+  `NetNpc.Pose` (0/1/2), `ActivityKey`, `Held`. A sleeper answers a talk sleepily.
+- **#1868 Jobs.** Vendor, quartermaster, guard (walled yard or sentry post; patrols the inside of the wall on the night
+  shift, radio warning + sends scouts/approaching robbers away, never fights), gardener (harvests a standing crop into a
+  base crate every 90 s, regrowth as for a player, tends saplings; no crate → tends only), craftsman (every 300 s:
+  2 plant fibre, or 2 iron ore from a crate → 1 ingot with a forge). `NpcDepositToContainer` lets consumables in,
+  respects filters and wood-box slots; the player's stash rule is unchanged.
+- **#1869 Client.** Sit pose (like a seated remote) and a new lying pose (root on its back along the bed, "z z z"),
+  hoe/hammer meshes, activity on the nameplate, the station deck dims at station night (`Sky`: fill, ambient and
+  interior fill to 0.45, strip lights stay bright; `LocalTimeOfDay` has no longitude aboard), "Talk to … (E)" prompt.
+
+Deviations from the build plan, decided in the code: the base index reads the block-edit store instead of scanning voxels
+(cost); the guard notices scouts without a line of sight (they stand right outside a wall that hides eyes, not voices).
+Tests: `NpcGridPathTests`, `BaseResidentsTests`, `NpcRoutineTests`, `NpcJobsTests`, station night in
+`PlayerStationReportsTests`, village beds in `SettlementNpcTests` (Slow); `DoorTests`/`SettlementNpcTests` pin midday.
+⚠ OPEN: Marcel's playtest (lying pose offsets, hoe/hammer look, station dim level, walking through settlement doors).
+
+### 🏰 Land creatures spawned and walked into a large walled base (#1862, 2026-09-13, branch walls-0913)
+
+Four verified causes behind one report, all server-side; no client or data change.
+
+- **The fill box follows what the players built** — `ComputeReachableFromOutside` flooded a fixed ±48 cube around the
+  core, so a fortress wider than 97 blocks had the seed edges INSIDE its own walls and nothing read as fenced in.
+  `BaseWallReach` asks the block-edit store once for the bounds of the player-owned edits within 192 of the core
+  (`IWorldRepository.TryGetPlayerBlockEditBounds`, per canonical piece across the seams), box = farthest cell + 6, at least
+  48, capped at 192 (a quarter lap on small bodies); `ServerWorld.PlayerBlockSet` (owner-carrying sets only) grows it live
+  and dirties the base's levels. `InWalledBaseArea`, `/basewalls` and the test seams use the same box; the budget scales
+  with it (8 cells per column, cap 600k — a 97 box gets 75k, was 60k), fail-open stays and logs once per level flip;
+  a level's reachable set is a bitset over the band rows instead of a hash set (a 385 box would cost hundreds of MB).
+- **Deep fluid is a wall to the fill** — `Supported()` treated any fluid as a floor, so a hand-dug moat was crossed on
+  its surface. Fluid over fluid (depth ≥ 2) carries no feet now, at the feet level too; a one-deep pond is waded, as
+  `TerrainStepBlocked` lets a walker wade one cell.
+- **Land hoverers obey the walker's terrain rules** — a gas-sac land grazer is a `Hoverer` and `StepBlockedByTerrain`
+  let every hoverer through. `CreatureMotion.IsLandHoverer`/`ObeysGroundRules`: one block up, three down, no water past a
+  puddle, no lava, the large-body column check; air hoverers and fliers keep their freedom. The #1854 lift onto a wall top
+  still works (stepping down two is within the drop tolerance).
+- **A shut door stops creatures** — the doorway is air, the door an entity, so the body sweep never saw one. `StepBlocked`
+  samples the step against `ClosedDoorBlocks` (the NPC rule from #1775) every quarter block: wild fauna is stopped by every
+  shut door, a companion only by a hand-operated one (a proximity door opens for the owner, never for the pet).
+
+Tests: a 121-wide ring with the core 40/30 off-centre keeps spawns out and the box grows/caps with owned builds only; a moat
+two deep fences the yard, a one-deep pond ring does not; a land gas-sac hoverer is stopped by a two-block ledge and a moat but
+wades a puddle, an air hoverer by neither; a walker's step into a shut wooden door is refused and allowed once opened.
+Seams: `WalledReachForTest`, `CreatureStepBlockedForTest`, `SurfaceHeightForTest`.
+### 🛋️ Ideas from the 2026-09-12 reports — a bench and a two-cell bed, zero-g construction on your station, where a discovery was found, notes under the Story tab (#1846 #1842 #1843 #1844, 2026-09-13, branch ideas-0913)
+
+The four ideas that were left after the morning batch, each decided with the maintainer first: lava stays walkable (#1841
+closed, not planned), notes are a Story-tab category rather than a thirteenth tab, zero-g is a per-player switch that is not
+saved, tables and chairs already existed (the Shape action) so only what was missing got built. #1851 (living NPCs) stays parked.
+
+- **#1846 A bench and a two-cell bed** — tables and chairs were already a Shape-action exchange for every buildable material;
+  what was missing was a bench and a bed longer than one block. New built-in forms are allocated **top-down** (`Bench = 63`,
+  `BedHead = 62`, `BedFoot = 61`; `ShapeCode.IsBuiltIn`, custom forms keep 19–60) so no saved custom form shifts. The bench is a
+  seat like the chair and joins with its neighbours. Placing a `bed` now writes head + foot (the foot always in the cell you
+  face; a blocked foot cell refuses with `@srv.place.bed_room`), mining either half clears both and drops one bed, the home
+  spawn arms on either half, the placement ghost previews the foot, generated rooms get the two-cell bed where it fits and the
+  old one-cell bed everywhere else (and the chairs in generated rooms face their table again on ±X).
+- **#1842 Zero-g construction mode** — `SetStationZeroGIntent` (tag 240): aboard a player station **O** toggles the float for
+  you alone (session-only, cleared on leaving); `OutsideStationGravity` honours it, the drift rescue still fires at 64 blocks,
+  and fall damage is waived for three seconds after switching gravity back on. HUD: station-specific hints and a ZERO-G badge.
+- **#1843 Where a discovery was found** — `ScanSite` (body + system, names recorded server-side at the first scan, in space
+  from the instance) on `PlayerState.ScannedWhere`, persisted, shipped as additive `DiscoveryLog` arrays; the Codex chapter shows
+  "found on <planet>, <system>" per entry, place entries name their system; legacy `place:`/`monument:` keys are backfilled on
+  join; the Achievements block links straight into the Discoveries chapter (`OpenWiki("discoveries")`).
+- **#1844 Notes** — a `Notes` category under the Story tab: up to 20 titled notes per player (title 40, body 2000, newlines
+  kept), server-persisted like markers (`NoteActionIntent`/`NoteList`, tags 241/242), title screened like a name, body masked
+  like chat; `NoteMarkup` renders `§0–§f` colours, `§l` bold, `§r` reset with tags closed per line; drafts survive rebuilds,
+  a refused save keeps the typed text; Preview/Edit toggle, Save, Delete.
+
+Tests: bed pair (head+foot, facing, refusals, mining either half, legacy slab, home spawn), shape ranges, bench seat, zero-g
+(on/off, ignored off-station, clears on leaving, drift rescue, fall grace, codec), scan sites (first scan, snapshot round trip,
+join backfill, DiscoveryLog round trip), notes (cap, clamp, newlines, screening, reload, join push, codec) + NoteMarkup.
+Locales EN+DE: `ui.shape.bench/bedhead/bedfoot`, `srv.place.bed_room`, zero-g keys, `ui.wiki.discoveries.where/open`,
+`ui.notes.*`, `srv.note.*`; coverage manifest regenerated. Local Unity build required (client/Assets).
+
+### 🛰️ Player reports 2026-09-13, morning — double doors, the diagonal waterfall glare, sinking gas-sac animals, scouts in the fortress, the station's borrowed sky, trees invisible from space, hotkeys typed into F1, the nameless net-fragment objective (#1852–#1860 + #1840 #1845 #1847, 2026-09-13, branch reports-0913)
+
+Lyxette, thirteen F1 reports from one morning on v2026.9.8 (her planet base on Seana and her station). Every report was read
+against the server snapshot, the screenshot and the code; her settler question is filed as design issue #1851 (parked). Three
+of the ideas from the evening before rode along because they were small.
+
+- **#1852 A double door opened one leaf at a time, with a black post between the leaves** — pairing was visual only (#1729
+  mirrored the hinge side); the server toggled exactly one id and `DoorView` drew both jamb posts for every door, so two posts
+  met at the shared jamb. `DoorPairing.IsPartner` (same kind, axis, height, one block along the leaf) now swings the partner
+  with one E; `DoorPairs.PartnerSides` drops the post on a shared jamb (the middle leaf of three loses both).
+- **#1853 A diagonal glare crawled across the waterfalls** — the mode-4 streak phase added `x+z` linearly, tilting the bands
+  41°. `across` now enters only as a nested perturbation, like the ripple term, in both SubShaders.
+- **#1854 Gas-sac animals sank into floors and cave rock, over and over** — a gas sac makes a land species a hoverer, and the
+  hoverer branch trusted `RestSurfaceYAt` with no ground clamp; the fallback handed back the creature's own, already-sunk cell
+  (6.6023 on a floor whose top is 7 = 6 + 0.8 − 0.2 wave). The rest probe now searches through rock for the nearest real
+  floor, the target never drops below it, and `LiftEmbeddedHoverer` runs before the 2-second sideways displacement.
+- **#1855 Bandit scouts appeared inside a walled fortress** — the spawn was a blind bearing at 40 blocks with no enclosure
+  check, the fence was the radius-8 zone cube and bandits had no wall or fluid collision. Spawns now try 4 radii × 8 bearings
+  and reject `InWalledBaseArea`/`InSealedBaseRoom`/fluid/rampart columns (robbers too); the scout fence is the enclosure;
+  bandit steps refuse walls higher than one block and fluids.
+- **#1856 The station sky showed a grey moon and an ice world that do not exist; "Port Nou" stayed Uncharted after months of
+  trading; no "You are here" aboard; the station's star colour was hashed from an empty system name** — one root: station
+  worlds are `station:<bodyId>` and `Galaxy.FindBody` is exact. `ResolveLocationBody` strips the prefix (player stations resolve
+  their host via `_stationHostBody`, and the station body now carries `ParentId`); used by the visited stamp (docking + wrecks
+  stamp it too), `LocationNamesFor`, the weather star and the star map's active id. `SkyBodiesView` builds the host's sky on a
+  station; `StationBackdrop` lost its decorative moon and sibling.
+- **#1857 Trees grown aboard a station were invisible from space (the pond was not)** — the exterior meshes the structure
+  cell grid, which only player edits mirrored; `TryGrowTree` and crop regrow now mirror every cell through a deferred batch
+  (one row write + one design broadcast per tree).
+- **#1858 Typing "e" and "u" into the F1 dialog docked her and undocked her** — the dialog registered as menu owner only
+  after the end-of-frame screenshot, and no gameplay verb consulted `TextFieldFocused()`. `InputGate` now sits in
+  `InputMap.Down/Held/Up` (every verb but Esc/Tab is swallowed while a text field has focus), the owner is set on the opening
+  frame, V in flight is guarded, the flight early-outs include chat typing, the flight prompts hide under a menu.
+- **#1859 "A net fragment lies on this world" never said which world, stuck in orbit, promised a signal that only a
+  900-second tip could produce, and the chip cut "(7/204)"** — `ShipAiLine.ObjectiveArg` + `story.obj.fragment_on` name the
+  body; the 1 Hz VEGA tick re-sends the objective whenever (key, arg, progress, target) changes; the fragment POI is revealed
+  while the objective is active and the compass shows its distance; the chip auto-fits (font 17, counter on its own line).
+- **#1860 The status toast never expired** — `HudToastPolicy`: 8 s (warnings 15 s) + 0.5 s fade, sequence-numbered so an
+  identical line re-sent shows again; the EVA-pinned "no longer airtight" and the stale "life support lost" clear themselves.
+- **#1840 Scan-drones on asteroids** — unlit red threat strip, fin caps and an underside emitter, eye 0.24 wide (space model
+  gets the strip). **#1845** — "You are in chat" banner below the crosshair while the chat field has focus. **#1847** — a
+  `grass` item (dirt + plant fibre by hand; grass drops grass), so a station arboretum can have green ground.
+
+Tests: pair toggle + partner sides + jamb posts, grass item/recipe/drop, land hoverer rises onto a floor and never re-sinks,
+scouts never spawn inside a closed ring nor climb it, station docking marks Visited + names resolve + tree reaches the grid,
+objective names the body and moves on, ShipAiLine round trip, InputGate/ChatBanner/HudToastPolicy/VegaObjectiveChip EditMode.
+Locales EN+DE: `ui.chat.typing_banner`, `story.obj.fragment_on`, `ui.hud.compass_fragment`, `item.grass.*`; coverage manifest
+regenerated. Local Unity build required (client/Assets + shader).
+
+### 🏘️ Building modules + procedural interiors — a template is a whole settlement OR a part of one, and every room gets furniture (#1826 / #1827 / #1828, 2026-09-13, branch feat/settlement-modules-interiors)
+
+Marcel: a settlement made in the Town editor should be usable either as a complete structure (as today) or as an
+element the procedural composers build a settlement from — and the buildings' interiors should be furnished
+procedurally, for both. **Contract (#1826):** `StructureTemplate.Role` (`role` in the JSON; `StructureRoles`) — empty
+= a whole settlement (the classic pinned path), `house` / `market` / `board` / `greenhouse` = a plot module (6 × 6, up
+to the tier's storey height: `SettlementGenerator.PlotModuleEnvelope`), `city_*` = a 32 × 32 district of the G.D.S.
+city (tier `metropolis`). A plot module's tier picks its style (hamlet/village vs town/city); pack + planet types filter
+like whole templates; `GameContent.SettlementModulesFor` lists them and `GroupByTier` keeps them OUT of the whole
+pools. Town editor: a **Use as** stepper (whole · house · market · mission board · greenhouse · city housing / market /
+hall / garden / tower), the size line shows the module envelope, a **Room** marker joins the palette, `role` rides in
+the bundle meta and the user-content template, `tools/merge_structure.py` carries it, loading a template restores the
+stepper; locale keys `ui.struct.role` / `ui.role.*` / `ui.marker.room` / `ui.struct.size_module` / `ui.tier.metropolis`
+(en + de). **Composition (#1827):** `SettlementGenerator.Generate(…, modules, chance)` decides per plot by a HASH of
+tier + seed + plot (never an rng draw — every plot that stays procedural is byte-identical, test-guarded), stamps the
+module centred (`StampModule`), translates its markers, adds a missing vendor / board / inhabitant in the first free
+cell over the centre (`FreeCellAbove`), takes doors only from the module's door markers, lets ruins decay it like the
+rest; `CityGenerator.Generate(…, modules, chance)` does the same per district (never plaza / open). Server: the
+per-plot chance is the world option `SettlementTemplateUse` (Rare 15 %; Off disables both), and
+`StructurePlacementRecord.Modules` gates it — a fresh stamp writes 1, records from older saves and legacy re-derives
+stay 0, so an existing world's layout never changes under its blocks (round-trip test through a real save).
+**Interiors (#1828):** `RoomFurnisher` furnishes a floor region along its walls — bed, table + chair (#805 shapes on
+the style's material), crate, plant, light, market counter, terminal — from a hash-seeded `Random` of its own; the
+resident's cell, the door lane, the ladder corner and every deck row stay clear; palettes for village (wood / stone /
+torch), town (steel / crate / light), alien (iron / data cache); the G.D.S. houses skip the floor lamp (deck lights,
+#1808). `StampBuilding` furnishes every storey of every procedural building; a `room` marker floods an authored floor
+(cap 256 cells, other marker cells + door lanes reserved, role from the marker inside: vendor → market, mission board →
+office, else home) in whole templates and modules alike. Existing worlds get furniture in their settlements on the
+next start (air cells inside protected rooms only); layouts stay pinned. Two shipped example modules
+(`tools/gen_settlement_modules.py` → `data/settlement_templates.json`): `timber_cottage` (village house, log posts +
+stone under a log gable, hinged door) and `iron_flat` (town house, two iron/glass storeys, ladder, deck lights, slide
+door). Tests: `SettlementModuleTests` (13 — contract, plot / style / size filters, byte-identical plots, vendor
+fallback, off switches, furnished procedural rooms with clear lanes, room marker exactness + cap, city districts +
+open zones, city houses without floor lamps, the record gate through a save) + `KnownMarkers` += `room`. Docs:
+USER_MANUAL §6, `docs/developer/STATION_SETTLEMENT_EDITOR.md` §3b.
+
+### 🛰️ Player reports 2026-09-12, evening — the glow past the seam, the diggable Guardian core, the roof spawn, ruin pillars, station saplings, the doorway "leak", 2-block gaps again (#1829–#1839, 2026-09-13, branch fix/player-reports-2026-09-12-night)
+
+Justus (eight F1 reports, v2026.9.7 — asteroid world + the Guardian core) and Lyxette (four, her station). Every report was
+read against the server snapshot and the code first; the ideas from the same evening are filed as #1840–#1847 (drones on
+asteroids, sinking into lava, zero-g construction, codex find location, notes tab, chat banner, furniture, a grass block).
+
+- **#1829 The mining glow vanished "too far from the ship"** — `MiningFx` was the one view script that never mapped server
+  coordinates through `ScenePos`: the server echoes the canonical cell, the outline lives in the unbounded scene space, and
+  past a wrap seam (Z −314 → +319 in the report, period 640 on a 1296 asteroid) the crack compare never matched and the
+  final-hit flash popped a world-lap away. Both messages now map through `SceneCell`.
+- **#1830 The Guardian core could be mined** — no finale guard in `HandleMine`/`BreakArea`, and the column is a bare-hand
+  light block on a one-shot stamp. `IsGuardianCoreProtected` covers the 3×3 heart (pedestal, column, pillars, panes) from
+  the floor plate to the pillar tops; the shell stays diggable (Route B). `@srv.protect.core` EN+DE.
+- **#1831 No breach hint after joining a save on the core body** — `FinaleView` learned the system only from `WorldReset`;
+  `JoinAccepted` never reached it, so the fire hold mined the core instead of channelling. The gate now reads the star
+  map's active location id (`guardian_finale*`), off in the space view, with the name as fallback.
+- **#1832 "Craft an item" over the finale** — the VEGA onboarding chip beat `story.obj.finale` unconditionally; once the
+  Guardian system is revealed the story objective wins (key, target, progress).
+- **#1833 Docking put Lyxette on the airless roof** — `TryFindStandableInStation` accepted any standable cell up to the top
+  of the build; the roof's outer face qualified and was nearest once the centre column was walled in. Two passes now: a
+  cell inside a sealed pocket first, anything standable only when no pocket exists; boarding sets `AwaitingSpawnAdopt`.
+- **#1834 Ruin pillars and glowing runes placed as plain cubes** — `ancient_brick`/`rune_stone` were not in
+  `TintableDefaults`, so `HandlePlace` stripped the form and glow that `BreakBlockAt` had put into the item; the client
+  ghost showed the pillar anyway. Both keys added; `HeldPlaceShape` now mirrors the `Shapeable` gate.
+- **#1835 Saplings never grew on a station** — the void-enclosure probe ran at the crown cell, whose floor is the air
+  trunk column → "opens to the void" for ever. Judged at the sapling's cell now (berry bushes have no ripening by design).
+- **#1836 False "station is no longer airtight"** — `FillStationPocket` declared a hull breach whenever the START cell was
+  airtight, which a built/stamped door cell and a water cell are; every door transit and pond dip fired the one-shot
+  warning, and the toast had no lifetime. The fill now seeds from the head/neighbour of a door or fluid cell and takes the
+  first sealed pocket; the client clears the banner when life support reports the station sealed again.
+- **#1837 2-block openings still wedged (the #1790 probe was one column short)** — the lintel sits in the NEXT column and
+  the step-up engages at contact, radius + skin before it. `UpdateStepOffset(move)` now samples ahead along the move
+  (centre + both shoulders, `AheadProbe` 0.55 m beyond the capsule edge) as well.
+- **#1838 Fall damage for a flyer** — `HandleFallDamage` now bails for `CreativeFlightFor || Fly`, like `InSpace`.
+- **#1839 "You take damage!" on lava** — `InferDamageCause` samples feet and feet−1, matching the server's `InLava`.
+
+Tests: core column unmineable + protection box, finale objective over the tutorial chip, flyer takes no fall damage,
+ruin masonry shapeable/tintable, roof spawn (25-long hall with a packed centre), doorway/pond pocket, sapling grows in a
+sealed station hall. Local Unity player build before merge (client: MiningFx, FinaleView, HudUi, PlayerController,
+GameBootstrap).
+
+### 🔭 View distance goes to 16 — and the view streams as a disc (#1813, 2026-09-12, branch feat/view-distance-16)
+
+Marcel: raise the view-distance maximum to 16 chunks; a native desktop client's first run now starts at 8, the browser
+build keeps its old defaults (4, phone/tablet browsers 3), and returning players keep their saved value. The settings stepper
+now runs 1–16 and the server clamps a join request to 16 (`MaxClientViewDistanceChunks`, was 8). Raising the cap alone
+would have thrashed: the server streamed a SQUARE of (view + 1) chunks, whose corners (≈ radius × √2 = 24 chunks at 16)
+lie past the sweep's keep/prune radius (view + 4, capped at 20) — the sweep forgot them and the streamer regenerated and
+re-sent them every 10 s (172 of 3822 chunks per sweep at 16; the corners past view + 4 exist from view 8 up). The fog edge is round, so
+the corners were never visible: `StreamChunks` now skips columns outside a disc measured to each column's nearest edge
+(`IsColumnInStreamDisc`) — every column the fog circle reaches and the whole near-column square still stream, and
+fewer chunks go out at every view distance. Desktop client: the fixed 256-block renderer cull grows to (view + 2) × 16
+above view 14 so the last hazed ring is not clipped (unload stays 384). Tests: `StreamDisc_CoversTheFogCircle_…` (fast,
+all 16 slider values) and `ClientViewDistance_ReachesSixteen_…` (Slow: streams 14 chunks out, clamps a spoofed 99, the
+sweep keeps the whole view — fails with 172 forgotten chunks without the disc). Cost: at 16 a fresh view is ~3800
+chunks, ≈ 16 s to fill at the default 16 chunks/tick; the bundled singleplayer server must be rebuilt to get the cap.
+
+### 🏔️ Chunk pipeline & far terrain — the horizon beyond the chunks, generation off the tick, visibility culling (epic #1815: #1816–#1824, 2026-09-12, branch feat/chunk-pipeline-far-terrain) — ⚠ RELEASE NOTE: protocol v6, older game versions cannot join
+**Why.** A comparison with Minecraft Java's chunk pipeline (streaming, generation, section meshing, visibility) showed
+most of its ideas already here; what was missing was a horizon beyond the streamed chunks, generation off the tick
+thread, view/travel-aware ordering, visibility culling and time budgets on the browser's single thread. Marcel's
+decisions: far view desktop 1024 / browser + tablet 512, with cities and player builds; long crisp horizons on thin and
+airless worlds; 2 generation threads; WebGL threads parked (Unity Web has no C# threads — only Burst jobs with
+COOP/COEP headers, which glitch.fun cannot send).
+
+**What changed.**
+- **#1816** `WorldGenerator.SetWorldMode` returns early for an unchanged mode (pads by content). `ServerWorld` re-applies the
+  mode before every chunk, which had wiped the #1526 column memos between every two chunks in the real server path.
+- **#1817** `ChunkGenerationPool`: `ServerConfig.ChunkGenWorkers` (default 2, `--chunk-gen-workers`, `BBS_CHUNK_GEN_WORKERS`; the
+  browser singleplayer uses 0) threads, each with its own sibling generator. A streaming pass sends exactly what it sent
+  before, but generates each batch in parallel (workers + tick thread) and pre-generates the next chunks of the view;
+  persisted edits are applied on adoption, on the tick thread.
+- **#1818** `StreamPriorityKey` (server) and `ChunkBuildPriority` (client mesh dispatch): the near ring by plain distance
+  first, then distance from a velocity look-ahead anchor, weighted ×1 ahead / ×1.5 beside / ×2 behind the look direction.
+- **#1819** Browser: inline chunk builds stop on a 4 ms (tablet 2 ms) frame budget instead of a count of 2, collider cooks
+  are parked and cooked nearest-first on their own 3 ms (2 ms) budget (the footing chunk always cooks). Desktop: at most
+  8 finished builds upload per frame.
+- **#1820** Far terrain: `FarTerrainWorldInfo` (tag 239) carries the world's exact generator settings after every join /
+  world switch; `Client.Core/FarTerrain` samples the same generator (`FarTerrainSource` matches the streamed chunks
+  column for column) into 128-block near patches (8-block cells, to 384 blocks) and 256-block far patches (32-block
+  cells, to the range); `FarTerrainView` builds one small mesh per patch (desktop samples on a background thread, the
+  browser a row at a time on a 2.5 ms budget), the new `FarTerrain` shader discards columns where real chunks are drawn
+  (a 64×64 column mask) and the far level inside the near disc. Setting **Far view** Off / 512 / 1024 (applies live; 14 locales).
+- **#1821** Builds in the far view: `IWorldRepository.LoadEditColumnTops` (SQLite / PostgreSQL / memory),
+  `FarTerrainTileRequest` / `FarTerrainTile` (tags 237/238) — per 4×4 cell of a 64-block tile the top edit's height,
+  block and tint; range-checked (1344 blocks, wrap-aware), token-bucket limited, re-sent every 2 s when `BlockSet`
+  dirties a held tile. Cities, settlements and player builds stand on the horizon.
+- **#1822** `FarHaze.BaseFar`: with the far view on, the haze ends at 95 % (thin air) … 32 % (soupy) of the far range, never
+  inside the chunks; airless stays fog-free, weather still clamps against the streamed edge. Far view off keeps the old
+  mapping, and the desktop renderer cull then drops to (view + 2) × 16 on fogged worlds.
+- **#1823** Visibility culling: the mesher records face connectivity through non-opaque cells (`ChunkMeshData.Connectivity`);
+  when the camera is not under the open sky a walk from its chunk (never back toward the camera, only through connected
+  faces) decides which chunks may be seen — hidden ones inside the shadow distance switch to shadows-only.
+- **#1824** Fluid cells whose neighbourhood would load a chunk outside every player's keep range park instead of generating
+  terrain in the fluid step (resume after a chunk load or when a player comes within range); dead `MaxLoadedChunksPerPlayer` removed.
+
+**Tests.** Server: column memos survive the server path, parked fluid resumes, pool output equals inline output bit for
+bit (and siblings on parallel threads equal the single-thread goldens), streaming order, far tiles (repository tops on
+SQLite + memory, range refusal, re-send on edit, world info), codec round trips + golden tag list. Client: far-view
+defaults/cycle/clamp, haze mapping, the far source against the streamed chunks, overlay, layout, patch geometry,
+connectivity and the visibility walk, build order.
+
+### 🚀 Release v2026.9.7 — the city release (2026-09-12, branch release/2026.9.7)
+
+Everything merged since v2026.9.6 (8 PRs, 14 issues): terrain **generation 7** — the G.D.S. city world (#1793 / PR #1803)
+with its ceiling lights follow-up (#1808 / PR #1809); the chat holo window + VEGA lane arbitration + the input-focus
+order fix (#1795/#1799/#1806, PRs #1798/#1801/#1807); the singleplayer connect budget and the loading hand-off
+(#1797/#1800, PRs #1798/#1802); the ship-menu and shell-screen boot (#1796 / PR #1798); and the 2026-09-12 report round
+— void rescue over a dug shaft, the feedback dialog outliving the rig, 2-block openings, the Guardian-core hint and the
+third/fourth `GenerateCaret` crash (#1788–#1792/#1804, PRs #1794/#1805). CHANGELOG section written thematically;
+`data/whatsnew.json` re-exported with the DE+EN release post. Protocol stays 5, saves migrate unchanged; the city world
+reaches new galaxies only. Fleet: server image `2026.9.7`, worldhost re-pinned if `Shared/**` changed, reports unchanged.
+
+### 🪐 World options: the planet-type list scrolls instead of running under the footer (#1811, 2026-09-12, branch fix/1811-worldopt-planet-list-scroll)
+
+Marcel's screenshot: on *World options → Planet type frequencies* the last left rows (Rock planet, Savanna world) sat under
+"Reset overrides", and the white slider handles fused into tall columns. The page fitted its row pitch to the type count
+but clamped it at 40 px; 37 selectable types (the city world #1793 was the latest) need 19 rows per column → 68 px under
+the footer, clicks landing on the buttons. The handles were 42 px tall: a horizontal uGUI `Slider` stretches the handle
+over the slider height and ADDS `sizeDelta.y` (16 + 26). Fix: the rows live in a clipped `ScrollRect` viewport between the
+note and the footer at a fixed 56 px pitch (inline auto-hide scrollbar, pad navigation scrolls via `UiNav`); handles are
+16 + 10 = 26 px on every world-options page. "Reset overrides" now also moves the sliders back (the map was cleared, the
+rows kept their old values), and the page re-reads the options each time it opens. `WorldOptionsLayoutTests` gained the
+advanced-page guards (viewport above the footer, fixed pitch, handle fits a row); verified with a local Unity build.
+
+### ⌨️ Chat input takes keys again when opened over an empty scrollback (#1806, 2026-09-12, branch fix/chat-input-focus-order)
+
+Marcel's playtest of #1801: open the chat with no lines on screen and the input row appears but takes no keys — no text,
+no Esc, and Enter would not reopen it. Since #1801 the row lives inside the holo window, and the window is inactive
+whenever it has nothing to show; `ChatUi.OpenInput` focused the field BEFORE `RefreshLog` woke the window, and uGUI's
+`ActivateInputField` silently no-ops on a field under an inactive parent. With `_typing` already set, the player was
+stuck. Fix: wake and place the window first, then focus (while typing the window always has a height). No automated
+coverage possible for the MonoBehaviour order; verified with a local Unity build. Engine rule for any future field
+inside a togglable panel: activate the hierarchy, then the field.
+
+### ⌨️ Fourth `InputField.GenerateCaret` crash: a focused field survives `canvas.enabled = false` (#1804, 2026-09-12, branch fix/caret-canvas-disable)
+
+Lyxette's v2026.9.6 crash report — the same uGUI `NullReferenceException` as v2026.9.2 (Lyxette), v2026.9.5 (Justus,
+#1791) and #1683. Reading uGUI 2.0.0's `GenerateCaret`, the only real null is `m_TextComponent.canvas`: `Graphic.canvas`
+is null once no ancestor Canvas is active and enabled. `SetActive(false)` / destroy can never get there — uGUI's own
+`InputField.OnDisable` deactivates the field first — so #1634, #1683 and #1791 cured the selection leak, not the crash.
+The crash needs a screen that hides with `canvas.enabled = false` while a field is focused: the GameObject stays active,
+the caret blink keeps queueing rebuilds, the next one throws (twice a second until something deactivates the field).
+The only such screen with text fields is `CraftingTechShipUI` (Funk, photo note, crew/companion/base names, missions,
+search); Esc/Tab are guarded by `typingRecent` and a mouse click deselects first, so the path is the programmatic
+close — `GameMenu.CloseForTransition` on `HyperjumpStarted` (incl. the #1614 transit arrival, new in 9.6) or the
+`SpaceViewActive` flip. Fix: `InputFocusGuard` (on every `UiKit.AddInput` field) now also handles
+`OnCanvasHierarchyChanged` — focused + `textComponent.canvas == null` → deactivate + deselect — and
+`CraftingTechShipUI.Hide()` hands focus back explicitly (`UiKit.ReleaseTextFieldFocus(_canvas.transform)`) before the
+canvas goes. Not reproducible from the payload (no log tail); manual check: TAB menu → click into the search box →
+hyperjump → no exception in `Player.log`.
+
+### 💬 Chat window: holo panel + outline text like VEGA, fitted to the lines, gone when the chat closes (#1799, 2026-09-12, branch feat/chat-window-contrast)
+
+Marcel's playtest note after #1798: the chat text was often unreadable for want of a background. The scrollback was the
+only HUD text with neither a backplate nor an outline — a bare legacy `Text` at 16 px over the world, built in #643
+before the look pass. `ChatUi` now frames it in VEGA's speech-panel chrome (`UiHolo.AddPanel`, same fill/radius/glow,
+bitmap fallback automatic) with TMP outline text at 18 px. The window hugs its content: `ChatUi.ResolveWindow` (pure,
+EditMode-tested) ends it at the lane bottom, grows it upward by the measured block plus padding, caps the block so the
+top never rises over the toast, and takes the input row in as the window's bottom row while typing (no lines → a
+compact input frame). No lines and no typing → no window. A `CanvasGroup` on the window drives the fades via `UiTween`
+(0.15 s in; 0.6 s out when the last line ages out in Auto mode; 0.15 s on Esc / the J key / Off), instant under reduced
+motion; a line arriving mid-fade reverses the tween. Lane arbitration with VEGA (#1795) is unchanged underneath.
+
+### ⏳ Singleplayer: the progress bar covers the server boot, not a nameless curtain (#1800, 2026-09-12, branch fix/sp-loading-handoff)
+
+Marcel's playtest note after the generation-5/6 worldgen: a new singleplayer world showed the progress bar (0 → 100 %
+in 2.5 s), then a dark "Loading world…" curtain with **no world name** for 10–20 s, then the same curtain with the
+system · planet name. The shell's `LoadingScreen` was purely time-based and handed off to `LaunchGame` after MinShow no
+matter what; the rig's `WorldLoadingOverlay` then rose with an empty `LocationName` (it only arrives with the join),
+while the bundled server still did its whole boot behind it — SQLite init + NetCodec warm-up, `BuildGalaxy`, `LoadWorld`
+with every structure stamp, and only then the transport (Player.log 2026-09-12: 10.6 s rainbow sea, 20.2 s coral sea).
+`LoadingHandoffPolicy` (pure, EditMode-tested) now holds the bar screen on `AppShell.LocalServerBooting` — the desktop
+twin of the browser host's `BrowserWorldBooting` gate (#771) — until `LocalServerLauncher.Ready` relays the server's
+"started on port" line; the bar creeps from 60 % toward 85 % meanwhile and snaps to 100 % on ready. A server that lives
+but never reports ready is given up on at the connect loop's 120 s ceiling (`AbortLocalServerBoot` → menu +
+`ui.sp.server_failed`); a server that dies is still caught by the launch watcher. The nameless curtain now covers only
+the rig build + dial + join (~1 s); in-game hosting shares the path. Stage-based real progress (server stage lines)
+stays a possible follow-up.
+
+### 💬 Chat yields to VEGA + the ship menu boots like the HUD (2026-09-12, branch feat/chat-vega-lane-menu-holo, PR #1798, merged)
+
+Two of Marcel's playtest notes. **Chat ↔ VEGA:** the chat overlay (#643) and VEGA's speech panel + objective chip
+(#482) had both been placed in the "free" left HUD column — the chat's scrollback (y 280…590, sorted above VEGA)
+drew straight across a story line and its input row sat exactly on the chip. The chat now yields: `ChatUi.ResolveLane`
+(pure, EditMode-tested) ends the scrollback above the speech panel while a line is up, stacks the input row directly
+under the shortened scrollback while typing with either VEGA element up, and keeps the old lane when VEGA is quiet;
+`VegaPanel` exposes `SpeechVisible` / `ChipVisible` and the two lane constants. The scrollback is also measured against
+its lane now (TextGenerator, scale 1) so a shorter band drops the oldest rows instead of growing upward over the vitals.
+**Ship menu:** the three frames are UiHolo panels (the HUD's shader, same colour) and `ShowMode` plays the HUD's
+boot-up feel on open and on every tab change — header fade, then sidebar → list → detail wipe on left→right with a
+0.07 s stagger while each pane's content fades up behind the wipe; never on the live rebuilds, instant under reduced
+motion. The shell screens get the same treatment (`UiKit.BootScreen`, called by AppShell after each build): main menu,
+settings, credits, editors and save-select fade in as a whole while their top-level elements rise in build order with
+a short stagger and their frames — now UiHolo panels — wipe on. **Singleplayer connect race:** a fresh world took 16 s of server-side generation while the client's
+connect budget was the remote one (initial dial + 6 × 2 s ≈ 14 s) — it gave up in the very second the server logged
+"started on port", and the menu blamed the antivirus. `ConnectRetryPolicy` (pure, EditMode-tested) now gives the
+bundled local server a patient budget (knock once a second, ceiling 120 s) and `LocalServerLauncher.Ready` relays the
+server's startup line so the client dials the instant it listens; remote hosts keep the short #409 budget.
+
+### 🚀 Release v2026.9.6 — the new-planets release (2026-09-12, branch release/2026.9.6)
+
+Everything merged since v2026.9.5 (17 PRs, 41 issues): the school club's generation-5 planets (#1756–#1765, follow-ups
+#1768/#1769), generation 6 creatures + giant trees (#1778–#1783), water colours + rain (#1758 / PR #1772), the
+landed-ship take-off transit (#1614 **server half**, PR #1676 by ahmdkaml — the landing half stays open), saplings +
+station/avatar fixes (#1773–#1777, #1785), avatar-editor undo/fill/outfits (#1737–#1739), hosted-world OOM (#1740/#1741),
+Lyxette's 2026.9.5 round (#1745–#1753), test guards (#1735/#1743), credits (PRs #1770/#1771), the test-world script
+(PR #1767). CHANGELOG section written thematically; `data/whatsnew.json` re-exported with the DE+EN release post.
+Protocol stays 5. Fleet: server image `2026.9.6`, worldhost re-pinned (Shared changed), reports unchanged; after the
+deploy the per-world memory fence goes back from 1536m to 768m (#1740 mitigation).
+
+### 🏙️ Generation 7 — the city world: a lava desert with one guarded city (#1793, 2026-09-12, branch feat/gds-city-planet)
+
+Justus's F1 idea, decided with Marcel the same day (cities: yes; one gigantic city from 32×32 modules; cool only
+in the rooms; lava sea and rivers; friendly machine guardians in a new look; "G.D.S." stays text and mysterious;
+rare; the landing pad inside the city). Design record: docs/developer/WORLD_GENERATION.md §17.
+
+- **Planet** `gds_desert` (data): gen-7 gated, exotic, `spawnWeight 1`, volcanic sand desert, lava sea + rivers,
+  no flora/fauna, breathable at 55 °C, `cityWorld: "gds"`, `npcOutfits` purple/red. `CurrentTerrainGeneration = 7`.
+- **Composer** `CityGenerator`: 7×7 modules + 4-wide streets = 256² as ONE metropolis-tier settlement — plaza
+  (pad), markets, hall, gardens (pool + trees), corner towers, housing; per-cell purple/red tints; walled with
+  four gates; open zones for the pad ring and the wreck site. `StampCityWorld` replaces the hospitality roll
+  on a city world, centres the city on pad 0, pins it as settlement 0 (`city:gds`); phases B–D moved into
+  `CommitSettlements`.
+- **Cool rooms**: `InCityShelter` (inside the footprint + roofed) → 22 °C.
+- **Lit rooms** (#1808, 2026-09-12, branch fix/city-interior-lights): Marcel's first walk — every room was dark.
+  `StampBuilding(ceilingLight:)` sets a warm strip light INTO the deck above every storey (centre cell, 2×2 grid
+  over wide rooms); towers get shaft lights in the roof and at both red bands; `CityGenerator.Set` no longer
+  leaves a tint on a cell overwritten by a light. Ordinary settlements unchanged. Existing saves stay dark.
+- **G.D.S.**: `guard_post` marker → role `guardian` (machine, purple chassis, `NetNpc.Look = "gds_guard"`, leash
+  14); client stripe band + glowing pupils (`PlayerAvatar.SetGuardianLook`); `DialogDefinition.PlanetTypes`
+  filter + two G.D.S. dialogues; guardian greeting persona; `npc.role/greet.guardian`; VEGA `vega.hint.world.gds`;
+  name syllables; desert ambience. Locale keys in all 14 locales.
+- Tests: `CityWorldTests`. Not yet: hand-authored modules overriding the procedural ones.
+
+### 🕳️ Player reports 2026-09-12 — the shaft that was "the void", the orphaned reply dialog, 2-block gaps, the caret, and the way to the Guardian core (#1788–#1792, 2026-09-12, branch fix/reports-2026-09-12)
+
+Justus's evening of 2026-09-11 (five F1 reports + a client crash, v2026.9.5) and Lyxette's crash of 2026-09-12 (v2026.9.6).
+Every report was checked against the server snapshot and the code before anything was changed.
+
+- **#1788 The void rescue teleported a player falling down their own shaft** — `IsInVoid` read "16 under the
+  surface + no ground within 24" as the bottomless void, but since B46 every column ends in bedrock 256–2048
+  blocks down; a 50-block dig was "the void" and `TickVoidRescue` snapped the digger to the ship's heal tank every
+  second ("Ich werde im End Level immer wieder zum Schiff tp"). Now a position above the column's floor
+  (`WorldGenerator.FloorDepth`) is never the void — a cave, a mega-cavern or a dug shaft always ends on something.
+  Tests carve their void THROUGH the floor (`FloorDepthForTest`); a new test drops a player down a 160-block shaft
+  and expects to be left alone.
+- **#1789 FeedbackUi outlived the world rig** — both dialog canvases are top-level while the component sits on
+  the rig root, and there was no `OnDestroy`: a reply overlay open during ReturnToMenu stayed in the main menu
+  and its OK button crashed in `CancelInvoke` (Lyxette). `OnDestroy` now destroys both canvases and releases the
+  world hold, like `ChatUi`. Also stops two hidden canvases leaking per world join.
+- **#1790 2-block-high openings still wedged the player** (follow-up to #454/#609) — `UpdateStepOffset`
+  sampled the ceiling in the one column under the capsule axis; off-centre in a corridor, or at a lintel whose
+  block sits in the next column, the 0.6 m step sweep stayed armed. The probe now covers the capsule footprint
+  (centre, four sides, four diagonals at radius + skin).
+- **#1791 Third `InputField.GenerateCaret` crash** — #1683 and #1634 fixed the feedback dialog and the chat box
+  one at a time; a third dialog crashed the same way. `UiKit.AddInput` now attaches `InputFocusGuard`, which
+  deactivates the field and clears the EventSystem selection from the field's own `OnDisable` — all 63 fields.
+- **#1792 The way to the Guardian core** — the chamber is 20 blocks deep but sits under ONE aperture at (48, 24)
+  while pads ring the planet; Justus dug 50 blocks under his ship and then used `goto_core`. The `guardian_core`
+  POI gets its own map look (◎, hot rose, legend row — six legend slots per row now), the compass a third line +
+  blip with the distance, and VEGA says once on landing (`vega.hint.guardian_core`, 14 locales) that the core is
+  under the marked shaft, not under the ship.
+- Not code: **#1793** Justus's city-planet idea (analysis to follow on the issue).
+
+### 🐟 Rays, air fish, hydras, more wings and fins, and giant trees — generation 6 (#1778–#1783, 2026-09-11, branch feat/new-kinds-gen6)
+
+Marcel's idea list of 2026-09-11, shipped as **terrain generation 6** so no existing world changes: every
+creature roll of the wave is appended after the last generation-5 roll and applied only on a generation-6
+world (a generation-5 roster is bit-for-bit the classic roster — a test serialises both), the giant trees
+are a separate stamp pass gated the same way. All of it is procedural — any new world may roll the kinds —
+and every trait is authorable in `data/creatures.json` too. Design record: docs/developer/WORLD_GENERATION.md
+§16, the rig in docs/developer/CREATURE_RIG.md.
+
+- **#1778 Rays** — `CreatureBodyPlan.Ray` (20 % of the standard-plan Air and Water species): a flat disc on
+  one pair of wing panels, each side a chain of three panels the animator runs a travelling wave along, a
+  five-link whip tail, eyes on top. A water ray hugs the sea bed (`WaterColumnY(bottom:)`), a sky ray is the
+  class between hoverer and flier — `CreatureMotion.IsSkyGlider`: a `Hoverer` (never lands, never perches)
+  with the Glider style, a faster cruise ease (`SkyGliderEaseRate`), pitch into its swoops and banking into
+  its turns; a water ray banks too (`CreatureView`).
+- **#1779 Air fish** — 25 % of the standard-plan Air species that did not become rays: legless, wingless,
+  finned, tailed, gliding, a sky glider like the ray. `CreatureMotion.FinsFor` grows fins on a legless Air
+  body (no older Air species is legless, so nothing older changes); the fins scull in the air, slow and small.
+- **#1780 Heads** — `Heads` 1–3 (6 % / 2 % on standard ground bodies, 15 % / 5 % on titans = the hydra):
+  side by side at the front, or each on its own fanned neck on a titan; the animator breathes and gestures
+  each head on its own phase, only the first head carries the gaze, the jaws take turns calling.
+- **#1781 Wing pairs** — `WingPairs` 1–3 (20 % / 8 % of winged Air species, 10 % two pairs on ground
+  gliders): pairs along the torso like the leg rows, `WingRig.Row`, a per-row lag (two pairs in opposition,
+  three a rear-to-front wave) and an insect beat rate.
+- **#1782 Fin pairs** — `FinPairs` 1–3 (30 % / 10 % of legless finned bodies): `FinRig` (kind, side, row)
+  replaces the index-typed fin array; pairs along the flanks with a metachronal lag, a second dorsal on
+  three-paired bodies.
+- **#1783 Giant trees** — `giant_log` + `giant_leaves` (own blocks, so the scanner names them as their own
+  coined species `tr1`), `WorldGenerator.GiantTrees.cs`: a pass with its own 16-cell margin and 64-cell rise,
+  ~one tree per 38×38 inside forest patches, size 3–5 → trunk 3×3–5×5 rooted from the lowest surface of the
+  footprint, radial branches with leaf balls, a hollow crown shell; shape by theme (giant broadleaf, giant
+  conifer, giant jungle tree). Textures generated with `tools/ai-assets` + the leaf alpha baked.
+- Wire: `NetCreature.Heads/WingPairs/FinPairs` (additive), `BodyPlan = "Ray"`; companion snapshots carry all
+  three. `CurrentTerrainGeneration = 6`, `NewKindsGeneration = 6`.
+- Tests: `CreatureNewKindsTests` (gen-5 bit-for-bit, determinism, every plan's invariants and occurrence,
+  the motion rules, authored counts), `GiantTreeTests` (envelope per shape, theme shapes, a gen-6 wood grows
+  one and regenerates identically across the stacked chunks, gen 5 never does, the species, the blocks),
+  `FloraVarietyTests` holds `giant_leaves` in the leaf-alpha list. Locale keys in all 14 locales.
+### 🌳 Air west of the origin, crew that stays aboard, saplings, and a helmet frame you can paint (#1773–#1777, 2026-09-11, branch fix/reports-0911b)
+
+The evening's three F1 reports on 2026.9.5 — two from Lyxette on her station, one from Justus about his avatar.
+
+- **#1773 the station's air ends at x = 0.** "Immer noch angeblich undichte Räume": her oxygen was full at x 2.75
+  and drained at x −0.8 inside one closed iron/glass room with energy doors. Since #1558 a boarder's position is
+  unwrapped, but every block WRITE still canonicalises X into [0, circ) and hands that position to the cell grid
+  (`WriteBackStationCell`), the absorb pass and the door entities — a wall built at x −5 landed at x ≈ 5947, so
+  `BoundsMin.X` never left the origin, `FillStationPocket` (raw coordinates, no `CanonicalBlock` anywhere) read
+  x < 0 as the void, and `PlayerDoorFillsCell` compared 5946 with −6. Now `StationLocalWorld` unwraps every
+  position the grid stores to the lap nearest the origin (write-back, absorb, door bounds), `NormaliseStationCells`
+  moves the phantom east cells of existing saves back on the next start, the door column is compared across the
+  seam, and the bump snapshot lists doors (a doorway used to read as a hole, since a door is an entity, never a
+  voxel). Gravity follows for free (`BeyondStationBox` reads the same bounds). Tests: a room built on foot west of
+  the origin breathes and its door seals, the same room without the door leaks, phantom cells migrate.
+- **#1775 station crew has no containment.** "Hier läuft einer außerhalb der Eisenmauer herum" — the filler crew was
+  homed at the post ± 2 blocks with no standable and no air check (a post beside the hull put a settler inside
+  the wall), the post keeper stood inside the vendor block, a stroller stepped two blocks up onto a one-block
+  parapet (`TryGroundFeetYAt` scans upward, `PathBlockedByWorld` sweeps at the destination height only), and a
+  closed door was air to it. `StationCrewSpot` now picks standable cells inside the post's sealed pocket
+  (jittered first, then the rings, then a deck down/up; legacy spot last), the step-up is one block, a closed door
+  entity blocks (`ClosedDoorBlocks`), a step that would leave the pocket is a wall, and a crew member found
+  outside its pocket is set back home. Same bug class as #1482 (walking machines), never applied to people.
+- **#1774 saplings that grow into trees.** Lyxette's arboretum: crops already grew on plain dirt aboard a station
+  (every crop hosts on `dirt`; the tray is an alternative), but trees were worldgen only and leaves had no item.
+  A `sapling` item + `flora_sapling` block (hand recipe 1 log + 2 fibre → 2; leaves drop one 1-in-10) plants on
+  dirt/grass/mud under the flora rules (host below, inside the hull on a void world), rides the persisted regrow
+  queue with a 150 s clock, and `TryGrowTree` stamps a 4–5 log trunk with a round crown of `tree_leaves` once the
+  column is free — under a low ceiling it retries every 30 s. Picked up, it stays a sapling (no regrow). It is
+  deliberately NO catalog species: no world roster, no greenhouse grows it, and the client renders anything
+  `flora_*` as a billboard anyway. `tree_leaves` / `pine_needles` / `palm_frond` drop themselves and place. The
+  sapling tile is the bush texture for now. Manual: Greenhouses. Tests: `SaplingTests`.
+- **#1776 the helmet frame around the face.** Justus: "ein Rand neben meinem Gesicht, den ich nicht umfärben kann".
+  The four helmet bars reach past the face plate and frame the drawn face; `FaceChunks` gave the helmet's front
+  `-1` (#874, "the front stays open"), so their lips always showed the flat suit tint. Each bar's front lip now
+  continues its own strip past the strip's front edge (`PaintSeg.FrontChunk` + `Lip`, `LipBand` = ⅛ of the chunk),
+  the face plate covers the whole head front (`FacePlateScale` 0.9 → 1.0, no skin rim), and the visor band hides
+  while a custom face is drawn (it covered the top rows). Payload stays five chunks. Hint text updated (14 locales).
+  His second wish — repixel AND recolour in the game — already existed: Character tab → "Aussehen" is the same
+  editor as the menu designer, colours included.
+- **#1777 three avatar colour bugs.** `RemotePlayers` applied skin/torso/arms/legs on the first presence only, so
+  others kept seeing creation-time colours until they reconnected (now re-applied whenever a presence carries new
+  ones); `ApplyColors` skipped `ShaderColor.Srgb` and rendered an in-game colour brighter than after a restart;
+  `BodyPaintKit.FromCanvas` masked `& 0xF` and dropped palette entries 16–31 on every body canvas.
+
+### 💧 Water in different colours, and rain to match (#1758 follow-up, 2026-09-11, branch feat/water-colours-auto)
+
+The children's "water in different colours per world" was built but switched on nowhere but the rainbow
+planet. Every type with a real water sea and an atmosphere (25 types; not the dry, lava or airless bodies)
+now carries `waterTint: "auto"` — a seeded, blue-dominant pick per world. `FluidTints.ForWorld` takes the
+save's terrain generation, so a pre-generation-5 save keeps the classic blue (the colour is computed at
+runtime, not baked). Marcel: "bedenke dabei auch die Farbe des Regens" — `WaterColours.cs` blends the 3D
+drops of rain, drizzle and sleet, the visor's beads, streaks and wet wash, and the underwater wash toward the
+world's colour; rainbow rain cycles through the hues. Tests: every water-sea type opts in and no other does,
+old saves stay blue, the palette rolls more than one family with blue the most common.
+
+### ✏️ Sophie, not Sophia (2026-09-11, branch docs/sophie)
+
+Marcel: the rainbow planet's inventor is **Sophie**. Renamed in the credits and the rainbow planet description
+of all 14 locales (incl. the transliterations — Софи, Софі, ソフィー — and the Polish inflection), the README,
+WORLD_GENERATION.md, this file and the client test that joins as her.
+
+### 🎓 Credits: every child of the school club, one list (2026-09-11, branch docs/schul-ag-credits-complete)
+
+Marcel: no more "first day / second wave / third wave" — the Schul-AG block of the credits simply names every
+child who took part. `ui.credits.body` in all 14 locales now carries one line — Ben, Damian, Lena, Marie,
+Nikita, Noa, Paul, Sophie (Latin names everywhere, the model had transliterated them into Hangul) — followed
+by Christopher Korb; the README's club section says the same and links the report and idea issues. The scrap
+planet, the per-world water colours and the islands with plants underneath stay group ideas without a name.
+
+### 🖥️ The gaming planet is gaming gear, not meadow (#1762 follow-up, 2026-09-11, branch fix/gaming-world-more-pcs)
+
+Marcel's playtest: "zu viel Natur", and Ben's first wish — structures shaped like gaming PCs — was missing,
+and everything was rare. `gamer_hills` cuts flora to 0.03 and trees to 0.0015; a fourth landmark row
+`giant-pc` (a 20–26 × 14–18 box 44–59 tall: PC case, a tempered-glass side panel, a glowing RGB strip up the
+front) joins the monitor, keyboard and mouse; the hotspot cells shrink from 2 400 blocks at 60 % to 720 at
+90 %, so each family shows several times per world; a house-sized `pc-tower` prop (2 × 2 × 5–7, monitor strip
+on top) fills the ground between them. Generation 5 only; the `gamer_hills-gen5` golden is re-pinned.
+
+### 🏝️ The rainbow planet's islands float on the sea (#1757 follow-up, 2026-09-11, branch fix/rainbow-islands-afloat)
+
+Marcel's first playtest of the school club wave: he spawned on land, the islands hung in the sky, the water
+was blue. The children meant islands *swimming* on the water and hardly any land. `rainbow_sea` now uses a
+new `buoyantIslands` type flag instead of the sky islands: the calibration floods 95–98 % of the terrain
+(its own quantile band), and `GetExtraBands` adds one `Afloat` band per island — a deck 1–5 blocks above the
+waterline, a keel 2–9 below it, open water underneath, grounded on a shoal where the sea is too shallow. The
+keel is written before the sea fill (like the generation-3 material bands) with the biome's own ground; the
+island flora pass and the hanging kelp see the band as before (the kelp may now root into water). The relief
+pool moved to hills + downs (the old archipelago domes were the land). Generation 5 only; the
+`rainbow_sea-gen5` golden is re-pinned, the other goldens did not move. Tests: the flood share and an island
+with water under its keel; the kelp scan runs around the sea level; the server announces water mode 2 for a
+rainbow start (`WaterTintMode` seam) and the real client receives it. The blue water was the shader: the
+screen-space block composited the refracted bed through the water and tinted the depths a hard-coded blue, which
+diluted the recolour — the deep tint now follows the world's colour and the composite is recoloured once more
+after the bed is mixed in. Marcel's second playtest: "Regenbogenwelt passt jetzt."
+
+### 🧪 A save that starts on the planet you name (2026-09-11, branch feat/test-world-tool)
+
+`scripts/make-test-world.ps1 -Planet rainbow_sea` creates a ready-to-play singleplayer world that spawns on the
+chosen planet type — the create-world panel never offers that, the server always understood `--start-planet`.
+The script runs the client's bundled server once with the launcher's own arguments, lets it create the save, and
+stops it the way the client does (stdin). The world appears in the Singleplayer picker under the planet's German
+display name ("Regenbogenplanet"); `-Planet a,b,c` makes several, `-Peaceful` / `-Sandbox` apply the panel's
+presets, `-List` prints the planet keys the client knows. Made for the school club playtest of the generation-5
+planets; the save is an ordinary save, nothing in the game changed. Documented in docs/developer/DEVELOPER.md.
+
+### 🌈 The school club's planets, creatures and plants — generation 5 (#1756–#1765, 2026-09-11, branch feat/schul-ag-wave)
+
+The third wave from the school club "Building Games with AI", shipped as **terrain generation 5** so no
+existing world changes (the generation-0/1/3 goldens are untouched; five new `*-gen5` groups pin the wave).
+Design record: docs/developer/WORLD_GENERATION.md §15.
+
+- **#1757 Rainbow planet (Sophie)** — `rainbow_sea`: rainbow water (static bands), floating islands, kelp
+  forests (`underwaterForests`), a seabed of diggable sand (`seabedBlock`), corals and algae, breathable air.
+- **#1758 Water colours** — `FluidTints.ForWorld` + `EnvironmentState.WaterTint/Mode` + a luminance recolour
+  in the water shader; every existing world keeps the classic blue.
+- **#1759 Hanging flora** — `flora_hangkelp` roots in the underside of a floating island (`Species.Hanging`,
+  host-above regrow, a mirrored billboard).
+- **#1760 Flower planet + flowerling (Damian)** — `flower_fields` with the strict `floral` theme (flowers and
+  nothing else, no trees) and ONE authored creature: a walking flower that grins, drops berries and blocks for
+  a calm visitor, and turns on a miner it sees (`GameServerFlowerling.cs`).
+- **#1761 Scrap planet** — `scrapyard`: four scrap blocks with weighted random drops, dense scrap props,
+  `ruinsBias`/`factoriesBias`; stray scrap rarely on every other solid-ground world.
+- **#1762 Gaming planet (Ben)** — `gamer_hills`: karst caves, PC desk props, and a monitor, a keyboard and a
+  mouse the size of mountains (landmark rows); the gear is mineable and placeable, never craftable.
+- **#1763 Leni + authored species (Lena)** — `data/creatures.json`, `authoredCreatures` per type, appended
+  after the procedural roster on generation-5 worlds; Leni: white shaggy fur, no tail, peaceful, in pairs,
+  ONLY on snow and ice (`BiomeExclusive`), name "Leni <coined>".
+- **#1764 Paul flower (Lena)** — the `giant-paul` giant-flora row: tree-sized, huge leaves, toxic petals, rare.
+- **#1765 Scaffold** — atlas 32×32 (1024 tiles), `CurrentTerrainGeneration = 5`, credits for Sophie, Damian,
+  Lena and Ben in all 14 locales, docs §15.
+- Textures: 15 tiles generated with `tools/ai-assets` (approved by Marcel one by one before bundling).
+- Tests: goldens for the five gen-5 groups; type completeness + galaxy gating; strict theme, later-wave
+  species, hanging kelp under islands, seabed sand, the Paul flower; prop rows + gaming landmarks; authored
+  rosters, Leni's ground rule, the flowerling's anger and gifts; content (recipes, random drops, creatures.json).
+
+### 📦 Bundles that follow the ground, and loot that burns over the moat (#1752, #1753, 2026-09-11, branch fix/reports-0911)
+
+Lyxette again, on 2026.9.5: "Es schweben immer noch solche Blöcke herum" — a drop bundle hanging four cells up in
+the open sky, and the meat her sentries and lava trench produce "stays". The snapshot said what the code
+confirmed: the sentry/lava/player kill paths all leave an expiring loot packet (5 min, #1312), so the floater
+was a stranded **mining-overflow** bundle — immortal by design (#1312), but it had stopped following the ground.
+
+- **#1752 packets re-settle.** `SettleDropCell` + `Fall` used to run exactly once, at spill time. Mine the wall
+  top a bundle landed on, blast the ground under it, let the water it rested on dry up — and it hung there for
+  good; so did every packet spilled before #1311 taught fresh ones to fall. Now `ResettleDropPackets` runs
+  inside the 4 Hz sweep once a second for every packet within 64 cells of a joined player (their chunks are
+  resident anyway; a bundle on the far side of the planet must not drag its chunk in). A packet that lands on
+  one of its own kind merges into it — loot never into overflow (#1312). Deliberately NOT done in
+  `LoadContainers`: that runs before the landing pads reach worldgen, and `World.GetBlock` generates chunks.
+- **#1753 loot over lava or fire burns away in 60 s.** A trench kill spills at the lava cell, settles to the air
+  above it and stops on the melt — one cell up, unreachable without stepping in. Maintainer decision: keep
+  #1312 (loot 5 min, overflow never) and cap only creature loot that hovers over lava / sits in or over fire, at
+  spill time and whenever a packet re-settles onto such a cell. Overflow over lava stays immortal.
+- Tests: `DropLootTests` +5 (pillar mined → falls the next second; falling onto another bundle merges, same
+  kind only; a floater from an old save lands when somebody comes near; loot over lava ≤ 60 s while the overflow
+  beside it stays; loot on dry ground keeps 300 s).
+- Not changed: the opaque-face lighting behind #1749 (Lyxette's answer supports the "bed lit per face" reading;
+  she calls it ambience, so it stays a cosmetic item).
+
+### 🌊 Water that blends instead of switching (#1749, 2026-09-11, branch fix/water-mode-1749)
+
+The mosaic Lyxette photographed on her moat and Marcel on a swamp lake was not the bed and not the screen-space
+path (it showed on the Low preset, at noon): it was the water MODE. The surface classified river / open / calm per
+cell from shore runs, every reed or pillar in the water ended a run, and the transparent shader branched on the
+verdict, so neighbouring cells drew different ripple directions and brightness. `WaterSurface` (now Client.Core,
+nine tests) returns continuous weights (open, brook along X / Z, foam) with linear ramps across the old thresholds,
+steps over plants and slim props, and the mesher averages every channel over block corners; both shader passes
+blend the three looks by weight and take the wave amplitude from the same weights. The #1701 majority vote is gone.
+
+### 🚪 A curtain you can see, a door you can take down, a cave that is a room (#1745–#1748, #1750, 2026-09-10, branch fix/reports-0910)
+
+Lyxette's 2026-09-10 reports, the first on 2026.9.5. Two were client bugs hiding behind correct servers:
+a row of waterfall blocks poured a sheet the client drew one cell of — `WaterfallDetect` wanted two open sides
+and a curtain column has one (the rule now knows a sheet from a pool by its neighbours, and moved to
+Client.Core with tests, #1745); and a player-built door could not be mined at all, because the voxel aim
+march walks through an entity standing in an air cell (`TryAimDoor` tests the doors first, ranked by
+`RayBox` against the first solid cell; a stamped door answers "protected" instead of a ghost heal, #1746).
+A creature asleep in her walled underground hall was a legitimate cave spawn — the walled-yard gate exempts
+cave dwellers and her hall is far outside every base radius — so a cave pocket with player edits around it
+no longer counts as a cave (#1747). Emissive blocks now bleed through the distance haze (#1748), and the
+relay chain cap is 32 (#1750, item text in all locales). Open: the water-bed mosaic (#1749, playtest).
+
+### 🎨 A real undo, a fuller fill, and outfits you can put on in the game (#1737–#1739, 2026-09-10, branch feat/avatar-editor-tools)
+
+Three things Marcel missed in the avatar editor. Two of them turned out to be about the editor the whole
+game shares: the main-menu Avatar Designer, the in-game appearance screen and the block paint tool are one
+component (`FaceEditor`) wearing three hosts, so all three grew the same tools at once.
+
+- **#1737 — undo that keeps going.** The old undo was ONE snapshot the button swapped in and out: the last
+  stroke, and nothing before it. `PixelEditHistory` (plain C#, 12 EditMode tests) is a 32-step stack with a
+  real **Redo** beside it, `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` and `RB` on the pad. Two rules make it feel
+  right rather than merely deeper: a step remembers **which part** it happened on, so the history survives a
+  tab switch and carries the tab back with it (a change you cannot see happening does not read as an undo);
+  and a **base colour** change is a step too — a slip of the colour wheel repaints the whole figure — with
+  one drag counting as one step instead of sixty near-identical shades. A stroke that repainted pixels in
+  the colour they already had is not a step at all.
+- **#1738 — fill.** The flood fill has been there since #899, so half of this was findability: an armed tool
+  now recolours its own label and the hint line under the buttons says what the next click will do. The
+  other half was real — the flood only ever takes the blob under the cursor, so **Fill everything** paints
+  the whole visible surface (the active face region, or the whole canvas in the square hosts) in one press,
+  whatever was on it before. The tool box is two rows now; its right edge follows whatever stands beside it
+  in that host, which also fixes the colour wheel drawing over the end of the old row in the paint tool.
+- **#1739 — outfits in the game.** #1047's eight saved looks were a main-menu affair; the settings file has
+  carried unused `CaptureOutfit`/`ApplyOutfit` helpers for them ever since. The outfit shelf is now a column
+  of the shared editor, so it shows up in the game and in the designer at once: click a row and you are
+  wearing it — colours, face and all four paintings. The hosts own the storage and the wording, because the
+  two mean different things by "the look you are wearing" (the designer's scratch values, still committed by
+  its Apply, versus the live figure). In the game that is five appearance payloads against a server that
+  accepts one every 2 s: the figure changes at once, other players see the last painting about ten seconds
+  later, on the send queue that was already there.
+
+### 🌊 A waterfall, a pair of doors, and two names (#1726, #1729, 2026-09-10, branch feat/reports-0909-client)
+
+The client half of the 2026-09-09 decisions, plus the credits Marcel asked for the same day.
+
+- **#1726 — the waterfall spout.** She wanted a waterfall on a levelled ~80×80 spaceport and got a flood: a
+  falling cell is refilled at `FluidFull`, so every step of stepped ground re-arms a seven-cell spread. That is
+  the documented rule, and changing it would change every body of water in every save — so instead there is a
+  new block (option C). `water_spout` is a solid machine block, not a fluid, whose underside pours ordinary
+  water straight down; the column is marked *falling* all the way, and `FedByASpout` walks up from the foot of
+  the fall so the landing cell never spreads either. It wakes like a fluid (the cell beneath it mined, the
+  column drying up) and the player is told when it is placed on solid ground. New texture, workshop recipe
+  (2 metal panels + 1 water), DE/EN, and four tests including a restart — the confinement lives in the
+  persisted falling flags, so a reload must not turn the foot back into a flood.
+- **#1729 — double doors, inferred.** The server records each placed door as its own one-block doorway and
+  knows nothing of pairs, so the pairing is inferred client-side from positions alone: `DoorPairs.MirrorsLeaf`
+  (Client.Core, Unity-free, 8 tests) says which door of an adjacent same-kind pair is the right-hand half, and
+  `DoorView` hangs that leaf on the far jamb and swings it the other way round. Re-checked on every door list,
+  so placing or removing a neighbour flips a leaf by rebuilding it in place with its swing state kept. Three
+  in a row pair only at the end; slide doors, mixed kinds, other floors and doors across the wall never pair.
+- **Credits: Paul and Noa** join the Schul-AG block — README and `ui.credits.body` in all 14 languages, first
+  names only like the other children. Paul sent the club's second wave of browser reports (#1708, #1709,
+  #1713); Noa tested PC after PC in the computer room, which no report ever showed.
+
+### 🔌 Power runs where you build it (#1714, #1727, #1728, 2026-09-09, branch feat/reports-0909-decisions)
+
+Marcel's calls on the decisions the second report batch raised. Three of the five are server-side and land
+here; the two that are client work (#1726 waterfall block, #1729 double doors) follow separately.
+
+- **#1714 — the power relay.** A sentry shoots 14 blocks but could only stand within 8 of a base core, which
+  makes it unusable on a compound of ~80×80. The player who reported it proposed the answer herself: *"nichts
+  wäre leichter als einen Energieversorgungsblock zu schaffen"*. A new `power_relay` block carries base power
+  one zone further, and relays **chain** — core → relay → relay → post — so power runs as far as the player
+  is willing to build. Widening the zone instead was rejected on cost: `FindSentryCells` is an O(r³) walk on
+  the rescan beat, and a radius covering her compound would have cost ~185× the current one. Each hop stays a
+  cheap 17³ walk, capped at 16 relays per base. New texture, recipe and blueprint gate (shares the sentry's),
+  and both the sentry description and `vega.hint.base_walls` now say "powered", not "within 8 blocks".
+- **#1727 — say what a quench actually did.** Placing a fluid by hand already explains itself; a flood that
+  reached a lava trench on its own said nothing, so the player watched her trench go dark, saw lava still
+  glowing beneath the new rock, and concluded the game had stacked a block on top. It had not — only the
+  cells the water touched are quenched, and the molten core stays. Now a flowing quench says so, once per
+  player per minute rather than once per hardened cell.
+- **#1728 — let a builder diagnose their own ring.** `/basewalls` answers exactly the question she could not
+  ("is there a gap, or is my compound past the 48-block reach?") but was admin-only. It is now open to the
+  owner of a base on that body — **restricted to bases they own**: the report names a core by name and exact
+  cell and says where the ring fails open, so pointed at a stranger's base it would be a reconnaissance tool.
+  Admins still see whichever core is nearest. The 48-block reach itself is unchanged; raising it needs a
+  measurement of the flood fill first.
+
+### 🧱 One compile was bigger than a whole world's memory (#1740, #1741, 2026-09-10, branch fix/arcade-world-oom-jit)
+
+An arcade world was offline on the portal. It had in fact been dying on every start for two days — the kernel
+killed it 4–7 seconds in, `OOMKilled`, ~731 MB against the 768 MiB per-world fence, and the keep-awake pass
+restarted it every 30 s, 120 times an hour, without anything saying it was broken. The give-up guard from
+#1706 shipped that morning and finally latched it, which is how it became visible at all.
+
+- **#1740 — the JIT, not the game.** During the spike the managed heap sits at 42 MB and not one byte is
+  allocated: the memory is native, committed and released inside ~1.3 s, and `DOTNET_JITMinOpts=1` makes it
+  vanish. It is the optimizer compiling *one* method — `WorldGenerator.GetExtraBands` — and that single compile
+  costs **1.6 s and ~1.05 GB**. Measured on the same save: v2026.9.3 needed 31 ms and 14 MB; v2026.9.4, which
+  appended the three generation-3 band blocks (#1688–#1695), needed 1673 ms and 1055 MB. The blocks now live in
+  their own non-inlined `AppendGen3Bands` — 24 ms, 14 MB, and the failing world peaks at 86 MB instead of 1059.
+  A world is only exposed if its active planet carries extra bands at all, which is why the pool's other world
+  never flinched; on desktop the same compile is a 1.6 s hitch rather than a kill. Things that did not help:
+  `NoInlining` on the three helpers, on `SurfaceHeight`, on every callee, `TieredPGO=0`, `TieredCompilation=0`.
+- **#1741 — giving up must reach the picker too.** The reaper stopped restarting the dead world, but the join
+  path still offered exactly that world to the next guest as its wake-on-demand candidate. So as long as the
+  healthy world had headroom nobody noticed, and the moment it filled up, guests were sent into an instance the
+  gateway knew was dead. `PickWorldAsync` now skips given-up worlds and answers the friendly arcade-full notice
+  (#936/#941) instead; a world that comes back up is a candidate again. Two tests, both red before the fix.
+
+### 🤔 Second batch of 2026-09-09 (#1726–#1729): seven reports, no defects — five decisions
+
+A second wave arrived the same evening, while the batch below was being fixed. Analysed against the code:
+**not one of them is a bug.** Recording that here rather than patching, because inventing fixes for correct
+behaviour would make the game worse, and because four of the five need a call only Marcel can make.
+
+- **#1726 — placed water floods instead of falling.** The fluid model is level-based and bounded per plane
+  (`FluidFull = 8`, `Spread` fills at `level - 1`, so seven cells sideways). What is not bounded is a drop:
+  a falling cell is refilled at `FluidFull`, so every step re-arms a fresh seven-cell spread and a flood grows
+  with the terrain rather than settling. Correct per the documented Minecraft-style design, and a hazard at
+  the ~80×80 scale this player builds at. Three options in the issue; the interesting one is a placeable
+  source that only feeds straight down.
+- **#1727 — quenched lava keeps its molten core.** `QuenchLava` replaces the cell it hardens (it does not
+  stack), and only the contact surface touches water, so the lava underneath stays lava. Deliberate and
+  physically honest. The real complaint is that a player watching it happen built the wrong mental model and
+  filed it as a defect — the fix, if any, is telling her once, not changing the physics.
+- **#1728 — animals inside a walled compound.** Checked against `vega.hint.base_walls`: the hint names the
+  48-block reach *and* says "Eine Lücke oder eine offen gelassene Holztür, und die Tiere finden sie". Her
+  compound has a doorway with no door in it. Rule, constant and wording all agree — no defect. Worth having
+  anyway: 48 blocks is below the scale people build at, and nothing tells a player *which* limit they hit.
+- **#1729 — double doors.** Two leaves should swing away from their shared edge. Her gateway is the reason
+  #1728 happened at all, so this is the change that would actually close her perimeter. Mostly Unity work.
+- **#1713 — retitled and re-scoped.** A second reporter hit "no terrain, only sky" on the **Windows** client,
+  not WebGL, and his report carried a server snapshot: standing on solid ground in a cavity at y 45, nineteen
+  blocks below his own ship, 5354 cells of solid rock around him — with a fragment of that ship still drawn.
+  Objects render, chunks do not. His screenshot also carries the `srv.misc.dug_out` toast, which makes this
+  very likely a **symptom of #1708** (the 1 Hz rescue loop never let the view settle). #1708 shipped after his
+  report, so the first step is re-testing on the next build before spending more on it.
+
+Also in the batch and needing nothing: an overview screenshot of her finished spaceport, sent as a thank-you.
+
+### 🛟 Nobody stays stuck, and a hosted world stays up (#1704–#1712, 2026-09-09, branch fix/reports-0909)
+
+Nine reports in one day, all on 2026.9.4: two children from the school club, three from a builder on her own
+server, and five identical server crashes from one hosted world. Two threads ran through them.
+
+**A hosted world was down all day, and nothing said so.** "Glitch Arcade 3" was OOM-killed within seconds of
+every start — over 2000 starts in eighteen hours. Measuring the cgroup showed 123 MB → 805 MB in under a
+second and then death, but the same save loaded locally peaks at 958 MB and settles at **85 MB**: the spike is
+garbage the GC never had to keep. The runtime caps its heap at 75 % of the container limit and native memory
+(ICU, SQLite, JIT, stacks — ~150 MB) sits outside that budget, so resident memory reached 730 MB against a
+768 MiB cap while the GC believed it was fine. Reseeding the world would not have helped: the seed is a
+function of the world id, and a fresh world on that exact seed runs clean.
+
+- **#1704 — cap the GC heap below the container limit.** `DOTNET_GCHeapHardLimitPercent=0x37` (55 %) leaves
+  the native side room; verified by loading the failing save under a 384 MB hard limit, where it settles at
+  85 MB instead of dying.
+- **#1705 — workstation GC is actually pinned now.** The csproj said `ServerGarbageCollector`; the property is
+  `ServerGarbageCollection`, so it was silently ignored and `runtimeconfig.json` carried no `System.GC.Server`
+  key at all. The comment claiming the VPS "can never flip to server GC by accident" is now true.
+- **#1706 — the keep-awake pass gives up.** It restarted every dead arcade world every 30 s forever. Failures
+  now back off (30 s doubling to 30 min) and stop after five, logging the world as needing a person.
+- **#1707 — a listener race no longer kills the container.** The managed `HttpListener` calls Accept from its
+  own constructor and can throw `ArgumentNullException` out of `Start()`. It ran unguarded straight out of
+  `Main`; it is retried now, and a genuinely occupied port still fails loudly.
+
+**Three ways to be somewhere a body cannot be.** A child fell, respawned inside his own hull, and could not
+get out — the hull is indestructible, so he could not even dig. Another was dug out of terrain and then held
+frozen. And a builder was told her wooden door was a ship hull.
+
+- **#1709 — a player sealed in their own hull is freed.** The block rescue cannot see hulls (they are placed
+  objects, not world blocks) and the hull rescue asked for *two* overlapping ones. A single hull with no body
+  space in the cell is now the trigger. Standing in your own cabin stays ordinary.
+- **#1708 — the rescue stops fighting the client.** Every `RespawnNotice` re-arms an 8 s settle freeze; at 1 Hz
+  the grace never elapsed and the player sat motionless with the mouse still working. No second rescue goes
+  out while the first is unacknowledged.
+- **#1710 — the pad guard protects ground, not your buildings.** It covered the whole footprint nine blocks
+  deep regardless of what the cell was, so anything built there was permanently unmineable — and answered
+  "ship hull" about a door on a planet. Player-placed blocks come out again; the foundation stays; the
+  rejection names the pad.
+- **#1711 — creatures stop resting inside cave ceilings.** The rest-height probe fell back to the generator's
+  noise surface, which for an animal under a roof is on the far side of solid rock.
+- **#1712 — the scan panel grows with its text.** Fixed 78 px for three lines meant the tool-tier line added
+  in #1686 clipped the fourth: "braucht einen Grundstein in" with the rest gone.
+
+Still open from the same batch: **#1713** (WebGL renders no terrain after landing — needs a browser console
+capture on the school hardware) and **#1714** (a sentry must sit within 8 blocks of a base core, too tight for
+large builds — a design decision, not a defect).
+
+---
+
+### 🌱 Worldgen audit — generation 4 (biome-theme rosters) and nine hygiene fixes (#1715–#1724, 2026-09-09, branch fix/worldgen-audit-0909)
+
+A read-through of the terrain, flora and fauna generators against the July 2026 audit: seven of its nine
+findings were already fixed by the August fauna waves; the two that remained and eight new small ones make
+this package. Nothing here moves a classic golden — the one behaviour change is gated on a new generation.
+
+- **#1715 — flora roster reads the biome themes (generation 4).** `CurrentTerrainGeneration` 3 → 4. The
+  activation roll's "on theme" is the union of the planet theme and every biome theme in the type's pool, so a
+  `varied` world's swamp and desert biomes grow what their own themes prefer instead of a pool the temperate
+  theme thinned to 40 %. Older worlds keep the planet-only roll — and every species they ever grew.
+- **#1716 — farmed crops kept taking the world hue.** The mesher put every `flora_*` block into tint mode 1;
+  a crop carries no species tint, so the shader fell back to the world's base hue — violet berries on a violet
+  world. Crops are `TraitCultivated` now (mode 0, the authored tile). The base hue itself moved next to the
+  per-species colours as `FloraTints.ForWorld` (same value; the server ships it from there).
+- **#1717 — the spawn tick gated on the unclamped cap.** A world modelling above the hard cap of 64 sat in
+  the 1.5 s fast-fill cadence forever, walking ring + roster with terrain probes for nothing.
+- **#1718 — spawn probes read real blocks first.** `TryGetFluidColumn`: a pool the player built hosts a
+  school, a drained pond does not; every herd member runs the leader's probe from its own spot (a school
+  beside a small pond used to be the leader alone).
+- **#1719 — the cave-floor and shoreline probes no longer load chunks** on the tick thread.
+- **#1720 — the spawn-target round robin counts the wild population**, not companions.
+- **#1721 — one flora-form truth.** `FloraCatalog.Species.Solid`; the mesher derives its tall and solid
+  sets from the catalog, a test holds `bake_leaf_alpha.py`'s FOLIAGE list to it.
+- **#1722 — one roster-seed formula.** `WorldGenerator.RosterSeedFor`, used by worldgen and both server
+  sites, with a test that the server's rosters equal the generators' output.
+- **#1723 — `WonderFor`'s lock-free fast path** holds key + profile in one immutable slot.
+- **#1724 — column memos key on the wrapped column**, guarded by a seam-identity test over generation 0,
+  1 and 3 worlds.
+
+Docs: WORLD_GENERATION.md §6, §7, §14. Tests: 9 new across the existing flora / creature / column-cache
+classes (no new test class — the shard-weight guard).
+
+---
+
+### 🌊 Built water is real water — a player-report package (#1697–#1701, 2026-09-08, branch feat/water-defence-lava)
+
+Seven reports from one session of a player fortifying her spaceport: a moat, a wall, a lava trench, sentry
+posts. Four of them turned out to be the same blind spot from different angles — the server treats water the
+GENERATOR made as terrain and water the PLAYER placed as nothing at all — and her own "here things are fine!"
+report was the control that proved it: her lava trench works, because the lava gate reads real blocks while
+the water gate asked the generator.
+
+- **#1697 — a hand-dug moat is water.** `WaterDepthAtFeet` reads real blocks (the generator only answers for
+  columns that are not streamed in), so the walker gate fires on a flooded trench exactly as on a pond. The
+  ground probe no longer answers with the generator's PRE-EXCAVATION surface for a flooded column — that is
+  the waterline of a filled moat, which is what let animals walk on water; it reports the submerged bed
+  instead. Air creatures measure their altitude band from the fluid SURFACE, not from the bed underneath it
+  (a player found one of her fliers asleep under water), and a swimmer porpoises in a hand-built pool.
+- **#1698 — fluids are murk, not a wall.** A sightline crosses up to `WorldConstants.FluidSightRange` (6)
+  fluid cells before it closes, instead of breaking on the first. "No aggro across a lake" survives; a fight
+  at swimming distance becomes possible at all. One rule for attacks, aggro and the sentry; the client's
+  render-side sight mirror follows it, so a tracer is never drawn for a shot the server refused.
+- **#1699 — the sentry answers wildlife, and explains itself.** It now shoots hostile animals (never a tamed
+  companion), which is what `vega.hint.base_walls` had been promising all along. Placing a post outside every
+  base zone says so on the spot, and a scanned post names its range and the zone it needs.
+- **#1700 — lava and fire burn everybody.** Creatures, bandits and Guardian machines take contact damage like
+  the player (`GameServerBurning.cs`, 2 Hz). Lava fauna and tamed companions are exempt; Creative worlds and
+  "environmental hazards off" spare everything. No story, mission or achievement credit — nobody fired.
+- **#1701 — the water surface is one plane.** A fluid's top face lights per CORNER instead of per face
+  (transparent faces skipped AO entirely and took one light value for all four vertices, which reads as a
+  grid of tiles on a wide flat surface), and a face's wave mode is the majority verdict of its neighbourhood,
+  so a moat of varying width no longer draws a seam through water the player reads as one body.
+
+---
+
+### ⚙ Terrain generation 3 — the landform completion package (#1688–#1695, 2026-09-08, branch feat/terrain-gen3, PR #1696)
+
+A landform audit measured the generator against a list of 84 real-world landforms: 43 present, 15 partial,
+26 missing. The misses cluster around four things the generator had no concept of — a designed sea floor,
+ice as a volume, river morphology, and water below the surface — so the package is one invisible
+foundation followed by the families built on it. Everything gates on `TerrainGeneration >= 3`; generation
+0–2 worlds stay byte-identical and the classic golden checksums never move. See
+[docs/developer/WORLD_GENERATION.md](docs/developer/WORLD_GENERATION.md) §13.
+
+**Part 1 (foundation) — DONE on the branch (2026-09-07):** the generation-3 switch and the `karst` / `reef`
+terrain tags; the worm carver as a family table with a generation-gated span budget; and the four
+structural extensions, each proven by one real family — landmark paints that fill a column (glacier tongues
+ice six deep), sea-relative landmark rows that never touch the calibration (seamounts), ice / fluid bands
+inside the water span (icebergs), sub-surface fluid spans with a cave shield (underground river reaches on
+wet karst worlds: swallow hole, sealed passage with bank ledges, spring). Golden groups `ocean-gen3`,
+`frozen_ocean-gen3`, `karst-gen3`, `highland-gen3` (= `highland-gen1`, the control); a Slow-tier chunk-cost
+guard. Not released: the whole package ships together after Marcel's local Unity playtest.
+**Part 2 (rock) — DONE on the branch (2026-09-07):** slot canyons, arêtes and tooth rows, desert pavement
+and the petrified-dune skin (landmark rows); rock gates and mountain halls (worm families riding their
+landform's own hotspot cell); the labyrinth, stone-forest and petrified-dune styles, gated by generation
+so a style added to an existing pool never moves an older world's relief. Rainbow strata (Bunte Berge)
+via the paint CYCLE — a paint row may lay its fill down in 3-thick bands parallel to the surface.
+Goldens `desert-gen3`, `red_desert-gen3`, `dust_bowl-gen3` pinned, `karst-gen3` re-pinned (the
+stone-forest style joined the pool).
+**Part 3 (caves) — DONE on the branch (2026-09-07):** dripstone — stalactites hanging from the roof and
+stalagmites rising from the floor of every worm tunnel and mega-cavern on a wet karst / wetland world
+(salt-white on limestone country, the deep rock elsewhere; an underground river's passage never drips — its
+headroom is the promise the reach is passable); karst cathedrals — caverns up to 40 tall instead of 28 on
+`karst`-tagged worlds. Golden `jungle-gen3` pinned, `karst-gen3` re-pinned.
+**Part 4 (volcanic + desert) — DONE on the branch (2026-09-07):** obsidian fields (a paint three deep with
+crystal glints on dry volcanic worlds), lava flows (2–3 bent tongues from every cone foot: a ropy 1–3 rise,
+a basalt skin three deep, and 1-deep lava pockets on the core through the body chain — never over a cave
+mouth), barchans (fields of crescent dunes on wind-and-sand worlds that rolled no dune sea), frost polygons
+(the salt-polygon net on cold wet ground: 1-high stone ridges, ice-covered ponds in a fifth of the plates).
+All geometry trig-free. Goldens `lava-gen3`, `tundra-gen3` pinned, `frozen_ocean-gen3` re-pinned.
+**Part 5 (wetlands + rivers) — DONE on the branch (2026-09-08):** river morphology in the rasteriser behind
+classic-no-op parameters — meanders (one S per low-gradient coarse cell, oxbow pools at a quarter of the
+apexes), delta fans (2–4 half-width strokes out of every sea outlet), floodplains (mud paint, a third of it
+1-deep pools); rias (drowned shelf-coast valleys, a sea-relative row — the partition test now allows land to
+become sea, never the reverse); floating vegetation mats (a mud band at a lake's water top); peat bogs (the
+new `peat` block — texture generated, 14 locales — six deep with pools, reeds and lichen as its late-host
+flora); thermokarst ponds (2–4 deep on Voronoi plates with a 1-high polygonal rim). Surface flora follows a
+generation-3 paint (ember blooms on a lava flow, lichen on a frost ridge). Goldens `swamp-gen3`,
+`boreal-gen3` pinned; every gen-3 group re-pinned; every classic / gen-1 golden unchanged (the peat host is a
+`LateHosts` entry so the roster coverage rule never sees it).
+**Part 6 (coast + sea floor) — DONE on the branch (2026-09-08):** sea arches (a Cap-band bar from a cliff to a
+sea-relative stem), blowholes (a geyser vent on a cliff over a sealed water shaft), causeway islands (an islet
+joined to the coast by a sandbar one below the sea), lagoons and atolls (reef rings of the new `coral_rock`
+block, the atoll with sand islets), reef fields (bumpy coral shallows with 4× seabed flora), blue holes,
+submarine canyons and trenches. The partition rule now has an explicit new-land allow-list (islets, stems)
+and permits sea-floor cuts above the floor cap. Golden `archipelago-gen3` pinned; `ocean-gen3` unchanged.
+**Part 7 (ice) — DONE on the branch (2026-09-08):** glaciers as a volume (a hotspot tongue 150–400 long down the
+steepest descent, 12–30 thick, ice filled to the old ground, own crevasses, icefall decks where the ground
+drops, scree moraines on the flanks and the snout), glacier gates and ice caves (worm families on the glacier
+cell), sheet caves through the crust of ice-surface worlds, ice sheets with nunataks by row precedence,
+hanging valleys beside the glacial troughs, icebergs off the pads; frost polygons and thaw ponds yield to ice
+cover. Goldens `glacier-gen3`, `ice-gen3` pinned, `tundra-gen3`, `frozen_ocean-gen3` re-pinned.
+**Part 8 (planet types + docs) — DONE on the branch (2026-09-08):** `coral_sea`, `icecap`, `river_lowlands`
+(`minTerrainGeneration: 3`, retyped into generation-3 galaxies by the #1649 roll), names + descriptions in
+all 14 locales, name flavours, goldens `coral_sea-gen3`, `icecap-gen3`, `river_lowlands-gen3`; docs §13.8,
+changelog entry. Full fast suite green (2888), local Unity Windows client built from the branch; issues
+#1688–#1695, PR #1696. Marcel's playtest follows the merge.
+
+### ★ Tool-tier gates say what they want (#1686, 2026-09-07, branch feat/1686-tool-tier-hints)
+
+Aiming the starter Basic Drill at a Machine Housing produced `Your current tool cannot mine this block.` and
+nothing else — the tool tier was never named, never shown before the swing, and never explained. Fifteen blocks
+gate this way (the tier-2 machine/metal blocks and rare ores, plus water and lava at tier 3), so the wall a new
+player meets on day one had no visible way through. Nothing about the gating rules changed; only what the game
+says about them.
+
+- **The rule has one home.** `Shared/Content/MiningRules.cs` holds `ToolCanMine` plus `CheapestToolFor` (the
+  lowest tier that clears a gate, lowest mining power among equals). `GameServer.ToolCanMine` and the client's
+  fluid-cursor check were hand-copied twins that could drift; both now call the shared predicate.
+- **The reject names the tool.** `HandleMine` and the asteroid path send `@srv.mine.wrong_tool_named:<tool>`
+  with the tool localized for the session — "Your tool is not strong enough for this block. Needs: Titanium
+  Drill." The client needed no change: `ResolveServerToken` already fills `{name}` from an `@srv.key:arg`
+  token. The bare `srv.mine.wrong_tool` stays as the fallback for a block nothing can break.
+- **The scan panel says it before the swing.** `HudUi.ScanToolLine` appends a `Needs: …` line to every scan of
+  a gated block, whether or not the held tool clears it — the readout is a datasheet, not a warning. No wire
+  change: the client already loads the full `GameContent`, `MinToolTier` included; it simply never read it.
+- **VEGA explains it once.** New `tier_gate` context tip (Equipment priority), armed by a refused swing and
+  disarmed when the line actually goes out — the candidate collector deliberately leaves it standing, because
+  it runs every tick while only one tip fires per cadence slot. Mentioned per block, so hammering the same wall
+  is one telling, not one per swing.
+- Names a **concrete tool** everywhere rather than an abstract tier: "a drill of tier 2" is not actionable,
+  "Titanium Drill" is. That titanium must come from wrecks, loot or trade (titanium ore is itself tier 2) is
+  deliberate design — the game now says so instead of leaving it as a silent dead end.
+- Three new locale keys across all 14 languages; `ToolTierGateTests` (7) + a VEGA tip test in `ShipAiTests`.
+
+### ★ Lyxette round 10: the hyperjump arrives where it says, two ships never share a pad, the compass points at the ship (#1677–#1684, 2026-09-07, branch fix/lyxette-reports-2026-09-07)
+
+Three player reports and one silent crash report from the evening of 2026-09-06, on two builds (the hyperjump
+report and the crash on v2026.9.2, the other two on v2026.9.3).
+
+**#1677 the in-flight hyperjump.** `HyperjumpToSystem` sends `SpaceClosed`, `SpaceState` and the new star map in
+ONE tick; the client pump applies all three in one frame, so `SpaceView` never saw `InSpace` go false and never
+rebuilt its scene — the flight view kept the departure system's star, planets and landables, and landing on one of
+them was a second cross-system jump back to the old planet. The view now keys the scene on the flight INSTANCE
+(`Game.Space.InstanceId`) and rebuilds when it changes; `EnterSpace` sends the star map before the space state, which
+also closes the smaller surface-launch race.
+
+**#1678/#1679/#1680 two hulls on one pad.** A trader's ship and the player's own ship were stamped cell-for-cell into
+each other on pad 0 (the world origin on every world), and he could not leave the ship. Both stampers wrote at
+`pad.Center − size/2` and trusted the pad bookkeeping alone. The stamp is authoritative now: `LandedFootprintTaken`
+(wrap-aware on both seams) plus `ClearFootprintPadFor` re-home an arriving player to a pad whose ground is actually
+clear, and `MaterializeLandedTraderHere` releases the pad instead of setting down on an occupied one. Two holes in
+the bookkeeping are closed with it: a hyperjumping pilot no longer carries the pad claim of the body they left, and a
+departing/swept trader takes its hull and pilot with it, keyed on its OWN body (`NpcLandedTrader.BodyId`) rather than
+whichever world happened to be active — including the `PilotNpcId == 0` default that removed an unrelated NPC.
+
+**#1681 the rescue.** Hulls are placed objects, not world blocks, so `IsEntombed` was blind to them and
+`SafeSpawnPoint` kept returning the heal tank inside the overlap. A player standing where their own hull and a
+foreign one overlap is now moved to standable ground outside every hull (the pad-ring search shared with the vehicle
+recall), and the heal tank is skipped while it sits inside a foreign hull.
+
+**#1682 the compass.** #1597 replaced the fixed ▲ with a rotating N, and a 90-hour player read that as "the ship is
+gone" — the ship was still there as an 8 px square among the waypoint and beacon squares. A cyan triangle now rides
+the dial rim at a constant radius and points at the ship, so the direction stays readable at any distance; the blip
+keeps showing approach progress. The glyph is a runtime-generated sprite (`UiKit.TriangleSprite`) — the HUD's SDF
+atlas is built from Rajdhani, which carries no geometric shapes.
+
+**#1683 the caret crash.** A uGUI `InputField.GenerateCaret` NRE arrived 22 s after an F1 send. Both feedback dialogs
+now release the focused input and the EventSystem selection before hiding, the treatment the chat box got in #1634.
+
+**#1684 the wreck pin.** The wreck's runtime origin was re-derived from pad 0 on every load while its blocks were
+written once; pads are not persisted, only the rule that recomputes them, and that rule changed twice inside the last
+release. The wreck now carries a `StructurePlacementRecord` like every other structure, and the settlement stamper
+reads the same shared anchor helper instead of a duplicated constant.
+
+Tests: trader refuses an occupied footprint, an expired trader takes its hull, a trader that never set down takes no
+other NPC, an arriving ship avoids a hull whose reservation is gone, a wedged player is moved into the open, a
+hyperjump releases the pad claim, the wreck record outranks the pad derivation.
+
+### ★ Creatures get real limbs: a speed-locked gait, knees and feet, foot planting on real blocks (#1674, 2026-09-06, branch feat/creature-limbs)
+
+Six packages in one branch. **WP1 gait:** new pure `CreatureGait` (Shared) — cycle rate = speed ÷ stride length, so a
+planted foot no longer slides (the old wave beat at `3 + speed·2.2`, unrelated to the distance covered, and every animal
+in the game skated); the stance angle is an arcsine so the foot's ground velocity is constant; six footfall patterns
+(lateral-sequence walk, trot, bound, insect tripod, metachronal wave, paddle) with hysteresis + cross-fade; hips moved to
+the body's real half-width and spread over the whole torso; `LegRig` gives every leg an explicit side/row (the two body
+plans numbered their legs in opposite orders, so any row-keyed gait ran mirrored on titans). **WP2 character:** a hinged
+jaw that opens on every vocalisation and bite (the voices had been coming out of a sealed head since #902), a lie-down
+sleep pose, blinking, a gaze that follows the player, ear flicks / tail swats / weight shifts on long idles. **WP3 LOD:**
+Near/Mid/Far/Frozen distance tiers (there were none — up to 45 full rigs animated every frame at any distance), scaled to
+55 % under Reduced effects. **WP4 joints:** hip → knee → foot with fore/hind limbs bending opposite ways, wings with a
+wrist that folds the outer panel along the flank, tail / neck / tentacle / trunk chains; the titan neck is a chain now, so
+a giraffe's graze bends the neck instead of nodding at the top of a column. **WP5 fins:** `HasFins` species trait, derived
+from the species' own voice seed rather than drawn, so no RNG is consumed and existing worlds keep their species
+bit-for-bit; old companion snapshots are lifted on load. **WP6 planting:** `CreatureFeet` + analytic two-bone
+`CreatureIk` — feet get world-space targets on real blocks, body pitch/roll come from the plane through them, and network
+corrections re-plant rather than drag. Tests: `CreatureGaitTests`, `CreatureIkTests` (forward-kinematics round trip over
+the whole reachable volume), `CreatureFinsTests`. Docs: new `docs/developer/CREATURE_RIG.md`.
+**Not done yet:** playtest, PerfProbe numbers, WebGL measurement.
+
+---
+
+### ★ Landscape variety 6/6: eight planet types, six monuments, structures on rugged ground (#1649, 2026-09-06, branch landscape/1649-worlds)
+
+Eight data-only types (`red_desert`, `boreal`, `archipelago`, `glacier`, `meadowlands`, `ashen_ocean`, `dust_bowl`,
+`frozen_ocean`) with style pools, tags, biomes (relief multipliers), ores, weather, EN/DE names + descriptions (12 locales
+via `translate_locale.py`), `NameGenerator.PlanetFlavors`; spawn weights 4–7, exotic where it fits; `BodyPlanetTypes` keeps
+old saves. `MonumentGenerator.ArchetypesGen1` + bridge / watchtower / tomb / ziggurat / colossus / aqueduct; the server
+draws generation-1 monuments from the larger pool, generation 0 keeps the five. Settlement placement unchanged: the #586
+guarantee already seats structures on generation-1 relief (tests on highland / red_desert / glacier gen-1 worlds).
+`LandscapeWorldsTests` (content cross-check for all types, new types generate + names, ashen-ocean lava sea + land,
+monument canvases + runes + caches, placement guarantee). **The package is complete** — release steps in the runbook;
+PLAYTEST (Marcel, after release build): new desert + highland (style regions), jungle (marsh / oasis / scree),
+red_desert + archipelago from the launcher (orbit names and colours).
+
+---
+
+### ★ Vehicle playtest follow-ups: the cockpit recall packs the vehicle up, a parked hull you cannot walk through, "Board (E)" on screen, a boat you leave into the water (#1668–#1671, 2026-09-06, branch fix/vehicle-playtest-2026-09-06)
+
+Marcel's first playtest of the #1667 build. **#1668** the cockpit recall parked the speeder on the first ring's
+(−r, −r) corner — 14 m diagonally behind the ship, past the 14 m HUD hint — and X means "pack up" everywhere else, so
+it read as "the speeder vanished". Now the recall **packs the vehicle into the inventory**; only with no slot free is it
+parked beside the ship, on the candidate **nearest the player**, with a server-raised #1217 ping on the spot and the
+distance in the message (`@srv.<kind>.recalled_parked:<m>`); the HUD hint range is 30 m. **#1669** `SpeederView` switched
+the parked hull's collider off while the player was inside a hand-typed box centred on the root; the hull is meshed at
+an offset (x −1…2, z −2…3), so the box overhung two faces (walk-through) and counted the roof as inside
+(fall-through). `VehicleHull.Encloses` (Client.Core, tested) is the hull box shrunk by the capsule radius and capped
+under the roof. **#1670** no on-screen "how to board": the centre prompt now reads "Board (E) · Pack up (X)" beside an
+own parked speeder/boat (the pad/touch ACT list already carries the pack-up). **#1671** `DismountSpot` fell back to the
+seat for a boat mid-lake — inside the now-solid hull; it now puts the driver in the water beside the hull. Tests:
+`VehicleRecoveryTests` (packed / full-inventory speeder + boat, nearest-cell, ping), `BoatTests` mid-lake exit,
+`VehicleHullTests`. Locale keys `srv.{speeder,boat}.recalled` → `recalled_packed` + `recalled_parked`.
+PLAYTEST (Marcel): X at the cockpit → item in the inventory; full inventory → marker + distance; walk into a parked
+speeder from all four sides; stand on it; boat exit mid-lake; "Board (E)" prompt with keyboard, pad and touch.
+
+---
+
+### ★ Lyxette round 9: settlers out of the water, trees out of settlements, a speeder that stays on land and comes back, solid parked vehicles, space wrecks that exist, findable asteroids, ocean pads gated to new saves (#1658–#1665, 2026-09-06, branch fix/lyxette-reports-2026-09-06)
+
+Five F1 reports from the morning of 2026-09-06 (v2026.9.2) plus one release-risk finding. **#1658** `StandableSpot` judges a
+base settler's home the way the NPC walks (`IsCollidingCell`, fluids are a wall) — the entombment predicate called water
+"free" and homed the settler on the seabed, where the leash could never walk them out; re-home shares the rule, so wet
+settlers on existing saves migrate on the next scan. **#1659** the settlement stamp carves every tree block out of the
+footprint up to tree height plus a crown-wide ring (skipped where a player built), on every load; `IsSettlementProtected`
+exempts natural tree blocks the layout never placed (`SettlementInstance.Layout` + `GroundY`); greenhouse frames stay
+protected. **#1660** the hover ray starts inside the driver's capsule (from 2.5 m up it hit the capsule's own top and hover
+never engaged), the block column backs it up (chunk still baking, a hull wedged into a block lifts out), shore stop: water
+ahead caps the throttle, over water the speeder floats and can only back out toward the last dry pose, a blocked speeder
+hops by itself, `GuardAgainstFallingOut` runs while driving; server `TickSpeederInWater` snaps a wet driver back to the last
+dry pose (30 reports); deploy snaps to the standable cell nearest the feet and refuses a wet column
+(`@srv.speeder.need_land`). **#1661** `ReleaseDrivenVehicle` on respawn; client stow reach = the server's 5 m plus a HUD hint
+naming the vehicle and its distance when it is 5–14 m off; `RecallVehicleIntent` (codec 235): at the own landed ship's
+cockpit/console (`ShipStationReach`) the server parks a stranded speeder on the nearest dry standable cell outside the pad rim
+and a boat on the nearest waterline around the pad (`X` = `InputAction.RecallVehicle`, cockpit prompt suffix, context action);
+refused while driven, on another body, without a landed ship. **#1662** a PARKED vehicle carries the cooked `MeshCollider`
+(off while driven and while the local player stands inside its bounds); `HandleExitSpeeder` steps the driver onto the nearest
+standable cell beside the hull (`DismountSpot`, side cells first). **#1663** `KeepFarAsteroidsVisible` holds every asteroid
+body at ≥ 20 px apparent diameter, rim-pinned radar blips carry a name label, one-shot VEGA hint `chart_waypoint` on the
+first flight chart. **#1664** `GameServerSpaceWrecks.cs`: every `CelestialKind.Wreck` body drifts in its system's space as a
+`WreckGenerator` hull (`SpaceStructure` kind "wreck", `CombatEntityKind.Wreck`, salt `spacewreck:`), carved by the mining laser
+like an asteroid into plating / cable / a metal + data fragments, manifest read on approach (≤ 45 units: scan readout, "derelict"
+lore, body visited); client renders the design, amber rim-pinned radar blip, chart marker + click-snap, waypoint arrival 30,
+travel-screen "fly there to salvage". **#1665** `WorldDescription.CurrentTerrainGeneration = 2`, `OceanPadsGeneration = 2`:
+pads are re-derived from the seed on every load, so pre-generation-2 saves keep the frozen longitude-only march, the rolled
+ocean-world islet two blocks over the sea and the plain sand-mound shape (`LandingPadFlatten.ClassicShape`,
+`DecideClassicPad`); only new worlds get the 2-D nudge, deep-water islets and the plateau shape. Tests: `BaseLifeTests` (+1),
+`SettlementVegetationTests` (2), `VehicleRecoveryTests` (7), `SpaceWreckTests` (5), `LandingPadTests` (+1), `NetCodecTests`
+golden list; locales EN/DE + 12 via `translate_locale.py`. PLAYTEST (Marcel, local build + a flat-world save with speeder and
+boat): shore stop at a lake, dismount beside the hull, walk into a parked speeder, X at the cockpit with the speeder left far
+away, a wreck on the flight chart, distant asteroids on a belt world.
+
+---
+
+### ★ Landscape variety 5/6: 16 prop rows with micro-ruins, 7 tree kinds, giant-flora table (#1648, 2026-09-06, branch landscape/1648-props-trees)
+
+Generation-1 worlds only; classic goldens unchanged, `savanna-gen1` + `swamp-gen1` pinned. `WorldGenerator.StampsGen1.cs`:
+`PropKind` + `Gate` / `MaterialKey` / `SecondaryKey`, 16 rows appended (fallen log, termite mound, cairn, bone pile, rib
+cage, ice boulder, lava spatter, coral outcrop, crystal cluster, meteorite, tar pool, wall fragment, buried pillar, crashed
+probe, mining rig, rune stone — the ruins roll a data cache), scan margin 6 → 8. `TreeKind` + Baobab / Mangrove / Bamboo /
+Saguaro / Willow / MushroomTree / CrystalTree, `Theme.TreesGen1` + `PaletteFor(generation)` (gen-0 palettes untouched),
+mangroves need water within 4. `GiantFloraKinds` (fern on mud, crystal on crystal, cactus on sand) via
+`StampGiantFloraGen1`. `LandscapeStampsTests` (table order, gen-0 invariance, per-row rate within ×2 + never on an
+ineligible world, rib-cage chunk seam, palette gating, tree envelope, baobab presence, giant-flora rows + cactus probe).
+
+---
+
+### ★ Landscape variety 4/6: five new blocks, water / lava bodies, surface paints (#1647, 2026-09-06, branch landscape/1647-blocks-fluids)
+
+New blocks `moss_stone`, `tar`, `bone`, `sandstone`, `scree` (block + material item + locales in 14 languages + AI tiles
+via `tools/ai-assets`, NOTICES; dye/shape set extended; editors list them by category automatically). Generation-1
+bodies through ONE function (`TryGetGen1Water`, `WorldGenerator.FluidsGen1.cs`) shared by the column fill and every
+surface-water helper: marsh sheets (`wetland` tag on jungle/swamp/karst/ocean), oases with grass ring + palm fringe,
+hot springs, caldera / shield / maar lakes (lava on dry volcanic worlds), playas, tarns; `SurfaceGen1WaterDepth` keeps
+trees and props out. Paints (`Gen1SurfacePaint`): marsh mud, oasis ring, spring crust, playa salt, scree + bare rock on
+steep slopes, ash fall around cones, dry riverbeds, deck banding (sandstone / granite), soil patches, moss stone; strata
+now sandstone. Goldens: the hash switched from numeric ids to block KEYS (adding a block shifts every later id — saves
+remap via the block palette, the old hash made every golden move) — all 15 groups re-pinned, classic terrain verified
+unchanged with the id hash against the old block set; `ocean-gen1` + `jungle-gen1` new. `LandscapeFluidsPaintsTests`
+(content sanity, gen-0 invariance, helper agreement on 4 types, marsh / oasis / lava lake / playa presence, scree, moss,
+sandstone strata, lava rivers on every volcanic type). Local Unity build before merge (textures under client/Assets).
+
+---
+
+### ★ Landscape variety 3/6: 12 landmark families, 4 overhang bands, geodes / aquifers / strata (#1646, 2026-09-05, branch landscape/1646-landmarks)
+
+Generation-1 worlds only; the eight classic goldens are byte-identical, `tundra-gen1` + `rocky-gen1` pinned
+(`highland-gen1` re-pinned — the gen-1 groups move with every part until release). `WorldGenerator.LandmarksGen1.cs`:
+rows `shield-volcano`, `impact-basin`, `glacial-trough`, `yardangs`, `drumlin-field`, `inselberg` (granite paint),
+`star-dunes`, `mud-volcanoes`, `sinkhole-chain`, `maar`, `mushroom-rock`, `glacier-tongue` (ice paint) appended to
+`LandmarkKinds` after the classic rows; bands natural bridge / coastal ledge / ice cornice / mushroom cap
+(`MaxColumnBands` 8); geodes (crystal shell, hollow), aquifer caverns, sediment strata (granite until sandstone lands
+in part 4). Tags `inselbergs` / `wind` / `glacial` in `planets.json`. `LandscapeLandmarksTests` (gen-0 invariance,
+table order, per-row shape ranges, granite/ice paints, clamp + determinism + seam, bridge/cap/cornice bands, geode
+hollow, strata count gen 0 vs 1, aquifer lake rate). Docs: WORLD_GENERATION.md §12.2.
+
+---
+
+### ★ Landscape variety 2/6: regional style pools, per-world scale, biome relief, 7 new styles, 11 archetypes, planet regimes (#1645, 2026-09-05, branch landscape/1645-relief)
+
+Generation-1 worlds only (`w.Generation >= 1`; the eight classic goldens are byte-identical, three `*-gen1` groups
+pinned). `PlanetType.TerrainStyles` pools on 16 types → 1–3 styles per body laid out as REGIONS (`StyleOffset`: 70 %
+pure, 30 % offset-space blend band; the #703 hybrid fade on top). `WonderProfile.Scale` = TerrainScale × 0.75–1.35
+per body (relief fields only; biome/forest/pond masks keep the type scale). `Biome.ReliefMul` (mud 0.35, sand 0.8,
+stone 1.3–1.5) through the region-only biome field (`ReliefMulAt`, no altitude feedback). New styles `archipelago`,
+`fjordlands`, `downs`, `shattered`, `terraces`, `drumlins`, `glacial`; archetype pool 8 → 11 (moorland,
+knob-and-kettle, coastal cliffs); baseline regimes tilted (~8 %) / stepped (~3 %) / equatorial ridge (~3 %) in
+`WorldGenerator.Regimes.cs`. `LandscapeReliefTests` (pool coverage, identity purity, scale range, relief-mul
+monotonicity + continuity, style shape probes, determinism/seam/memo, regime rates). Docs: WORLD_GENERATION.md §12.1.
+**Playtest (Marcel):** one new desert + one new highland world — do the style regions read as one world?
+
+---
+
+### ★ Landscape variety 1/6: terrain-generation flag, terrain tags, landmark + prop tables, WorldGenerator split (#1644, 2026-09-05, branch landscape/1644-infra)
+
+Foundation for the landscape-variety package (#1644–#1649), deliberately **invisible**: all seven worldgen
+goldens unchanged. `WorldDescription.TerrainGeneration` (int, load-safe 0; `CurrentTerrainGeneration` = 1 for
+new worlds via ServerConfig, CLI `--terrain-generation` — the launcher always sends it via
+`WorldCreationOptions` and the world-options structures page shows it read-only; `JoinAccepted.TerrainGeneration`
+→ client preview bakes; `WorldGenerator.SetTerrainGeneration`, folded into every per-world memo key together with the
+lava-core flag). `PlanetType.TerrainTags` → `TerrainTag` flags resolved at content load (`volcanic`, `salt`,
+`buttes`, `hoodoos`, `crystal`; `wind`/`wetland`/`glacial`/`inselbergs` reserved) replace the 11 planet-KEY /
+style-string gates — `TerrainTagsAndGenerationTests` proves equivalence for every type. `LandmarkKinds`
+table (gate + offset + optional paint per family, table order = precedence) drives `SurfaceHeightUncached`
+and a paint hook in `ComputeColumn`; `PropKinds` table drives the set-dressing stamp. `WorldGenerator.cs`
+split into 11 partials by seam (pure moves). Docs: WORLD_GENERATION.md §12. Parts 2–6 follow in order.
+Playtest: none needed for this part.
+
+---
+
+### ★ CI: main green again — the view-distance streaming test wraps its probe columns at the longitude seam (#1640, 2026-09-05, branch fix/streaming-test-seam)
+
+Every push to `main` since #1632 failed the full tier on one `Slow` test (PR CI skips the Slow tier, so five
+merges went through green): `ClientViewDistance_ExtendsTheStreamedTerrain_OverTheWire` compared unwrapped chunk X,
+and the dry-pad preference (#1621) moved this seed's spawn pad to column 733 of 735 — "center + 2" named a column
+the server only ever streams canonically as 0. Test-only fix: both probe columns go through
+`WorldConstants.CanonicalChunkX(x, circumference)`, like the server's own chunk keys. Streaming was never wrong.
+
+---
+
+### ★ Report inbox: a pair keyed alike on both halves owns ONE thread on the client row; the detail page merges split entries (#1642, 2026-09-05, branch fix/reporthost-pair-thread-owner)
+
+Lyxette's two reports of 2026-09-05 were answered through `POST /api/reports/{id}/replies` on the client row; the
+admin list links the `/bump` half as primary and its page showed "No replies yet". Cause: `ThreadOwner` (#1378)
+predates the server forwarding the client's key (#1359) — with both halves keyed, "a keyed row owns itself" split
+the pair into two threads depending on where the operator answered. The in-game poll runs by key and saw both.
+
+- **Done:** `ReportHostPages.ThreadOwner` — a keyed server forward hands over to its client-direct twin (same key,
+  `IsSameReport`) from either side; a lone keyed row still owns itself; the key-less legacy path is unchanged.
+  `GET /admin/report/{id}` collects the replies of every row of the pair (time order) and the page marks an entry
+  stored on the other half with a link; the hand-over hint distinguishes "blank key" from "same key on both halves".
+  The reply form and `POST /api/reports/{id}/replies` keep writing to the owner (now always the client row).
+- **Unchanged:** `GET /api/reports/{id}` still returns that row's own replies (the read API is per row by design);
+  the player poll (`/api/replies`, by key) never needed this.
+- **Test:** `PairKeyedAlikeOnBothHalves_OwnsOneThreadOnTheClientRow_AndTheDetailMergesSplitEntries` (owner from
+  both sides, lone keyed row, merged + marked split entries, order); the #1378 test stays green.
+- **Deploy:** reports image redeploy (`reports-image.yml`), independent of the game release.
+
+### ★ VEGA continue key works right after the chat closes — the hidden chat box no longer counts as "a text field has focus" (#1634, 2026-09-05, branch fix/vega-n-after-chat)
+
+Marcel (2026-09-05, local playtest): Enter → type → Esc closed the chat fine, but N would not dismiss the VEGA
+line that had popped up meanwhile — until the next click into the world. Cause: `ChatUi` never released the
+uGUI EventSystem selection on close, and uGUI never deselects a deactivated InputField by itself, so
+`VegaPanel.InputCaptured()` (#1041) kept seeing "an InputField is selected" and swallowed the continue key.
+
+- **Done:** `ChatUi` drops the EventSystem selection whenever the chat box closes (end-edit for Esc *and* Enter,
+  plus disable) if it still points at the box. `VegaPanel.InputCaptured()` now requires the selected InputField
+  to be active in the hierarchy **and** `isFocused` — a closed or unfocused field captures nothing, which also
+  covers the feedback dialog / beacon label closed without a click.
+- **Unchanged:** the pause-menu gate, pad Back / touch NEXT (#1041), N typed inside the chat box still types `n`.
+- **Verify:** Enter → type → Esc → N advances VEGA with no click in between; same with Enter (send).
+
+### ★ Travel screen: a star system you jumped into but never landed in is reachable again — "Hyperjump to this system" for every other system (#1638, 2026-09-05, branch fix/travel-screen-known-system-jump)
+
+Lyxette (F1 report, v2026.9.2): "I can't reach the system I have already jumped into once — I guess I could if I had
+visited a planet." Exactly right: `BuildMapList()` in `CraftingTechShipUI` offered the violet **Hyperjump to this
+system** entry only for a system the player had NEVER entered. A hyperjump in flight marks the system *known*
+(`MarkSystemKnown`), so the travel screen switched to its body list — and with Instant Travel off every body there is
+locked ("not visited": never landed) while the detail pane only said "fly there and land manually". Nothing on the
+screen could send the pilot back into that system. Server side `HyperjumpToSystem` never gated on known/unknown, so
+this was purely a client UI gap.
+
+- **Done (client):** every non-current system shows the **Hyperjump to this system** button above its bodies; a known
+  system gets its own hint (`ui.map.system_known_jump`: jump in and fly, or pick a world you've landed on). A LOCKED
+  body in another system shows `ui.map.locked_cross_hint` plus the same jump button in the detail pane (shared helper
+  `AddSystemJumpButton`, disabled off the ship). Same-system bodies unchanged.
+- **Locales:** 2 keys en/de by hand, 12 machine locales via `translate_locale.py`. Manual: travel-screen paragraph.
+- **Verify:** local Unity build; locale parity tests. Playtest: jump into a fresh system, don't land, travel home,
+  Map → that system → the jump button is back; pick one of its locked worlds → jump button in the detail pane too.
+
+### ★ Volcanoes on every lava-core world; sea-mount cones rise out of the sea as volcanic islands (#1631, 2026-09-05, branch feat/volcanoes-1631)
+
+Marcel (2026-09-05): ocean worlds should sometimes show volcanoes as mountains out of the water; volcanoes on
+other world types too, but only where there is a lava core. Worldgen already had cones (#477) but gated
+them to `atmosphere != none && waterAbundance > 0`, and a 24–46-block cone on an ocean seabed never broke
+the surface. **`HasVolcanoes`** = `!Void && !Cratered && !_crateredWorld && !FloatingIslands` — the same
+bodies whose world floor ends in the molten band. **Sea-mount lift** in the new `TryGetVolcanoInCell`
+(the per-cell half of `TryGetVolcano`): a centre whose `RawSurfaceHeight` is below `SeaLevel` gets
+`height = (sea − raw + 12..36) / ConeRimShare` (0.84^1.6) and `radius` grown up to +24 (= the placement
+margin, so seam safety holds); cones memoised per (planet, salt, circ, cell) in `_volcanoCells`.
+Re-entrancy: `BuildCalibration` samples `SurfaceHeight` before the sea exists → `[ThreadStatic] _calibrating`
+skips the lift during the sample and `CalibFor` invalidates the column caches afterwards, so the un-lifted
+rim columns never stick (`SeaMountLift_IsDeterministic_AndIndependentOfQueryOrder`). Tests:
+`VolcanoLavaCoreTests` (ocean sea-mounts clear the sea, desert + lava worlds grow cones, cratered asteroid
+none, order independence, legacy rule with the flag off). `VolcanoesForTest` hook. **Gated to new worlds** like
+continents (#704): `WorldDescription.LavaCoreVolcanoes` (load-safe false; ServerConfig's default description
+true) → `WorldGenerator.SetLavaCoreVolcanoes` at server start — a cone appearing on an existing desert save could
+bury a base, and the worldgen goldens (`desert-default`) prove old saves are byte-identical. The client's
+minimap preview does not carry the flag (cones are invisible at map resolution).
+
+### ★ HUD look pass: SDF text, shader-drawn holo chrome, a real hologram glow, vitals icons and a motion layer (#1623 #1624 #1625 #1626 #1627 #1628, 2026-09-05, branch feat/hud-wow-look — unreleased, positions untouched)
+
+**Why.** Marcel, 2026-09-05: "wie würde man in Unity ein HUD bauen, das State-of-the-art aussieht (WOW-Effekt)?
+… ich will das alles in einem Worktree einmal ausprobieren." The research (analysis doc, gitignored) found the
+gap was not the UI system but four missing layers every modern sci-fi HUD has: SDF text, light that actually
+blooms, resolution-independent chrome, and motion. uGUI stays (Unity 6.4 still names it the primary runtime
+choice); nothing moved on screen (playtest feedback #485/#915 owns the layout); WebGL keeps the flat overlay path.
+
+**What ships.** (1) **Text:** `UiText` — TextMeshPro (already inside our uGUI 2.0 package) with a font asset built
+at RUNTIME from the bundled Rajdhani TTF (dynamic SDF atlas, Noto Sans + JP/KR/SC as dynamic fallbacks — no baked
+asset, ADR 0002), three looks on one atlas: plain, a dark underlay (replaces the 5×-vertex `UiOutline` on the HUD)
+and a cyan glow for headline labels. The TMP essential resources (`Assets/TextMesh Pro`: settings, SDF shaders,
+Liberation fallback) are extracted from the package and committed; the SDF shaders join the always-included list so
+the runtime materials' glow/underlay keyword variants survive the build. HUD only — `HudUi`, `VegaPanel`,
+`SpaceRadar`, the quick-bar cells; menus stay on legacy `Text`. (2) **Chrome:** `UiHolo` + `BlocksBeyondTheStars/UiHolo`
+— a signed-distance rounded rect / ring on a plain quad, one shared material, per-element parameters (size, radius,
+border, glow, reveal, fill opacity) in UV1–UV3 via a `BaseMeshEffect`, so everything still batches: soft outer glow,
+corner-bright brackets, a slow border sweep, a left→right boot reveal, `_ClipRect`/stencil aware. Panels, the compass
+and radar rings, the hotbar backplate/cells/selection ring, every bar (vitals, wreck, repair, speeder) use it; the
+bitmap sprites remain as the fallback when the shader is missing. (3) **Glow:** the visor composite gains a real
+hologram bloom — the HUD RT is thresholded + downsampled to quarter resolution and blurred (two 9-tap passes,
+`Visor.shader` passes 1–3, render-graph blits in `VisorUrpCompositor`) and added in the composite; a damage
+**glitch** (row jitter + chroma burst, `VisorHud.Kick`) fires with every health drop. Medium+ only, like the visor
+itself. (4) **Icons:** `tools/ai-assets/gen_hud_icons.py` (Pillow, no paid generation) draws white line icons
+for health/oxygen/energy/hunger/hull/shield into the 22-unit gutter the bars always left free. (5) **Motion:**
+`UiTween` (in-house, ~200 lines, unscaled time, reduced-motion aware): vitals ease with a **ghost trail** that
+shows what a hit just took and numbers **roll**; the hotbar ring flares on selection; toasts slide in; the hit
+marker recoils; the whole HUD **boots** (fade + staggered panel reveal) on world entry and after a respawn.
+(6) **Perf:** the per-frame movers (vitals, compass, hotbar, crosshair) sit on nested sub-canvases, so their
+vertex updates no longer re-batch the static chrome (perf analysis 2026-09-03, item 24).
+
+**Verification.** Local Unity build in the worktree (client scripts are not compiled by PR CI) + the automated
+screenshot capture of the built client (cockpit, planet surface, space flight; no player-log exceptions); no .NET
+suite is touched (client/Assets only). Marcel approved the look on the screenshots ("sieht prima aus").
+
+**Open.** Marcel's verdict on the look; glow/threshold tuning; TMP for the menus (they still use `Text`); the
+`PerfProbe` text-change tracker only sees legacy `Text`; a runtime `SpriteAtlas` for the remaining icon textures
+(Unity 6.4 API); PerfProbe A/B of the sub-canvas split.
+
+**WebGL verification + glow-target fallback (#1636, 2026-09-05, branch fix/visor-glow-format-fallback).** A local
+WebGL build of the HUD pass (`BBS_WEBGL_FAST_LOCAL`, served + captured headed) compiled clean and rendered the whole
+new HUD in the browser — SDF text, holo chrome, glow, icons — with no new console errors (only the known engine
+noise, #1099). The one real gap found in review: the glow chain's quarter-res blur targets were hard-wired to
+`B10G11R11_UFloatPack32`, which as a render target needs `EXT_color_buffer_float` under WebGL 2 — desktop browsers
+have it, older tablets do not, and the render graph would then fail the visor pass every frame. `VisorUrpCompositor`
+now picks the format once per session via `SystemInfo.IsFormatSupported` (render + linear) and falls back to
+`R8G8B8A8_UNorm`; the glow input is the LDR HUD RT and the threshold never exceeds 1, so nothing visible changes
+where the float format works. Not measured: browser frame times (another agent's Unity build was running).
+
+### ★ Ocean landings: 2-D pad nudge, islet for every deep all-water pad, wider islets, dry-pad preference, blue seabed markers with depth (#1618 #1619 #1620 #1621 #1622, 2026-09-05, branch fix/ocean-pads-2d-nudge)
+
+Follow-up to #1453/#1454 after Marcel's 2026-09-05 impression that "the islets do not work": a 12-seed probe
+(analysis, not committed) showed the islet generation was fine but the X-only pad march left 83 of 164 ocean
+pads in the water although 92 % of them had land within a 2-D ±180 search, 37 % of those went to the seabed
+by the 60 % roll (seed 9: 88 blocks deep), and the r 8 sand islet read as a sandbank. **#1618** —
+`NudgePadToDryAndFlat` is a ring search over X and Z (step 3, `PadSearchBudget` 180 / `PadSearchBudgetOcean`
+300 for `waterAbundance ≥ 1`, |Z| clamped to the latitude band; east/west visited first on each ring so ties
+stay on the planned latitude); `ComputeLandingPads` is memoised per body (`_padCache`, cleared with the
+galaxy) because the chooser recomputes remote bodies per approach. After: 157/164 pads on natural land,
+7 islets, 0 seabed. **#1619** — `DecidePad`: an all-water footprint whose sea depth (`seaLevel − median
+ground`) exceeds `ShallowSeabedDepth` = 8 becomes an islet on ANY world whose sea is water
+(`WorldGenerator.SeaIsWater`); shallow water, ponds/rivers and lava seas keep the seabed shaft (`Wet`,
+plus `Depth` from `TryGetWaterSurface`). The 60 % `IsletRoll` is gone. **#1620** — `LandingPadFlatten`
+carries `PlateauRadius` (12) + `IsletRadius` (28), `IsletRise` 3; `PadColumnAt` wobbles both rims by ±3
+blocks of `FbmT` noise (never inside the reserved pad) and slopes 2:1; `FlattenLandingPads` puts the biome
+surface on the plateau over beach fill, beach block on the slope, and `FloraForSurface` tufts at 16 % on the
+plateau off the pad. **#1621** — `PreferredFreePadIndex` (dry > islet > seabed, ties by index) replaces
+`FirstFreePadIndex` for players in `CreateNewPlayer`, `PlayerPad` and the auto path of `TryClaimPad`
+(`PadsForBody` computes an unloaded body's pads); traders keep the plain rule. **#1622** — `NetLandingPad.Depth`
+(appended contractless field); SpaceView paints a free wet pad's button blue and captions
+"underwater · seabed · N m"; WorldMap lists the depth. No new locale keys. Tests: `LandingPadTests`
+(`OceanWorld_RaisesAnIsletUnderDeepPads_AndOnlyShallowOnesStayOnTheSeabed` on seed 9,
+`PadNudge_FindsLandNorthOrSouth_NotOnlyAlongTheLatitude`, `PlayerPadPreference_…`,
+`NewPlayer_SpawnsOnAPadNoWorseThanTheBestFreeOne`). Local Unity build before merge (client/Assets touched).
+
+### ★ Bigger galaxy by default: Universe-size tiers 6 / 12 / 20 / 32, Growing starts at 12, server default 12 (#1615 #1616 #1617, 2026-09-05, branch feat/bigger-default-galaxy)
+Marcel: "mehr Inhalt im selben Spiel". Analysis first: the galaxy is POCO metadata (~12 bodies per system);
+worlds, space instances, ticks and the save (`block_edit` deltas only) all scale with OCCUPIED bodies, never
+with the system count — so 8 → 12 (Normal) and 18 → 32 (Huge) cost nothing in singleplayer or on the VPS. The
+only thing that grows is `StarMapData` (~15–20 KB at 8 → ~60–80 KB at 32, broadcast on landing / rename /
+lane / growth) — fine natively, worth a look on WebGL before ever going past 32. Decided: no jump fuel /
+distance cost for now, the denser hyperspace chart at 32 stars is fine, the official VPS world picks up the
+new default at the next release reset. Changes: `WorldCreationOptions` tier table 4/8/12/18 → 6/12/20/32
+(Normal still sends no explicit count), `WorldDescription.StarSystemCount` 8 → 12 (+ pin test
+`DefaultDescription_GeneratesTwelveSystems`), docs (WORLD_GENERATION, USER_MANUAL). No change to the
+`--systems` clamp (1..32) or the growth soft cap (48); the chart layout tests already run at 40 systems.
+- Playtest open: does a 12-system Normal galaxy read as "more to do" on the hyperspace chart, and is Huge (32) still legible?
+
+### ★ Planet lighting: shade is shade, not a cave — depth-aware skylight, dappled sun through the shadow map, de-stacked AO, star light normalised, caves a touch brighter, shadow fade (#1608 #1609 #1610 #1611 #1612, 2026-09-05, branch fix/shade-skylight-lighting)
+Marcel: "auf manchen Welten immer noch recht dunkel; im Schatten braucht es die Lampe, um eine Textur zu erkennen".
+Analysis: the URP shadow map is mild (shadowStrength 0.7 → ×0.73); what crushed shade was the mesher SKYLIGHT —
+`ChunkMesher.Top()` counts any non-air block (leaves, flora, glass) as the column top, so under any canopy / overhang
+≥ 5 wide the 5×5 open fraction is 0 and `BlockAtlas.shader` lit the face like a cave (ambient at the 0.26 floor, the
+direct-sun term zeroed BEFORE the shadow map, no night fill) — ~24 % of a lit face at noon, ~4 % in a crevice once
+vertex AO × normal-map cavity × after-opaque SSAO stacked on top. Open ground: `_Sc_Light` is the raw star colour, so
+late-K / M stars (about a fifth of all systems) lit every face at 64–74 % of a sun-like star all day. Changes:
+**#1608** `Skylight()` takes a shade floor from the depth below the column top (0.55 within 6 blocks, fading to 0 by
+14 — deep caves unchanged) and the URP pass gates the direct sun + specular by `saturate(sky*2)`, so the foliage
+alpha-clip holes cast real sun spots under trees; **#1609** SSAO intensity 0.5 → 0.3 on the High + Medium renderers;
+**#1610** `Sky.ApplyLighting` lifts the block light so its sRGB luma never drops below 93 % of the sun-like anchor
+(≈ 85 % linear), hue untouched, the sun disc / rays / grade keep the raw colour, `_sun.color` follows so Lit props
+match; **#1611** occluded ambient floor 0.26 → 0.32 (URP + Built-in passes); **#1612** the dead `_Sc_GradeTint` /
+`_Sc_GradeParams` uploads dropped (no shader read them) and the shadow sample blended to lit with
+`GetMainLightShadowFade`. Verification: local Unity build; the .NET suite is untouched (the mesher lives in
+`client/Assets` only). Playtest open: jungle at noon under canopy, an M-star world, a cave at 12+ blocks.
+
+### ★ Hyperspace chart: a stars-only galaxy tab on the flight chart, jump-from-chart, real star colours, the finale out past the frontier (#1603 #1604 #1605, 2026-09-05, branch feat/hyperspace-chart-1603)
+
+**Why.** Marcel, 2026-09-05: "like the planet chart in space, I want a hyperspace map of the star systems — as a
+tab on the flight chart, a graphical picture of the systems (stars only)". The travel screen (Tab → Map) listed
+systems but drew nothing; the flight chart (M) knew only the current system.
+
+**What ships.** (#1603) `SpaceMap` gets a **System / Hyperspace** tab row (active tab cyan, LB/RB step on a pad,
+M always opens on System). The Hyperspace tab hosts a reusable `GalaxyChartWidget`: every system of
+`Game.StarMap` as a star disc with corona at its real `MapX/MapY`, fit-to-chart over all systems (the galaxy grows
+outward from home, #1123). The current system wears a cyan ring + ship glyph; known systems show their name;
+**unknown systems are dimmed and labelled `?`** (the #1113 rule, shared with the travel screen via
+`GalaxyChartLayout.DisplayName` — a radar array reveals names on both); tier-2 systems carry the "Frontier" tag;
+relay jump lanes (#1125) are thin cyan lines; other players' names sit above their star; the finale system glows
+hyperspace-violet. Click a star → info panel (been here / never entered, who is there, your station/base badges,
+lane or generator hint) with a **Hyperjump** button that sends the same `HyperjumpSystemIntent` as the travel
+screen — enabled only with a `jump_generator` aboard or a lane (the server keeps enforcing). **No distances are
+shown.** The chart now closes on `HyperjumpStarted` (an in-flight jump keeps `InSpace` true, so the old chart
+would have survived with a stale snapshot). (#1604) Additive `NetStarSystem.StarColor` filled by the server from
+the weather's `StarColor(systemName)` — the chart's star matches the sun seen after landing; 0 → warm-yellow
+fallback. (#1605) `GuardianFinaleMapPosition`: the finale system sits ≥ 1600 map units out from home, in the
+direction from the galaxy's centre through home — beyond every procedural and grown star. Locale keys
+`ui.spacemap.tab_*` / `hyper_*` in all 14 locales (en/de by hand, the rest machine first-pass); Codex
+"Finding your way" paragraph, user manual and the multi-world developer doc updated.
+
+**Tests.** `GalaxyChartLayoutTests` (client): every star of grown galaxies fits, the fit is tight, name gate,
+undirected lanes, snap picking. `HyperspaceChartServerTests`: star colour served + equals the joined world's
+`SunColor`, codec round-trip, finale position beyond every star for fixed/grown galaxies and seed-stable, revealed
+finale is tier 2.
+
+**Verification.** Local Unity build (client scripts are not compiled by PR CI); server + client suites.
+
+**Open.** Zoom/pan of the galaxy chart (not needed ≤ ~30 stars); frontier-distance rings (the 400/700 constants
+would have to move to Shared); showing the same picture on the travel screen (the widget is built for it).
+
 ## 📦 Released versions
 
 Published GitHub Releases (tag = version single-source-of-truth; each tag push builds the Windows installer
@@ -110,6 +2343,31 @@ Per-item detail lives in the dated work log below. **Since 2026-07 versions are 
 #1144, #1146, #1147), all 28 sub-issues #1102–#1129 done. The whole package is UNRELEASED pending the big
 playtest; the post-epic implementation audit spawned the follow-up fix round #1149–#1156.
 
+### ★ Space distances in km, roomier star systems (flight-view scale 0.16 → 0.24), moons ride 1.5× the clear gap (#1599 #1600 #1601, 2026-09-05, branch feat/space-km-roomier-systems)
+
+**Why.** Marcel: on a world the HUD's metres are right, but in space the radar/chart said "83 m" to a planet — the
+flight scene is not metric (ship at half size, a 6 km planet a 35-unit ball), so the label only made the system feel
+like a toy. And systems still looked squat: measured over ~1 000 generated systems, one planet in ten had barely a
+planet-width of empty space to its neighbour (p10 1.2 widths, median 4.2), and 100 % of moons sat on their minimum
+orbit at every view scale — the #499 clamp IS the moon layout. Decisions: km at 10 km per unit (EVA keeps metres),
+scale 0.24 (not 0.32), planet render sizes unchanged, no travel-time compensation yet, moon gap ×1.5.
+
+**What ships.** `Client.Core/SpaceDistance` (10 km per unit, space-grouped thousands, localized `ui.space.km_fmt`
+in all 14 locales; `ui.spacemap.distance_fmt` now says km) used by the three radar readouts and the chart waypoint
+line; the EVA "Fly to your ship — 40 m" is untouched. `SystemBodyLayout.FlightViewScale` 0.16 → 0.24 (shared —
+the server's belt rock clusters follow; measured: nearest-planet hop 13 → 20 s, launch → farthest body 28 → 40 s in
+the starter ship, empty space p10 1.2 → 2.3 planet widths). `SystemBodyLayout.MoonOrbitGapFactor` 1.5 inside
+`MinOrbitFor` (parent pair only; the moon ladder and the relax pass keep the plain gap). Tests reference the constant
+instead of `0.16f`; new `SpaceDistanceTests` + two layout pins. Manual row for **M** names the unit.
+
+**Consequences accepted.** Persisted flight positions (player-built space structures, the ship pose saved on
+entering the interior) live in a launch-body-centred frame: near the launch body nothing moves, a structure parked
+beside *another* planet is now off it by 1.5× (changelog says so). NPC stations/traders/hostiles sit at fixed
+offsets around the launch spot — unaffected. Surface sky, star map and generator use raw system coords — unaffected.
+Rejected again: generator constants (`OrbitStep`, moon orbit) — they move bodies in existing saves and shrink the
+parent planet in a moon's sky (`SkyBodiesView`). Stage 2 if 0.24 still reads cramped after the playtest: 0.32
+together with a cruise mode. Client change → local Unity build.
+
 ### ★ First-person scale: field of view 80° by default, a 50–100° setting, a smaller held item that keeps its size (#1589 #1590 #1591, 2026-09-05, branch feat/fov-setting)
 
 **Why.** Playtest 2026-09-05: "the blocks feel huge — one right in front of you fills the whole view". The world is
@@ -148,6 +2406,21 @@ station, wreck or distant body knew about. Code review, not yet seen in a playte
 plane (a hair inside it, reversed-Z aware), so the depth test rejects exactly the pixels an opaque draw covers — at
 any distance. The late draw and its saving stay; the dome radius only sets clipping and star size now, which the
 three components say in a comment. Additive domes at one depth layer in any order, so the picture is unchanged.
+
+### ★ A shield module built on the ground and a completed R repair charge the shield to its new maximum (#1586, 2026-09-05, PR #1606 by @ahmdkaml)
+
+**Why.** Player report (Lyxette, v2026.9.2): after installing a shield generator and repairing the hull on the ground,
+the shield sat at its old value (55) until the next launch, when it jumped to the new maximum (135) — the module looked
+dead. The charge only ever filled at launch (`EnterSpace`) and in the space tick's out-of-combat regen;
+`RecomputeShipCombatStats` clamps downwards only, so `HandleBuildModule` and the ship repair left the stored charge alone.
+
+**What ships.** `HandleBuildModule`: after `RecomputeShipCombatStats`, a module carrying a `shield` or `shield_regen`
+stat sets `_ship.Shield = _shipShieldMax` — the workshop charges the new shields. `RepairShipAll`: when the repair
+completes (no missing cell, hull at max) the shield is topped up before `ShipCombatStatus` goes out. No regeneration
+while landed (decided). Tests: `ShipRepairTests.RepairShipAll_WhenFullyRepaired_RestoresShield`,
+`ShipFleetTests.BuildShieldGenerator_RestoresShieldToMax` (135 for the starter) and
+`BuildNonShieldModule_DoesNotChangeShield`; new test seams `ShipShieldForTest` / `SetShipShieldForTest`.
+Community contribution — Ahmed's first gameplay (non-test) PR.
 
 ### ★ The HUD compass gets a rotating N marker instead of the fixed ▲ that looked like a north needle (#1597, 2026-09-05, branch feat/compass-north-marker-1597)
 

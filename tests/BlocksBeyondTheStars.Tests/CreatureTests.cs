@@ -8,6 +8,8 @@ using BlocksBeyondTheStars.Shared.Configuration;
 using BlocksBeyondTheStars.Shared.Content;
 using BlocksBeyondTheStars.Shared.Definitions;
 using BlocksBeyondTheStars.Shared.Geometry;
+using BlocksBeyondTheStars.Shared.Primitives;
+using BlocksBeyondTheStars.Shared.State;
 using BlocksBeyondTheStars.WorldGeneration;
 using Xunit;
 using SvGameServer = BlocksBeyondTheStars.GameServer.GameServer;
@@ -30,7 +32,7 @@ public sealed class CreatureTests : IDisposable
         _content = ContentLoader.LoadFromDirectory(TestPaths.DataDir());
     }
 
-    private SvGameServer Started(string planet, out SqliteWorldRepository repo)
+    private SvGameServer Started(string planet, out SqliteWorldRepository repo, Action<ServerConfig>? configure = null)
     {
         repo = new SqliteWorldRepository(new SaveGamePaths(_root, "creature"));
         var st = new LoopbackServerTransport(new LoopbackLink());
@@ -41,7 +43,9 @@ public sealed class CreatureTests : IDisposable
             StartPlanet = planet,
             AutoSaveIntervalMinutes = 9999,
             PlaceStarterShip = false,
+            World = { TerrainGeneration = 0 }, // #1645: gameplay test on the classic relief — the player sits at a fixed (0, 64, 0), which generation-1 terrain may flood or bury
         };
+        configure?.Invoke(config);
         var server = new SvGameServer(config, _content, st, repo);
         server.Start();
         return server;
@@ -320,6 +324,7 @@ public sealed class CreatureTests : IDisposable
                 Assert.Equal(few[i].Habitat, many[i].Habitat);
                 Assert.Equal(few[i].Size, many[i].Size);
                 Assert.Equal(few[i].BodyPlan, many[i].BodyPlan);
+                Assert.Equal(few[i].HasFins, many[i].HasFins);
             }
         }
     }
@@ -1216,6 +1221,358 @@ public sealed class CreatureTests : IDisposable
                 server.Tick(0.2);
             }
             Assert.Equal(0.0, creature.GiveUpTimer);
+        }
+    }
+
+    // ---------------- Spawner hygiene (#1717, #1718, #1719) ----------------
+
+    /// <summary>The air cell standing on real ground at a column (the first air-over-solid from above).</summary>
+    private static int GroundCellY(SvGameServer server, int x, int z)
+    {
+        for (int y = 140; y > 10; y--)
+        {
+            if (server.World.GetBlock(new Vector3i(x, y, z)).IsAir && !server.World.GetBlock(new Vector3i(x, y - 1, z)).IsAir)
+            {
+                return y;
+            }
+        }
+
+        throw new InvalidOperationException($"no ground under ({x}, {z})");
+    }
+
+    [Fact]
+    public void SpawnGate_StopsAskingAtTheHardCap_EvenWhenThePopulationModelRunsHigher()
+    {
+        // #1717: TickCreatures gated the fill on the UNCLAMPED population model while TrySpawnCreatureNear
+        // clamped to the hard cap and refused — a world modelling above 64 sat in the 1.5 s fast-fill cadence
+        // forever, walking the ring and the roster with terrain probes for nothing (the shape of the old
+        // cap-of-12 bug at a rarer threshold).
+        var server = Started("jungle", out var repo, c => c.Rules.CreatureAbundance = AlienActivity.Extreme);
+        using (repo)
+        {
+            const int players = 25; // √25 = 5: 20 × 2.2 × 5 = 220 × size (≥ 0.5) × jitter (≥ 0.7) > 64 on any body
+            for (int i = 0; i < players; i++)
+            {
+                var p = server.AddLocalPlayer("Ranger" + i);
+                p.State.AboardShip = false;
+                p.State.Position = new Vector3f(0, 64, 0);
+            }
+
+            Assert.True(server.WorldCreatureCapForTest(players) > 64,
+                $"precondition: the model must exceed the hard cap (got {server.WorldCreatureCapForTest(players)})");
+
+            int ground = GroundCellY(server, 0, 0);
+            while (server.Creatures.Count(c => !c.IsCompanion) < 64)
+            {
+                server.SpawnCreatureAtForTest(new Vector3f(0.5f, ground, 0.5f));
+            }
+
+            server.Tick(0.1); // settle the tick's own bookkeeping before counting
+            int attempts = server.SpawnAttemptsForTest;
+            for (int i = 0; i < 40; i++)
+            {
+                server.Tick(0.5); // 20 s — a dozen fast-fill cadences' worth
+            }
+
+            Assert.True(server.Creatures.Count(c => !c.IsCompanion) >= 64, "the world stays at the hard cap");
+            Assert.Equal(attempts, server.SpawnAttemptsForTest);
+        }
+    }
+
+    [Fact]
+    public void WaterProbe_ReadsRealBlocks_SoASchoolFillsAPlayerBuiltPool()
+    {
+        // #1718: the spawn probes asked the GENERATOR alone, and a herd member asked only its own column — a
+        // pool the player dug and filled never hosted a spawn, and beside a small pond the golden-angle spots
+        // (4–8 blocks out) landed on the bank, so the school was the leader alone.
+        var server = Started("desert", out var repo); // a dry world: the generator has no water near the pool
+        using (repo)
+        {
+            var p = server.AddLocalPlayer("Ranger");
+            p.State.AboardShip = false;
+            p.State.Position = new Vector3f(0, 64, 0);
+
+            // A spot the generator calls dry (no water within the probe's 8 blocks) …
+            (int X, int Z)[] candidates = { (40, 40), (-50, 40), (60, -30), (-70, -60), (90, 20), (20, 90), (120, 120), (-130, 50) };
+            var (cx, cz) = candidates.First(c => server.WaterColumnNearForTest(c.X, c.Z) is null);
+
+            // … gets a 7 × 7 pool two cells deep, dug into the real ground.
+            var water = _content.GetBlock("water")!.NumericId;
+            int floor = GroundCellY(server, cx, cz);
+            for (int x = cx - 3; x <= cx + 3; x++)
+            {
+                for (int z = cz - 3; z <= cz + 3; z++)
+                {
+                    server.World.SetBlock(new Vector3i(x, floor - 1, z), water);
+                    server.World.SetBlock(new Vector3i(x, floor, z), water);
+                }
+            }
+
+            var found = server.WaterColumnNearForTest(cx, cz);
+            Assert.NotNull(found);
+            Assert.Equal(floor, found!.Value.Top);
+            Assert.Equal(floor - 2, found.Value.Bed);
+
+            // A social water species: the leader stands in the pool's centre; the members must find the pool
+            // from their own spots 4–8 blocks out, where the ground is dry.
+            var sp = server.SpeciesRoster.OrderBy(s => s.Size).First(); // the smallest body fits a two-deep pool
+            sp.Habitat = CreatureHabitat.Water;
+            sp.SocialGroupSize = 5;
+            server.SpawnGroupAroundForTest(sp.Id, cx, cz);
+
+            var school = server.Creatures.Where(c => c.SpeciesId == sp.Id).ToList();
+            Assert.True(school.Count >= 2, $"the members must find the pool beside their spots (got {school.Count})");
+            foreach (var fish in school)
+            {
+                var cell = new Vector3i((int)MathF.Floor(fish.Position.X), (int)MathF.Floor(fish.Position.Y), (int)MathF.Floor(fish.Position.Z));
+                Assert.Equal(water.Value, server.World.GetBlock(cell).Value);
+            }
+        }
+    }
+
+    [Fact]
+    public void CaveProbe_NeverLoadsAChunk()
+    {
+        // #1719: the cave-floor probe read through the LOADING block accessor, so a cave spawn attempt at a ring
+        // offset beyond the streamed chunks generated a chunk on the tick thread.
+        var server = Started("jungle", out var repo);
+        using (repo)
+        {
+            int before = server.World.LoadedChunkCount;
+            server.CaveFloorForTest(4000, 4000); // far outside anything streamed in
+            Assert.Equal(before, server.World.LoadedChunkCount);
+        }
+    }
+
+    // ---------- School club wave 3 (#1763 / #1760): authored species ----------
+
+    [Fact]
+    public void AuthoredSpecies_JoinAfterTheProceduralSlots_OnGenerationFiveOnly()
+    {
+        // Leni (#1763) rides on the ice worlds: the procedural roster is byte-for-byte what it always was, and on
+        // a generation-5 world one more species follows it; the flower fields (#1760) host the flowerling alone.
+        var glacier = _content.GetPlanet("glacier")!;
+        var authored = _content.AuthoredCreaturesFor(glacier);
+        Assert.Contains(authored, a => a.Key == "leni");
+
+        var classic = CreatureGenerator.GenerateRoster(glacier, 4242);
+        var gen4 = CreatureGenerator.GenerateRoster(glacier, 4242, 4, authored);
+        var gen5 = CreatureGenerator.GenerateRoster(glacier, 4242, 5, authored);
+        Assert.Equal(classic.Select(s => s.Id + s.Name), gen4.Select(s => s.Id + s.Name));
+        Assert.Equal(classic.Count + 1, gen5.Count);
+        Assert.Equal(classic.Select(s => s.Id + s.Name), gen5.Take(classic.Count).Select(s => s.Id + s.Name));
+
+        var leni = gen5[^1];
+        Assert.Equal("au_leni", leni.Id);
+        Assert.StartsWith("Leni ", leni.Name);
+        Assert.Equal(2, leni.SocialGroupSize);
+        Assert.True(leni.BiomeExclusive);
+        Assert.Contains("snow", leni.BiomeSurfaces);
+        Assert.False(leni.HasTail);
+        Assert.Equal(4, leni.Legs);
+        Assert.Equal(CreatureTemperament.Passive, leni.Temperament);
+        Assert.Equal("shaggy", leni.Hide);
+
+        var flowers = _content.GetPlanet("flower_fields")!;
+        var flowerlings = CreatureGenerator.GenerateRoster(flowers, 4242, 5, _content.AuthoredCreaturesFor(flowers));
+        var only = Assert.Single(flowerlings);
+        Assert.Equal("au_flowerling", only.Id);
+        Assert.Equal(CreatureBodyPlan.Floral, only.BodyPlan);
+        Assert.True(only.AngeredByMining && only.GiftsWhenCalm);
+        Assert.Equal(2, only.Legs);
+        Assert.Empty(CreatureGenerator.GenerateRoster(flowers, 4242, 4, _content.AuthoredCreaturesFor(flowers)));
+
+        foreach (var sp in gen5.Concat(flowerlings))
+        {
+            Assert.True(BlocksBeyondTheStars.Shared.Definitions.LocomotionController.ForSpecies(sp).CruiseSpeed > 0f);
+        }
+    }
+
+    [Fact]
+    public void Leni_SpawnsOnlyOnSnowOrIce()
+    {
+        // #1763: BiomeExclusive is a hard rule against the ground under the animal's feet, real blocks first.
+        var server = Started("glacier", out var repo, c => c.World.TerrainGeneration = 5);
+        using (repo)
+        {
+            Assert.Contains(server.SpeciesRoster, s => s.Id == "au_leni");
+            var snow = _content.GetBlock("snow")!.NumericId;
+            var dirt = _content.GetBlock("dirt")!.NumericId;
+            var spot = new Vector3i(40, 90, 40);
+            for (int dy = 0; dy <= 3; dy++)
+            {
+                server.World.SetBlock(new Vector3i(spot.X, spot.Y + dy, spot.Z), BlockId.Air);
+            }
+
+            var at = new Vector3f(spot.X + 0.5f, spot.Y, spot.Z + 0.5f);
+            server.World.SetBlock(new Vector3i(spot.X, spot.Y - 1, spot.Z), snow);
+            Assert.True(server.SpawnSpotClearForSpeciesTest("au_leni", at), "Leni refused the snow");
+
+            server.World.SetBlock(new Vector3i(spot.X, spot.Y - 1, spot.Z), dirt);
+            Assert.False(server.SpawnSpotClearForSpeciesTest("au_leni", at), "Leni accepted bare dirt");
+        }
+    }
+
+    /// <summary>A flower-fields world of generation 5 with the player standing on cleared ground at (x, z) and a
+    /// flowerling a few blocks away. Returns the creature id and the player's feet Y.</summary>
+    private (SvGameServer Server, SqliteWorldRepository Repo, string Creature, int FeetY, BlocksBeyondTheStars.GameServer.PlayerSession Player)
+        FlowerlingScene(int along = 3)
+    {
+        var server = Started("flower_fields", out var repo, c => c.World.TerrainGeneration = 5);
+        int x = 24, z = 24;
+        int surface = 120;
+        while (surface > 1 && server.World.GetBlock(new Vector3i(x, surface, z)).IsAir)
+        {
+            surface--;
+        }
+
+        // Clear a box of air over the ground (the flower fields are dense, and a flower in the sightline would
+        // be a test of the flora, not of the rule).
+        // #1997: a flat grass strip out to the flowerling, so a longer approach is a test of the rule, not the relief.
+        var grass = _content.GetBlock("grass")!.NumericId;
+        for (int dx = -3; dx <= System.Math.Max(6, along + 3); dx++)
+            for (int dz = -3; dz <= 6; dz++)
+            {
+                for (int dy = 1; dy <= 4; dy++)
+                {
+                    server.World.SetBlock(new Vector3i(x + dx, surface + dy, z + dz), BlockId.Air);
+                }
+
+                if (along > 3)
+                {
+                    server.World.SetBlock(new Vector3i(x + dx, surface, z + dz), grass);
+                }
+            }
+
+        var p = server.AddLocalPlayer("Justus");
+        p.State.AboardShip = false;
+        p.State.Position = new Vector3f(x + 0.5f, surface + 1, z + 0.5f);
+        p.State.Inventory.SetSlot(0, new ItemStack("basic_drill", 1));
+        var at = along > 3 ? new Vector3f(x + along + 0.5f, surface + 1, z + 0.5f) : new Vector3f(x + 3.5f, surface + 1, z + 3.5f);
+        string id = server.SpawnCreatureAtForTest(at, "au_flowerling");
+        return (server, repo, id, surface + 1, p);
+    }
+
+    [Fact]
+    public void Flowerling_HuntsAMiner_AcrossItsWholeAngerRange()
+    {
+        // #1997: angered from 12 blocks it used to read "hostile" and wander off (it only hunted within 8) — now it comes.
+        var (server, repo, id, feetY, p) = FlowerlingScene(along: 12);
+        using (repo)
+        {
+            server.SetLocalDayFractionForTest(0.5, 24f); // noon — it is awake
+            var stone = new Vector3i(23, feetY, 24);
+            server.World.SetBlock(stone, _content.GetBlock("stone")!.NumericId);
+            server.MineBlock("Justus", stone.X, stone.Y, stone.Z);
+            Assert.True(server.ProvokeTimerForTest(id) > 0.0, "the flowerling did not mind the mining");
+
+            float before = p.State.Health;
+            for (int i = 0; i < 48; i++)
+            {
+                p.State.Position = new Vector3f(24.5f, feetY, 24.5f);
+                server.TickForTest(0.25);
+            }
+
+            var c = server.NetCreatureForTest(id);
+            float dist = (float)System.Math.Sqrt((c.X - 24.5f) * (c.X - 24.5f) + (c.Z - 24.5f) * (c.Z - 24.5f));
+            Assert.True(dist < 4f, $"the angry flowerling stayed {dist:0.0} blocks away");
+            Assert.True(p.State.Health < before, "the angry flowerling never bit");
+        }
+    }
+
+    [Fact]
+    public void Flowerling_MiningBesideItWakesIt_AndItBitesAtNight()
+    {
+        // #1997: at night it slept through its own grudge (and a roused hunter never bit after dark).
+        var (server, repo, id, feetY, p) = FlowerlingScene();
+        using (repo)
+        {
+            server.SetLocalDayFractionForTest(0.0, 24f); // midnight — a diurnal flowerling sleeps
+            server.TickForTest(0.25);
+            Assert.True(server.NetCreatureForTest(id).Asleep, "the flowerling should be asleep at midnight");
+
+            var stone = new Vector3i(25, feetY, 24);
+            server.World.SetBlock(stone, _content.GetBlock("stone")!.NumericId);
+            server.MineBlock("Justus", stone.X, stone.Y, stone.Z);
+            server.TickForTest(0.25);
+            Assert.False(server.NetCreatureForTest(id).Asleep, "mining right beside it did not wake it");
+
+            float before = p.State.Health;
+            for (int i = 0; i < 24; i++)
+            {
+                p.State.Position = new Vector3f(24.5f, feetY, 24.5f);
+                server.TickForTest(0.25);
+            }
+
+            Assert.True(p.State.Health < before, "the woken flowerling never bit");
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FloralFace_EveryPartStandsInFrontOfTheHead(bool hostile)
+    {
+        // #1997: the first face was built inside the head cubes (the maw, the teeth) and 0.01 d behind the face (the grin).
+        foreach (float scale in new[] { 0.75f, 1f, 1.4f })
+        {
+            float unit = 0.5f * 1.6f;
+            float w = unit * 0.9f * scale, h = unit * 0.85f * scale, d = unit * 0.8f * scale, headZ = unit * 0.45f;
+            var boxes = FloralFaceLayout.Build(w, h, d, headZ, hostile);
+            Assert.NotEmpty(boxes);
+            Assert.Contains(boxes, b => b.Part == (hostile ? FloralFacePart.Maw : FloralFacePart.Grin));
+            float front = FloralFaceLayout.FaceFrontZ(d, headZ);
+            foreach (var b in boxes)
+            {
+                Assert.True(FloralFaceLayout.FrontZInHead(b, h, d, headZ) > front + 1e-4f,
+                    $"{b.Part} (jaw={b.OnJaw}) ends at {FloralFaceLayout.FrontZInHead(b, h, d, headZ):0.000}, the face is at {front:0.000}");
+            }
+        }
+    }
+
+    [Fact]
+    public void Flowerling_TurnsOnAMiner_ItCanSee()
+    {
+        // #1760: a block broken in front of it → a grudge (the provoke timer runs, it reads hostile and bites);
+        // no grudge while nobody mines.
+        var (server, repo, id, feetY, p) = FlowerlingScene();
+        using (repo)
+        {
+            Assert.Equal(0.0, server.ProvokeTimerForTest(id));
+            var stone = new Vector3i(25, feetY, 24);
+            server.World.SetBlock(stone, _content.GetBlock("stone")!.NumericId);
+            server.MineBlock("Justus", stone.X, stone.Y, stone.Z);
+            Assert.True(server.World.GetBlock(stone).IsAir, "the stone was not mined");
+            Assert.True(server.ProvokeTimerForTest(id) > 0.0, "the flowerling did not mind the mining");
+            Assert.NotNull(server.LastBlockBreakForTest("Justus"));
+        }
+    }
+
+    [Fact]
+    public void Flowerling_GiftsACalmVisitor_ButNotAMiner()
+    {
+        // #1760: a player who has not mined for two minutes and stands close gets a present; a miner does not.
+        var (server, repo, id, feetY, p) = FlowerlingScene();
+        using (repo)
+        {
+            p.State.Position = new Vector3f(26.5f, feetY, 26.5f); // within three blocks of the flowerling
+            int before = server.DropPackets.Count;
+            server.AdvanceGiftClockForTest(130);
+            server.Tick(0.1);
+            Assert.True(server.DropPackets.Count > before, "no gift for a calm visitor");
+            var items = server.DropPackets.SelectMany(c => c.Items).Select(s => s.Item).ToList();
+            Assert.Contains(items, i => i == "berries" || i == "stone" || i == "wood_log" || i == "iron_ore" || i == "copper_ore");
+
+            // A cooldown, then mining: no second gift while the miner is a miner.
+            var stone = new Vector3i(27, feetY, 24);
+            server.World.SetBlock(stone, _content.GetBlock("stone")!.NumericId);
+            p.State.Position = new Vector3f(26.5f, feetY, 24.5f);
+            server.MineBlock("Justus", stone.X, stone.Y, stone.Z);
+            int afterGift = server.DropPackets.Count;
+            p.State.Position = new Vector3f(26.5f, feetY, 26.5f);
+            server.AdvanceGiftClockForTest(60);
+            server.Tick(0.1);
+            Assert.Equal(afterGift, server.DropPackets.Count);
         }
     }
 

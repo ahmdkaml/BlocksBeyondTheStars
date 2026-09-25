@@ -65,6 +65,41 @@ namespace BlocksBeyondTheStars.Client
             return field != null && field.isFocused;
         }
 
+        /// <summary>Hands keyboard focus back before a screen hides itself with <c>canvas.enabled = false</c> (#1804).
+        /// A field left focused under a disabled canvas crashes the next caret rebuild; <see cref="InputFocusGuard"/>
+        /// catches the canvas toggle on every field, this is the explicit hand-back for screens that close
+        /// programmatically while the player may be typing. <paramref name="within"/> limits it to fields under that
+        /// transform, so another screen's field is never touched.</summary>
+        public static void ReleaseTextFieldFocus(Transform within = null)
+        {
+            var es = EventSystem.current;
+            var selected = es != null ? es.currentSelectedGameObject : null;
+            if (selected == null || (within != null && !selected.transform.IsChildOf(within)))
+            {
+                return;
+            }
+
+            var field = selected.GetComponent<InputField>();
+            if (field == null)
+            {
+                return;
+            }
+
+            var guard = selected.GetComponent<InputFocusGuard>();
+            if (guard != null)
+            {
+                guard.Release();
+                return;
+            }
+
+            if (field.isFocused)
+            {
+                field.DeactivateInputField();
+            }
+
+            es.SetSelectedGameObject(null);
+        }
+
         private static Font _font;
         private static Sprite _panelSprite;
         private static Sprite _dialogSprite;
@@ -72,6 +107,7 @@ namespace BlocksBeyondTheStars.Client
         private static Sprite _solidSprite;
         private static Sprite _spinnerSprite;
         private static Sprite _discSprite;
+        private static Sprite _triangleSprite;
 
         /// <summary>A plain white sprite (tint via Image.color) — used for fills/bars.</summary>
         public static Sprite SolidSprite
@@ -126,6 +162,42 @@ namespace BlocksBeyondTheStars.Client
             }
         }
 
+        /// <summary>
+        /// A filled, anti-aliased triangle pointing UP (apex at the top edge, base along the bottom) — the
+        /// direction glyph for HUD markers that have to say "that way", rotated by the caller (#1682). Drawn
+        /// here rather than taken from a font: the HUD's SDF atlas is built at runtime from Rajdhani, which
+        /// carries no geometric shapes, so a "▲" would be a missing-glyph box on some machines. Cached.
+        /// </summary>
+        public static Sprite TriangleSprite
+        {
+            get
+            {
+                if (_triangleSprite == null)
+                {
+                    const int n = 64;
+                    var tex = new Texture2D(n, n, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
+                    var px = new Color[n * n];
+                    for (int y = 0; y < n; y++)
+                    {
+                        // Half-width of the triangle at this row: full at the base (y = 0), zero at the apex.
+                        float t = y / (float)(n - 1);
+                        float half = (1f - t) * (n * 0.5f);
+                        for (int x = 0; x < n; x++)
+                        {
+                            float d = half - Mathf.Abs(x - (n - 1) * 0.5f); // >0 inside, in pixels
+                            px[y * n + x] = new Color(1f, 1f, 1f, Mathf.Clamp01(d)); // 1 px AA edge
+                        }
+                    }
+
+                    tex.SetPixels(px);
+                    tex.Apply();
+                    _triangleSprite = Sprite.Create(tex, new Rect(0, 0, n, n), new Vector2(0.5f, 0.5f), 100f);
+                }
+
+                return _triangleSprite;
+            }
+        }
+
         public static Font Font =>
             _font != null ? _font
             : _font = (Resources.Load<Font>("fonts/Rajdhani-Medium") // bundled sci-fi UI font (OFL, full DE glyphs)
@@ -146,6 +218,55 @@ namespace BlocksBeyondTheStars.Client
 
         /// <summary>Set from <see cref="ClientSettings.Apply"/>: reduced-effects users keep instant panel snaps.</summary>
         public static bool ReducedMotion;
+
+        /// <summary>
+        /// The HUD's boot-up feel for a whole shell screen (main menu, settings, save select, …): the screen
+        /// fades in as a whole, every top-level element rises and fades up in build order with a short stagger
+        /// (the systems coming online one after another), and every holo frame under the root wipes on
+        /// left→right (<see cref="UiHolo.PlayReveal"/>). Call once right after the screen is built. Elements
+        /// that are inactive at that moment (modal dialogs, overlays) are skipped — they get their own
+        /// TransitionIn when they open. Instant under <see cref="ReducedMotion"/>.
+        /// </summary>
+        public static void BootScreen(GameObject canvasRoot, float stagger = 0.035f, float maxStagger = 0.45f)
+        {
+            if (canvasRoot == null)
+            {
+                return;
+            }
+
+            TransitionIn(canvasRoot);
+            var root = canvasRoot.transform;
+            if (ReducedMotion)
+            {
+                UiHolo.PlayReveal(root); // snaps every shape to fully drawn
+                return;
+            }
+
+            int n = 0;
+            for (int i = 0; i < root.childCount; i++)
+            {
+                var child = root.GetChild(i) as RectTransform;
+                if (child == null || !child.gameObject.activeSelf)
+                {
+                    continue;
+                }
+
+                var group = child.GetComponent<CanvasGroup>();
+                if (group == null)
+                {
+                    group = child.gameObject.AddComponent<CanvasGroup>();
+                }
+
+                float delay = Mathf.Min(n * stagger, maxStagger);
+                n++;
+                group.alpha = 0f;
+                UiTween.Alpha(group, 1f, 0.24f, UiTween.Ease.OutQuad, delay);
+                var home = child.anchoredPosition;
+                UiTween.Move(child, home + new Vector2(0f, -10f), home, 0.28f, UiTween.Ease.OutCubic, delay);
+            }
+
+            UiHolo.PlayReveal(root, 0.34f, 0.06f, 0.04f);
+        }
 
         /// <summary>Fade+rise-in transition (~0.14 s, unscaled) on a UI root: attaches/reuses a CanvasGroup
         /// and animates alpha 0→1 plus a small upward slide. Instant under <see cref="ReducedMotion"/>.
@@ -422,12 +543,35 @@ namespace BlocksBeyondTheStars.Client
             // Expand = scale by the smaller of the width/height ratios, so the whole 1920x1080 layout
             // always fits (no right-edge overflow on non-16:9 / high-res monitors); extra space is margin.
             scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.Expand;
+            // The holo chrome shader (UiHolo) carries its per-element parameters in UV1/UV2; canvases strip
+            // those channels unless asked to keep them.
+            canvas.additionalShaderChannels |= AdditionalCanvasShaderChannels.TexCoord1 | AdditionalCanvasShaderChannels.TexCoord2
+                                               | AdditionalCanvasShaderChannels.TexCoord3;
             go.AddComponent<GraphicRaycaster>();
             if (userScalable)
             {
                 ScalableCanvases.Add(new ScaledCanvas { Canvas = canvas, BaseRef = baseRef });
             }
 
+            return canvas;
+        }
+
+        /// <summary>Makes <paramref name="go"/> a nested Canvas (its own batch, so per-frame movers do not re-batch
+        /// the whole HUD). A nested canvas has its OWN shader-channel mask — without copying the parent's, the
+        /// UiHolo/TMP vertex channels (UV1–UV3) are dropped and the chrome renders as white boxes.</summary>
+        public static Canvas AddSubCanvas(GameObject go)
+        {
+            if (go == null)
+            {
+                return null;
+            }
+
+            var canvas = go.GetComponent<Canvas>() ?? go.AddComponent<Canvas>();
+            var parent = go.transform.parent != null ? go.transform.parent.GetComponentInParent<Canvas>() : null;
+            canvas.additionalShaderChannels = parent != null
+                ? parent.additionalShaderChannels
+                : AdditionalCanvasShaderChannels.TexCoord1 | AdditionalCanvasShaderChannels.TexCoord2 | AdditionalCanvasShaderChannels.TexCoord3;
+            canvas.overrideSorting = false;
             return canvas;
         }
 
@@ -467,11 +611,15 @@ namespace BlocksBeyondTheStars.Client
                 return sprite;
             }
 
-            var tex = Resources.Load<Texture2D>("icons/" + name);
+            var tex = TexturePackFolder.IconOverride(name) ?? Resources.Load<Texture2D>("icons/" + name);
             sprite = tex != null ? Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f) : null;
             _icons[name] = sprite;
             return sprite;
         }
+
+        /// <summary>Forgets the cached icon sprites — the local texture pack changed an icon (#1952). Screens built
+        /// afterwards pick up the new art; the old sprites are swept with the next unused-assets pass.</summary>
+        public static void ClearIconCache() => _icons.Clear();
 
         /// <summary>Places an icon (if it exists) at a square rect; no-op when the icon is missing.</summary>
         public static Image AddIcon(Transform parent, float x, float y, float size, string name)
@@ -748,20 +896,33 @@ namespace BlocksBeyondTheStars.Client
             public RectTransform Rt;     // the slot box (scaled up when selected)
             public Image Border;         // the box fill / frame (tinted by selection)
             public Image Ring;           // bright selection outline (toggled on the active slot)
+            public UiHolo.Shape RingShape; // the ring's holo parameters (glow flash on selection) — null on the bitmap fallback
             public RawImage Icon;        // the block-atlas / item texture
-            public Text Num, Name;
-            public Text Count;           // stack size, top-right (#744) — left empty by the ship-systems bar
+            public TMPro.TMP_Text Num, Name;
+            public TMPro.TMP_Text Count; // stack size, top-right (#744) — left empty by the ship-systems bar
         }
 
         /// <summary>Builds a quick-bar cell at a top-left anchored rect. The icon nearly fills the box (only a thin
-        /// inset) so the graphic reads large; the number sits top-left and the name caption along the bottom.</summary>
+        /// inset) so the graphic reads large; the number sits top-left and the name caption along the bottom.
+        /// Holo chrome (UiHolo) with SDF captions; bitmap sprites when the shader is unavailable.</summary>
         public static QuickSlot MakeQuickSlot(Transform parent, float x, float y, float size)
         {
-            var ring = AddImage(parent, x - 3f, y - 3f, size + 6f, size + 6f, PanelSprite, Cyan); // outline, behind the box
-            ring.type = Image.Type.Sliced;
+            Image ring;
+            UiHolo.Shape ringShape = null;
+            if (UiHolo.Available)
+            {
+                ring = UiHolo.AddPanel(parent, x - 3f, y - 3f, size + 6f, size + 6f, new Color(Cyan.r, Cyan.g, Cyan.b, 0.10f), 11f, 2f, 1.8f);
+                ringShape = ring.GetComponent<UiHolo.Shape>();
+            }
+            else
+            {
+                ring = AddImage(parent, x - 3f, y - 3f, size + 6f, size + 6f, PanelSprite, Cyan); // outline, behind the box
+                ring.type = Image.Type.Sliced;
+            }
+
             ring.enabled = false;
 
-            var box = AddPanel(parent, x, y, size, size, SlotIdle);
+            var box = UiHolo.AddPanel(parent, x, y, size, size, SlotIdle, 8f, 1f, 0.45f);
 
             float inset = 6f;
             var iconGo = new GameObject("Icon", typeof(RectTransform));
@@ -771,16 +932,16 @@ namespace BlocksBeyondTheStars.Client
             icon.raycastTarget = false;
             icon.enabled = false;
 
-            var num = AddText(box.transform, 5f, 2f, size - 8f, 18f, string.Empty, 15, TextCol, TextAnchor.UpperLeft, FontStyle.Bold);
-            AddOutline(num);
-            var name = AddText(box.transform, 2f, size - 17f, size - 4f, 16f, string.Empty, 12, TextCol, TextAnchor.MiddleCenter, FontStyle.Bold);
-            AddOutline(name);
+            var num = UiText.Add(box.transform, 5f, 2f, size - 8f, 18f, string.Empty, 15, TextCol, TextAnchor.UpperLeft, FontStyle.Bold, UiText.Look.Outline);
+            var name = UiText.Add(box.transform, 2f, size - 17f, size - 4f, 16f, string.Empty, 12, TextCol, TextAnchor.MiddleCenter, FontStyle.Bold, UiText.Look.Outline);
             // Stack size in the free corner: the hotkey number owns top-left, the caption owns the bottom edge.
-            var count = AddText(box.transform, 5f, 2f, size - 10f, 18f, string.Empty, 13, TextCol, TextAnchor.UpperRight, FontStyle.Bold);
-            AddOutline(count);
+            var count = UiText.Add(box.transform, 5f, 2f, size - 10f, 18f, string.Empty, 13, TextCol, TextAnchor.UpperRight, FontStyle.Bold, UiText.Look.Outline);
 
-            return new QuickSlot { Rt = box.rectTransform, Border = box, Ring = ring, Icon = icon, Num = num, Name = name, Count = count };
+            return new QuickSlot { Rt = box.rectTransform, Border = box, Ring = ring, RingShape = ringShape, Icon = icon, Num = num, Name = name, Count = count };
         }
+
+        /// <summary>Selection feedback on a quick-bar cell: the ring's glow flares and eases back (holo only).</summary>
+        public static void FlashQuickSlot(in QuickSlot s) => UiHolo.Flash(s.RingShape, 3.2f, 1.8f, 0.4f);
 
         /// <summary>Applies the selected/idle look to a quick-bar cell: a bright fill + a cyan outline ring on the
         /// active slot, so the held tool / active system is unmistakable. (The ring sits just behind the cell and
@@ -802,8 +963,11 @@ namespace BlocksBeyondTheStars.Client
         /// separated from the busy world, with a faint cyan keyline along the bottom.</summary>
         public static void QuickBackplate(Transform parent, float x, float y, float w, float h)
         {
-            AddPanel(parent, x, y, w, h, new Color(0.02f, 0.05f, 0.11f, 0.62f));
-            AddImage(parent, x + 6f, y + h - 3f, w - 12f, 2f, SolidSprite, new Color(Cyan.r, Cyan.g, Cyan.b, 0.5f));
+            UiHolo.AddPanel(parent, x, y, w, h, new Color(0.02f, 0.05f, 0.11f, 0.62f), 12f, 1.2f, 0.8f);
+            if (!UiHolo.Available)
+            {
+                AddImage(parent, x + 6f, y + h - 3f, w - 12f, 2f, SolidSprite, new Color(Cyan.r, Cyan.g, Cyan.b, 0.5f));
+            }
         }
 
         /// <summary>Adds a crisp dark outline to small HUD text so it stays legible over bright terrain/space.</summary>
@@ -886,6 +1050,10 @@ namespace BlocksBeyondTheStars.Client
             // the world dialogs and the editors — so no screen has to remember to opt in. Inert on
             // keyboard/mouse.
             input.gameObject.AddComponent<PadTextEntryBridge>().Init(input, placeholder);
+
+            // #1791: hand focus back the moment the field's dialog goes inactive — every field, not one dialog at a
+            // time (the feedback dialog got this in #1683, the chat box in #1634, and a third dialog crashed anyway).
+            input.gameObject.AddComponent<InputFocusGuard>().Init(input);
 
             return input;
         }
@@ -1133,6 +1301,95 @@ namespace BlocksBeyondTheStars.Client
                         _img.enabled = busy;
                     }
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Releases keyboard focus when an input field's screen goes away (#1791, #1804). Screens hide two ways.
+    /// <c>SetActive(false)</c> / destroy: uGUI's own <c>InputField.OnDisable</c> deactivates the field, and this
+    /// guard only drops the EventSystem selection uGUI leaves behind (#1634 — a hidden field otherwise stays the
+    /// "selected" object until the next world click). <c>canvas.enabled = false</c>: the GameObject stays active,
+    /// nothing deactivates the field, the caret blink keeps queueing rebuilds, and the next one dereferences
+    /// <c>Text.canvas</c>, which is null once no enabled Canvas sits above the field — the
+    /// <c>NullReferenceException</c> in <c>InputField.GenerateCaret</c> behind five crash reports (#1683, #1791,
+    /// #1804, and again in 2026.9.9).
+    /// <para>The 2026.9.7 guard asked <c>textComponent.canvas == null</c> from <c>OnCanvasHierarchyChanged</c>. That
+    /// property is a cache the Text only clears in its OWN <c>OnCanvasHierarchyChanged</c>, and this guard sits on the
+    /// field's GameObject, above the Text — so it could still read the stale, disabled canvas and let the field stay
+    /// focused. It also never saw a field that focused itself one frame later (<c>ActivateInputField</c> only raises a
+    /// flag that <c>InputField.LateUpdate</c> acts on) or a field focused under an already hidden canvas, which gets no
+    /// message at all. The guard therefore walks the parents itself (<see cref="HasLiveCanvas"/>, never the cache) and
+    /// re-checks every frame in a <c>LateUpdate</c> ordered after uGUI's, i.e. after a pending activation landed and
+    /// before the canvas rebuild that would draw the caret.</para>
+    /// Attached by <see cref="UiKit.AddInput"/> to every field it builds, and by the chat box to its own field.
+    /// </summary>
+    [DefaultExecutionOrder(32000)]
+    public sealed class InputFocusGuard : MonoBehaviour
+    {
+        private static readonly List<Canvas> CanvasBuffer = new List<Canvas>();
+
+        private InputField _field;
+
+        public void Init(InputField field) => _field = field;
+
+        private void OnDisable() => Release();
+
+        private void OnCanvasHierarchyChanged() => ReleaseIfCanvasless();
+
+        private void LateUpdate() => ReleaseIfCanvasless();
+
+        private void ReleaseIfCanvasless()
+        {
+            if (_field != null && _field.isFocused && !HasLiveCanvas(_field))
+            {
+                Release();
+            }
+        }
+
+        /// <summary>True when an enabled, active Canvas sits above the field's text — the same walk
+        /// <c>Graphic.CacheCanvas</c> does, done fresh instead of trusting the Text's cached result. A nested canvas
+        /// toggled under a still-enabled root therefore leaves the field alone.</summary>
+        public static bool HasLiveCanvas(InputField field)
+        {
+            if (field == null)
+            {
+                return false;
+            }
+
+            var from = field.textComponent != null ? field.textComponent.transform : field.transform;
+            from.GetComponentsInParent(false, CanvasBuffer);
+            bool live = false;
+            foreach (var canvas in CanvasBuffer)
+            {
+                if (canvas != null && canvas.isActiveAndEnabled)
+                {
+                    live = true;
+                    break;
+                }
+            }
+
+            CanvasBuffer.Clear();
+            return live;
+        }
+
+        /// <summary>Deactivates the field if it is focused and drops the EventSystem selection if it points here.</summary>
+        public void Release()
+        {
+            if (_field == null)
+            {
+                return;
+            }
+
+            if (_field.isFocused)
+            {
+                _field.DeactivateInputField();
+            }
+
+            var es = EventSystem.current;
+            if (es != null && es.currentSelectedGameObject == gameObject)
+            {
+                es.SetSelectedGameObject(null);
             }
         }
     }

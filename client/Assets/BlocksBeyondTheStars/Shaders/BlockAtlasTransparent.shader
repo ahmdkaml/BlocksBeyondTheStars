@@ -46,6 +46,8 @@ Shader "BlocksBeyondTheStars/BlockAtlasTransparent"
             float4 _Sc_SunDir;
             float4 _Sc_Sky;   // sky colour (set by Sky.cs) — water SSR sky fallback
             float _Sc_ScreenFx; // 1 when the depth+opaque textures exist (Medium+); 0 on Low → water uses the simple look
+            float4 _Sc_WaterTint; // #1758: per-world water colour (Sky.cs); read in mode 1
+            float _Sc_WaterMode;  // #1758: 0 = the classic blue, 1 = tint, 2 = static rainbow bands by position
 
             // SRP Batcher (#573): per-MATERIAL properties only. The _Sc_* globals above stay outside — they are
             // set once per frame via Shader.SetGlobal*, not per material.
@@ -58,6 +60,7 @@ Shader "BlocksBeyondTheStars/BlockAtlasTransparent"
                 float4 positionOS : POSITION;
                 float3 normal : NORMAL;
                 float2 uv : TEXCOORD0;
+                float2 sky : TEXCOORD1; // y carries the animation code of the tile (#1957); the rest is the opaque shader's
                 // Water top faces: x=mode (1 lake, 2 open, 3 river), y=foam (corner-smoothed),
                 // z=wave amplitude factor (corner-smoothed), w=flow axis (0=X, 1=Z).
                 float4 water : TEXCOORD2;
@@ -75,6 +78,26 @@ Shader "BlocksBeyondTheStars/BlockAtlasTransparent"
                 float4 water : TEXCOORD5;
             };
 
+            // #1957 animated tiles. TEXCOORD1.y = tint mode (low 4 bits) + 16*frames + 256*speedIndex + 1024*stripStart
+            // (BlockTextureAtlas.AnimationCode) — every term is exact in a float. The mesh UV stays on the block's
+            // OWN atlas cell; an animated face is moved onto the strip cell of the current frame here, in the vertex
+            // stage, so it costs the fragment stage nothing. 32 = atlas cells per side (AtlasBands.Cols/Rows).
+            float2 BbtsAnimatedUv(float2 uv, float code, out float mode)
+            {
+                mode = fmod(code, 16.0);
+                float frames = fmod(floor(code / 16.0), 16.0);
+                if (frames < 1.5)
+                {
+                    return uv;
+                }
+
+                float speedIndex = fmod(floor(code / 256.0), 4.0);
+                float fps = speedIndex < 0.5 ? 2.0 : speedIndex < 1.5 ? 4.0 : speedIndex < 2.5 ? 8.0 : 12.0;
+                float slot = floor(code / 1024.0) + fmod(floor(_Time.y * fps), frames);
+                float2 cell = floor(uv * 32.0);
+                return (float2(fmod(slot, 32.0), floor(slot / 32.0)) + (uv * 32.0 - cell)) / 32.0;
+            }
+
             Varyings vert(Attributes v)
             {
                 Varyings o;
@@ -88,7 +111,12 @@ Shader "BlocksBeyondTheStars/BlockAtlasTransparent"
                 // faces, but on every other block those same channels carry the flora/hull/dye tint — so a
                 // dyed pane's blue channel used to be read as a wave amplitude and the glass physically bobbed.
                 // Water always writes a positive mode, so this gate can never exclude water.
-                float amp = v.water.x > 0.5 ? 0.12 * v.water.z * (1.0 - saturate(v.water.y)) : 0.0;
+                // #1749: the amplitude comes from the corner-smoothed weights — open water bobs fully, a calm
+                // basin a quarter, a brook not at all — and never a falling flank (mode 4).
+                float openW = saturate(v.water.x - 1.0);
+                float brookW = saturate(v.water.z + v.water.w);
+                float ampFactor = openW + (1.0 - openW) * (1.0 - brookW) * 0.25;
+                float amp = (v.water.x > 0.5 && v.water.x < 3.5) ? 0.12 * ampFactor * (1.0 - saturate(v.water.y)) : 0.0;
                 if (amp > 0.0005)
                 {
                     float t = _Time.y;
@@ -98,7 +126,8 @@ Shader "BlocksBeyondTheStars/BlockAtlasTransparent"
                 }
 
                 o.positionCS = TransformWorldToHClip(wp);
-                o.uv = v.uv;
+                float unusedMode;
+                o.uv = BbtsAnimatedUv(v.uv, v.sky.y, unusedMode);
                 o.wn = TransformObjectToWorldNormal(v.normal);
                 o.wp = wp;
                 o.mat = v.color;
@@ -146,42 +175,80 @@ Shader "BlocksBeyondTheStars/BlockAtlasTransparent"
                     // and through it while swimming.
                     alpha = tex.a;
 
+                    // #1758 (school club wave 3): the world's water colour. A luminance recolour keeps the wave
+                    // shading; mode 2 lays static rainbow bands across the world (by position, never animated).
+                    // `wtint` stays in scope: the screen-space block below composites the BED through the water
+                    // and tints the depths, and both must follow the world's colour or a sandy shallow sea reads
+                    // as sand with a faint hue and a deep one as the classic blue (Marcel's playtest 2026-09-11).
+                    float3 wtint = float3(1.0, 1.0, 1.0);
+                    if (_Sc_WaterMode > 0.5)
+                    {
+                        float wlum = dot(col, float3(0.299, 0.587, 0.114));
+                        wtint = _Sc_WaterTint.rgb;
+                        if (_Sc_WaterMode > 1.5)
+                        {
+                            float hue = frac((i.wp.x + i.wp.z) / 96.0);
+                            wtint = saturate(abs(frac(hue + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0);
+                            wtint = lerp(float3(0.5, 0.5, 0.5), wtint, 0.85);
+                        }
+                        col = lerp(col, wlum * wtint * 2.2, 0.85);
+                    }
+
                     float mode = i.water.x;
                     float t = _Time.y;
                     if (mode > 3.5)
                     {
                         // Waterfall flank: a bright sheet of streaks racing straight DOWN the face. Procedural on
                         // world height (atlas UVs can't scroll); sin(k*y + w*t) translates the pattern downward.
+                        // `across` only ever enters as a NESTED perturbation (a per-column phase offset): added
+                        // linearly to the phase it tilted the streaks ~41 degrees into a diagonal glare (#1853).
                         float across = i.wp.x + i.wp.z;
                         float ph = i.wp.y * 3.0 + t * 6.5;
                         float rip = 0.5 + 0.5 * sin(ph + sin(across * 2.3) * 1.5);
                         col += light * 0.12 * rip;
-                        float streak = smoothstep(0.84, 1.0, sin(ph * 1.27 + across * 3.3));
+                        float streak = smoothstep(0.84, 1.0, sin(ph * 1.27 + sin(across * 2.9) * 1.2));
                         col = lerp(col, light * float3(0.95, 0.98, 1.0), streak * 0.45);
                         alpha = saturate(alpha + streak * 0.30 + rip * 0.06);
                     }
-                    else if (mode > 2.5)
+                    else
                     {
-                        // River/brook: bright ripple bands + thin white streaks racing along the channel's
-                        // flow axis. UVs cannot scroll inside an atlas tile, so the motion is procedural
-                        // on world position.
-                        float2 flow = i.water.w < 0.5 ? float2(1.0, 0.0) : float2(0.0, 1.0);
-                        float along = dot(i.wp.xz, flow);
-                        float across = dot(i.wp.xz, float2(-flow.y, flow.x));
-                        float ph = along * 1.9 - t * 5.5;
-                        float rip = 0.5 + 0.5 * sin(ph + sin(across * 2.7) * 1.2);
-                        col += light * 0.10 * rip;
-                        float streak = smoothstep(0.86, 1.0, sin(ph * 1.31 + across * 3.1));
-                        col = lerp(col, light * float3(0.95, 0.97, 1.0), streak * 0.35);
-                        alpha = saturate(alpha + streak * 0.20 + rip * 0.04);
-                    }
-                    else if (mode > 1.5)
-                    {
-                        // Open water: a soft moving sun glint, plus an animated rippled foam band where
-                        // the surface meets the shore (i.water.y fades over the last three blocks).
+                        // #1749: below the waterfall there is no branch. Open water, brook (along X and/or Z)
+                        // and calm basin are WEIGHTS the mesher averages over block corners, so a body of
+                        // varying width — or one full of reeds — blends from one look to the next instead of
+                        // switching per cell and drawing a mosaic of ripple directions and brightness tiles.
+                        float open = saturate(mode - 1.0);
+                        float wX = saturate(i.water.z);
+                        float wZ = saturate(i.water.w);
+                        float calm = saturate(1.0 - open - wX - wZ);
+
+                        // Brook: bright ripple bands + thin white streaks racing along the flow axis, one set
+                        // per axis, each weighted. Procedural on world position — atlas UVs cannot scroll.
+                        float ripSum = 0.0, streakSum = 0.0;
+                        if (wX > 0.001)
+                        {
+                            float ph = i.wp.x * 1.9 - t * 5.5;
+                            float rip = 0.5 + 0.5 * sin(ph + sin(i.wp.z * 2.7) * 1.2);
+                            float streak = smoothstep(0.86, 1.0, sin(ph * 1.31 + i.wp.z * 3.1));
+                            ripSum += wX * rip;
+                            streakSum += wX * streak;
+                        }
+                        if (wZ > 0.001)
+                        {
+                            float ph = i.wp.z * 1.9 - t * 5.5;
+                            float rip = 0.5 + 0.5 * sin(ph + sin(-i.wp.x * 2.7) * 1.2);
+                            float streak = smoothstep(0.86, 1.0, sin(ph * 1.31 - i.wp.x * 3.1));
+                            ripSum += wZ * rip;
+                            streakSum += wZ * streak;
+                        }
+                        col += light * 0.10 * ripSum;
+                        col = lerp(col, light * float3(0.95, 0.97, 1.0), streakSum * 0.35);
+                        alpha = saturate(alpha + streakSum * 0.20 + ripSum * 0.04);
+
+                        // Open water: a soft moving sun glint, plus an animated rippled foam band where the
+                        // surface meets the shore (i.water.y fades over the last three blocks).
                         float glint = pow(0.5 + 0.5 * sin(i.wp.x * 1.7 + i.wp.z * 1.3 + t * 1.9), 6.0);
-                        col += light * 0.06 * ndl * glint;
-                        float foam = i.water.y;
+                        col += light * 0.06 * ndl * glint * open;
+                        float foam = i.water.y * open;
                         if (foam > 0.01)
                         {
                             float cell = frac(sin(dot(floor(i.wp.xz * 3.0), float2(12.9898, 78.233))) * 43758.5453);
@@ -190,11 +257,9 @@ Shader "BlocksBeyondTheStars/BlockAtlasTransparent"
                             col = lerp(col, light * float3(0.97, 0.99, 1.0), f * 0.85);
                             alpha = saturate(alpha + f * 0.45);
                         }
-                    }
-                    else if (mode > 0.5)
-                    {
-                        // Calm lake/pond: a barely-there slow shimmer, nothing more.
-                        col += light * 0.03 * (0.5 + 0.5 * sin(t * 0.6 + i.wp.x * 0.8 + i.wp.z * 1.1));
+
+                        // Calm basin: a barely-there slow shimmer for whatever weight is left.
+                        col += light * 0.03 * calm * (0.5 + 0.5 * sin(t * 0.6 + i.wp.x * 0.8 + i.wp.z * 1.1));
                     }
 
                     // Screen-space water (depth colour, refraction, SSR) needs the depth + opaque textures, which
@@ -217,7 +282,9 @@ Shader "BlocksBeyondTheStars/BlockAtlasTransparent"
                     float3 Vw = normalize(i.wp - _WorldSpaceCameraPos);
                     float vertical = column * max(abs(Vw.y), 0.08); // floor keeps near-horizontal rays finite
                     float depth01 = saturate(vertical / 16.0);
-                    col = lerp(col, col * 0.6 + light * float3(0.03, 0.10, 0.16), depth01 * 0.45); // gentler, lighter deep tint
+                    // The deep tint follows the world's water colour (#1758); classic worlds keep the blue depths.
+                    float3 deepTint = _Sc_WaterMode > 0.5 ? wtint * 0.18 : float3(0.03, 0.10, 0.16);
+                    col = lerp(col, col * 0.6 + light * deepTint, depth01 * 0.45); // gentler, lighter deep tint
                     alpha = lerp(alpha, saturate(alpha + 0.08), depth01); // depth reads as colour, barely as opacity
                     float edge = 1.0 - saturate(column / 0.55);          // ~1 right at the waterline / around objects
                     if (edge > 0.01)
@@ -236,6 +303,13 @@ Shader "BlocksBeyondTheStars/BlockAtlasTransparent"
                     float refr = 0.018 * (1.0 - depth01); // shallow distorts the visible bed; deep hides it anyway
                     float3 bed = SampleSceneColor(screenUV + wob * refr);
                     col = lerp(bed, col, saturate(alpha));
+                    // #1758: the bed is seen THROUGH coloured water — recolour the composite as well, else the
+                    // refracted sand wins over the tint and rainbow water looks like a sandy sea with a hue.
+                    if (_Sc_WaterMode > 0.5)
+                    {
+                        float clum = dot(col, float3(0.299, 0.587, 0.114));
+                        col = lerp(col, clum * wtint * 1.7, 0.55);
+                    }
 
                     // Screen-space reflection on the surface: mirror the view ray about the (wave-rippled) normal
                     // and march it through the depth buffer; on a hit reflect the opaque colour there, else fall
@@ -338,12 +412,15 @@ Shader "BlocksBeyondTheStars/BlockAtlasTransparent"
             fixed4 _Sc_Light;   // system sun colour x day brightness x weather (a>0.5 = set)
             float4 _Sc_SunDir;  // world-space direction TO the sun
             float _BaseAlpha;
+            float4 _Sc_WaterTint; // #1758: per-world water colour (Sky.cs); read in mode 1
+            float _Sc_WaterMode;  // #1758: 0 = the classic blue, 1 = tint, 2 = static rainbow bands by position
 
             struct appdata
             {
                 float4 vertex : POSITION;
                 float3 normal : NORMAL;
                 float2 uv : TEXCOORD0;
+                float2 sky : TEXCOORD1; // y carries the animation code of the tile (#1957); the rest is the opaque shader's
                 // Water top faces: x=mode (1 lake, 2 open, 3 river), y=foam (corner-smoothed),
                 // z=wave amplitude factor (corner-smoothed), w=flow axis (0=X, 1=Z).
                 float4 water : TEXCOORD2;
@@ -361,6 +438,26 @@ Shader "BlocksBeyondTheStars/BlockAtlasTransparent"
                 UNITY_FOG_COORDS(2)
             };
 
+            // #1957 animated tiles. TEXCOORD1.y = tint mode (low 4 bits) + 16*frames + 256*speedIndex + 1024*stripStart
+            // (BlockTextureAtlas.AnimationCode) — every term is exact in a float. The mesh UV stays on the block's
+            // OWN atlas cell; an animated face is moved onto the strip cell of the current frame here, in the vertex
+            // stage, so it costs the fragment stage nothing. 32 = atlas cells per side (AtlasBands.Cols/Rows).
+            float2 BbtsAnimatedUv(float2 uv, float code, out float mode)
+            {
+                mode = fmod(code, 16.0);
+                float frames = fmod(floor(code / 16.0), 16.0);
+                if (frames < 1.5)
+                {
+                    return uv;
+                }
+
+                float speedIndex = fmod(floor(code / 256.0), 4.0);
+                float fps = speedIndex < 0.5 ? 2.0 : speedIndex < 1.5 ? 4.0 : speedIndex < 2.5 ? 8.0 : 12.0;
+                float slot = floor(code / 1024.0) + fmod(floor(_Time.y * fps), frames);
+                float2 cell = floor(uv * 32.0);
+                return (float2(fmod(slot, 32.0), floor(slot / 32.0)) + (uv * 32.0 - cell)) / 32.0;
+            }
+
             v2f vert(appdata v)
             {
                 v2f o;
@@ -371,7 +468,12 @@ Shader "BlocksBeyondTheStars/BlockAtlasTransparent"
                 // foam band — shared corners displace identically, the shoreline stays flush.
                 // Gated on the water mode like the URP pass (#1374) — on a dyed pane those channels carry the
                 // dye, not a wave, and the glass used to bob. Water always writes a positive mode.
-                float amp = v.water.x > 0.5 ? 0.12 * v.water.z * (1.0 - saturate(v.water.y)) : 0.0;
+                // #1749: the amplitude comes from the corner-smoothed weights — open water bobs fully, a calm
+                // basin a quarter, a brook not at all — and never a falling flank (mode 4).
+                float openW = saturate(v.water.x - 1.0);
+                float brookW = saturate(v.water.z + v.water.w);
+                float ampFactor = openW + (1.0 - openW) * (1.0 - brookW) * 0.25;
+                float amp = (v.water.x > 0.5 && v.water.x < 3.5) ? 0.12 * ampFactor * (1.0 - saturate(v.water.y)) : 0.0;
                 if (amp > 0.0005)
                 {
                     float t = _Time.y;
@@ -381,7 +483,8 @@ Shader "BlocksBeyondTheStars/BlockAtlasTransparent"
                 }
 
                 o.pos = UnityWorldToClipPos(wp);
-                o.uv = v.uv;
+                float unusedMode;
+                o.uv = BbtsAnimatedUv(v.uv, v.sky.y, unusedMode);
                 o.wn = UnityObjectToWorldNormal(v.normal);
                 o.wp = wp;
                 o.water = v.water;
@@ -421,40 +524,75 @@ Shader "BlocksBeyondTheStars/BlockAtlasTransparent"
                     // and through it while swimming.
                     alpha = tex.a;
 
+                    // #1758: the world's water colour — mirrors the URP pass (luminance recolour; mode 2 = static rainbow).
+                    if (_Sc_WaterMode > 0.5)
+                    {
+                        float wlum = dot(col, fixed3(0.299, 0.587, 0.114));
+                        float3 wtint = _Sc_WaterTint.rgb;
+                        if (_Sc_WaterMode > 1.5)
+                        {
+                            float hue = frac((i.wp.x + i.wp.z) / 96.0);
+                            wtint = saturate(abs(frac(hue + float3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0);
+                            wtint = lerp(float3(0.5, 0.5, 0.5), wtint, 0.85);
+                        }
+                        col = lerp(col, wlum * wtint * 2.2, 0.85);
+                    }
+
                     float mode = i.water.x;
                     float t = _Time.y;
                     if (mode > 3.5)
                     {
                         // Waterfall flank: bright streaks racing straight DOWN the face (procedural on world
                         // height — atlas UVs cannot scroll; sin(k*y + w*t) moves the pattern downward).
+                        // `across` only ever enters as a NESTED perturbation (a per-column phase offset): added
+                        // linearly to the phase it tilted the streaks ~41 degrees into a diagonal glare (#1853).
                         float across = i.wp.x + i.wp.z;
                         float ph = i.wp.y * 3.0 + t * 6.5;
                         float rip = 0.5 + 0.5 * sin(ph + sin(across * 2.3) * 1.5);
                         col += light * 0.12 * rip;
-                        float streak = smoothstep(0.84, 1.0, sin(ph * 1.27 + across * 3.3));
+                        float streak = smoothstep(0.84, 1.0, sin(ph * 1.27 + sin(across * 2.9) * 1.2));
                         col = lerp(col, light * fixed3(0.95, 0.98, 1.0), streak * 0.45);
                         alpha = saturate(alpha + streak * 0.30 + rip * 0.06);
                     }
-                    else if (mode > 2.5)
+                    else
                     {
-                        // River/brook: ripple bands + white streaks racing along the flow axis (procedural
-                        // on world position — atlas UVs cannot scroll).
-                        float2 flow = i.water.w < 0.5 ? float2(1.0, 0.0) : float2(0.0, 1.0);
-                        float along = dot(i.wp.xz, flow);
-                        float across = dot(i.wp.xz, float2(-flow.y, flow.x));
-                        float ph = along * 1.9 - t * 5.5;
-                        float rip = 0.5 + 0.5 * sin(ph + sin(across * 2.7) * 1.2);
-                        col += light * 0.10 * rip;
-                        float streak = smoothstep(0.86, 1.0, sin(ph * 1.31 + across * 3.1));
-                        col = lerp(col, light * fixed3(0.95, 0.97, 1.0), streak * 0.35);
-                        alpha = saturate(alpha + streak * 0.20 + rip * 0.04);
-                    }
-                    else if (mode > 1.5)
-                    {
-                        // Open water: moving sun glint + animated rippled foam against the shore.
+                        // #1749: below the waterfall there is no branch. Open water, brook (along X and/or Z)
+                        // and calm basin are WEIGHTS the mesher averages over block corners, so a body of
+                        // varying width — or one full of reeds — blends from one look to the next instead of
+                        // switching per cell and drawing a mosaic of ripple directions and brightness tiles.
+                        float open = saturate(mode - 1.0);
+                        float wX = saturate(i.water.z);
+                        float wZ = saturate(i.water.w);
+                        float calm = saturate(1.0 - open - wX - wZ);
+
+                        // Brook: bright ripple bands + thin white streaks racing along the flow axis, one set
+                        // per axis, each weighted. Procedural on world position — atlas UVs cannot scroll.
+                        float ripSum = 0.0, streakSum = 0.0;
+                        if (wX > 0.001)
+                        {
+                            float ph = i.wp.x * 1.9 - t * 5.5;
+                            float rip = 0.5 + 0.5 * sin(ph + sin(i.wp.z * 2.7) * 1.2);
+                            float streak = smoothstep(0.86, 1.0, sin(ph * 1.31 + i.wp.z * 3.1));
+                            ripSum += wX * rip;
+                            streakSum += wX * streak;
+                        }
+                        if (wZ > 0.001)
+                        {
+                            float ph = i.wp.z * 1.9 - t * 5.5;
+                            float rip = 0.5 + 0.5 * sin(ph + sin(-i.wp.x * 2.7) * 1.2);
+                            float streak = smoothstep(0.86, 1.0, sin(ph * 1.31 - i.wp.x * 3.1));
+                            ripSum += wZ * rip;
+                            streakSum += wZ * streak;
+                        }
+                        col += light * 0.10 * ripSum;
+                        col = lerp(col, light * fixed3(0.95, 0.97, 1.0), streakSum * 0.35);
+                        alpha = saturate(alpha + streakSum * 0.20 + ripSum * 0.04);
+
+                        // Open water: a soft moving sun glint, plus an animated rippled foam band where the
+                        // surface meets the shore (i.water.y fades over the last three blocks).
                         float glint = pow(0.5 + 0.5 * sin(i.wp.x * 1.7 + i.wp.z * 1.3 + t * 1.9), 6.0);
-                        col += light * 0.06 * ndl * glint;
-                        float foam = i.water.y;
+                        col += light * 0.06 * ndl * glint * open;
+                        float foam = i.water.y * open;
                         if (foam > 0.01)
                         {
                             float cell = frac(sin(dot(floor(i.wp.xz * 3.0), float2(12.9898, 78.233))) * 43758.5453);
@@ -463,11 +601,9 @@ Shader "BlocksBeyondTheStars/BlockAtlasTransparent"
                             col = lerp(col, light * fixed3(0.97, 0.99, 1.0), f * 0.85);
                             alpha = saturate(alpha + f * 0.45);
                         }
-                    }
-                    else if (mode > 0.5)
-                    {
-                        // Calm lake/pond: a barely-there slow shimmer.
-                        col += light * 0.03 * (0.5 + 0.5 * sin(t * 0.6 + i.wp.x * 0.8 + i.wp.z * 1.1));
+
+                        // Calm basin: a barely-there slow shimmer for whatever weight is left.
+                        col += light * 0.03 * calm * (0.5 + 0.5 * sin(t * 0.6 + i.wp.x * 0.8 + i.wp.z * 1.1));
                     }
                 }
                 else

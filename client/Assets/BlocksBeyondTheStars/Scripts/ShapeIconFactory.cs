@@ -55,7 +55,7 @@ namespace BlocksBeyondTheStars.Client
             }
 
             bool custom = ShapeCode.IsCustomShape(shape);
-            if (!custom && shape >= ShapeCode.Count)
+            if (!custom && !ShapeCode.IsBuiltIn(shape))
             {
                 return null;
             }
@@ -83,18 +83,23 @@ namespace BlocksBeyondTheStars.Client
         /// projection, point-scaled up to the tile resolution.</summary>
         private static Texture2D BuildFromVoxels(Texture2D atlasTex, ushort tileId, string voxels)
         {
-            var mask = CustomShape.Silhouette(voxels, out int grid);
-            if (grid == 0)
+            // The WHOLE form (#1961): a wardrobe two blocks high reads as a tall shape in the slot, centred and
+            // scaled to fit, instead of as its bottom block.
+            var mask = CustomShape.SilhouetteOfForm(voxels, out int columns, out int rows);
+            if (columns == 0 || rows == 0)
             {
                 return null;
             }
 
+            int side = Mathf.Max(columns, rows);
+            float padX = (side - columns) * 0.5f, padY = (side - rows) * 0.5f;
+
             // The voxel grid has y UP; the icon mask is sampled with v up as well, so rows map straight across.
             return BuildMasked(atlasTex, tileId, (u, v) =>
             {
-                int gx = Mathf.Clamp((int)(u * grid), 0, grid - 1);
-                int gy = Mathf.Clamp((int)(v * grid), 0, grid - 1);
-                return mask[gy * grid + gx];
+                int gx = Mathf.FloorToInt((u * side) - padX);
+                int gy = Mathf.FloorToInt((v * side) - padY);
+                return gx >= 0 && gy >= 0 && gx < columns && gy < rows && mask[(gy * columns) + gx];
             });
         }
 
@@ -227,6 +232,16 @@ namespace BlocksBeyondTheStars.Client
                     return v <= 0.1f;
                 case BlockShape.Pot: // small centred planter with a wider rim
                     return (u >= 0.28f && u <= 0.72f && v <= 0.42f) || (u >= 0.22f && u <= 0.78f && v >= 0.34f && v <= 0.5f);
+                case BlockShape.Bench: // side view like the chair, but a lower backrest and the seat running edge to edge (#1846)
+                    return (v >= 0.35f && v <= 0.5f)
+                        || (u >= 0.72f && u <= 0.9f && v >= 0.35f && v <= 0.78f)
+                        || (v <= 0.35f && ((u >= 0.06f && u <= 0.2f) || (u >= 0.8f && u <= 0.94f)));
+                case BlockShape.BedHead: // side view: mattress slab, a pillow bump and the headboard on the left (#1846)
+                    return v <= 0.5f
+                        || (u >= 0.12f && u <= 0.45f && v <= 0.62f)
+                        || (u >= 0.02f && u <= 0.1f && v <= 0.85f);
+                case BlockShape.BedFoot: // side view: mattress slab and the footboard on the right (#1846)
+                    return v <= 0.5f || (u >= 0.9f && u <= 0.98f && v <= 0.68f);
                 default:
                     return true; // cube — full tile (callers never ask us for this)
             }

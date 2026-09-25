@@ -49,15 +49,6 @@ public enum AlienActivity
     Extreme,
 }
 
-public enum WeaponMode
-{
-    None,
-    ToolsOnly,
-    NonLethal,
-    Lasers,
-    All,
-}
-
 public enum HazardLevel
 {
     Off,
@@ -138,8 +129,6 @@ public sealed class GameRules
     /// <summary>Passive-fauna abundance (world options): scales each world's live-creature cap —
     /// Off = lifeless, Extreme ≈ double the normal population. Live-editable by the world admin.</summary>
     public AlienActivity CreatureAbundance { get; set; } = AlienActivity.Normal;
-
-    public WeaponMode WeaponMode { get; set; } = WeaponMode.ToolsOnly;
 
     public HazardLevel EnvironmentalHazards { get; set; } = HazardLevel.Normal;
     public OxygenConsumption OxygenConsumption { get; set; } = OxygenConsumption.Normal;
@@ -253,6 +242,13 @@ public sealed class GameRules
     /// flipping it on also hands one to everyone online. Old saves deserialize without the field and keep the
     /// OFF default — no start-up lift needed.</summary>
     public bool StarterTeleporter { get; set; }
+
+    /// <summary>World textures (world option, default ON — issue #1958): when ON the world's admins may publish
+    /// textures that every player of the save sees instead of the official ones; when OFF nothing may be
+    /// published and the stored ones are not shown. Only admins ever publish — an override changes the world for
+    /// everybody. Live-editable by the world admin. Old saves deserialize without the field and keep the ON
+    /// default — no start-up lift needed.</summary>
+    public bool WorldTextures { get; set; } = true;
 
     /// <summary>The mode a player effectively plays (#1121): the world's <see cref="GameMode"/> unless the
     /// world admin gave them a per-player override. Every mode-derived rule below has a <c>…For</c> twin

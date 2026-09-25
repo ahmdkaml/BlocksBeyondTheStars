@@ -23,62 +23,94 @@ namespace BlocksBeyondTheStars.Client
             public readonly Vector3 A, B, C, D;
             public readonly bool IsQuad;
 
-            /// <summary>Per-vertex texture coordinates as FRACTIONS of the block's atlas tile (0..1), used by
-            /// player-designed forms: a micro box must show the slice of the material it actually covers, or an
-            /// 8³ form renders as dozens of shrunken copies of the whole tile. <see cref="HasUv"/> = false keeps
-            /// the built-in forms on their original whole-tile mapping.</summary>
+            /// <summary>Per-vertex texture coordinates as FRACTIONS of the block's atlas tile (0..1): a micro box of a
+            /// player-designed form must show the slice of the material it actually covers, or an 8³ form renders as
+            /// dozens of shrunken copies of the whole tile. <see cref="HasUv"/> is false only on a face that has not
+            /// been through <see cref="Finish"/> yet — everything <see cref="Build"/> returns carries them.</summary>
             public readonly Vector2 UvA, UvB, UvC, UvD;
             public readonly bool HasUv;
 
+            /// <summary>#1900: which piece of the form this face belongs to (<see cref="ShapePart"/>) and which way it
+            /// looks in the form's own frame (<see cref="FaceSide"/>) — the keys of a block's texture slots. Every
+            /// built-in form gets real texture coordinates too since #1900 (<see cref="Finish"/>): the slice of the
+            /// tile each corner covers, so a table leg shows a thin slice of the wood instead of a whole plank tile and
+            /// the bed stops showing a complete bed on every face.</summary>
+            public readonly ShapePart Part;
+            public readonly FaceSide Side;
+
             public Face(Vector3 a, Vector3 b, Vector3 c)
+                : this(a, b, c, default, false, default, default, default, default, false, ShapePart.Body, FaceSide.Top)
             {
-                A = a; B = b; C = c; D = default; IsQuad = false;
-                UvA = UvB = UvC = UvD = default; HasUv = false;
+            }
+
+            private Face(Vector3 a, Vector3 b, Vector3 c, Vector3 d, bool quad, Vector2 ua, Vector2 ub, Vector2 uc, Vector2 ud,
+                bool hasUv, ShapePart part, FaceSide side)
+            {
+                A = a; B = b; C = c; D = d; IsQuad = quad;
+                UvA = ua; UvB = ub; UvC = uc; UvD = ud; HasUv = hasUv;
+                Part = part; Side = side;
+            }
+
+            /// <summary>The outward normal (not normalised) — the same winding rule the mesher shades with.</summary>
+            public Vector3 Normal => Vector3.Cross(B - A, (IsQuad ? D : C) - A);
+
+            /// <summary>#1900: stamps the part, derives the side from the face's own-frame normal and — unless the face
+            /// already carries texture coordinates (a player-designed micro box) — projects them from its corners along
+            /// the dominant axis: top/bottom by X,Z, faces toward ±X by Z,height, faces toward ±Z by X,height (the
+            /// micro-box convention). Called on the untransformed form, so yaw and tilt afterwards carry it along.</summary>
+            public Face Finish(ShapePart part)
+            {
+                var n = Normal;
+                float ax = Mathf.Abs(n.x), ay = Mathf.Abs(n.y), az = Mathf.Abs(n.z);
+                int axis = ay >= ax && ay >= az ? 1 : ax >= az ? 0 : 2;
+                var side = axis == 1 ? (n.y >= 0f ? FaceSide.Top : FaceSide.Bottom) : FaceSide.Side;
+                if (HasUv)
+                {
+                    return new Face(A, B, C, D, IsQuad, UvA, UvB, UvC, UvD, true, part, side);
+                }
+
+                Vector2 P(Vector3 p) => axis == 1 ? new Vector2(p.x, p.z) : axis == 0 ? new Vector2(p.z, p.y) : new Vector2(p.x, p.y);
+                return new Face(A, B, C, D, IsQuad, P(A), P(B), P(C), IsQuad ? P(D) : default, true, part, side);
             }
 
             public Face(Vector3 a, Vector3 b, Vector3 c, Vector3 d)
+                : this(a, b, c, d, true, default, default, default, default, false, ShapePart.Body, FaceSide.Top)
             {
-                A = a; B = b; C = c; D = d; IsQuad = true;
-                UvA = UvB = UvC = UvD = default; HasUv = false;
             }
 
             public Face(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Vector2 ua, Vector2 ub, Vector2 uc, Vector2 ud)
+                : this(a, b, c, d, true, ua, ub, uc, ud, true, ShapePart.Body, FaceSide.Top)
             {
-                A = a; B = b; C = c; D = d; IsQuad = true;
-                UvA = ua; UvB = ub; UvC = uc; UvD = ud; HasUv = true;
             }
 
             /// <summary>The same face with every corner moved through <paramref name="move"/> — the texture
-            /// coordinates ride along, so a rotated form keeps its surface mapping.</summary>
+            /// coordinates, part and side ride along, so a rotated form keeps its surface mapping.</summary>
             public Face Map(System.Func<Vector3, Vector3> move)
-                => IsQuad
-                    ? (HasUv
-                        ? new Face(move(A), move(B), move(C), move(D), UvA, UvB, UvC, UvD)
-                        : new Face(move(A), move(B), move(C), move(D)))
-                    : new Face(move(A), move(B), move(C));
+                => new Face(move(A), move(B), move(C), IsQuad ? move(D) : default, IsQuad, UvA, UvB, UvC, UvD, HasUv, Part, Side);
         }
 
         /// <summary>Builds the polygons for a shape index (see <see cref="BlockShape"/>), oriented by a yaw
         /// (0..3 quarter-turns about the vertical centre) THEN tilted so the shape's local +Y points to
         /// <paramref name="upFace"/> (0 = +Y = the original behaviour → yaw-only, unchanged). yaw × up-face give
-        /// the full 24 cube orientations. Returns null for cube/unknown.</summary>
-        public static List<Face> Build(int shapeIndex, int orientation, int upFace = 0)
+        /// the full 24 cube orientations. Returns null for cube/unknown. <paramref name="cell"/> picks the cell of
+        /// a player form that spans several blocks (#1961, <see cref="ShapeCode.CellOf"/>); 0 for everything else.</summary>
+        public static List<Face> Build(int shapeIndex, int orientation, int upFace = 0, int cell = 0)
         {
             // Built once per (form, yaw, up-face) and then shared: the mesher asks for this on every shaped
             // cell of every remesh, and a player-designed form can be dozens of boxes. Callers must treat the
             // returned list as read-only (nothing has ever mutated it).
-            int cacheKey = (shapeIndex << 5) | ((upFace & 7) << 2) | (orientation & 3);
+            int cacheKey = ((cell & 0xF) << 11) | (shapeIndex << 5) | ((upFace & 7) << 2) | (orientation & 3);
             if (_faceCache.TryGetValue(cacheKey, out var cached))
             {
                 return cached;
             }
 
-            var built = BuildUncached(shapeIndex, orientation, upFace);
+            var built = BuildUncached(shapeIndex, orientation, upFace, cell);
             _faceCache[cacheKey] = built;
             return built;
         }
 
-        private static List<Face> BuildUncached(int shapeIndex, int orientation, int upFace)
+        private static List<Face> BuildUncached(int shapeIndex, int orientation, int upFace, int cell)
         {
             var faces = new List<Face>();
             if (ShapeCode.IsCustomShape(shapeIndex))
@@ -91,7 +123,16 @@ namespace BlocksBeyondTheStars.Client
                     return null;
                 }
 
-                foreach (var box in CustomShape.Merge(voxels))
+                // A form over several blocks draws ONE of its cells here; a one-block form is its own cell 0. A
+                // cell index the form does not have (a block left over from a wiped-and-reused slot) has no
+                // geometry either → plain cube.
+                string cellVoxels = CustomShape.CellVoxels(voxels, cell);
+                if (cellVoxels.Length == 0)
+                {
+                    return null;
+                }
+
+                foreach (var box in CustomShape.Merge(cellVoxels))
                 {
                     MicroBox(faces, box);
                 }
@@ -118,8 +159,18 @@ namespace BlocksBeyondTheStars.Client
                 case BlockShape.Fence: Fence(faces); break;                                        // posts + rails along X
                 case BlockShape.Sheet: Box(faces, 0f, 0f, 0f, 1f, 0.0625f, 1f); break;             // 1/16 rug/veneer plate
                 case BlockShape.Pot: Pot(faces); break;                                            // small centred planter
+                case BlockShape.Bench: Bench(faces); break;                                        // full-width seat + low backrest (#1846)
+                case BlockShape.BedHead: BedHead(faces); break;                                    // two-cell bed, head half (#1846)
+                case BlockShape.BedFoot: BedFoot(faces); break;                                    // two-cell bed, foot half (#1846)
                 default: return null; // Cube / unknown → no custom geometry
                 }
+            }
+
+            // #1900: every face gets its part (Box stamps one; anything built face by face is the body), its own-frame
+            // side and — unless it already has them — texture coordinates, BEFORE the yaw/tilt below.
+            for (int i = 0; i < faces.Count; i++)
+            {
+                faces[i] = faces[i].Finish(faces[i].Part);
             }
 
             if ((orientation & 3) != 0)
@@ -160,6 +211,11 @@ namespace BlocksBeyondTheStars.Client
             _customVoxels = snapshot ?? new Dictionary<int, string>();
             _faceCache.Clear();
         }
+
+        /// <summary>The registered bitmap of a player form, from the published snapshot — for callers that need
+        /// more than one cell's faces (the placement ghost draws every block of a form over several blocks).</summary>
+        public static bool TryGetCustomVoxels(int shapeIndex, out string voxels)
+            => _customVoxels.TryGetValue(shapeIndex, out voxels);
 
         /// <summary>Drops every cached face list (session teardown — the next world may register different
         /// forms under the same indices).</summary>
@@ -216,15 +272,16 @@ namespace BlocksBeyondTheStars.Client
 
         // --- Primitive builders (unit cell, y up, centre at 0.5,*,0.5) ---
 
-        /// <summary>An axis-aligned box [x0,x1]×[y0,y1]×[z0,z1] with all six faces wound outward.</summary>
-        private static void Box(List<Face> f, float x0, float y0, float z0, float x1, float y1, float z1)
+        /// <summary>An axis-aligned box [x0,x1]×[y0,y1]×[z0,z1] with all six faces wound outward, tagged with the
+        /// form part it builds (#1900 — the block's texture slots can dress each part differently).</summary>
+        private static void Box(List<Face> f, float x0, float y0, float z0, float x1, float y1, float z1, ShapePart part = ShapePart.Body)
         {
-            f.Add(new Face(new(x0, y1, z0), new(x0, y1, z1), new(x1, y1, z1), new(x1, y1, z0))); // +Y top
-            f.Add(new Face(new(x0, y0, z1), new(x0, y0, z0), new(x1, y0, z0), new(x1, y0, z1))); // -Y bottom
-            f.Add(new Face(new(x1, y0, z0), new(x1, y1, z0), new(x1, y1, z1), new(x1, y0, z1))); // +X
-            f.Add(new Face(new(x0, y0, z1), new(x0, y1, z1), new(x0, y1, z0), new(x0, y0, z0))); // -X
-            f.Add(new Face(new(x1, y0, z1), new(x1, y1, z1), new(x0, y1, z1), new(x0, y0, z1))); // +Z
-            f.Add(new Face(new(x0, y0, z0), new(x0, y1, z0), new(x1, y1, z0), new(x1, y0, z0))); // -Z
+            f.Add(new Face(new(x0, y1, z0), new(x0, y1, z1), new(x1, y1, z1), new(x1, y1, z0)).Finish(part)); // +Y top
+            f.Add(new Face(new(x0, y0, z1), new(x0, y0, z0), new(x1, y0, z0), new(x1, y0, z1)).Finish(part)); // -Y bottom
+            f.Add(new Face(new(x1, y0, z0), new(x1, y1, z0), new(x1, y1, z1), new(x1, y0, z1)).Finish(part)); // +X
+            f.Add(new Face(new(x0, y0, z1), new(x0, y1, z1), new(x0, y1, z0), new(x0, y0, z0)).Finish(part)); // -X
+            f.Add(new Face(new(x1, y0, z1), new(x1, y1, z1), new(x0, y1, z1), new(x0, y0, z1)).Finish(part)); // +Z
+            f.Add(new Face(new(x0, y0, z0), new(x0, y1, z0), new(x1, y1, z0), new(x1, y0, z0)).Finish(part)); // -Z
         }
 
         private static void Pyramid(List<Face> f)
@@ -309,7 +366,38 @@ namespace BlocksBeyondTheStars.Client
         private static void Pot(List<Face> f)
         {
             Box(f, 0.28f, 0f, 0.28f, 0.72f, 0.42f, 0.72f); // body
-            Box(f, 0.24f, 0.36f, 0.24f, 0.76f, 0.5f, 0.76f); // slightly wider rim
+            Box(f, 0.24f, 0.36f, 0.24f, 0.76f, 0.5f, 0.76f, ShapePart.Rim); // slightly wider rim
+        }
+
+        // #1846: a bench is a chair whose seat and backrest span the full X width, so a row of benches reads as
+        // one long seat (like tables and fence rails, the cell-spanning boxes meet across cells). The backrest is
+        // lower than a chair's — a park bench, not a pew. Legs poke into the seat like the chair's.
+        private static void Bench(List<Face> f)
+        {
+            Box(f, 0f, 0.35f, 0.1f, 1f, 0.5f, 0.9f);       // seat, full width
+            Box(f, 0f, 0.4f, 0.72f, 1f, 0.78f, 0.9f);      // low backrest toward +Z (yaw turns it), full width
+            Box(f, 0.06f, 0f, 0.14f, 0.2f, 0.4f, 0.26f);   // four legs
+            Box(f, 0.8f, 0f, 0.14f, 0.94f, 0.4f, 0.26f);
+            Box(f, 0.06f, 0f, 0.74f, 0.2f, 0.4f, 0.86f);
+            Box(f, 0.8f, 0f, 0.74f, 0.94f, 0.4f, 0.86f);
+        }
+
+        // #1846: the two-cell bed. Both halves keep the legacy one-cell bed's slab as their mattress, so a bed
+        // from an old save, a ship layout or a cramped procedural room (still a Slab) matches the new ones in
+        // height. The head half's foot side is local +Z — the server writes the foot half on the cell that
+        // ShapeCode.YawDirection(yaw) points to, and the foot's footboard faces the same way, so the two boards
+        // close the bed at both ends. Trim boxes are inset from the mattress faces (never coplanar).
+        private static void BedHead(List<Face> f)
+        {
+            Box(f, 0f, 0f, 0f, 1f, 0.5f, 1f, ShapePart.BedHead);                  // mattress (= the legacy slab)
+            Box(f, 0.15f, 0.45f, 0.12f, 0.85f, 0.62f, 0.45f, ShapePart.Pillow);  // pillow, sunk into the mattress
+            Box(f, 0.02f, 0.45f, 0.02f, 0.98f, 0.85f, 0.1f, ShapePart.Headboard); // headboard at −Z
+        }
+
+        private static void BedFoot(List<Face> f)
+        {
+            Box(f, 0f, 0f, 0f, 1f, 0.5f, 1f, ShapePart.BedFoot);                  // mattress
+            Box(f, 0.02f, 0.45f, 0.9f, 0.98f, 0.68f, 0.98f, ShapePart.Footboard); // footboard at +Z
         }
 
         private const float Cx = 0.5f, Cz = 0.5f, R = 0.5f;

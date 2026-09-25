@@ -40,6 +40,7 @@ public sealed class CreatureTamingTests : IDisposable
             StartPlanet = "jungle", // "many" fauna
             AutoSaveIntervalMinutes = 9999,
             PlaceStarterShip = false,
+            World = { TerrainGeneration = 0 }, // #1645: gameplay test on the classic relief — the player sits at a fixed (0, 64, 0), which generation-1 terrain may flood or bury
         };
         var server = new SvGameServer(config, _content, st, repo);
         server.Start();
@@ -387,6 +388,7 @@ public sealed class CreatureTamingTests : IDisposable
             object value = prop.PropertyType switch
             {
                 var t when t == typeof(string) => "v" + seed,
+                var t when t == typeof(string[]) => new[] { "s" + seed, "t" + seed }, // #1763: BiomeSurfaces
                 var t when t == typeof(int) => seed,
                 var t when t == typeof(float) => seed + 0.5f,
                 var t when t == typeof(bool) => true,
@@ -407,8 +409,11 @@ public sealed class CreatureTamingTests : IDisposable
                 continue;
             }
 
-            Assert.True(Equals(prop.GetValue(src), prop.GetValue(clone)),
-                $"CloneSpecies drops {prop.Name} — the companion snapshot would silently lose it");
+            object? a = prop.GetValue(src), b = prop.GetValue(clone);
+            bool same = a is System.Array aa && b is System.Array bb
+                ? aa.Cast<object>().SequenceEqual(bb.Cast<object>()) // #1763: an array copies by value
+                : Equals(a, b);
+            Assert.True(same, $"CloneSpecies drops {prop.Name} — the companion snapshot would silently lose it");
         }
     }
 

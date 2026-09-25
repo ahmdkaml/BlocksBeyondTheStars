@@ -160,12 +160,12 @@ public sealed partial class GameServer
 
         foreach (var w in _creatures)
         {
-            if (w.IsCompanion || w.FrozenTimer > 0 || !_speciesById.TryGetValue(w.SpeciesId, out var sp))
+            if (w.IsCompanion || w.IsGiant || w.FrozenTimer > 0 || !_speciesById.TryGetValue(w.SpeciesId, out var sp))
             {
                 continue;
             }
 
-            if ((sp.Hostile || w.ProvokeTimer > 0) && SpeciesActive(sp)
+            if ((sp.Hostile || w.ProvokeTimer > 0) && SpeciesActive(sp, w.Position)
                 && WrapDistSq(w.Position, at) <= r2 && HasLineOfSight(w.Position, at))
             {
                 return true;

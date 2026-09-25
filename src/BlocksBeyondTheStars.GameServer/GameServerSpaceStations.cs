@@ -5,6 +5,7 @@ using BlocksBeyondTheStars.Networking.Messages;
 using BlocksBeyondTheStars.Shared.Definitions;
 using BlocksBeyondTheStars.Shared.Geometry;
 using BlocksBeyondTheStars.Shared.Primitives;
+using BlocksBeyondTheStars.Shared.State;
 using BlocksBeyondTheStars.Shared.World;
 using BlocksBeyondTheStars.WorldGeneration;
 
@@ -38,12 +39,35 @@ public sealed partial class GameServer
         public string Id { get; init; } = string.Empty;
         public string Name { get; set; } = string.Empty;
         public string SizeTier { get; init; } = "medium";
-        public Vector3f SpacePosition { get; init; }
-        public Vector3i Origin { get; init; }
+
+        /// <summary>Where the station floats in its space instance (the centre of its hull box). A generated station is
+        /// laid out by its real hull size (#1917, <see cref="LayoutStationHulls"/>).</summary>
+        public Vector3f SpacePosition { get; set; }
+
+        /// <summary>Where the structure's cell (0,0,0) is stamped in the void world. A kit station replayed with an
+        /// exterior margin it was not composed with sits that much further out (#1918), so its modules stay put.</summary>
+        public Vector3i Origin { get; set; }
+
         public bool Stamped { get; set; }
         public StationStructure? Structure { get; set; }
+
+        /// <summary>#1917: the generated station's hull as flown — its visible cells 1:1, sent to pilots like a player
+        /// station's build. Null for player stations (their own cell grid is the hull) and before the first sight.</summary>
+        public SpaceStructure? Hull { get; set; }
+
+        /// <summary>#1917: half the hull box (flight units = blocks), centred on <see cref="SpacePosition"/>.</summary>
+        public Vector3f HullHalf { get; set; }
+
+        /// <summary>#1917: the hangar mouth centre relative to <see cref="SpacePosition"/>, and its outward direction.</summary>
+        public Vector3f DockOffset { get; set; }
+        public int DockOutX { get; set; }
+        public int DockOutZ { get; set; } = -1;
         public List<(string Type, Vector3f Pos)> Markers { get; } = new();
         public Vector3f Spawn { get; set; }
+
+        /// <summary>#1874: the kit composition this station was baked from (null = a template or the procedural
+        /// generator). A kit station's crew lives in its cabins (<see cref="SpawnKitStationCrew"/>).</summary>
+        public StationComposition? Kit { get; set; }
 
         /// <summary>World-space box of the stamped build (player stations; #1473 sealed-air reach box).</summary>
         public Vector3i BoundsMin { get; set; }
@@ -63,6 +87,57 @@ public sealed partial class GameServer
     /// <summary>True while the player is walking inside a boarded station.</summary>
     public bool InStation(string playerId) => _boardedStation.ContainsKey(playerId);
 
+    /// <summary>The galaxy body a location id stands for (#1856). A boarded station's world is keyed
+    /// <c>station:&lt;id&gt;</c> — a value <c>Galaxy.FindBody</c> never matches, so every lookup that went straight
+    /// through it (the Visited stamp, the location names, the star colour, the star map's "you are here") came
+    /// back empty on stations. This strips the prefix and resolves the station BODY (<c>sys3-st</c> /
+    /// <c>pstation:&lt;owner&gt;:&lt;n&gt;</c>); plain body ids resolve as before. Null for ids the galaxy does
+    /// not carry (ship interiors, the synthesised <c>-st-local</c> fallback station).</summary>
+    private CelestialBody? ResolveLocationBody(string? locationId)
+    {
+        if (string.IsNullOrEmpty(locationId))
+        {
+            return null;
+        }
+
+        string bodyId = locationId.StartsWith(StationLocationIdPrefix, System.StringComparison.Ordinal)
+            ? locationId.Substring(StationLocationIdPrefix.Length)
+            : locationId;
+        return _galaxy?.FindBody(bodyId);
+    }
+
+    /// <summary>The body whose sky a location shares (#1856): for a player station the body it orbits (its host,
+    /// when the galaxy knows it), for anything else the location's own body. Null when unresolved.</summary>
+    private CelestialBody? ResolveLocationHostBody(string? locationId)
+    {
+        var body = ResolveLocationBody(locationId);
+        if (body is { Kind: CelestialKind.SpaceStation } && _stationHostBody.TryGetValue(body.Id, out var host)
+            && _galaxy?.FindBody(host) is { } hostBody)
+        {
+            return hostBody;
+        }
+
+        return body;
+    }
+
+    /// <summary>Stamps the body behind a location id Visited and persists the status — the star map's "charted"
+    /// state (#1856: stations and wrecks never got it, so they stayed "Uncharted" after docking). Accepts a body
+    /// id or a <c>station:</c> world id; no-op for unknown ids and for bodies already visited.</summary>
+    private void MarkBodyVisited(string? locationId)
+    {
+        if (ResolveLocationBody(locationId) is { } body && body.Status != GenerationStatus.Visited)
+        {
+            body.Status = GenerationStatus.Visited;
+            _repo.SetLocationStatus(body.Id, body.Status.ToString());
+        }
+    }
+
+    /// <summary>Test seam (#1856): the galaxy body id behind a location id (empty when unresolved).</summary>
+    public string ResolveLocationBodyIdForTest(string locationId) => ResolveLocationBody(locationId)?.Id ?? string.Empty;
+
+    /// <summary>Test seam (#1856): the friendly (system, body) names a location id resolves to.</summary>
+    public (string System, string Planet) LocationNamesForTest(string locationId) => LocationNamesFor(locationId);
+
     /// <summary>Name of the station the player is boarded on, or empty when not on one.</summary>
     private string CurrentStationName(string playerId)
         => _boardedStation.TryGetValue(playerId, out var id) && _stationsById.TryGetValue(id, out var st)
@@ -79,7 +154,20 @@ public sealed partial class GameServer
     private void AddStationContacts(SpaceInstance instance)
     {
         string anchorId = StationHostKey(instance.Id);
-        foreach (var station in StationContactsForCurrentSystem(anchorId))
+        var stations = StationContactsForCurrentSystem(anchorId).ToList();
+
+        // #1917: a generated station is seen as it really is — its layout is decided (and pinned) the moment it first
+        // shows up in flight, and its visible hull flies 1:1 like a player station's build.
+        foreach (var station in stations)
+        {
+            if (!_playerStationCells.ContainsKey(station.Id))
+            {
+                EnsureStationHull(station);
+            }
+        }
+
+        LayoutStationHulls(stations);
+        foreach (var station in stations)
         {
             instance.Entities.Add(new CombatEntity
             {
@@ -90,9 +178,189 @@ public sealed partial class GameServer
                 Hull = 1f,
                 HullMax = 1f,
                 Position = station.SpacePosition,
-                Scale = StationModelScale(station.SizeTier), // a colossal station LOOKS colossal from the cockpit
+                Scale = StationModelScale(station.SizeTier), // the placeholder model's size, for a client without the hull
             });
+
+            if (station.Hull is { } hull)
+            {
+                instance.Structures[hull.Id] = hull; // sent to every pilot with the other voxel bodies on entry
+            }
         }
+    }
+
+    /// <summary>The lowest hull block of a generated station floats at least this high over the flight plane, clear of
+    /// every planet sphere down there (a lone giant reaches a radius of about 41).</summary>
+    private const float StationHullFloorY = 44f;
+
+    /// <summary>Clear space between the hulls of two generated stations of one orbit.</summary>
+    private const float StationHullGap = 30f;
+
+    /// <summary>
+    /// Lays the generated stations of an orbit out by their real hull size (#1917): the classic three lanes ahead of the
+    /// launch point, each station behind the previous one with <see cref="StationHullGap"/> of clear space, its lowest
+    /// block at <see cref="StationHullFloorY"/> or higher. Player stations keep the position they were built at.
+    /// </summary>
+    private void LayoutStationHulls(List<BoardableStation> stations)
+    {
+        var flown = stations.Where(s => s.Hull != null).ToList();
+        var centres = LayoutHullCentres(flown.Select(s => s.HullHalf).ToList());
+        for (int i = 0; i < flown.Count; i++)
+        {
+            flown[i].SpacePosition = centres[i];
+            flown[i].Hull!.Position = centres[i];
+        }
+    }
+
+    /// <summary>The centres of an orbit's station hulls, in order, from their half sizes (#1917) — see
+    /// <see cref="LayoutStationHulls"/>.</summary>
+    internal static Vector3f[] LayoutHullCentres(IReadOnlyList<Vector3f> halves)
+    {
+        var centres = new Vector3f[halves.Count];
+        float lastFar = float.NaN;
+        for (int i = 0; i < halves.Count; i++)
+        {
+            var half = halves[i];
+            float x = (i % 3 - 1) * 70f;
+            float y = System.MathF.Max(40f, StationHullFloorY + half.Y);
+            float z = System.MathF.Max(90f + i * 45f, 50f + half.Z);
+            if (!float.IsNaN(lastFar))
+            {
+                z = System.MathF.Max(z, lastFar + StationHullGap + half.Z);
+            }
+
+            centres[i] = new Vector3f(x, y, z);
+            lastFar = z + half.Z;
+        }
+
+        return centres;
+    }
+
+    /// <summary>Test seam (#1917): a generated station's flown hull — cell count, centre, half size and the dock point
+    /// in front of its hangar mouth with the mouth's outward direction — or null before it was first seen.</summary>
+    public (int Cells, Vector3f Centre, Vector3f Half, Vector3f Dock, int OutX, int OutZ)? StationHullForTest(string stationId)
+        => _stationsById.TryGetValue(stationId, out var st) && st.Hull is { } hull
+            ? (hull.Cells.Count, st.SpacePosition, st.HullHalf, StationDockPoint(stationId, standOff: 0f), st.DockOutX, st.DockOutZ)
+            : null;
+
+    /// <summary>Test seam (#1917): where a station's structure cell (0,0,0) is stamped in its void world.</summary>
+    public Vector3i StationStampOriginForTest(string stationId)
+        => _stationsById.TryGetValue(stationId, out var st) ? st.Origin : default;
+
+    /// <summary>Builds a generated station's structure (pinned at first sight) and its flown hull, once per server run.</summary>
+    private void EnsureStationHull(BoardableStation station)
+    {
+        if (station.Hull != null)
+        {
+            return;
+        }
+
+        var structure = EnsureStationStructure(station);
+        var cells = StationHull.VisibleCells(structure, _content);
+        if (cells.Count == 0)
+        {
+            return;
+        }
+
+        var hull = new SpaceStructure
+        {
+            Id = station.Id,
+            Kind = "station",
+            OwnerId = string.Empty, // a game station: nobody's — EVA building and mining on it are refused
+            Name = station.Name,
+            Boardable = true,
+        };
+
+        int minX = int.MaxValue, minY = int.MaxValue, minZ = int.MaxValue, maxX = int.MinValue, maxY = int.MinValue, maxZ = int.MinValue;
+        foreach (var c in cells)
+        {
+            hull.Cells[c] = new BlockId(structure.Get(c.X, c.Y, c.Z));
+            var (tint, glow) = structure.GetModifier(c.X, c.Y, c.Z);
+            if (tint != 0 || glow != 0)
+            {
+                hull.Mods[c] = (tint, glow);
+            }
+
+            int shape = structure.GetShape(c.X, c.Y, c.Z);
+            if (shape != 0)
+            {
+                hull.Shapes[c] = shape;
+            }
+
+            minX = System.Math.Min(minX, c.X); minY = System.Math.Min(minY, c.Y); minZ = System.Math.Min(minZ, c.Z);
+            maxX = System.Math.Max(maxX, c.X); maxY = System.Math.Max(maxY, c.Y); maxZ = System.Math.Max(maxZ, c.Z);
+        }
+
+        hull.Width = maxX - minX + 1;
+        hull.Height = maxY - minY + 1;
+        hull.Length = maxZ - minZ + 1;
+
+        // The client centres a design on its cells' box — so does everything measured here.
+        float cx = (minX + maxX + 1) / 2f, cy = (minY + maxY + 1) / 2f, cz = (minZ + maxZ + 1) / 2f;
+        var dock = StationHull.FindDock(structure, _content);
+        hull.HasDock = true;
+        hull.DockX = dock.X;
+        hull.DockY = dock.Y;
+        hull.DockZ = dock.Z;
+        hull.DockOutX = dock.OutX;
+        hull.DockOutZ = dock.OutZ;
+
+        station.Hull = hull;
+        station.HullHalf = new Vector3f(hull.Width / 2f, hull.Height / 2f, hull.Length / 2f);
+        station.DockOffset = new Vector3f(dock.X - cx, dock.Y - cy, dock.Z - cz);
+        station.DockOutX = dock.OutX;
+        station.DockOutZ = dock.OutZ;
+        hull.Position = station.SpacePosition;
+    }
+
+    /// <summary>A pilot's distance to a station in flight (#1917): to the box of its hull — a generated station's flown
+    /// hull or a player station's build, centred where the client draws it — else to its centre.</summary>
+    private float StationFlightDistance(BoardableStation station, Vector3f pilot)
+    {
+        Vector3f half;
+        if (station.Hull != null)
+        {
+            half = station.HullHalf;
+        }
+        else if (_playerStationCells.TryGetValue(station.Id, out var build) && build.Cells.Count > 0)
+        {
+            int minX = int.MaxValue, minY = int.MaxValue, minZ = int.MaxValue, maxX = int.MinValue, maxY = int.MinValue, maxZ = int.MinValue;
+            foreach (var c in build.Cells.Keys)
+            {
+                minX = System.Math.Min(minX, c.X); minY = System.Math.Min(minY, c.Y); minZ = System.Math.Min(minZ, c.Z);
+                maxX = System.Math.Max(maxX, c.X); maxY = System.Math.Max(maxY, c.Y); maxZ = System.Math.Max(maxZ, c.Z);
+            }
+
+            half = new Vector3f((maxX - minX + 1) / 2f, (maxY - minY + 1) / 2f, (maxZ - minZ + 1) / 2f);
+        }
+        else
+        {
+            return (float)System.Math.Sqrt(station.SpacePosition.DistanceSquared(pilot));
+        }
+
+        float dx = System.MathF.Max(0f, System.MathF.Abs(pilot.X - station.SpacePosition.X) - half.X);
+        float dy = System.MathF.Max(0f, System.MathF.Abs(pilot.Y - station.SpacePosition.Y) - half.Y);
+        float dz = System.MathF.Max(0f, System.MathF.Abs(pilot.Z - station.SpacePosition.Z) - half.Z);
+        return System.MathF.Sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    /// <summary>#1917: where a ship docks with a station in flight — just outside its hangar mouth — or the station's
+    /// centre when it has no flown hull.</summary>
+    private Vector3f StationDockPoint(string stationId, float standOff)
+    {
+        if (!_stationsById.TryGetValue(stationId, out var station))
+        {
+            return Vector3f.Zero;
+        }
+
+        if (station.Hull == null)
+        {
+            return station.SpacePosition;
+        }
+
+        return new Vector3f(
+            station.SpacePosition.X + station.DockOffset.X + station.DockOutX * standOff,
+            station.SpacePosition.Y + station.DockOffset.Y,
+            station.SpacePosition.Z + station.DockOffset.Z + station.DockOutZ * standOff);
     }
 
     /// <summary>The stations that belong in a space instance. <paramref name="anchorBodyId"/> is the body whose
@@ -219,7 +487,8 @@ public sealed partial class GameServer
             return;
         }
 
-        if (contact.Position.DistanceSquared(PilotPositionIn(instance, playerId)) > StationBoardRange * StationBoardRange)
+        // #1917: measured to the station's hull box — a colossal hull can be docked from any side, not just near its middle.
+        if (StationFlightDistance(station, PilotPositionIn(instance, playerId)) > StationBoardRange)
         {
             Reject(session, "station", "@srv.station.closer"); // #994: measured from THIS pilot's ship
             return;
@@ -250,8 +519,9 @@ public sealed partial class GameServer
     /// <summary>The world-transition half of boarding (shared by in-space docking and the travel-screen "board a
     /// visited station" path): switches the player into the station's own free-floating void world, stamps its
     /// interior, spawns the crew, marks it visited and tells the client to reload. The caller has already arranged
-    /// the return location (<see cref="_boardedReturn"/>) and torn down any prior presence (space instance / station).</summary>
-    private void EnterBoardedStation(PlayerSession session, BoardableStation station)
+    /// the return location (<see cref="_boardedReturn"/>) and torn down any prior presence (space instance / station).
+    /// <paramref name="at"/> wakes the player at that spot instead of the arrivals point (a rejoin, #1925).</summary>
+    private void EnterBoardedStation(PlayerSession session, BoardableStation station, Vector3f? at = null)
     {
         string playerId = session.State.PlayerId;
 
@@ -259,6 +529,7 @@ public sealed partial class GameServer
         // life support, no weather) — the same robust WorldReset path planet travel uses, so the player no
         // longer falls through to the planet.
         string stationLoc = "station:" + station.Id;
+        ClearStationZeroG(session); // #1842: every boarding starts walking
         LoadWorld(StationPlanetType, stationLoc); // loads/creates the void world + sets the Active cursor
         SetCurrent(session);
         if (_playerStationCells.TryGetValue(station.Id, out var playerCells))
@@ -283,14 +554,17 @@ public sealed partial class GameServer
         }
 
         session.CurrentLocationId = stationLoc;
-        session.State.Position = station.Spawn;
+        session.State.Position = at ?? station.Spawn;
         session.State.AboardShip = false;
         session.State.InEva = false; // docking ends any spacewalk — the station has life support
         session.SentChunks.Clear();
+        session.AwaitingSpawnAdopt = true; // #1833: like every other server teleport — the client's stale stream must not drag them back (#865)
         MarkArrivedOnBody(session, station.Id); // boarding marks the station visited → a travel-screen target
+        MarkBodyVisited(station.Id); // #1856: …and charted for everyone — the galaxy status, not just this player's list
 
         Send(session, new SpaceClosed { Reason = "@srv.station.docked", ShipDisabled = false });
-        Send(session, new WorldReset { PlanetType = StationPlanetType, PlanetName = station.Name, SystemName = string.Empty, Hyperjump = false });
+        // #1856: the station's own system, so the client labels "System · Station" and keys the sun colour right.
+        Send(session, new WorldReset { PlanetType = StationPlanetType, PlanetName = station.Name, SystemName = LocationNamesFor(stationLoc).System, Hyperjump = false });
         SendPlayerState(session);
         SendEnvironment(session);
         SendInventory(session);
@@ -300,9 +574,9 @@ public sealed partial class GameServer
         {
             StationId = station.Id,
             Name = station.Name,
-            X = station.Spawn.X,
-            Y = station.Spawn.Y,
-            Z = station.Spawn.Z,
+            X = session.State.Position.X,
+            Y = session.State.Position.Y,
+            Z = session.State.Position.Z,
         });
         SendStarMap(session); // refresh markers/owner/visited now that this station counts as visited
         SyncAppearance(session); // faces + body paintings both ways on the station world (#982)
@@ -379,6 +653,92 @@ public sealed partial class GameServer
         return land is not null ? (land.Id, land.PlanetType!) : (_meta.ActiveLocationId, _meta.DefaultPlanetType);
     }
 
+    /// <summary>The station a saved location (<c>station:&lt;id&gt;</c>) names, if it is still a station of this galaxy
+    /// (NPC stations and player-built ones alike) — null for every other location (#1925).</summary>
+    private CelestialBody? SavedStationBody(string? locationId)
+        => !string.IsNullOrEmpty(locationId) && locationId.StartsWith(StationLocationIdPrefix, System.StringComparison.Ordinal)
+           && _galaxy?.FindBody(locationId.Substring(StationLocationIdPrefix.Length)) is { Kind: CelestialKind.SpaceStation } body
+            ? body
+            : null;
+
+    /// <summary>#1925 ("I quit on a space station and came back on the planet"): a player whose save stands aboard a
+    /// station is boarded again once the join is through — through the same transition docking uses, at the saved spot
+    /// when it is still standing room, else at the arrivals point. The join itself placed them (and their ship) on the
+    /// planet the station undocks to (<see cref="RestoreJoinBody"/>), so a station that is gone or no longer open to
+    /// them simply leaves them there, like before.</summary>
+    private void RestoreStationOnJoin(PlayerSession session, string savedLocation, Vector3f savedPosition)
+    {
+        if (SavedStationBody(savedLocation) is not { } body || !CanBoardStation(session, body.Id))
+        {
+            return;
+        }
+
+        string playerId = session.State.PlayerId;
+        if (!_stationsById.TryGetValue(body.Id, out var station))
+        {
+            station = GetOrCreateStation(body.Id, body.Name, 0);
+        }
+
+        LeaveSpace(playerId);
+        _boardedStation.Remove(playerId);
+        _dockedFromEva.Remove(playerId);
+        _boardedReturn[playerId] = StationReturnLocation(body.Id, body);
+        EnterBoardedStation(session, station);
+        if (StandingRoomAt(savedPosition))
+        {
+            // The spot rides the RespawnNotice channel (Died=false), like every server-side relocation — a plain
+            // PlayerStateUpdate position is ignored by the client (#414 N17).
+            session.State.Position = savedPosition;
+            Send(session, new RespawnNotice
+            {
+                X = savedPosition.X,
+                Y = savedPosition.Y,
+                Z = savedPosition.Z,
+                Reason = "@srv.station.rejoined:" + station.Name,
+            });
+            SendPlayerState(session);
+        }
+
+        _log.Info($"Player '{session.State.Name}' rejoined aboard station '{station.Name}'.");
+    }
+
+    /// <summary>Feet and head in air above a solid block within reach below, on the active world (#1925).</summary>
+    private bool StandingRoomAt(Vector3f pos)
+    {
+        var feet = pos.ToBlock();
+        if (!WithinBuildHeight(feet.Y) || !WithinBuildHeight(feet.Y + 1)
+            || !_world.GetBlock(feet).IsAir || !_world.GetBlock(new Vector3i(feet.X, feet.Y + 1, feet.Z)).IsAir)
+        {
+            return false;
+        }
+
+        for (int dy = 1; dy <= 3; dy++)
+        {
+            var below = new Vector3i(feet.X, feet.Y - dy, feet.Z);
+            if (WithinBuildHeight(below.Y) && !_world.GetBlock(below).IsAir)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>The disconnect half of #1925: forgets the boarding without <see cref="LeaveStation"/>'s undock — the
+    /// player's save keeps the station location and spot, and the leaver is not relaunched into a space instance.</summary>
+    private void ForgetStationBoarding(PlayerSession session)
+    {
+        string playerId = session.State.PlayerId;
+        if (!_boardedStation.Remove(playerId))
+        {
+            return;
+        }
+
+        ClearStationZeroG(session);
+        _boardedReturn.Remove(playerId);
+        _dockedFromEva.Remove(playerId);
+    }
+
     /// <summary>Leaves a boarded station and undocks straight back into <b>space flight</b> around the
     /// planet the station orbits — you return to your ship's view, not to the planet surface. The planet
     /// world is restored underneath (so a later landing drops you there), then the player relaunches into
@@ -390,6 +750,8 @@ public sealed partial class GameServer
         {
             return;
         }
+
+        ClearStationZeroG(session); // #1842: zero-g construction mode is per boarding (also the disconnect path)
 
         string stationLoc = session.CurrentLocationId; // the station world being left
         var (returnLoc, returnType) = _boardedReturn.TryGetValue(playerId, out var r)
@@ -448,11 +810,19 @@ public sealed partial class GameServer
         Send(session, new ServerMessage { Text = fromEva ? "@srv.station.back_outside" : "@srv.station.undocked" });
     }
 
-    private void StampStation(BoardableStation station)
+    /// <summary>The void-world cell a station's structure cell (0,0,0) is stamped at (before any exterior shift).</summary>
+    private static readonly Vector3i StationStampOrigin = new(8, 64, 8);
+
+    /// <summary>
+    /// Decides a generated station's layout, pins it and bakes its structure — once per server run. Runs the first time the
+    /// station shows up in flight (#1917) or, at the latest, when it is boarded; the result is the same either way, because
+    /// "fresh" asks the repository whether the station's void world holds anything instead of the loaded world.
+    /// </summary>
+    private StationStructure EnsureStationStructure(BoardableStation station)
     {
-        if (station.Stamped)
+        if (station.Structure is { } built)
         {
-            return;
+            return built;
         }
 
         long sSeed = _meta.Seed ^ WorldGenerator.StableHash("station:" + station.Id);
@@ -464,14 +834,75 @@ public sealed partial class GameServer
         // so a later, bigger pool must never re-pick a different layout under them. Stations pinned
         // before the feature (map entry absent, void world no longer virgin) replay the LEGACY pool,
         // which reproduces the pre-#1115 selection draw-for-draw.
+        // #1874: modular stations are the standard — a FRESH station draws from one joint random table of the
+        // complete templates and the kits of its tier (by weight; Off = the procedural generator as before) and pins
+        // "kit:<key>" plus the composition. A pinned kit station replays its composition, never the kit. Pinned
+        // templates and legacy replays keep the old path draw for draw.
         StationStructure structure;
         var roll = new System.Random(unchecked((int)(sSeed ^ (sSeed >> 32))));
+        var packs = _meta.Description.EnabledStructurePacks;
         StructureTemplate? template = null;
+        StationStructure? kitStructure = null;
+        StationComposition? composition = null;
         bool pinned = _meta.StationTemplates.TryGetValue(station.Id, out var pinnedKey);
-        if (roll.NextDouble() < _meta.Description.StationTemplateUse.Probability())
+        bool pinnedKit = pinned && pinnedKey!.StartsWith("kit:", System.StringComparison.Ordinal);
+        bool fresh = !pinned && !_repo.HasAnyBlockEdits(StationLocationIdPrefix + station.Id);
+        double useP = _meta.Description.StationTemplateUse.Probability();
+        bool legacyHit = roll.NextDouble() < useP; // consumed for every station: the legacy stream contract (#1115)
+        if (pinnedKit)
         {
-            template = _content.PickStationTemplate(station.SizeTier, _meta.Description.EnabledStructurePacks, roll,
-                legacyOnly: !pinned && !_worlds.Active.VirginAtLoad);
+            if (_meta.StationKits.TryGetValue(station.Id, out var rec))
+            {
+                if (rec.Exterior is null)
+                {
+                    // #1918: a kit station composed before exterior detail existed gets its kit's detail now, pinned once.
+                    var kitNow = _content.KitByKey(rec.Kit);
+                    rec.Exterior = new StationKitExteriorRecord
+                    {
+                        SolarWings = kitNow?.SolarWings ?? 0,
+                        Antennas = kitNow?.Antennas ?? 0,
+                        Domes = kitNow?.Domes ?? 0,
+                    };
+                    _repo.SaveMetadata(_meta);
+                }
+
+                composition = FromRecord(rec);
+                kitStructure = StationKitComposer.Replay(composition, key => _content.TemplateByKey(StructureKit.KindStation, key), _content, station.SizeTier, out var failure);
+                if (kitStructure is null)
+                {
+                    _log.Warn($"Station '{station.Name}': pinned kit composition cannot be replayed ({failure}) — falling back to the procedural interior.");
+                    composition = null;
+                }
+            }
+            else
+            {
+                _log.Warn($"Station '{station.Name}' is pinned to a kit but has no composition record — falling back to the procedural interior.");
+            }
+        }
+        else if (fresh)
+        {
+            if (useP > 0)
+            {
+                // #1888: the option is the share of complete templates — the legacy roll above IS that coin (a
+                // Bernoulli draw at the option's probability), then a weighted pick among the templates or the kits.
+                var templates = _content.CompleteTemplatesFor(StructureKit.KindStation, station.SizeTier, packs, null);
+                var kits = _content.KitsFor(StructureKit.KindStation, station.SizeTier, packs, null);
+                var (pickedTemplate, kit) = PickTemplateOrKit(templates, kits, legacyHit, roll);
+                template = pickedTemplate;
+                if (kit != null)
+                {
+                    kitStructure = StationKitComposer.Compose(kit, key => _content.TemplateByKey(StructureKit.KindStation, key), sSeed, _content, out composition, out var failure);
+                    if (kitStructure is null)
+                    {
+                        _log.Warn($"Station '{station.Name}': kit '{kit.Key}' could not be assembled ({failure}) — procedural interior instead.");
+                        composition = null;
+                    }
+                }
+            }
+        }
+        else if (legacyHit)
+        {
+            template = _content.PickStationTemplate(station.SizeTier, packs, roll, legacyOnly: !pinned);
             if (pinned)
             {
                 // The roll's draw is consumed above (stream contract); the pinned layout wins ("" = procedural).
@@ -481,15 +912,38 @@ public sealed partial class GameServer
 
         if (!pinned)
         {
-            _meta.StationTemplates[station.Id] = template?.Key ?? string.Empty;
+            if (composition != null)
+            {
+                _meta.StationTemplates[station.Id] = "kit:" + composition.KitKey;
+                _meta.StationKits[station.Id] = ToRecord(composition);
+            }
+            else
+            {
+                _meta.StationTemplates[station.Id] = template?.Key ?? string.Empty;
+            }
+
             _repo.SaveMetadata(_meta);
         }
 
-        structure = template != null
-            ? StationGenerator.FromTemplate(template, _content)
-            : StationGenerator.Generate(station.SizeTier, sSeed, _content);
+        structure = kitStructure
+            ?? (template != null
+                ? StationGenerator.FromTemplate(template, _content)
+                : StationGenerator.Generate(station.SizeTier, sSeed, _content));
 
         station.Structure = structure;
+        station.Kit = kitStructure != null ? composition : null;
+        station.Origin = StationStampOrigin - structure.ModuleShift; // #1918: an old kit station's modules stay put
+        return structure;
+    }
+
+    private void StampStation(BoardableStation station)
+    {
+        if (station.Stamped)
+        {
+            return;
+        }
+
+        var structure = EnsureStationStructure(station);
 
         // Stamp the whole station in one transaction (hundreds of voxels, otherwise one WAL commit each).
         ushort GetStructureCell(Vector3i p) =>
@@ -519,6 +973,17 @@ public sealed partial class GameServer
                             new BlockId(b), tint, glow, structure.GetShape(x, y, z));
                     }
         });
+
+        // #1901: the stamp above skips air, so furniture an older kit composer put where the current bake leaves air — a
+        // chair in a cabin doorway — would stay in the persisted world forever. A replayed kit station clears it ONCE.
+        if (station.Kit != null && _meta.StationKits.TryGetValue(station.Id, out var kitRecord)
+            && kitRecord.Revision < StationKitRecord.CurrentRevision)
+        {
+            int cleared = ClearStaleKitFurniture(station, structure);
+            kitRecord.Revision = StationKitRecord.CurrentRevision;
+            _repo.SaveMetadata(_meta);
+            _log.Info($"Station '{station.Name}': furnishing brought up to revision {StationKitRecord.CurrentRevision} ({cleared} stale piece(s) removed).");
+        }
 
         station.Markers.Clear();
         foreach (var m in structure.Markers)
@@ -572,6 +1037,54 @@ public sealed partial class GameServer
     }
 
     /// <summary>
+    /// The one-time cleanup of a kit station stamped by an older composer (#1901): every cell where the current bake leaves
+    /// air over its deck but the world still holds a piece the station furnisher places (a table, chair, bench or counter,
+    /// a crate, a plant, a terminal) is emptied. Never a bed, a light, a wall, a door, a ladder or anything a player built
+    /// or placed there (the cell's last editor is a player), and never a crate that holds a container. Returns the number
+    /// of cells cleared.
+    /// </summary>
+    private int ClearStaleKitFurniture(BoardableStation station, StationStructure structure)
+    {
+        var palette = RoomFurnisher.PaletteFor(RoomFurnisher.Style.Station, _content);
+        int cleared = 0;
+        _repo.RunInTransaction(() =>
+        {
+            for (int x = 0; x < structure.Width; x++)
+                for (int y = 1; y < structure.Height; y++)
+                    for (int z = 0; z < structure.Length; z++)
+                    {
+                        if (structure.Get(x, y, z) != 0 || structure.Get(x, y - 1, z) == 0)
+                        {
+                            continue; // the bake builds here, or there is no deck a piece could have stood on
+                        }
+
+                        var cell = new Vector3i(station.Origin.X + x, station.Origin.Y + y, station.Origin.Z + z);
+                        var id = _world.GetBlock(cell);
+                        if (id.IsAir || !RoomFurnisher.IsFurnishingPiece(palette, id.Value, _world.GetShape(cell)))
+                        {
+                            continue;
+                        }
+
+                        if (_containers.Any(c => c.Position.Equals(cell)))
+                        {
+                            continue; // a crate somebody keeps things in
+                        }
+
+                        var editor = _repo.GetBlockAttribution(_world.LocationId, WorldConstants.CanonicalBlock(cell, _world.Circumference));
+                        if (editor is { } e && !string.IsNullOrEmpty(e.Owner))
+                        {
+                            continue; // a player built or re-placed this piece
+                        }
+
+                        _world.SetBlock(cell, BlockId.Air);
+                        cleared++;
+                    }
+        });
+
+        return cleared;
+    }
+
+    /// <summary>
     /// Populates a boarded station with crew NPCs from its markers — a vendor at the trade post, a
     /// quartermaster at the mission board, and dockhands at the hangar/quarters. They live at the
     /// station's (far-away) interior coordinates, so they coexist with any planet-side settlement NPCs;
@@ -579,6 +1092,14 @@ public sealed partial class GameServer
     /// </summary>
     private void SpawnStationNpcs(BoardableStation station)
     {
+        if (station.Kit != null)
+        {
+            SpawnKitStationCrew(station); // #1874: one resident per cabin, the posts staffed by residents
+            MaybeSpawnVisitingTrader(station);
+            return;
+        }
+
+        _stationCrewSpotsTaken.Clear();
         var rng = new System.Random(unchecked((int)(_meta.Seed ^ WorldGenerator.StableHash("station-npc:" + station.Id))));
         int added = 0;
         int vendorIndex = 0;
@@ -586,6 +1107,7 @@ public sealed partial class GameServer
         BeginAuthoredCasting(station.Id); // #1150: at most one authored face per place
         foreach (var (type, pos) in station.Markers)
         {
+            var profession = NpcProfessions.ByMarker(type);
             string? role = type switch
             {
                 "vendor" => "vendor",
@@ -593,7 +1115,7 @@ public sealed partial class GameServer
                 "quarters" => "settler",
                 "hangar" => "settler", // a dockhand
                 "greenhouse" => "settler", // the hydroponics bay's gardener (#628)
-                _ => null,
+                _ => profession?.Role,
             };
 
             if (role is null)
@@ -611,19 +1133,34 @@ public sealed partial class GameServer
 
             // Each station vendor gets its own profession (B55) so multiple traders on one station sell different
             // goods; other crew stay "traders"-themed. The first vendor keeps the station's "traders" identity.
-            string npcTheme = role == "vendor" ? VendorThemeFor(station.Id, vendorIndex++, "traders") : "traders";
+            // A profession keeps its own theme and never shifts the classic vendors' themes (no vendorIndex step).
+            string npcTheme = profession is { Trades: true } ? profession.Theme
+                : role == "vendor" ? VendorThemeFor(station.Id, vendorIndex++, "traders") : "traders";
             bool robotic = npcTheme == "researchers"; // research staff are service androids
 
             // Markers sit centred in the air cell above the floor (+0.5); drop the NPC's feet onto the
-            // floor surface (the integer Y) so the crew stands on the deck instead of floating over it.
-            var standing = new Vector3f(pos.X, (float)System.Math.Floor(pos.Y), pos.Z);
+            // floor surface (the integer Y) so the crew stands on the deck instead of floating over it. On a
+            // player station the marker is the vendor / board BLOCK itself, so the post keeper takes the nearest
+            // standable cell beside it that holds air (#1775).
+            var standing = StationCrewSpot(station, pos, rng, jitter: 0);
             var npc = MakeNpc(role, npcTheme, robotic, standing, rng);
             if (role == "quartermaster")
             {
                 npc.Name = CoinGiverName(station.Id); // the mission-giver's name matches its missions (item 13)
             }
 
-            ApplyAuthoredCharacter(npc, "station", station.Id); // #1128: a pack face may claim this slot
+            if (profession != null)
+            {
+                ApplyProfession(npc, profession);
+                npc.Work = standing;
+                npc.HasWork = true;
+            }
+            else
+            {
+                ApplyAuthoredCharacter(npc, "station", station.Id); // #1128: a pack face may claim this slot
+            }
+
+            npc.RoutineEnabled = true; // #1867: the crew keeps the station clock — a post by day, a bunk at night
             _npcs.Add(npc);
             added++;
         }
@@ -635,15 +1172,16 @@ public sealed partial class GameServer
         // board) — the filler crew then gathers around those, never around the bare spawn pad.
         bool playerStation = station.Id.StartsWith("pstation:", System.StringComparison.Ordinal);
         var spots = station.Markers
-            .Where(m => !playerStation || (m.Type is "vendor" or "mission_board" && StationMarkerStaffable(station, m.Type, m.Pos)))
+            .Where(m => !playerStation || (NpcProfessions.IsStaffedPostMarker(m.Type) && StationMarkerStaffable(station, m.Type, m.Pos)))
             .Select(m => m.Pos).ToList();
         for (int i = 0; i < extra && spots.Count > 0; i++)
         {
             var b = spots[rng.Next(spots.Count)];
-            var home = new Vector3f(b.X + (float)(rng.NextDouble() * 4 - 2), (float)System.Math.Floor(b.Y), b.Z + (float)(rng.NextDouble() * 4 - 2));
+            var home = StationCrewSpot(station, b, rng, jitter: 2); // #1775: a standable cell in the post's air, never inside the hull
             bool robot = rng.NextDouble() < 0.3; // ~30% androids
             var npc = MakeNpc("settler", "traders", robot, home, rng);
             npc.Size = 0.9f + (float)rng.NextDouble() * 0.22f;
+            npc.RoutineEnabled = true; // #1867
             _npcs.Add(npc);
             added++;
         }
@@ -686,7 +1224,15 @@ public sealed partial class GameServer
 
     /// <summary>True if the player is at a station vendor, enabling market barter there.</summary>
     public bool NearSpaceStationVendor(Shared.State.PlayerState player)
-        => NearStationMarker(player, "vendor", StationMarkerReach);
+    {
+        if (!_boardedStation.TryGetValue(player.PlayerId, out var stationId) || !_stationsById.TryGetValue(stationId, out var station))
+        {
+            return false;
+        }
+
+        // The classic trading post or a trading profession's post (2026-09).
+        return station.Markers.Any(m => NpcProfessions.IsTradeMarker(m.Type) && player.Position.DistanceSquared(m.Pos) <= StationMarkerReach * StationMarkerReach);
+    }
 
     /// <summary>True if the player is at a station mission board.</summary>
     public bool NearSpaceStationMissionBoard(Shared.State.PlayerState player)

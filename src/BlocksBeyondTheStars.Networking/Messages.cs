@@ -270,6 +270,11 @@ public sealed class TravelIntent
     public int PadIndex { get; set; } = -1;
 }
 
+/// <summary>launch done during transit travel move on to the next step</summary>
+public sealed class TransitLaunchDoneIntent
+{
+}
+
 /// <summary>Client fires a built ship weapon at a space entity. The server validates and resolves the hit.
 /// Contractless-additive aim fields (#693): the ship's forward direction at the moment of firing, so the
 /// server can enforce a firing arc. An all-zero direction (older client) skips the arc check.</summary>
@@ -464,6 +469,15 @@ public sealed class BoardStationIntent
 /// <summary>Client leaves the currently boarded station and returns to the ship.</summary>
 public sealed class LeaveStationIntent { }
 
+/// <summary>Client → server (#1842): the boarder of a player-built station switches zero-g construction mode on
+/// (<c>Enabled</c> = true) or off for THEMSELVES — the suit floats everywhere on the station, so the outer hull
+/// can be built from any side without stepping off the deck. Per player, session-only (never persisted); the
+/// server ignores it while the player is not on a player station.</summary>
+public sealed class SetStationZeroGIntent
+{
+    public bool Enabled { get; set; }
+}
+
 /// <summary>Client repairs one damaged/missing wreck hull cell with a matching block item.</summary>
 public sealed class RepairWreckIntent
 {
@@ -528,6 +542,10 @@ public sealed class ScanIntent
 {
     public string SubjectType { get; set; } = string.Empty; // "creature" | "block"
     public string SubjectKey { get; set; } = string.Empty;
+
+    /// <summary>The aimed creature's entity id for a creature scan (#1926, empty from older clients): lets the server read
+    /// the one individual under the crosshair — the Sreekmakra's disguise — instead of guessing from the species.</summary>
+    public string EntityId { get; set; } = string.Empty;
 }
 
 /// <summary>Client scans a space entity (asteroid) with the ship scanner to reveal its resources.</summary>
@@ -608,6 +626,21 @@ public sealed class DiscoveryLog
 
     /// <summary>False = append <see cref="Entries"/> to what the client already has; true = replace.</summary>
     public bool Full { get; set; }
+
+    /// <summary>Where each entry was found (#1843), parallel to <see cref="Entries"/>: the galaxy body id the
+    /// player stood on (or orbited) at scan time. Empty string = unknown — an entry from before the game
+    /// recorded sites, or a scan the galaxy could not place (a ship interior); the client then shows no
+    /// location line. Additive fields: an older peer leaves all four empty.</summary>
+    public string[] BodyIds { get; set; } = System.Array.Empty<string>();
+
+    /// <summary>The body's display name per entry (parallel to <see cref="BodyIds"/>); empty = unknown.</summary>
+    public string[] BodyNames { get; set; } = System.Array.Empty<string>();
+
+    /// <summary>The star system id per entry (parallel to <see cref="BodyIds"/>); empty = unknown.</summary>
+    public string[] SystemIds { get; set; } = System.Array.Empty<string>();
+
+    /// <summary>The star system's display name per entry (parallel to <see cref="BodyIds"/>); empty = unknown.</summary>
+    public string[] SystemNames { get; set; } = System.Array.Empty<string>();
 }
 
 /// <summary>An item + quantity in a trade offer.</summary>
@@ -818,11 +851,78 @@ public sealed class JoinAccepted
     /// <summary>Whether this save was created with continents (#704) — the client's preview generators
     /// must apply the same gate or orbit/minimap textures would show the wrong coastlines.</summary>
     public bool TerrainContinents { get; set; }
+
+    /// <summary>The terrain generation this save was created with (#1644) — the client's preview generators
+    /// must apply the same generation as the server, like <see cref="TerrainContinents"/>. Contractless
+    /// MessagePack: an older client ignores it, an older server leaves it 0 (the classic generators).</summary>
+    public int TerrainGeneration { get; set; }
 }
 
 public sealed class JoinRejected
 {
     public string Reason { get; set; } = string.Empty;
+}
+
+/// <summary>Server → client (#1820): everything the client's own generator needs to draw THIS world's far terrain
+/// exactly as the server generates it — sent after every JoinAccepted / WorldReset. The preview generators (minimap,
+/// orbit sphere) approximate; the far view sits next to real chunks, so it must match them.</summary>
+public sealed class FarTerrainWorldInfo
+{
+    public int WorldId { get; set; }
+    public string LocationId { get; set; } = string.Empty;
+    public string PlanetType { get; set; } = string.Empty;
+    public int Circumference { get; set; }
+    public bool Cratered { get; set; }
+    public bool ContinentsEnabled { get; set; }
+    public bool LavaCoreVolcanoes { get; set; }
+    public int TerrainGeneration { get; set; }
+
+    /// <summary>A void world (station, ship interior) has no terrain: the far view switches off.</summary>
+    public bool Void { get; set; }
+
+    /// <summary>The world's flattened landing pads, <see cref="PadStride"/> ints each: centreX, centreZ, surfaceY,
+    /// radius, islet (0/1), plateauRadius, isletRadius, classicShape (0/1).</summary>
+    public int[] Pads { get; set; } = System.Array.Empty<int>();
+
+    public const int PadStride = 8;
+}
+
+/// <summary>Client → server (#1821): which far-terrain tiles the client's far view needs. Tiles are
+/// <see cref="FarTerrainTile.TileBlocks"/>-block squares on the canonical block grid; the server answers each with a
+/// <see cref="FarTerrainTile"/> and re-sends it when an edit changes it.</summary>
+public sealed class FarTerrainTileRequest
+{
+    /// <summary>The world the client asks about (the WorldId of its last JoinAccepted / WorldReset).</summary>
+    public int WorldId { get; set; }
+
+    /// <summary>Flat (tileX, tileZ) pairs, canonical tile indices. The server serves at most
+    /// <see cref="FarTerrainTile.MaxTilesPerRequest"/> pairs per request.</summary>
+    public int[] Tiles { get; set; } = System.Array.Empty<int>();
+}
+
+/// <summary>Server → client (#1821): the persisted builds of one far-terrain tile — cities, settlements, ruins and
+/// player builds, which the client's seed-based far terrain cannot know. One entry per
+/// <see cref="CellBlocks"/>×<see cref="CellBlocks"/> cell that holds any non-air edit: the highest such edit's height,
+/// block and tint. The four arrays run in step; an empty tile has empty arrays.</summary>
+public sealed class FarTerrainTile
+{
+    public const int TileBlocks = 64;
+    public const int CellBlocks = 4;
+    public const int CellsPerSide = TileBlocks / CellBlocks;
+    public const int MaxTilesPerRequest = 48;
+
+    public int WorldId { get; set; }
+    public int TileX { get; set; }
+    public int TileZ { get; set; }
+
+    /// <summary>Bumped whenever an edit inside the tile changes it (the client keeps the newest).</summary>
+    public int Version { get; set; }
+
+    /// <summary>Cell index within the tile: cellZ × <see cref="CellsPerSide"/> + cellX.</summary>
+    public byte[] Cells { get; set; } = System.Array.Empty<byte>();
+    public short[] TopY { get; set; } = System.Array.Empty<short>();
+    public ushort[] Blocks { get; set; } = System.Array.Empty<ushort>();
+    public int[] Tints { get; set; } = System.Array.Empty<int>();
 }
 
 public sealed class ChunkDataMessage
@@ -986,6 +1086,18 @@ public sealed class PlayerStateUpdate
     /// tells the HUD WHY suit energy (or, once empty, health) is falling.</summary>
     public bool SuitClimateActive { get; set; }
 
+    /// <summary>The exposure meter 0..1 (2026-09, Titas) — the HUD shows the cold/heat protection left.</summary>
+    public float Exposure { get; set; }
+
+    /// <summary>True while the exposure meter is running (on foot outside on a timed-exposure type).</summary>
+    public bool ExposureActive { get; set; }
+
+    /// <summary>True when the heat of a hot zone, not the cold, fills the meter.</summary>
+    public bool ExposureHot { get; set; }
+
+    /// <summary>Valuma's mood (2026-09): the player has stayed long enough that the music darkens.</summary>
+    public bool Uneasy { get; set; }
+
     /// <summary>Which life support keeps this player breathing (#794): 0 none (own tank / the world's own
     /// air), 1 ship cabin, 2 station, 3 base (zone cube or sealed room). Lets the HUD name the source —
     /// the client cannot mirror the sealed-room fill locally. New field on an existing contractless
@@ -1013,6 +1125,11 @@ public sealed class PlayerStateUpdate
     /// The client offers the double-tap-jump toggle only while this is set. New field on an existing
     /// contractless MessagePack message: an older client ignores it, an older server leaves it false.</summary>
     public bool CanFly { get; set; }
+
+    /// <summary>Zero-g construction mode (#1842) is on for this player on their boarded player station: the
+    /// float is chosen, not a drift over the edge — the HUD words its hints and badge accordingly. New field on
+    /// an existing contractless MessagePack message: an older client ignores it, an older server leaves it false.</summary>
+    public bool StationZeroG { get; set; }
 }
 
 public sealed class CraftResult
@@ -1067,7 +1184,6 @@ public sealed class ServerRules
 {
     public string GameMode { get; set; } = string.Empty;
     public string Pvp { get; set; } = string.Empty;
-    public string WeaponMode { get; set; } = string.Empty;
     public string AggressiveAliens { get; set; } = string.Empty;
     public string EnvironmentalHazards { get; set; } = string.Empty;
     public string DeathPenalty { get; set; } = string.Empty;
@@ -1097,6 +1213,11 @@ public sealed class ServerRules
     /// <summary>Starter-teleporter world option (#1056): when true every joining player is handed a suit
     /// teleporter (multiplayer convenience); default false.</summary>
     public bool StarterTeleporter { get; set; }
+
+    /// <summary>World textures (#1958): "Admins" when the world's admins may publish textures for everyone,
+    /// "Off" when the world has them switched off. EMPTY from a server that predates the feature — the client
+    /// then hides everything about world textures.</summary>
+    public string WorldTextures { get; set; } = string.Empty;
 
     /// <summary>Frontier-danger world option (#1122): when true, machines in the outermost frontier tier
     /// spawn as the tougher variant. Opt-in risk dial; the frontier's richness is unconditional.</summary>
@@ -1154,6 +1275,9 @@ public sealed class SetWorldRulesIntent
 
     /// <summary>Starter-teleporter toggle (#1056): "On"/"Off" to set it, empty to leave unchanged.</summary>
     public string StarterTeleporter { get; set; } = string.Empty;
+
+    /// <summary>World-textures toggle (#1958): "On"/"Off" to set it, empty to leave unchanged.</summary>
+    public string WorldTextures { get; set; } = string.Empty;
 
     /// <summary>Frontier-danger toggle (#1122): "On"/"Off" to set it, empty to leave unchanged.</summary>
     public string FrontierDanger { get; set; } = string.Empty;
@@ -1294,6 +1418,12 @@ public sealed class NetStarSystem
     /// vault/monument — and, with the opt-in "Frontier danger" rule, tougher machines). The star map
     /// tags tier-2 systems so flying far has a visible reason.</summary>
     public int Tier { get; set; }
+
+    /// <summary>The system's star colour as packed RGB (#1604) — the same value the planet sky's
+    /// <c>SunColor</c> takes after landing there (the server keys both by the system's name), so the
+    /// hyperspace chart's star matches the sun you see. 0 = not sent (an older server): the client falls
+    /// back to a warm yellow. Additive field; contractless MessagePack lets older clients ignore it.</summary>
+    public int StarColor { get; set; }
 }
 
 public sealed class StarMapData
@@ -1457,6 +1587,8 @@ public sealed class SpaceState
     /// client plays the warp VFX as the view opens (there is no surface take-off).</summary>
     public bool Hyperjump { get; set; }
 
+    public bool AutomaticTransit { get; set; } = false;
+
     /// <summary>Friendly names of the star system and the body this flight is anchored on (#1565). An in-flight
     /// hyperjump never lands, so no <see cref="WorldReset"/> carries the new identity — the HUD, the F1 form and
     /// the orbit view kept the departure system's name until the next landing.</summary>
@@ -1502,6 +1634,16 @@ public sealed class SpaceShipDesign
     public int[] Tint { get; set; } = System.Array.Empty<int>();
     public int[] Glow { get; set; } = System.Array.Empty<int>();
     public int[] Shape { get; set; } = System.Array.Empty<int>();
+
+    /// <summary>#1917: a generated station hull's hangar mouth — its centre in design cell units (the same space as
+    /// <see cref="X"/>/<see cref="Y"/>/<see cref="Z"/>; cell (x,y,z) spans x..x+1) and the horizontal direction pointing
+    /// out of it. The flight view docks there. Contractless-additive: older payloads leave <see cref="HasDock"/> false.</summary>
+    public bool HasDock { get; set; }
+    public float DockX { get; set; }
+    public float DockY { get; set; }
+    public float DockZ { get; set; }
+    public int DockOutX { get; set; }
+    public int DockOutZ { get; set; }
 }
 
 /// <summary>Server → client: a player's ship parked on the current world as a placed voxel OBJECT
@@ -1561,6 +1703,13 @@ public sealed class StructureEditIntent
 
     /// <summary>The hotbar item whose block to place (ignored when mining).</summary>
     public string ItemKey { get; set; } = string.Empty;
+
+    /// <summary>#1943: the orientation the placement ghost showed, exactly like <see cref="PlaceBlockIntent"/> —
+    /// up-face 0..5 and yaw 0..3, −1 = "let the server decide". Added to an existing contractless MessagePack
+    /// message: an older client leaves both at 0, so the server treats an unset pair as "decide" (see
+    /// <c>StampStructurePropShape</c>). Without it every prop built into a ship stamped as a plain cube.</summary>
+    public int UpFace { get; set; } = -1;
+    public int Yaw { get; set; } = -1;
 }
 
 /// <summary>Client → server: deploy a station core in front of the suit to start a player-built station (item
@@ -1722,12 +1871,35 @@ public sealed class NetCreature
     public bool EyeStalks { get; set; }
     public bool HasGasSac { get; set; }
 
+    /// <summary>Pectoral + tail fins — a legless swimmer's only limbs. Additive field: an older client
+    /// ignores it and draws the finless body it always did, and an older server leaves it false.</summary>
+    public bool HasFins { get; set; }
+
     // Body plans (#637/#638): which architecture the client renders ("Standard" | "Medusa" | "Titan"),
     // plus the titan-only neck/trunk traits. Additive fields — older clients ignore them and draw the
     // standard body, so the wire tag is unchanged.
     public string BodyPlan { get; set; } = "Standard";
     public int NeckLength { get; set; }
     public bool HasTrunk { get; set; }
+
+    /// <summary>The head's silhouette (#2009): "Box" (the head every species had) or one of the arachnid plan's pyramids
+    /// ("Pyramid" | "Spire" | "Frustum" | "Ziggurat"). Additive: an older client draws the box; an older server sends
+    /// nothing, which the client reads as the box.</summary>
+    public string HeadShape { get; set; } = "Box";
+
+    /// <summary>#2009: an arachnid ambusher sitting motionless in wait — the client holds the crouch and skips the idle
+    /// flourishes. Additive; false for everything else and from an older server.</summary>
+    public bool Lurking { get; set; }
+
+    /// <summary>Heads / wing pairs / fin pairs (#1780-#1782, generation 6). Additive: an older client ignores them and
+    /// draws the classic single head / pair / pair; an older server leaves them at 0, which the client reads as 1.</summary>
+    public int Heads { get; set; } = 1;
+    public int WingPairs { get; set; } = 1;
+    public int FinPairs { get; set; } = 1;
+
+    /// <summary>The hide tile the client paints the body with ("fur", "shaggy", "petal", …) for an authored species
+    /// (#1763); empty = the classic id-hashed pick. Additive: an older client ignores it.</summary>
+    public string Hide { get; set; } = string.Empty;
 
     /// <summary>Seed for this species' generated voice (#907) — the client derives phrase, cadence and
     /// timbre from it via <c>CreatureVoices.Derive</c>. Additive field: an older client ignores it and
@@ -1757,6 +1929,67 @@ public sealed class NetCreature
     /// arc integration uses the same glide factor the server does (#1368). Additive; a legacy server sends
     /// false, which is also what it simulates.</summary>
     public bool Glides { get; set; }
+
+    // --- Giants (#1998, generation 9). All additive: an older client ignores them (and draws a giant as the plain
+    // body its traits describe); for every other creature they stay at their defaults. ---
+
+    /// <summary>The giant's height in blocks (0 = not a giant).</summary>
+    public float GiantHeight { get; set; }
+
+    /// <summary>Colossus: its back ("plates", "spikes", "crystals", "forest", empty) and leg length vs torso.</summary>
+    public string BackFeature { get; set; } = string.Empty;
+    public float LegRatio { get; set; } = 1f;
+
+    /// <summary>Sandworm: mandible petals, body length and diameter.</summary>
+    public int Mandibles { get; set; }
+    public float WormLength { get; set; }
+    public float WormGirth { get; set; }
+
+    /// <summary>The server's heading (radians, dirX = cos, dirZ = sin) — a giant turns in arcs, so the client does
+    /// not guess it from the ~2 Hz positions.</summary>
+    public float Facing { get; set; }
+
+    /// <summary>What the giant is doing: "walk", "stand", "stomp" (colossus); "hidden", "approach", "breach", "rear"
+    /// (sandworm). Empty for every other creature.</summary>
+    public string Phase { get; set; } = string.Empty;
+
+    /// <summary>Seconds already run of the current phase when this snapshot was sent, and the phase's length —
+    /// the client runs the same shared curve (<c>SandwormPath</c>) or stomp timing from them.</summary>
+    public float PhaseT { get; set; }
+    public float PhaseDur { get; set; }
+
+    /// <summary>The phase's anchor point: the stomp's landing spot; the breach's ground point under the top of the arc;
+    /// the rear's strike target (Y = the surface there).</summary>
+    public float EvX { get; set; }
+    public float EvY { get; set; }
+    public float EvZ { get; set; }
+
+    /// <summary>The move's direction on the ground (unit X/Z), its peak height and — for a rear — how far before its
+    /// target the tower rises. For a stomp <see cref="EvLeg"/> is the leg (0..3: front-left, front-right, rear-left,
+    /// rear-right).</summary>
+    public float EvDirX { get; set; }
+    public float EvDirZ { get; set; }
+    public float EvPeak { get; set; }
+    public float EvStrike { get; set; }
+    public int EvLeg { get; set; }
+}
+
+/// <summary>A world effect at a spot (#1998): a thumper's thump, a colossus stomp, a sandworm breaching or striking. The
+/// client throws dust, shakes the camera with distance and plays the sound; inside <see cref="Radius"/> (a stomp, a
+/// strike) it also knocks its own player away from the spot — movement is the client's, the damage the server's.</summary>
+public sealed class WorldFx
+{
+    /// <summary>"thump" | "stomp" | "breach" | "strike" | "dive" | "rumble".</summary>
+    public string Kind { get; set; } = string.Empty;
+    public float X { get; set; }
+    public float Y { get; set; }
+    public float Z { get; set; }
+
+    /// <summary>0..1: how big the dust and the shake are.</summary>
+    public float Strength { get; set; }
+
+    /// <summary>Knock-back radius (blocks); 0 = no push.</summary>
+    public float Radius { get; set; }
 }
 
 /// <summary>Snapshot of live creatures (fauna) near the player on the planet surface.</summary>
@@ -1866,9 +2099,14 @@ public sealed class NetCompanion
     public int Tentacles { get; set; }
     public bool EyeStalks { get; set; }
     public bool HasGasSac { get; set; }
+    public bool HasFins { get; set; }
     public string BodyPlan { get; set; } = "Standard"; // #637/#638 — the portrait renders the real plan
     public int NeckLength { get; set; }
     public bool HasTrunk { get; set; }
+    public string HeadShape { get; set; } = "Box"; // #2009 — the portrait shows the pyramid an arachnid companion wears
+    public int Heads { get; set; } = 1;     // #1780-#1782 (generation 6) — the portrait shows every head, wing pair and fin pair
+    public int WingPairs { get; set; } = 1;
+    public int FinPairs { get; set; } = 1;
 }
 
 /// <summary>Server → client: the player's full companion roster (for the Companions menu tab).</summary>
@@ -2251,6 +2489,14 @@ public sealed class WorldEnvironment
     /// (green / brown / pink / purple …) regardless of the underlying tile. White = no tint.</summary>
     public int FloraTint { get; set; } = 0xFFFFFF;
 
+    /// <summary>This world's water colour, packed 0xRRGGBB (#1758, school club wave 3), read only when
+    /// <see cref="WaterTintMode"/> is 1. Additive: an older client ignores it, an older server sends the default.</summary>
+    public int WaterTint { get; set; } = 0x336BD9;
+
+    /// <summary>How the client colours the water (#1758): 0 = the classic blue (every existing world), 1 = multiply
+    /// <see cref="WaterTint"/> in, 2 = static rainbow bands by position (the rainbow planet). Additive.</summary>
+    public int WaterTintMode { get; set; }
+
     /// <summary>This world's walkable east–west circumference in blocks (longitude wrap + day/night span).
     /// Varies by body size — asteroids small, planets large — so the client wraps/renders at the right size.</summary>
     public int Circumference { get; set; } = 6000;
@@ -2397,6 +2643,11 @@ public sealed class ShipAiLine
 
     /// <summary>Locale key of the active objective chip; empty ⇒ clear the chip.</summary>
     public string ObjectiveKey { get; set; } = string.Empty;
+
+    /// <summary>Optional {0} substitution for the objective chip (#1859) — already a display string, e.g. the
+    /// body name in "a net fragment lies on {0}". Empty ⇒ the localized key is shown as-is. Additive: an
+    /// older peer simply never fills it.</summary>
+    public string ObjectiveArg { get; set; } = string.Empty;
 
     /// <summary>Progress toward the objective (e.g. blocks mined so far). 0/0 ⇒ no counter shown.</summary>
     public int ObjectiveProgress { get; set; }

@@ -77,7 +77,7 @@
   { "key": "factory_carbon_composite","station": "factory", "inputs": [ { "item": "carbon", "count": 3 } ],                                                                "outputs": [ { "item": "carbon_composite", "count": 1 } ] },
   { "key": "factory_energy_cell",     "station": "factory", "inputs": [ { "item": "copper_ore", "count": 2 }, { "item": "silicate", "count": 2 }, { "item": "carbon", "count": 3 } ], "outputs": [ { "item": "energy_cell_1", "count": 1 } ] },
   { "key": "factory_circuit_board",   "station": "factory", "inputs": [ { "item": "gold_ore", "count": 3 }, { "item": "silver_ore", "count": 3 }, { "item": "silicate", "count": 4 } ], "outputs": [ { "item": "circuit_board", "count": 1 } ] },
-  { "key": "factory_polymer",         "station": "factory", "inputs": [ { "item": "carbon", "count": 3 }, { "item": "sulfur_ore", "count": 2 } ],                           "outputs": [ { "item": "polymer", "count": 1 } ] },
+  { "key": "factory_polymer",         "station": "factory", "inputs": [ { "item": "carbon", "count": 3 }, { "item": "sulfur_ore", "count": 2 } ],                           "outputs": [ { "item": "polymer", "count": 2 } ] },
   { "key": "factory_titanium_plate",  "station": "factory", "inputs": [ { "item": "titanium_ore", "count": 3 } ],                                                          "outputs": [ { "item": "titanium_plate", "count": 1 } ] },
   // #1200 raw-ore -> part tier: the factory skips the smelt stages of the alloy / component chains at the price of
   // more ore per step (never a better per-ore yield than the refinery route). Gives the 11 single-use ores a
@@ -168,6 +168,32 @@
 
   { "key": "market_sell_meat",         "station": "market", "marketTheme": "settlers", "inputs": [ { "item": "creature_meat", "count": 4 } ], "outputs": [ { "item": "iron_ore", "count": 3 } ] },
   { "key": "market_buy_food",          "station": "market", "marketTheme": "settlers", "inputs": [ { "item": "iron_ore", "count": 3 } ],      "outputs": [ { "item": "creature_meat", "count": 5 } ] },
+  // The professions (2026-09, NpcProfessions): each trading profession posts its own goods. "Expensive" means diamonds and
+  // gold — there is no currency. The doctor's bed and stretcher are only on offer every other day (marketRotation).
+  { "key": "market_doctor_medpack", "station": "market", "marketTheme": "medics", "inputs": [ { "item": "iron_ore", "count": 3 } ], "outputs": [ { "item": "medpack", "count": 2 } ] },
+  { "key": "market_doctor_field_medkit", "station": "market", "marketTheme": "medics", "inputs": [ { "item": "gold_ingot", "count": 1 }, { "item": "crystal", "count": 2 } ], "outputs": [ { "item": "field_medkit", "count": 1 } ] },
+  { "key": "market_doctor_detoxifier", "station": "market", "marketTheme": "medics", "inputs": [ { "item": "diamond", "count": 1 }, { "item": "gold_ingot", "count": 2 } ], "outputs": [ { "item": "detoxifier", "count": 1 } ] },
+  { "key": "market_doctor_bed", "station": "market", "marketTheme": "medics", "marketRotation": 2, "inputs": [ { "item": "wood_log", "count": 4 }, { "item": "iron_ore", "count": 2 } ], "outputs": [ { "item": "bed", "count": 1 } ] },
+  { "key": "market_doctor_stretcher", "station": "market", "marketTheme": "medics", "marketRotation": 2, "inputs": [ { "item": "iron_plate", "count": 2 }, { "item": "plant_fiber", "count": 4 } ], "outputs": [ { "item": "stretcher", "count": 1 } ] },
+  { "key": "market_grocer_berries", "station": "market", "marketTheme": "grocer", "inputs": [ { "item": "iron_ore", "count": 2 } ], "outputs": [ { "item": "berries", "count": 6 } ] },
+  { "key": "market_grocer_stew", "station": "market", "marketTheme": "grocer", "inputs": [ { "item": "copper_ore", "count": 3 } ], "outputs": [ { "item": "hearty_stew", "count": 2 } ] },
+  { "key": "market_grocer_skewer", "station": "market", "marketTheme": "grocer", "inputs": [ { "item": "silicate", "count": 3 } ], "outputs": [ { "item": "mushroom_skewer", "count": 3 } ] },
+  { "key": "market_grocer_ration", "station": "market", "marketTheme": "grocer", "inputs": [ { "item": "iron_ore", "count": 4 } ], "outputs": [ { "item": "emergency_ration", "count": 2 } ] },
+  { "key": "market_arms_cable", "station": "market", "marketTheme": "arms", "inputs": [ { "item": "copper_ore", "count": 4 } ], "outputs": [ { "item": "cable", "count": 3 } ] },
+  { "key": "market_arms_titanium_plate", "station": "market", "marketTheme": "arms", "inputs": [ { "item": "iron_ore", "count": 6 }, { "item": "carbon", "count": 2 } ], "outputs": [ { "item": "titanium_plate", "count": 1 } ] },
+  { "key": "market_arms_energy_cell", "station": "market", "marketTheme": "arms", "inputs": [ { "item": "crystal", "count": 2 } ], "outputs": [ { "item": "energy_cell_1", "count": 1 } ] },
+  { "key": "market_arms_laser_pistol", "station": "market", "marketTheme": "arms", "inputs": [ { "item": "diamond", "count": 1 }, { "item": "gold_ingot", "count": 2 } ], "outputs": [ { "item": "laser_pistol", "count": 1 } ] },
+  { "key": "market_arms_plasma_blaster", "station": "market", "marketTheme": "arms", "inputs": [ { "item": "diamond", "count": 3 }, { "item": "gold_ingot", "count": 2 } ], "outputs": [ { "item": "plasma_blaster", "count": 1 } ] },
+  { "key": "market_sage_data_fragment", "station": "market", "marketTheme": "sage", "inputs": [ { "item": "gold_ingot", "count": 2 } ], "outputs": [ { "item": "data_fragment", "count": 1 } ] },
+  { "key": "market_sage_memory_fragment", "station": "market", "marketTheme": "sage", "inputs": [ { "item": "diamond", "count": 2 } ], "outputs": [ { "item": "ai_memory_fragment", "count": 1 } ] },
+  { "key": "market_tamer_translator", "station": "market", "marketTheme": "tamer", "inputs": [ { "item": "diamond", "count": 2 }, { "item": "gold_ingot", "count": 3 } ], "outputs": [ { "item": "creature_translator", "count": 1 } ] },
+  { "key": "market_tamer_forage_bait", "station": "market", "marketTheme": "tamer", "inputs": [ { "item": "plant_fiber", "count": 6 } ], "outputs": [ { "item": "forage_bait", "count": 2 } ] },
+  { "key": "market_tamer_meat_bait", "station": "market", "marketTheme": "tamer", "inputs": [ { "item": "creature_meat", "count": 3 } ], "outputs": [ { "item": "meat_bait", "count": 2 } ] },
+  { "key": "market_tamer_nectar_lure", "station": "market", "marketTheme": "tamer", "inputs": [ { "item": "berries", "count": 4 } ], "outputs": [ { "item": "nectar_lure", "count": 1 } ] },
+  { "key": "market_blocks_stone", "station": "market", "marketTheme": "blocks", "inputs": [ { "item": "iron_ore", "count": 1 } ], "outputs": [ { "item": "stone", "count": 16 } ] },
+  { "key": "market_blocks_sand", "station": "market", "marketTheme": "blocks", "inputs": [ { "item": "iron_ore", "count": 1 } ], "outputs": [ { "item": "sand", "count": 16 } ] },
+  { "key": "market_blocks_dirt", "station": "market", "marketTheme": "blocks", "inputs": [ { "item": "iron_ore", "count": 1 } ], "outputs": [ { "item": "dirt", "count": 16 } ] },
+  { "key": "market_blocks_basalt", "station": "market", "marketTheme": "blocks", "inputs": [ { "item": "copper_ore", "count": 1 } ], "outputs": [ { "item": "basalt", "count": 12 } ] },
 
   { "key": "ladder", "station": "hand", "inputs": [ { "item": "carbon", "count": 1 } ], "outputs": [ { "item": "ladder", "count": 3 } ] },
   { "key": "stairs", "station": "hand", "inputs": [ { "item": "stone", "count": 2 } ], "outputs": [ { "item": "stairs", "count": 4 } ] },
@@ -209,6 +235,11 @@
 
   { "key": "stairs_granite",     "station": "hand",     "inputs": [ { "item": "granite", "count": 2 } ],                                  "outputs": [ { "item": "stairs", "count": 4 } ] },
   { "key": "concrete_deepslate", "station": "hand",     "inputs": [ { "item": "deepslate", "count": 4 }, { "item": "sand", "count": 1 } ], "outputs": [ { "item": "concrete", "count": 4 } ] },
+  { "key": "stairs_sandstone",   "station": "hand",     "inputs": [ { "item": "sandstone", "count": 2 } ],                                "outputs": [ { "item": "stairs", "count": 4 } ] },
+  { "key": "concrete_scree",     "station": "hand",     "inputs": [ { "item": "scree", "count": 4 }, { "item": "sand", "count": 1 } ],     "outputs": [ { "item": "concrete", "count": 4 } ] },
+  { "key": "torch_tar",          "station": "hand",     "inputs": [ { "item": "tar", "count": 1 }, { "item": "plant_fiber", "count": 1 } ], "outputs": [ { "item": "torch", "count": 4 } ] },
+  { "key": "bone_bait",          "station": "hand",     "inputs": [ { "item": "bone", "count": 1 }, { "item": "berries", "count": 1 } ],    "outputs": [ { "item": "meat_bait", "count": 2 } ] },
+  { "key": "moss_scrape",        "station": "hand",     "inputs": [ { "item": "moss_stone", "count": 1 } ],                               "outputs": [ { "item": "plant_fiber", "count": 2 }, { "item": "stone", "count": 1 } ] },
   // #1203 orphans: ancient masonry and volcanic glass get a use once you know what you are looking at (archaeology).
   { "key": "concrete_ancient", "station": "hand", "requiredBlueprint": "archaeology", "inputs": [ { "item": "ancient_brick", "count": 2 }, { "item": "mud", "count": 1 } ], "outputs": [ { "item": "concrete", "count": 4 } ] },
   { "key": "glass_salt",         "station": "refinery", "inputs": [ { "item": "salt", "count": 1 }, { "item": "silicate", "count": 2 } ], "outputs": [ { "item": "glass", "count": 2 } ] },
@@ -217,6 +248,8 @@
   { "key": "water_ice",          "station": "hand",     "inputs": [ { "item": "ice", "count": 2 } ],                                      "outputs": [ { "item": "water", "count": 1 } ] },
   { "key": "fiber_mycelium",     "station": "hand",     "inputs": [ { "item": "mycelium", "count": 1 } ],                                 "outputs": [ { "item": "plant_fiber", "count": 2 } ] },
   { "key": "fiber_alien_grass",  "station": "hand",     "inputs": [ { "item": "alien_grass", "count": 1 } ],                              "outputs": [ { "item": "plant_fiber", "count": 2 } ] },
+  // #1847: turf you can carry — mined grass now drops itself, and a spade of dirt plus a handful of fibre grows a fresh block.
+  { "key": "grass",              "station": "hand",     "inputs": [ { "item": "dirt", "count": 1 }, { "item": "plant_fiber", "count": 1 } ], "outputs": [ { "item": "grass", "count": 1 } ] },
   { "key": "crate",       "station": "workshop", "inputs": [ { "item": "iron_plate", "count": 3 }, { "item": "wood_log", "count": 2 } ], "outputs": [ { "item": "crate", "count": 1 } ] },
   { "key": "door_wood",   "station": "hand",     "inputs": [ { "item": "wood_log", "count": 4 } ],                                          "outputs": [ { "item": "door_wood", "count": 1 } ] },
   { "key": "torch",       "station": "hand",     "inputs": [ { "item": "wood_log", "count": 1 }, { "item": "plant_fiber", "count": 2 } ], "outputs": [ { "item": "torch", "count": 4 } ] },
@@ -230,6 +263,14 @@
   { "key": "base_core",    "station": "workshop", "inputs": [ { "item": "stone", "count": 6 }, { "item": "iron_plate", "count": 2 } ], "outputs": [ { "item": "base_core", "count": 1 } ] },
   { "key": "station_vendor",    "station": "workshop", "requiredBlueprint": "station_vendor",        "inputs": [ { "item": "metal_panel", "count": 4 }, { "item": "circuit_board", "count": 2 }, { "item": "energy_cell_1", "count": 1 } ], "outputs": [ { "item": "station_vendor", "count": 1 } ] },
   { "key": "mission_board",     "station": "workshop", "requiredBlueprint": "station_mission_board", "inputs": [ { "item": "metal_panel", "count": 3 }, { "item": "circuit_board", "count": 1 }, { "item": "glass", "count": 2 } ],         "outputs": [ { "item": "mission_board", "count": 1 } ] },
+  { "key": "clinic_post", "station": "workshop", "requiredBlueprint": "station_profession_posts", "inputs": [ { "item": "metal_panel", "count": 3 }, { "item": "glass", "count": 2 }, { "item": "medpack", "count": 2 } ], "outputs": [ { "item": "clinic_post", "count": 1 } ] },
+  { "key": "shop_counter", "station": "workshop", "requiredBlueprint": "station_profession_posts", "inputs": [ { "item": "metal_panel", "count": 2 }, { "item": "wood_crate", "count": 1 }, { "item": "glass", "count": 1 } ], "outputs": [ { "item": "shop_counter", "count": 1 } ] },
+  { "key": "arms_rack", "station": "workshop", "requiredBlueprint": "station_profession_posts", "inputs": [ { "item": "iron_plate", "count": 4 }, { "item": "metal_panel", "count": 2 } ], "outputs": [ { "item": "arms_rack", "count": 1 } ] },
+  { "key": "sage_lectern", "station": "workshop", "requiredBlueprint": "station_profession_posts", "inputs": [ { "item": "metal_panel", "count": 2 }, { "item": "crystal", "count": 2 }, { "item": "data_fragment", "count": 2 } ], "outputs": [ { "item": "sage_lectern", "count": 1 } ] },
+  { "key": "tamer_post", "station": "workshop", "requiredBlueprint": "station_profession_posts", "inputs": [ { "item": "iron_plate", "count": 2 }, { "item": "plant_fiber", "count": 6 }, { "item": "forage_bait", "count": 1 } ], "outputs": [ { "item": "tamer_post", "count": 1 } ] },
+  { "key": "quarry_post", "station": "workshop", "requiredBlueprint": "station_profession_posts", "inputs": [ { "item": "iron_plate", "count": 2 }, { "item": "stone", "count": 10 }, { "item": "metal_panel", "count": 1 } ], "outputs": [ { "item": "quarry_post", "count": 1 } ] },
+  { "key": "streamer_post", "station": "workshop", "requiredBlueprint": "station_profession_posts", "inputs": [ { "item": "metal_panel", "count": 2 }, { "item": "circuit_board", "count": 2 }, { "item": "glass", "count": 2 } ], "outputs": [ { "item": "streamer_post", "count": 1 } ] },
+  { "key": "press_desk", "station": "workshop", "requiredBlueprint": "station_profession_posts", "inputs": [ { "item": "metal_panel", "count": 3 }, { "item": "circuit_board", "count": 1 }, { "item": "glass", "count": 1 } ], "outputs": [ { "item": "press_desk", "count": 1 } ] },
   { "key": "station_container", "station": "workshop", "requiredBlueprint": "station_container",     "inputs": [ { "item": "metal_panel", "count": 3 }, { "item": "iron_plate", "count": 2 } ],                                       "outputs": [ { "item": "station_container", "count": 1 } ] },
 
   { "key": "seed_plant",   "station": "hand", "inputs": [ { "item": "plant_fiber", "count": 2 } ], "outputs": [ { "item": "plant_seed", "count": 1 } ] },
@@ -240,6 +281,8 @@
   // Grain + mushroom seeds (#1204): the same hand-sown deal — one greenhouse harvest starts your own bed.
   { "key": "seed_grain",   "station": "hand", "inputs": [ { "item": "grain", "count": 3 } ],       "outputs": [ { "item": "grain_seed", "count": 2 } ] },
   { "key": "seed_shroom",  "station": "hand", "inputs": [ { "item": "mushroom_cap", "count": 2 } ], "outputs": [ { "item": "shroom_seed", "count": 2 } ] },
+  // Saplings (#1774): a log and some fibre make two young trees by hand — leaves drop one now and then as well.
+  { "key": "sapling",      "station": "hand", "inputs": [ { "item": "wood_log", "count": 1 }, { "item": "plant_fiber", "count": 2 } ], "outputs": [ { "item": "sapling", "count": 2 } ] },
   // The hydroponic tray the high-tech greenhouses grow crops in — the one host block that is not soil.
   { "key": "hydro_tray",   "station": "workshop", "inputs": [ { "item": "metal_panel", "count": 1 }, { "item": "glass", "count": 1 }, { "item": "plant_fiber", "count": 2 }, { "item": "brass_fitting", "count": 1 } ], "outputs": [ { "item": "hydro_tray", "count": 2 } ] },
 
@@ -253,6 +296,9 @@
   { "key": "algae_tank",   "station": "workshop",  "inputs": [ { "item": "metal_panel", "count": 2 }, { "item": "glass", "count": 3 } ], "outputs": [ { "item": "algae_tank", "count": 1 } ] },
   { "key": "heal_tank",    "station": "workshop",  "requiredBlueprint": "heal_tank", "inputs": [ { "item": "metal_panel", "count": 4 }, { "item": "glass", "count": 4 }, { "item": "cable", "count": 3 }, { "item": "energy_cell_1", "count": 1 } ], "outputs": [ { "item": "heal_tank", "count": 1 } ] },
   { "key": "sentry_post",  "station": "workshop",  "requiredBlueprint": "sentry_post", "inputs": [ { "item": "metal_panel", "count": 4 }, { "item": "cable", "count": 2 }, { "item": "circuit_board", "count": 1 }, { "item": "energy_cell_1", "count": 1 } ], "outputs": [ { "item": "sentry_post", "count": 1 } ] },
+  { "key": "power_relay",  "station": "workshop",  "requiredBlueprint": "sentry_post", "inputs": [ { "item": "metal_panel", "count": 2 }, { "item": "cable", "count": 3 }, { "item": "energy_cell_1", "count": 1 } ], "outputs": [ { "item": "power_relay", "count": 1 } ] },
+  { "key": "water_spout",  "station": "workshop",  "inputs": [ { "item": "metal_panel", "count": 2 }, { "item": "water", "count": 1 } ], "outputs": [ { "item": "water_spout", "count": 1 } ] },
+  { "key": "thumper",      "station": "workshop",  "inputs": [ { "item": "iron_plate", "count": 4 }, { "item": "cable", "count": 2 }, { "item": "energy_cell_1", "count": 1 } ], "outputs": [ { "item": "thumper", "count": 1 } ] },
   { "key": "algae_ration", "station": "algaetank", "inputs": [ { "item": "water", "count": 1 } ],                                        "outputs": [ { "item": "algae_ration", "count": 2 } ] },
   // #1203 algae bio-refinery (bio_refining blueprint): the tank grows fuel, fibre and feedstock, not just rations.
   { "key": "biofuel_algae", "station": "algaetank", "requiredBlueprint": "bio_refining", "inputs": [ { "item": "water", "count": 1 }, { "item": "plant_fiber", "count": 2 } ], "outputs": [ { "item": "biofuel", "count": 3 } ] },
@@ -303,9 +349,11 @@
   { "key": "titanium_block_unpack",  "station": "workshop", "inputs": [ { "item": "titanium_block", "count": 1 } ],  "outputs": [ { "item": "titanium_plate", "count": 9 } ] },
 
   { "key": "bed",         "station": "hand",     "inputs": [ { "item": "wood_log", "count": 6 }, { "item": "plant_fiber", "count": 8 } ], "outputs": [ { "item": "bed", "count": 1 } ] },
+  { "key": "crew_bunk",   "station": "workshop", "inputs": [ { "item": "metal_panel", "count": 3 }, { "item": "plant_fiber", "count": 6 } ], "outputs": [ { "item": "crew_bunk", "count": 1 } ] },
   { "key": "campfire",    "station": "hand",     "inputs": [ { "item": "wood_log", "count": 4 }, { "item": "stone", "count": 2 } ],       "outputs": [ { "item": "campfire", "count": 1 } ] },
   { "key": "wood_crate",  "station": "hand",     "inputs": [ { "item": "wood_log", "count": 6 } ],                                          "outputs": [ { "item": "wood_crate", "count": 1 } ] },
   { "key": "lantern",     "station": "hand",     "inputs": [ { "item": "wood_log", "count": 2 }, { "item": "glass", "count": 1 } ],       "outputs": [ { "item": "lantern", "count": 2 } ] },
+  { "key": "stretcher",   "station": "workshop", "inputs": [ { "item": "iron_plate", "count": 2 }, { "item": "plant_fiber", "count": 4 } ], "outputs": [ { "item": "stretcher", "count": 1 } ] },
   { "key": "rug",         "station": "hand",     "inputs": [ { "item": "plant_fiber", "count": 6 } ],                                       "outputs": [ { "item": "rug", "count": 2 } ] },
   { "key": "flower_pot",  "station": "hand",     "inputs": [ { "item": "mud", "count": 2 }, { "item": "plant_fiber", "count": 1 } ],      "outputs": [ { "item": "flower_pot", "count": 1 } ] },
   { "key": "cooked_meat", "station": "campfire", "inputs": [ { "item": "creature_meat", "count": 1 } ],                                     "outputs": [ { "item": "cooked_meat", "count": 1 } ] },

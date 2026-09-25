@@ -53,6 +53,9 @@ public sealed class StructureEditRow
     public int Y { get; set; }
     public int Z { get; set; }
     public ushort Block { get; set; }
+
+    /// <summary>Packed shape + orientation of the edited cell (#1943); 0 = the plain cube older saves stored.</summary>
+    public int Shape { get; set; }
 }
 
 /// <summary>
@@ -77,6 +80,9 @@ public sealed class MemoryWorldSnapshot
     public List<StoredBase> Bases { get; set; } = new();
     public List<StoredPaintDesign> PaintDesigns { get; set; } = new();
     public List<StoredCustomShape> CustomShapes { get; set; } = new();
+
+    /// <summary>World textures (#1958). Additive: a snapshot written before them reads back as an empty list.</summary>
+    public List<StoredWorldTexture> WorldTextures { get; set; } = new();
     public List<StoredPaintReport> PaintReports { get; set; } = new();
     public List<StoredAlliance> Alliances { get; set; } = new();
     public List<StoredCrew> Crews { get; set; } = new();
@@ -122,13 +128,14 @@ public sealed class MemoryWorldRepository : IWorldRepository
     private readonly Dictionary<(string Planet, int X, int Y, int Z), StoredBase> _bases = new();
     private readonly Dictionary<int, StoredPaintDesign> _paintDesigns = new();
     private readonly Dictionary<int, StoredCustomShape> _customShapes = new();
+    private readonly Dictionary<string, StoredWorldTexture> _worldTextures = new(StringComparer.Ordinal);
     private readonly List<StoredPaintReport> _paintReports = new();
     private readonly Dictionary<(string A, string B), StoredAlliance> _alliances = new();
     private readonly Dictionary<string, StoredCrew> _crews = new();
     private readonly Dictionary<(string Crew, string Player), StoredCrewMember> _crewMembers = new();
     private readonly Dictionary<string, string> _storyStates = new();   // storyId → JSON
     private readonly Dictionary<string, string> _spaceStructures = new(); // id → JSON
-    private readonly Dictionary<(string StructureId, int X, int Y, int Z), ushort> _structureEdits = new();
+    private readonly Dictionary<(string StructureId, int X, int Y, int Z), (ushort Block, int Shape)> _structureEdits = new();
     private readonly Dictionary<string, string> _locationStatuses = new();
     private readonly Dictionary<string, string> _missions = new();      // id → JSON
 
@@ -212,6 +219,7 @@ public sealed class MemoryWorldRepository : IWorldRepository
             Bases = _bases.Values.Select(CloneBase).ToList(),
             PaintDesigns = _paintDesigns.Values.Select(ClonePaintDesign).ToList(),
             CustomShapes = _customShapes.Values.Select(CloneCustomShape).ToList(),
+            WorldTextures = _worldTextures.Values.Select(CloneWorldTexture).ToList(),
             PaintReports = _paintReports.Select(ClonePaintReport).ToList(),
             Alliances = _alliances.Values.Select(a => new StoredAlliance { PlayerA = a.PlayerA, PlayerB = a.PlayerB, FormedUtc = a.FormedUtc }).ToList(),
             Crews = _crews.Values.Select(CloneCrew).ToList(),
@@ -271,7 +279,8 @@ public sealed class MemoryWorldRepository : IWorldRepository
                 X = kv.Key.X,
                 Y = kv.Key.Y,
                 Z = kv.Key.Z,
-                Block = kv.Value,
+                Block = kv.Value.Block,
+                Shape = kv.Value.Shape,
             });
         }
 
@@ -293,6 +302,8 @@ public sealed class MemoryWorldRepository : IWorldRepository
         _beams.Clear();
         _bases.Clear();
         _paintDesigns.Clear();
+        _customShapes.Clear(); // was missing: an import over a used repository kept the old forms
+        _worldTextures.Clear();
         _paintReports.Clear();
         _alliances.Clear();
         _crews.Clear();
@@ -369,6 +380,11 @@ public sealed class MemoryWorldRepository : IWorldRepository
             _customShapes[shape.Id] = CloneCustomShape(shape);
         }
 
+        foreach (var texture in snapshot.WorldTextures ?? new List<StoredWorldTexture>())
+        {
+            _worldTextures[texture.Key] = CloneWorldTexture(texture);
+        }
+
         foreach (var report in snapshot.PaintReports)
         {
             _paintReports.Add(ClonePaintReport(report));
@@ -406,7 +422,7 @@ public sealed class MemoryWorldRepository : IWorldRepository
 
         foreach (var row in snapshot.StructureEdits)
         {
-            _structureEdits[(row.StructureId, row.X, row.Y, row.Z)] = row.Block;
+            _structureEdits[(row.StructureId, row.X, row.Y, row.Z)] = (row.Block, row.Shape);
         }
 
         foreach (var kv in snapshot.LocationStatuses)
@@ -465,9 +481,10 @@ public sealed class MemoryWorldRepository : IWorldRepository
 
         foreach (var key in _structureEdits.Keys.ToList())
         {
-            if (remap.TryGetValue(_structureEdits[key], out ushort nb) && nb != _structureEdits[key])
+            var cell = _structureEdits[key];
+            if (remap.TryGetValue(cell.Block, out ushort nb) && nb != cell.Block)
             {
-                _structureEdits[key] = nb;
+                _structureEdits[key] = (nb, cell.Shape);
             }
         }
 
@@ -590,6 +607,40 @@ public sealed class MemoryWorldRepository : IWorldRepository
         }
     }
 
+    public IReadOnlyList<EditColumnTop> LoadEditColumnTops(string planet, int minX, int minZ, int maxX, int maxZ)
+    {
+        lock (_gate)
+        {
+            var minChunk = WorldConstants.WorldToChunk(new Vector3i(minX, 0, minZ));
+            var maxChunk = WorldConstants.WorldToChunk(new Vector3i(maxX, 0, maxZ));
+            var tops = new Dictionary<(int X, int Z), EditColumnTop>();
+            foreach (var bucketEntry in _blockEditsByChunk)
+            {
+                var ck = bucketEntry.Key;
+                if (ck.Planet != planet || ck.Cx < minChunk.X || ck.Cx > maxChunk.X || ck.Cz < minChunk.Z || ck.Cz > maxChunk.Z)
+                {
+                    continue;
+                }
+
+                foreach (var key in bucketEntry.Value)
+                {
+                    if (key.X < minX || key.X > maxX || key.Z < minZ || key.Z > maxZ
+                        || !_blockEdits.TryGetValue(key, out var value) || value.Block == 0)
+                    {
+                        continue;
+                    }
+
+                    if (!tops.TryGetValue((key.X, key.Z), out var top) || key.Y > top.Y)
+                    {
+                        tops[(key.X, key.Z)] = new EditColumnTop(key.X, key.Y, key.Z, value.Block, value.Tint);
+                    }
+                }
+            }
+
+            return new List<EditColumnTop>(tops.Values);
+        }
+    }
+
     public bool HasPlayerBlockEdits(string planet, Vector3i min, Vector3i max)
     {
         lock (_gate)
@@ -609,6 +660,70 @@ public sealed class MemoryWorldRepository : IWorldRepository
 
             return false;
         }
+    }
+
+    public bool TryGetPlayerBlockEditBounds(string planet, Vector3i min, Vector3i max, out Vector3i lo, out Vector3i hi)
+    {
+        lock (_gate)
+        {
+            bool any = false;
+            lo = new Vector3i(int.MaxValue, int.MaxValue, int.MaxValue);
+            hi = new Vector3i(int.MinValue, int.MinValue, int.MinValue);
+            foreach (var kv in _blockEdits)
+            {
+                var k = kv.Key;
+                if (k.Planet != planet
+                    || k.X < min.X || k.X > max.X
+                    || k.Y < min.Y || k.Y > max.Y
+                    || k.Z < min.Z || k.Z > max.Z
+                    || string.IsNullOrEmpty(kv.Value.Owner))
+                {
+                    continue;
+                }
+
+                any = true;
+                lo = new Vector3i(Math.Min(lo.X, k.X), Math.Min(lo.Y, k.Y), Math.Min(lo.Z, k.Z));
+                hi = new Vector3i(Math.Max(hi.X, k.X), Math.Max(hi.Y, k.Y), Math.Max(hi.Z, k.Z));
+            }
+
+            if (!any)
+            {
+                lo = hi = default;
+            }
+
+            return any;
+        }
+    }
+
+    public IReadOnlyList<BlockEdit> ListBlockEditsMatching(string planet, Vector3i min, Vector3i max,
+        IReadOnlyCollection<ushort> blocks, IReadOnlyCollection<int> shapeIndices, int limit)
+    {
+        var result = new List<BlockEdit>();
+        lock (_gate)
+        {
+            foreach (var kv in _blockEdits)
+            {
+                if (result.Count >= limit)
+                {
+                    break;
+                }
+
+                var k = kv.Key;
+                var v = kv.Value;
+                if (k.Planet != planet || v.Block == 0
+                    || k.X < min.X || k.X > max.X
+                    || k.Y < min.Y || k.Y > max.Y
+                    || k.Z < min.Z || k.Z > max.Z
+                    || !(blocks.Contains(v.Block) || shapeIndices.Contains((v.Shape >> 2) & 63)))
+                {
+                    continue;
+                }
+
+                result.Add(new BlockEdit(new Vector3i(k.X, k.Y, k.Z), v.Block, v.Tint, v.Glow, v.Shape));
+            }
+        }
+
+        return result;
     }
 
     public bool HasAnyBlockEdits(string planet)
@@ -881,6 +996,18 @@ public sealed class MemoryWorldRepository : IWorldRepository
     private static StoredCustomShape CloneCustomShape(StoredCustomShape s)
         => new() { Id = s.Id, OwnerId = s.OwnerId, OwnerName = s.OwnerName, Name = s.Name, Voxels = s.Voxels };
 
+    private static StoredWorldTexture CloneWorldTexture(StoredWorldTexture t)
+        => new()
+        {
+            Key = t.Key,
+            Frames = t.Frames,
+            Fps = t.Fps,
+            Data = t.Data,
+            OwnerId = t.OwnerId,
+            OwnerName = t.OwnerName,
+            CreatedUnix = t.CreatedUnix,
+        };
+
     private static StoredPaintReport ClonePaintReport(StoredPaintReport r)
         => new()
         {
@@ -1004,6 +1131,32 @@ public sealed class MemoryWorldRepository : IWorldRepository
         {
             _dirty = true;
             _customShapes.Remove(id);
+        }
+    }
+
+    public void SaveWorldTexture(StoredWorldTexture texture)
+    {
+        lock (_gate)
+        {
+            _dirty = true;
+            _worldTextures[texture.Key] = CloneWorldTexture(texture);
+        }
+    }
+
+    public IReadOnlyList<StoredWorldTexture> ListWorldTextures()
+    {
+        lock (_gate)
+        {
+            return _worldTextures.Values.OrderBy(t => t.Key, StringComparer.Ordinal).Select(CloneWorldTexture).ToList();
+        }
+    }
+
+    public void DeleteWorldTexture(string key)
+    {
+        lock (_gate)
+        {
+            _dirty = true;
+            _worldTextures.Remove(key);
         }
     }
 
@@ -1228,12 +1381,12 @@ public sealed class MemoryWorldRepository : IWorldRepository
         }
     }
 
-    public void SetStructureBlock(string structureId, Vector3i position, ushort block)
+    public void SetStructureBlock(string structureId, Vector3i position, ushort block, int shape = 0)
     {
         lock (_gate)
         {
             _dirty = true;
-            _structureEdits[(structureId, position.X, position.Y, position.Z)] = block;
+            _structureEdits[(structureId, position.X, position.Y, position.Z)] = (block, shape);
         }
     }
 
@@ -1243,7 +1396,7 @@ public sealed class MemoryWorldRepository : IWorldRepository
         {
             return _structureEdits
                 .Where(kv => kv.Key.StructureId == structureId)
-                .Select(kv => new BlockEdit(new Vector3i(kv.Key.X, kv.Key.Y, kv.Key.Z), kv.Value))
+                .Select(kv => new BlockEdit(new Vector3i(kv.Key.X, kv.Key.Y, kv.Key.Z), kv.Value.Block, shape: kv.Value.Shape))
                 .ToList();
         }
     }

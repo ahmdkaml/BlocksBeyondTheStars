@@ -65,6 +65,22 @@ public sealed class StoredCustomShape
     public string Voxels { get; set; } = string.Empty;
 }
 
+/// <summary>A world texture (#1958): a 64×64 tile — or up to eight frames of one — that an admin published for
+/// everyone in the save. Keyed by the texture it overrides (publishing again replaces it), so there is no id and
+/// no tombstone: nothing references a world texture, the key IS the reference.</summary>
+public sealed class StoredWorldTexture
+{
+    public string Key { get; set; } = string.Empty;
+    public int Frames { get; set; } = 1;
+    public int Fps { get; set; }
+
+    /// <summary>Base64 of the deflated raw RGBA32 frames (<c>WorldTextureCodec</c>).</summary>
+    public string Data { get; set; } = string.Empty;
+    public string OwnerId { get; set; } = string.Empty;
+    public string OwnerName { get; set; } = string.Empty;
+    public long CreatedUnix { get; set; }
+}
+
 /// <summary>A player report against a painted block or a player-designed form (moderation v1): who reported
 /// what where, kept for operator review. Deliberately append-only; wiping the design does not delete its
 /// reports. <see cref="Kind"/> tells the two apart ("paint" — the original rows — or "shape").</summary>
@@ -237,6 +253,26 @@ public readonly struct BlockEdit
     }
 }
 
+/// <summary>#1821: the highest non-air persisted edit of one (x, z) block column — what a far view needs to draw
+/// builds and structures it cannot derive from the seed.</summary>
+public readonly struct EditColumnTop
+{
+    public readonly int X;
+    public readonly int Y;
+    public readonly int Z;
+    public readonly ushort Block;
+    public readonly int Tint;
+
+    public EditColumnTop(int x, int y, int z, ushort block, int tint)
+    {
+        X = x;
+        Y = y;
+        Z = z;
+        Block = block;
+        Tint = tint;
+    }
+}
+
 /// <summary>A scheduled surface-flora regrowth: a harvested plant that returns on its cell after a delay,
 /// as long as its host block stays intact. Persisted so the regrow survives a server restart — otherwise a
 /// harvest-then-restart removes the plant for good (the harvest leaves a persisted air edit that overrides
@@ -349,6 +385,10 @@ public interface IWorldRepository : IDisposable
     /// <summary>Loads all stored block edits that fall inside the given chunk.</summary>
     IReadOnlyList<BlockEdit> LoadChunkEdits(string planet, ChunkCoord chunk);
 
+    /// <summary>#1821: for every (x, z) column inside the inclusive horizontal box that holds a non-air edit, the
+    /// highest such edit (any height). Bounded by the box — the far-terrain tiles ask 64×64 blocks at a time.</summary>
+    IReadOnlyList<EditColumnTop> LoadEditColumnTops(string planet, int minX, int minZ, int maxX, int maxZ);
+
     /// <summary>Stores (inserts or replaces) a scheduled flora regrowth, keyed by its world cell.</summary>
     void SaveFloraRegrow(string planet, Vector3i worldPosition, ushort block, double timer);
 
@@ -442,6 +482,15 @@ public interface IWorldRepository : IDisposable
     /// block falls back to a plain cube).</summary>
     void DeleteCustomShape(int id);
 
+    /// <summary>Stores (inserts or replaces) the world texture for its key (#1958).</summary>
+    void SaveWorldTexture(StoredWorldTexture texture);
+
+    /// <summary>Lists every world texture of the save (restored once at server start).</summary>
+    IReadOnlyList<StoredWorldTexture> ListWorldTextures();
+
+    /// <summary>Removes the world texture for a key — the official texture shows again.</summary>
+    void DeleteWorldTexture(string key);
+
     /// <summary>Appends a paint report row (moderation v1) for operator review.</summary>
     void SavePaintReport(StoredPaintReport report);
 
@@ -510,8 +559,10 @@ public interface IWorldRepository : IDisposable
 
     /// <summary>Records a single player edit (mine or place, incl. air) on an in-space voxel structure —
     /// the own-ship hull during an EVA. Only deltas against the deterministic baseline are stored, keyed by
-    /// the structure id (e.g. "ship:&lt;playerId&gt;"), mirroring the per-cell planet block-edit model.</summary>
-    void SetStructureBlock(string structureId, Vector3i position, ushort block);
+    /// the structure id (e.g. "ship:&lt;playerId&gt;"), mirroring the per-cell planet block-edit model. The packed
+    /// shape+orientation rides along (#1943) so furniture built into a ship keeps its form across a rebuild —
+    /// 0 is the plain cube every edit stored before.</summary>
+    void SetStructureBlock(string structureId, Vector3i position, ushort block, int shape = 0);
 
     /// <summary>Loads all stored edits for an in-space voxel structure (re-applied on top of the rebuilt
     /// baseline when the structure is reconstructed on space entry / server restart).</summary>
@@ -532,6 +583,22 @@ public interface IWorldRepository : IDisposable
     /// <see cref="LoadChunkEdits"/> deliberately drops attribution (it runs per streamed chunk), so this
     /// question needs its own bounded query.</summary>
     bool HasPlayerBlockEdits(string planet, Vector3i min, Vector3i max);
+
+    /// <summary>The axis-aligned bounds (inclusive) of every block edit inside the box that carries a player
+    /// <see cref="BlockEdit.Owner"/> — the footprint of what players built, dug or dyed there. False when there is
+    /// none. One aggregate query, so a base can size its enclosure fill by what its players actually built (#1862)
+    /// without streaming a single chunk. Coordinates are the store's canonical ones: a box that straddles the
+    /// longitude seam must be asked as two boxes.</summary>
+    bool TryGetPlayerBlockEditBounds(string planet, Vector3i min, Vector3i max, out Vector3i lo, out Vector3i hi);
+
+    /// <summary>#1865: every stored edit inside the inclusive box whose block is one of <paramref name="blocks"/>
+    /// OR whose packed shape descriptor carries one of <paramref name="shapeIndices"/> (the 6-bit form index,
+    /// <c>(shape &gt;&gt; 2) &amp; 63</c>) — capped at <paramref name="limit"/> rows. Air edits never match. A base
+    /// indexes its beds, seats, posts and workshops with one bounded query instead of scanning a million voxels:
+    /// every one of those was placed by a player, so the edit store holds them all. Coordinates are canonical — a
+    /// box that straddles the longitude seam must be asked as two boxes.</summary>
+    IReadOnlyList<BlockEdit> ListBlockEditsMatching(string planet, Vector3i min, Vector3i max,
+        IReadOnlyCollection<ushort> blocks, IReadOnlyCollection<int> shapeIndices, int limit);
 
     /// <summary>True if the location holds ANY persisted block edit, by any writer — worldgen stamps
     /// included. This is the ground truth for "was this world ever materialised before?" (#586): a world

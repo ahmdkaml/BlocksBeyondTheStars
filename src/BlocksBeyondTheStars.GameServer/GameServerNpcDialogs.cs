@@ -84,11 +84,15 @@ public sealed partial class GameServer
 
         foreach (var d in AllDialogs())
         {
+            bool profession = NpcProfessions.ByJob(npc.Job) != null;
             bool matches = !string.IsNullOrEmpty(d.Character)
                 ? string.Equals(d.Character, npc.CharacterId, StringComparison.OrdinalIgnoreCase)
-                : string.IsNullOrEmpty(d.Role) || string.Equals(d.Role, npc.Role, StringComparison.OrdinalIgnoreCase);
+                : !string.IsNullOrEmpty(d.Job)
+                    ? string.Equals(d.Job, npc.Job, StringComparison.OrdinalIgnoreCase) // 2026-09: a profession's own talk
+                    : !profession && (string.IsNullOrEmpty(d.Role) || string.Equals(d.Role, npc.Role, StringComparison.OrdinalIgnoreCase));
             if (!matches
                 || d.Nodes.Count == 0
+                || (d.PlanetTypes.Count > 0 && !d.PlanetTypes.Contains(_worlds.Active.PlanetType, StringComparer.OrdinalIgnoreCase)) // #1793
                 || StageRank(d.MinStage) > stage
                 || (d.OncePerPlayer && p.Milestones.Contains(DialogDoneMilestonePrefix + d.Key + ":done")))
             {
@@ -115,6 +119,13 @@ public sealed partial class GameServer
         var npc = _npcs.FirstOrDefault(n => n.Id == intent.NpcId);
         if (npc is null || npc.Pos.DistanceSquared(session.State.Position) > NpcTalkRange * NpcTalkRange)
         {
+            return;
+        }
+
+        if (npc.Pose == 2)
+        {
+            // #1867: someone asleep in bed mumbles and stays there — no dialogue, no job talk at midnight.
+            Send(session, new NpcGreeting { NpcId = npc.Id, Name = npc.Name, Role = npc.Role, Text = Localize(session.Locale, "npc.greet.sleepy") });
             return;
         }
 
@@ -171,6 +182,8 @@ public sealed partial class GameServer
         }
 
         p.Milestones.Add(DialogFlagMilestonePrefix + active.Dialog.Key + ":" + active.Node + ":" + intent.ChoiceIndex);
+        _dialogAction = string.Empty;
+        _dialogExtraText = string.Empty;
         ApplyDialogConsequence(session, npc, npcKey, choice.Consequence, paysReward);
 
         bool end = choice.Next < 0 || choice.Next >= active.Dialog.Nodes.Count;
@@ -196,8 +209,9 @@ public sealed partial class GameServer
             {
                 NpcId = npc.Id,
                 Name = npc.Name,
-                Text = Localize(session.Locale, choice.ResponseKey),
+                Text = Localize(session.Locale, choice.ResponseKey) + _dialogExtraText,
                 End = true,
+                Action = _dialogAction,
             });
             return;
         }
@@ -279,6 +293,24 @@ public sealed partial class GameServer
 
             case MissionChains.DialogConsequence when parts.Length >= 2 && parts[1].Length > 0:
                 GrantMissionFromDialog(session, npc, npcKey, parts[1]); // #1212: the conversation IS the acceptance
+                break;
+
+            // 2026-09 professions.
+            case "photo":
+                StartStreamerPhoto(session, npc);
+                break;
+
+            case "photo_never":
+                session.State.Milestones.Add(StreamerNeverMilestone);
+                break;
+
+            case "interview":
+                session.PendingInterviewNpcId = npc.Id;
+                _dialogAction = "interview";
+                break;
+
+            case "news":
+                _dialogExtraText = "\n\n" + NewsDigest(session, npc);
                 break;
         }
     }

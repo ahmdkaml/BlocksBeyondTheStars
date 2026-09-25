@@ -23,7 +23,9 @@ generated planets, mine resources, craft gear, build ships and bases, tame creat
 - **Mild sci-fi combat, no gore.** Players can fend off aggressive wildlife, robots and cartoonish
   "bandits" with tools and sci-fi weapons. There is no blood, no gore, no death animations of people —
   defeated creatures and robots simply break apart or flee; bandits are **chased away, never killed**.
-  By default, new worlds start with **weapons in "tools only" mode** — combat is opt-in per world.
+  Hand weapons are part of every world; what a world decides is how much hostility there is — planet robots,
+  bandits, space enemies and UFOs can each be switched **off** in the world options, and wildlife can be turned
+  down to none.
 - **Player death is gentle.** Running out of air or health means waking up again in your ship's med-bay.
   Items are not lost to other players.
 - **No horror.** Dark caves and a spooky ruin at most — the game's tone is curious, not frightening.
@@ -61,7 +63,7 @@ What protects players there — these are built into the game, not promises:
 **The safest setup for young children** is your own private world: host it on your own machine (LAN) or
 rent nothing at all — the game ships with everything needed. See
 [SELF_HOSTING](../developer/SELF_HOSTING.md), or simply play singleplayer. A private family world has
-exactly the players you invited, and you hold every switch (weapons mode, voice, chat filter, visitors).
+exactly the players you invited, and you hold every switch (robots, bandits and other enemies, voice, chat filter, visitors).
 
 ## Data
 
@@ -71,6 +73,16 @@ exactly the players you invited, and you hold every switch (weapons mode, voice,
   worlds; bug reports (F1/F2) contain the text the player types plus technical logs and are read by the
   maintainers.
 - There is **no analytics/tracking SDK, no ad network** in the game.
+- **Sending in a texture.** Children can send 64×64-pixel textures they painted in the game to the
+  developers. No real name, no e-mail and no location is asked for — the dialog asks for a *nickname* and says
+  not to use the real name; the child confirms that they painted the picture themselves, that the developers
+  may use it in the game, and that they are at least 16 **or that their parents agreed**. We look at every
+  submission by hand before anything goes into the game; one we do not adopt is deleted after twelve months at
+  the latest. If you do not want a submission to be used, write to us — we delete it, and a texture that has
+  already shipped is removed with the next version.
+- **Textures other players made.** On a multiplayer world its administrators can replace textures for
+  everyone there. *Settings → Show this world's textures → Off* switches that off for your child's game, on
+  every world.
 - The optional AI backend (for dynamic NPC dialogue) processes the in-game conversation text to generate
   replies; it is off unless the host sets it up, and it has a non-AI fallback.
 

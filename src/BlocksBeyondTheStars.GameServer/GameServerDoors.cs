@@ -7,6 +7,7 @@ using BlocksBeyondTheStars.Networking.Messages;
 using BlocksBeyondTheStars.Persistence;
 using BlocksBeyondTheStars.Shared.Definitions;
 using BlocksBeyondTheStars.Shared.Geometry;
+using BlocksBeyondTheStars.Shared.World;
 
 namespace BlocksBeyondTheStars.GameServer;
 
@@ -48,46 +49,55 @@ public sealed partial class GameServer
         public double AutoCloseTimer;  // slide doors: counts down once no player is near
         public bool PlayerBuilt;       // placed by a player (persisted + removable by mining), not stamped
         public float OpenRange = 4.5f; // proximity at which a slide door opens (SlideDoorOpenRange; tighter for the hatch)
+        public double NpcHeldUntil;    // #1866: a hand door an NPC swung open closes after this uptime (0 = a player's, left alone)
     }
 
-    /// <summary>Doors the player swings by hand with E (as opposed to slide/energy doors, which the server opens
-    /// on proximity). The wooden door is a cheap early-game hinge door — same behaviour, wood instead of metal.</summary>
-    private static bool IsHandOperated(string kind) => kind == "hinge" || kind == "wood";
-
-    /// <summary>Door kind for a structure door MARKER id (settlement/station templates + editors). The
-    /// energy door is the airtight one (#793) — village/city/station authors can place it explicitly.</summary>
-    private static string DoorKindForMarker(string markerType) => markerType switch
+    /// <summary>
+    /// Double doors (#1852): two hand-operated doors a player set side by side in one wall are one gateway,
+    /// so E on either leaf swings both — the client already hangs the right-hand leaf on the far jamb
+    /// (#1729), but until now each leaf still toggled alone. The server keeps no pair record; like the
+    /// client's <c>DoorPairs</c> the partner is inferred from positions alone. The rule is a pure static so
+    /// it is covered by plain tests.
+    /// </summary>
+    internal static class DoorPairing
     {
-        "door_hinge" => "hinge",
-        "door_energy" => "energy",
-        _ => "slide",
-    };
+        /// <summary>Slack on every coordinate comparison — positions are block centres, so anything short of
+        /// half a block is noise.</summary>
+        private const float Tolerance = 0.05f;
 
-    /// <summary>True for the placeable block keys that become a door ENTITY instead of a voxel block. Placement
-    /// treats them apart: they need a genuinely empty (air) cell — a door can't displace a fluid the way a solid
-    /// block does, the water would simply flow back around it (#851).</summary>
-    private static bool IsDoorBlock(string blockKey)
-        => blockKey is "door_hinge" or "door_slide" or "door_wood" or "door_energy";
+        /// <summary>
+        /// True when <paramref name="other"/> is the other leaf of a double door with <paramref name="door"/>:
+        /// both player-built and hand-operated, the same kind, the same wall axis, the same floor, and exactly
+        /// one block apart ALONG the wall (one block apart across it is two parallel walls, not one doorway).
+        /// A door two blocks off, a slide door, a stamped settlement door, or a door on another floor never
+        /// partners.
+        /// </summary>
+        public static bool IsPartner(ServerDoor door, ServerDoor other)
+        {
+            if (ReferenceEquals(door, other) || !door.PlayerBuilt || !other.PlayerBuilt)
+            {
+                return false;
+            }
 
-    /// <summary>Door kind for a placeable door BLOCK key — the inverse of <see cref="DoorItemFor"/>. Used
-    /// wherever a player places a door block (world cell or self-built ship), so the door entity keeps the
-    /// behaviour of the block that was placed (#1021).</summary>
-    private static string DoorKindForBlock(string blockKey) => blockKey switch
-    {
-        "door_slide" => "slide",
-        "door_wood" => "wood",   // cheap early-game hinge door, swings by hand like the metal one
-        "door_energy" => "energy", // walk-through air curtain — the door that seals a base room (#793)
-        _ => "hinge",
-    };
+            if (!DoorBlocks.IsHandOperated(door.Kind) || door.Kind != other.Kind || door.AxisX != other.AxisX)
+            {
+                return false;
+            }
 
-    /// <summary>The item a door of this kind hands back when it is picked up again.</summary>
-    private static string DoorItemFor(string kind) => kind switch
-    {
-        "slide" => "door_slide",
-        "wood" => "door_wood",
-        "energy" => "door_energy",
-        _ => "door_hinge",
-    };
+            if (System.Math.Abs(other.Pos.Y - door.Pos.Y) > Tolerance)
+            {
+                return false;
+            }
+
+            // The wall axis is the direction the leaf runs along: a door in an X wall has its neighbour at X ± 1.
+            float along = door.AxisX ? other.Pos.X - door.Pos.X : other.Pos.Z - door.Pos.Z;
+            float across = door.AxisX ? other.Pos.Z - door.Pos.Z : other.Pos.X - door.Pos.X;
+            return System.Math.Abs(across) <= Tolerance && System.Math.Abs(System.Math.Abs(along) - 1f) <= Tolerance;
+        }
+    }
+
+    // The door vocabulary (kinds, block keys, marker ids, hand-operated) is the shared DoorBlocks (#1975): one
+    // list for the server, the renderer, the placement ghost and the editors.
 
     private List<ServerDoor> _doors => _worlds.Active.Doors;
     private readonly List<Vector3f> _doorTargets = new(); // reused per tick (no per-tick LINQ alloc)
@@ -100,21 +110,42 @@ public sealed partial class GameServer
     /// <summary>Number of doors registered in the active world.</summary>
     public int DoorCount => _doors.Count;
 
+    /// <summary>How each door ended up hanging — its wall axis and the gap width it fills (#1986). For tests +
+    /// inspection: a leaf turned across its doorway shows up here as the wrong axis, or as a width wider than
+    /// the opening the building was given.</summary>
+    public IReadOnlyList<(int Id, string Kind, Vector3f Pos, bool AxisX, float Width, bool PlayerBuilt)> DoorFits
+        => _doors.Select(d => (d.Id, d.Kind, d.Pos, d.AxisX, d.Width, d.PlayerBuilt)).ToList();
+
     /// <summary>(Re)builds the door registry for the active world from every structure stamped into it:
     /// settlement buildings (slide for towns/cities, hinge for villages) and designed ships (slide doors from
-    /// the ship editor). Slide vs hinge comes from the marker; the wall axis + gap width are inferred from the
-    /// blocks around the opening. Idempotent — safe to call after any settlement/ship stamp.</summary>
+    /// the ship editor). Slide vs hinge comes from the marker; the wall axis comes from the generator that cut
+    /// the doorway where it recorded one (#1986) and from the blocks around the opening otherwise, and the gap
+    /// width is always measured. Idempotent — safe to call after any settlement/ship stamp.</summary>
     private void RegisterDoors()
     {
         _doors.Clear();
         _nextDoorId = 1;
 
-        // Settlement doorways.
+        // Settlement doorways. #1986/#1994: the structure measured its own doorways on its layout when it was
+        // stamped — wall axis and gap width — so hanging them reads no world block at all. A marker without
+        // such a record (an older stamp in a world being re-entered) falls back to probing the blocks.
+        var authored = _worlds.Active.SettlementDoorFits;
         foreach (var (type, pos) in _settlementMarkers)
         {
             if (type == "door_slide" || type == "door_hinge" || type == "door_energy")
             {
-                _doors.Add(MakeDoor(DoorKindForMarker(type), pos));
+                string kind = DoorBlocks.KindForMarker(type);
+                _doors.Add(authored.TryGetValue(WorldConstants.CanonicalBlock(pos.ToBlock(), _world.Circumference), out var fit)
+                    ? new ServerDoor
+                    {
+                        Id = _nextDoorId++,
+                        Kind = kind,
+                        Pos = fit.Centre,
+                        AxisX = fit.AxisX,
+                        Width = fit.Width,
+                        OpenRange = SlideDoorOpenRange,
+                    }
+                    : MakeDoor(kind, pos));
             }
         }
 
@@ -173,7 +204,7 @@ public sealed partial class GameServer
         {
             if (type == "door_slide" || type == "door_hinge" || type == "door_energy")
             {
-                _doors.Add(MakeDoor(DoorKindForMarker(type), pos));
+                _doors.Add(MakeDoor(DoorBlocks.KindForMarker(type), pos));
             }
         }
 
@@ -191,34 +222,14 @@ public sealed partial class GameServer
         int by = (int)System.Math.Floor(markerPos.Y);
         int bz = (int)System.Math.Floor(markerPos.Z);
 
-        // The jambs are solid along the wall axis; the passage is open along the other. Decide which — unless the
-        // caller already knows it (the ship hatch is a wide gap in the front wall, where a ±1 jamb probe at the
-        // centre is ambiguous and would wrongly default to Z, putting the door lengthwise in the cabin — B41a).
-        bool xJamb = solid(bx - 1, by, bz) || solid(bx + 1, by, bz);
-        bool zJamb = solid(bx, by, bz - 1) || solid(bx, by, bz + 1);
-        bool axisX = forceAxisX ?? (xJamb && !zJamb ? true : (zJamb && !xJamb ? false : xJamb));
-
-        // Scan the contiguous air gap along the wall axis (bounded, so a fully open area can't run away).
-        int lo = 0, hi = 0;
-        for (int s = 1; s <= 3; s++)
-        {
-            if (solid(axisX ? bx - s : bx, by, axisX ? bz : bz - s)) { break; }
-            lo = -s;
-        }
-        for (int s = 1; s <= 3; s++)
-        {
-            if (solid(axisX ? bx + s : bx, by, axisX ? bz : bz + s)) { break; }
-            hi = s;
-        }
-
-        float centre = (lo + hi) * 0.5f;
-        float width = hi - lo + 1;
-        var pos = new Vector3f(
-            (axisX ? bx + centre : bx) + 0.5f,
-            by,
-            (axisX ? bz : bz + centre) + 0.5f);
-
-        return new ServerDoor { Id = _nextDoorId++, Kind = kind, Pos = pos, AxisX = axisX, Width = width, OpenRange = openRange };
+        // The wall axis + gap width are the shared door rule (#1975): the same probe the placement ghost and the
+        // build editors run over their own grids, so a previewed door and a hung door cannot disagree. A caller
+        // that already knows the axis forces it — the ship hatch is a wide gap in the front wall, where a ±1 jamb
+        // probe at the centre is ambiguous and would wrongly default to Z, putting the door lengthwise in the
+        // cabin (B41a).
+        var fit = DoorProbe.Measure(solid, bx, by, bz, forceAxisX);
+        var pos = new Vector3f(fit.CentreX(bx), by, fit.CentreZ(bz));
+        return new ServerDoor { Id = _nextDoorId++, Kind = kind, Pos = pos, AxisX = fit.AxisX, Width = fit.Width, OpenRange = openRange };
     }
 
     private bool IsSolidBlock(int x, int y, int z) => !_world.GetBlock(new Vector3i(x, y, z)).IsAir;
@@ -243,13 +254,42 @@ public sealed partial class GameServer
             }
         }
 
+        // #1866: an NPC walking a route opens the slide doors on it like a player; idle NPCs don't (a vendor standing
+        // beside a doorway must not hold it open all day).
+        foreach (var npc in _npcs)
+        {
+            if (npc.Goal is not null)
+            {
+                _doorTargets.Add(npc.Pos);
+            }
+        }
+
         var targets = _doorTargets;
         bool changed = false;
         foreach (var door in _doors)
         {
             if (door.Kind != "slide" && door.Kind != "energy")
             {
-                continue; // hinge doors are manual (HandleDoorInteract); slide + energy auto-open on proximity
+                // hinge doors are manual (HandleDoorInteract); slide + energy auto-open on proximity. A hand door an NPC
+                // swung open (#1866) closes behind them once nobody stands in its gap.
+                if (door.Open && door.NpcHeldUntil > 0 && _uptime >= door.NpcHeldUntil)
+                {
+                    bool someoneInGap = false;
+                    for (int i = 0; i < targets.Count && !someoneInGap; i++)
+                    {
+                        someoneInGap = WrapDistSq(targets[i], door.Pos) <= 1.2f * 1.2f;
+                    }
+
+                    if (!someoneInGap)
+                    {
+                        door.Open = false;
+                        door.NpcHeldUntil = 0;
+                        MarkBaseWallsDirty(_world, door.Pos.ToBlock());
+                        changed = true;
+                    }
+                }
+
+                continue;
             }
 
             bool near = false;
@@ -283,7 +323,7 @@ public sealed partial class GameServer
     private void HandleDoorInteract(PlayerSession session, DoorInteractIntent intent)
     {
         var door = _doors.FirstOrDefault(d => d.Id == intent.DoorId);
-        if (door is null || !IsHandOperated(door.Kind))
+        if (door is null || !DoorBlocks.IsHandOperated(door.Kind))
         {
             return; // unknown door, or a slide door (those are server-automatic)
         }
@@ -294,7 +334,20 @@ public sealed partial class GameServer
         }
 
         door.Open = !door.Open;
+        door.NpcHeldUntil = 0; // #1866: the player owns this door's state now — no NPC closes it behind them
         MarkBaseWallsDirty(_world, door.Pos.ToBlock()); // #1367: a shut gate is a wall to the fill, an open one a gap
+
+        // #1852: the other leaf of a double door follows this one, so one E swings the whole gateway. The
+        // DoorList broadcast below carries every door, so both leaves reach the clients in one message.
+        foreach (var other in _doors)
+        {
+            if (other.Open != door.Open && DoorPairing.IsPartner(door, other))
+            {
+                other.Open = door.Open;
+                MarkBaseWallsDirty(_world, other.Pos.ToBlock());
+            }
+        }
+
         BroadcastDoors();
     }
 
@@ -307,18 +360,9 @@ public sealed partial class GameServer
     /// surrounding jambs if there's a clear one, else from the player's facing.</summary>
     private void PlaceDoor(PlayerSession session, Vector3i pos, string kind)
     {
-        bool xJamb = IsSolidBlock(pos.X - 1, pos.Y, pos.Z) || IsSolidBlock(pos.X + 1, pos.Y, pos.Z);
-        bool zJamb = IsSolidBlock(pos.X, pos.Y, pos.Z - 1) || IsSolidBlock(pos.X, pos.Y, pos.Z + 1);
-        bool axisX;
-        if (xJamb != zJamb)
-        {
-            axisX = xJamb; // jambs on exactly one axis → the wall runs that way
-        }
-        else
-        {
-            double yaw = session.State.Yaw * System.Math.PI / 180.0; // wall faces the player's look direction
-            axisX = System.Math.Abs(System.Math.Cos(yaw)) >= System.Math.Abs(System.Math.Sin(yaw));
-        }
+        // The shared placed-door rule (#1975): jambs on exactly one axis decide, else the wall faces the player —
+        // the same rule the placement ghost runs, so the hologram and the hung door agree.
+        bool axisX = DoorProbe.AxisForPlacedDoor(IsSolidBlock, pos.X, pos.Y, pos.Z, session.State.Yaw);
 
         _doors.Add(new ServerDoor
         {
@@ -336,6 +380,38 @@ public sealed partial class GameServer
 
     /// <summary>If a player-built door fills the mined cell's column (its ~3-tall opening), remove it, return the
     /// door item to the miner and forget it. Returns true if it handled the mine (a player door was there).</summary>
+    /// <summary>#1746: a stamped (station / settlement) door occupies the cell. Since the client aims at doors,
+    /// a mine intent can land on one of these too — it is protected like the walls around it and must be
+    /// answered as such, not with the "ghost block" heal an air cell would get.</summary>
+    private bool StampedDoorAt(Vector3i pos)
+    {
+        foreach (var d in _doors)
+        {
+            if (d.PlayerBuilt)
+            {
+                continue;
+            }
+
+            int by = (int)System.Math.Floor(d.Pos.Y);
+            if (pos.Y < by || pos.Y > by + 2)
+            {
+                continue;
+            }
+
+            // The doorway is Width cells wide along its wall axis and one cell deep across it.
+            float half = System.Math.Max(0.5f, d.Width * 0.5f);
+            bool along = d.AxisX
+                ? pos.X + 0.5f > d.Pos.X - half && pos.X + 0.5f < d.Pos.X + half && (int)System.Math.Floor(d.Pos.Z) == pos.Z
+                : pos.Z + 0.5f > d.Pos.Z - half && pos.Z + 0.5f < d.Pos.Z + half && (int)System.Math.Floor(d.Pos.X) == pos.X;
+            if (along)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private bool RemovePlayerDoorAt(PlayerSession session, Vector3i pos)
     {
         var door = _doors.FirstOrDefault(d => d.PlayerBuilt
@@ -355,7 +431,7 @@ public sealed partial class GameServer
 
         // Room for the returned door block before the door is removed — otherwise picking one up with a full
         // inventory destroyed it outright.
-        string doorItem = DoorItemFor(door.Kind);
+        string doorItem = DoorBlocks.ItemFor(door.Kind);
         var pool = new MaterialPool(_content, session.State, _ship);
         if (!pool.CanFit(new[] { new ItemAmount(doorItem, 1) }))
         {

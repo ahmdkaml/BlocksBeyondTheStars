@@ -40,7 +40,7 @@ public static class ReportHostPages
         }
 
         sb.Append("</select> <select name='category'><option value=''>all categories</option>");
-        foreach (var c in new[] { "feedback", "crash" })
+        foreach (var c in new[] { "feedback", "crash", ReportIngest.TextureCategory })
         {
             sb.Append($"<option value='{c}'{(c == category ? " selected" : "")}>{c}</option>");
         }
@@ -113,6 +113,13 @@ public static class ReportHostPages
     /// paired half when that one has a key, so the detail page shows the pair's one thread whichever half the
     /// operator opened, and an answer typed there is never stored where no game can read it. Without a keyed
     /// partner the row stays its own owner (and the page says nothing can reach the player).
+    /// <para>
+    /// Since #1359 the game server forwards the client's key with its <c>/bump</c> snapshot, so BOTH halves of a
+    /// current report carry the same key — and "a keyed row owns itself" split the pair into two threads: the
+    /// list links the <c>/bump</c> half as primary, so an answer typed there landed on that half while an answer
+    /// posted on the client row (API scripts) was invisible from it (#1642). A pair keyed alike now hands over to
+    /// its client-direct half from either side, the way the key-less legacy pair always did.
+    /// </para>
     /// </summary>
     /// <param name="candidates">Rows stamped within <see cref="DuplicateWindowSeconds"/> of <paramref name="r"/>
     /// (see <c>ReportStore.Around</c>); <paramref name="r"/> itself may be among them.</param>
@@ -120,6 +127,20 @@ public static class ReportHostPages
     {
         if (r.ReplyKey.Length > 0)
         {
+            if (r.Source.Length == 0)
+            {
+                return r; // the client-direct half owns its own thread
+            }
+
+            // A keyed server forward: its client-direct twin (same key, same report) owns the conversation (#1642).
+            foreach (var c in candidates)
+            {
+                if (c.Id != r.Id && c.Source.Length == 0 && c.ReplyKey == r.ReplyKey && IsSameReport(r, c))
+                {
+                    return c;
+                }
+            }
+
             return r;
         }
 
@@ -305,8 +326,9 @@ public static class ReportHostPages
     /// <paramref name="replies"/> are ITS replies. Null or <paramref name="r"/> itself = the row owns its thread.</param>
     /// <param name="pair">The rows the status buttons and delete act on (<see cref="PairOf"/>, #1380) — the
     /// page says so when there is more than one. Null = <paramref name="r"/> alone.</param>
-    public static string Detail(BugReportRecord r, IReadOnlyList<ReplyRecord>? replies = null, AdminCsrf? csrf = null, BugReportRecord? threadOwner = null, IReadOnlyList<BugReportRecord>? pair = null)
+    public static string Detail(BugReportRecord r, IReadOnlyList<ReplyRecord>? replies = null, AdminCsrf? csrf = null, BugReportRecord? threadOwner = null, IReadOnlyList<BugReportRecord>? pair = null, IReadOnlyList<AttachmentRecord>? attachments = null)
     {
+        attachments ??= Array.Empty<AttachmentRecord>();
         replies ??= Array.Empty<ReplyRecord>();
         threadOwner ??= r;
         var partners = pair?.Where(p => p.Id != r.Id).ToList() ?? new List<BugReportRecord>();
@@ -340,6 +362,21 @@ public static class ReportHostPages
 
         sb.Append("</table></div>");
 
+        if (attachments.Count > 0)
+        {
+            // A texture submission (#1966): the picture blown up with hard pixels, and every file as a download.
+            sb.Append("<div class='card'><h2>Submitted texture</h2>");
+            foreach (var a in attachments.Where(a => a.Mime == "image/png"))
+            {
+                sb.Append($"<p><img src='/admin/report/{r.Id}/attachment/{a.Index}/view' alt='texture' style='image-rendering:pixelated;height:256px;border:1px solid #456'></p>");
+            }
+
+            sb.Append("<p>");
+            sb.Append(string.Join(" · ", attachments.Select(a =>
+                $"<a href='/admin/report/{r.Id}/attachment/{a.Index}'>{E(a.FileName)}</a> <span class='sub'>({a.Bytes} B)</span>")));
+            sb.Append("</p><p class='hint'>Adopt it with <code>tools/pull_texture_submissions.py</code> + <code>tools/merge_texture.py</code>; set “fixed in version” so the player hears from which release on it ships — a submission without it is deleted after the retention period.</p></div>");
+        }
+
         if (r.ScreenshotFile.Length > 0)
         {
             sb.Append($"<div class='card'><h2>Screenshot</h2><a href='/admin/report/{r.Id}/screenshot'><img src='/admin/report/{r.Id}/screenshot' alt='screenshot'></a></div>");
@@ -353,9 +390,13 @@ public static class ReportHostPages
         bool viaPartner = threadOwner.Id != r.Id;
         if (viaPartner)
         {
-            // The screenshot half of a pre-reply-channel pair (#1378): its own key is blank, the thread lives
-            // on the client-direct row — say so, and let the form below write there.
-            sb.Append($"<p class='hint'>This row's own reply key is blank; the conversation lives on the paired " +
+            // The screenshot half of a pair (#1378, #1642): the thread lives on the client-direct row — say so,
+            // and let the form below write there. A pre-reply-channel half has a blank key of its own; a current
+            // one carries the same key as its twin, so both halves reach the same game.
+            string why = r.ReplyKey.Length == 0
+                ? "This row's own reply key is blank; the conversation lives on the paired "
+                : "Both halves of this report carry the player's key; the conversation lives on the paired ";
+            sb.Append($"<p class='hint'>{why}" +
                       $"<a href='/admin/report/{threadOwner.Id}'>{(threadOwner.Source.Length > 0 ? E(threadOwner.Source) : "client")} row</a> " +
                       "— the half whose key the player's game polls with. What you write below is stored there.</p>");
         }
@@ -391,7 +432,12 @@ public static class ReportHostPages
             string who = reply.Author == ReplyRecord.AuthorDev ? (reply.IsQuestion ? "You asked" : "You") : "Player";
             string stamp = DateTimeOffset.FromUnixTimeSeconds(reply.CreatedUnix).ToString("yyyy-MM-dd HH:mm");
             string seen = reply.Author == ReplyRecord.AuthorDev ? (reply.SeenUnix > 0 ? " · read" : " · unread") : string.Empty;
-            sb.Append($"<div class='reply reply-{E(reply.Author)}'><div class='sub'>{who} · {stamp} UTC{seen}</div><pre>{E(reply.Text)}</pre></div>");
+            // A thread that was split before #1642 (answered on the /bump half) is shown merged; name the half
+            // an entry lives on when it is not the owner's, so the operator can tell why it sits here.
+            string stored = reply.ReportId != threadOwner.Id
+                ? $" · stored on the <a href='/admin/report/{E(reply.ReportId)}'>paired row</a>"
+                : string.Empty;
+            sb.Append($"<div class='reply reply-{E(reply.Author)}'><div class='sub'>{who} · {stamp} UTC{seen}{stored}</div><pre>{E(reply.Text)}</pre></div>");
         }
 
         if (threadOwner.FixedInVersion.Length > 0)

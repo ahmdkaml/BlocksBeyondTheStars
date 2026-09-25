@@ -28,6 +28,7 @@ public enum CombatEntityKind
     BanditShip,   // space raider that hails the player ship and demands cargo before opening fire
     EscapePod,    // #1129: a drifting life pod — fly close to rescue the survivor (never hostile/targetable)
     Anomaly,      // #1129: a shimmering unknown — scan it for knowledge + a lore text (never hostile)
+    Wreck,        // #1664: the star map's derelict ship — a voxel hull you carve for salvage (never hostile)
 }
 
 /// <summary>A server-authoritative combat entity (space object or planet enemy).</summary>
@@ -52,6 +53,13 @@ public sealed class CombatEntity
 
     /// <summary>Seconds an aggressor that gave up will ignore the player (wanders off, won't chase or attack).</summary>
     public double GiveUpTimer { get; set; }
+
+    /// <summary>#2009: an arachnid ambusher is sitting in wait this tick — motionless until a player comes within
+    /// <see cref="Shared.Definitions.ArachnidRules.LurkRange"/>. Transient; on the wire only for the client's pose.</summary>
+    public bool Lurking { get; set; }
+
+    /// <summary>Server uptime after which a gift-giving species (#1760, the flowerling) may spill its next gift.</summary>
+    public double GiftReadyAt { get; set; }
 
     /// <summary>For asteroids: size tier (2 = large, 1 = medium, 0 = small). Large ones split when destroyed.</summary>
     public int AsteroidTier { get; set; }
@@ -121,6 +129,15 @@ public sealed class CombatEntity
 
     /// <summary>True when this entity is a tamed companion rather than wild fauna.</summary>
     public bool IsCompanion => OwnerId.Length > 0;
+
+    /// <summary>A one-per-world giant's own state (#1998, the colossus or a sandworm); null for every other entity.
+    /// Giants live in the creature list for the wire, the hits and the kills, but move, attack, spawn and leave by
+    /// their own rules (<c>GameServerGiants</c>) — the spawner, the far prune, the bite aura, sentries, fire, the
+    /// stasis projector and taming all pass them by.</summary>
+    public GiantRuntime? Giant { get; set; }
+
+    /// <summary>True for the colossus and the sandworms (#1998).</summary>
+    public bool IsGiant => Giant is not null;
 
     /// <summary>Companion payoff (#1210, server-only): uptime until which the pet poses "alert" (client flag),
     /// and when its next produce drop is due (0 = not armed yet).</summary>
@@ -463,6 +480,12 @@ public sealed partial class GameServer
         ResizeCargo(_ship);
         RecomputeShipCombatStats();
 
+        if (module.Stats.ContainsKey("shield") ||
+            module.Stats.ContainsKey("shield_regen"))
+        {
+            _ship.Shield = _shipShieldMax;
+        }
+
         Send(session, new ServerMessage
         {
             Text = Localize(session.Locale, "srv.module.built")
@@ -580,9 +603,12 @@ public sealed partial class GameServer
         {
             ShipAiOnEnterSpace(session); // VEGA onboarding: first launch into space
             ShipAiBanditSectorWarning(session, instance); // pirate space? warn BEFORE any raider appears
+            // #1677: the star map goes FIRST. The flight view builds its scene — star, planets, landables —
+            // from the map the moment it sees the space state, so a map arriving after it (a big message, a
+            // late packet) had the view build the DEPARTURE system and offer its planets to land on.
+            SendStarMap(session); // the space view needs the system's bodies to render + land on them
             SendSpaceState(session, instance, skipLaunch, hyperjump);
             SendShipCombatStatus(session);
-            SendStarMap(session); // the space view needs the system's bodies to render + land on them
 
             // item 20 S1: carry the player's ship as a voxel structure in the instance + send it so the flight
             // view renders the real designed ship (1:1) instead of the hand-built cube model. Rebuilt fresh on
@@ -597,9 +623,10 @@ public sealed partial class GameServer
             // item 20 S3: also send every voxel asteroid body so the flight view renders + can mine them —
             // and every player-built station (#1470): its design was only ever sent at commission, so after a
             // landing or a restart re-entering pilots saw the generic placeholder instead of the real hull.
+            // The system's derelict (#1664) is a voxel hull of the same family.
             foreach (var st in instance.Structures.Values)
             {
-                if (st.Kind == "asteroid" || st.Kind == "station")
+                if (st.Kind == "asteroid" || st.Kind == "station" || st.Kind == "wreck")
                 {
                     SendShipDesign(session, st);
                 }
@@ -708,6 +735,7 @@ public sealed partial class GameServer
         }
 
         AddBeltRockClusters(instance, anchor); // #683 S2: mineable rocks AT the system's asteroid bodies
+        AddSpaceWrecks(instance, anchor);      // #1664: the system's derelict, AT its star-map position
 
         AddStationContacts(instance);
         AddPersistedStations(instance); // item 20 S4: re-create player-built stations floating in this instance
@@ -1061,7 +1089,8 @@ public sealed partial class GameServer
         target.Hull -= weapon.Damage;
 
         // item 20 S3: a voxel ore asteroid carves down to match its hull as you shoot it (visible depletion).
-        if (target.Kind == CombatEntityKind.Asteroid && instance.Structures.ContainsKey(target.Id))
+        // A derelict hull (#1664) is salvaged the same way — plating comes off shot by shot.
+        if (target.Kind is CombatEntityKind.Asteroid or CombatEntityKind.Wreck && instance.Structures.ContainsKey(target.Id))
         {
             CarveAsteroidToHull(instance, target);
         }
@@ -1099,10 +1128,15 @@ public sealed partial class GameServer
             }
         }
 
-        if (target.Kind == CombatEntityKind.Asteroid && instance.Structures.ContainsKey(target.Id))
+        if (target.Kind is CombatEntityKind.Asteroid or CombatEntityKind.Wreck && instance.Structures.ContainsKey(target.Id))
         {
             RemoveAsteroidStructure(instance, target.Id); // S3: drop the voxel body too (loot handled below)
             // fall through to the loot branch (voxel asteroids are tier 0 → they yield ore)
+        }
+
+        if (target.Kind == CombatEntityKind.Wreck && session is not null)
+        {
+            MarkSpaceWreckVisited(session, target.Id); // #1664: salvaged down to nothing counts as having been there
         }
 
         if (target.Kind == CombatEntityKind.Asteroid && target.AsteroidTier > 0)
@@ -1257,9 +1291,10 @@ public sealed partial class GameServer
     {
         reason = string.Empty;
 
-        if (target.Kind == CombatEntityKind.Asteroid)
+        if (target.Kind is CombatEntityKind.Asteroid or CombatEntityKind.Wreck)
         {
-            // Asteroid mining/breaking is governed by AsteroidDestruction, independent of combat.
+            // Asteroid mining/breaking is governed by AsteroidDestruction, independent of combat. A derelict
+            // hull (#1664) is salvage, not a fight — it follows the same rule.
             if (Rules.AsteroidDestruction == AsteroidDestructionMode.Off)
             {
                 reason = "@srv.space.asteroids_off";
@@ -1607,6 +1642,8 @@ public sealed partial class GameServer
         // Per-player pose for visibility — so the others in this instance can render this ship / EVA suit.
         bool eva = FindSessionByPlayerId(playerId)?.State.InEva ?? false;
         instance.PlayerPoses[playerId] = new SpacePlayerPose(pos, yaw, eva);
+
+        CheckSpaceWreckApproach(instance, playerId, pos); // #1664: flying up to a derelict "visits" it
     }
 
     private void HandleShipMove(PlayerSession session, ShipMoveIntent move)
@@ -2044,36 +2081,21 @@ public sealed partial class GameServer
             p.Health = 100f;
             p.Oxygen = 100f;
 
-            if (!keepShip && playerId == shipOwnerId)
-            {
-                // Park the wreck on the owner's home pad so it occupies a landing spot AND is repairable there
-                // (the repair flow needs a placed own-ship structure). The medbay survives the carving, so the
-                // heal-tank respawn still works.
-                SetCurrent(session);
-                if (SetActiveWorld(session.CurrentLocationId))
-                {
-                    PlaceLandedShip();
-                }
+            string reason = keepShip ? "@srv.space.ship_disabled" : "@srv.space.ship_destroyed";
+            Send(session, new SpaceClosed { Reason = reason, ShipDisabled = true });
 
-                p.AboardShip = true;
-                p.Position = _healTank;
-                p.RespawnPoint = _healTank;
-            }
-            else
-            {
-                p.Position = p.RespawnPoint;
-                p.AboardShip = true;
-            }
+            // Put the pilot back on their ship's world for real (#1945). Two lines used to do it — position and
+            // the aboard flag — which is no world change at all: the client stayed on the world it had last been
+            // told about (the ship interior after a walkabout), dropped the arriving chunks of the planet it now
+            // stood on and hovered there with no ground and no ship, since the keep branch never re-parked one.
+            // This is the same transition a death does, minus the death: park the ship, land on its heal tank,
+            // send the WorldReset + RespawnNotice and everything the client drops with them.
+            // The wreck has to stand on its owner's pad: the repair flow needs a placed own-ship structure, and
+            // the medbay survives the carving, so the heal-tank landing still works.
+            RecoverToShip(session, reason, salvaged: false, died: false,
+                parkShip: !keepShip && playerId == shipOwnerId);
 
-            Send(session, new SpaceClosed
-            {
-                Reason = keepShip
-                    ? "@srv.space.ship_disabled"
-                    : "@srv.space.ship_destroyed",
-                ShipDisabled = true,
-            });
             SendShipCombatStatus(session);
-            SendPlayerState(session);
             if (!keepShip && playerId == shipOwnerId)
             {
                 SendShipRepairStatus(session); // show the repair job immediately
@@ -2193,6 +2215,9 @@ public sealed partial class GameServer
             Entities = instance.Entities.Select(ToNet).ToArray(),
             SkipLaunch = skipLaunch,
             Hyperjump = hyperjump,
+            // Automatic landed-ship transit: tell the client that finishing
+            // the launch animation should signal the server to continue.
+            AutomaticTransit = session.AutomaticTransit,
             SystemName = systemName,
             BodyName = bodyName,
             // Other real pilots PLUS the peaceful NPC traders out here — both ride the flight view's
@@ -2271,6 +2296,8 @@ public sealed partial class GameServer
 
     private void HandleEnterSpace(PlayerSession session)
     {
+        session.AutomaticTransit = false;
+        session.PendingTransitBodyId = null;
         // If the player is inside the ship interior, they are parked in space (the interior is only ever
         // entered from a space instance) — so returning to flight must SKIP the planet take-off animation and
         // restore the ship where it was parked, exactly like the helm (B40). Only a launch from a real planet
@@ -2471,8 +2498,9 @@ public sealed partial class GameServer
         // you fly to its worlds and land manually from there.
         var anchor = system.Bodies.FirstOrDefault(b => !string.IsNullOrEmpty(b.PlanetType)) ?? system.Bodies[0];
 
+        bool wasLanded = !InSpace(playerId);
         // Launching off a surface? Remove the parked ship from the OLD world before we switch systems.
-        if (!InSpace(playerId) && SetActiveWorld(session.CurrentLocationId))
+        if (wasLanded && SetActiveWorld(session.CurrentLocationId))
         {
             RemoveLandedShip(session);
         }
@@ -2480,6 +2508,11 @@ public sealed partial class GameServer
         LeaveSpace(playerId); // tear down any current flight instance (no-op on a surface)
 
         session.CurrentLocationId = anchor.Id;
+        // #1679: the pad claim belongs to the body we just left. Carried across, it silently reserved that
+        // index on the ANCHOR body (PadOccupiedByOther matches index + location) and PlayerPad then trusted it,
+        // stamping the first landing on a pad the pilot never claimed — including one a trader was parked on.
+        // A pilot arriving in flight holds no pad; they claim one when they land, like every other arrival.
+        session.AssignedPadIndex = -1;
         SetCurrent(session);
         if (_ship is not null)
         {
@@ -2498,7 +2531,14 @@ public sealed partial class GameServer
             _finaleReturn[playerId] = origin.Id;
         }
 
-        EnterSpace(playerId, skipLaunch: true, hyperjump: true); // warp in; no surface take-off
+        if (wasLanded)
+        {
+            session.AutomaticTransit = true;
+            session.PendingTransitBodyId = null;
+            session.TransitLaunchTimer = 0;
+        }
+
+        EnterSpace(playerId, skipLaunch: !wasLanded, hyperjump: true); // landed ships take off before the warp
         SendStarMap(session); // refresh the travel screen with the now-known system
         // The landing path says where you arrived; the in-flight arrival said nothing, so the chat scrollback
         // never told the pilot the jump had happened at all (#1565).
@@ -2510,11 +2550,11 @@ public sealed partial class GameServer
     }
 
     /// <summary>Test/util entry: leave space and land on a specific body (system-scale flight landing).</summary>
-    public void LandOnBody(string playerId, string destinationBodyId)
+    public void LandOnBody(string playerId, string destinationBodyId, int padIndex = -1)
     {
         if (FindSessionByPlayerId(playerId) is { } session)
         {
-            HandleLeaveSpace(session, new LeaveSpaceIntent { DestinationBodyId = destinationBodyId });
+            HandleLeaveSpace(session, new LeaveSpaceIntent { DestinationBodyId = destinationBodyId, PadIndex = padIndex });
         }
     }
 
@@ -2533,7 +2573,6 @@ public sealed partial class GameServer
     private void HandleLeaveSpace(PlayerSession session, LeaveSpaceIntent intent)
     {
         string dest = intent.DestinationBodyId ?? string.Empty;
-
         // From an EVA spacewalk you can only land on an asteroid — not a planet or moon.
         if (session.State.InEva)
         {

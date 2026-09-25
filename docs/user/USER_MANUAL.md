@@ -21,7 +21,8 @@ Last updated: 2026-08-26.
 - Launch the client. **Windows:** `BlocksBeyondTheStars.Launcher.exe` (shows a loading splash then starts the game)
   or `BlocksBeyondTheStars.exe` directly. **Linux:** `./BlocksBeyondTheStars.Launcher.Console` (prints "Loading..."
   to the terminal then starts the game) or `./BlocksBeyondTheStars.x86_64` directly.
-  From the main menu: **Singleplayer** → pick an existing save or
+  From the main menu: **Singleplayer** → pick an existing save (newest first; a long list scrolls with the mouse
+  wheel, the scrollbar or the gamepad; **✕** deletes a save after a confirmation) or
   start a **New world** (name + seed), **Host Game** → host a world for friends, **Join Server**, or
   **Official Worlds** → online multiplayer on the official servers (see below).
 - **Host Game (in-game multiplayer hosting):** the same world picker as singleplayer — *any* saved world
@@ -119,11 +120,12 @@ Last updated: 2026-08-26.
 | **L** | Toggle the suit headlamp (requires a `suit_lamp`) |
 | **G** | Loot the nearest container |
 | **H** | Store your loose materials and blocks in the nearest storage crate / wood box (tools, weapons and equipment stay with you) |
-| **E** | Use a nearby ship/station tile (cockpit, workshop, cargo, medbay, …); **trade with a vendor** (opens the Market); **board your hover speeder**; **beam** from a teleporter pad you're standing on; **choose what belongs in a storage crate** you're aiming at (see §5 → Storage crates) |
-| **X** | Pack up (stow) a nearby deployed hover speeder or boat back into its item |
+| **E** | Use a nearby ship/station tile (cockpit, workshop, cargo, medbay, …); **at a vendor: trade or talk** (a small question — **E** again trades, *Talk* opens the conversation); **board your hover speeder**; **beam** from a teleporter pad you're standing on; **choose what belongs in a storage crate** you're aiming at (see §5 → Storage crates) |
+| **X** | Pack up (stow) a nearby deployed hover speeder or boat back into its item; at your own landed ship's **cockpit / console**: **recall** every speeder / boat you left out on this world straight into your inventory (parked beside the ship, with a marker, only when no slot is free; see §5 → Hover speeder) |
 | **T** | Send a trade request to a nearby player |
 | **K** | Send a dock request to a nearby player |
 | **U** | Undock from a player / leave a boarded space station |
+| **O** | Aboard your own (or any player-built) station: toggle **zero-g construction mode** for yourself — the suit floats over the decks (Jump rises, Crouch sinks) so you can extend the hull without walking; press again to walk. Not saved; off whenever you board |
 | **V** | Toggle first / third-person camera |
 | **I** | Toggle **thermal vision** while looking through the thermal binoculars (see §5 → Binoculars) |
 | **N** | Advance the current **VEGA** dialogue line (also fast-completes the typewriter) — rebindable; gamepad **View** (Back), touch **NEXT ▶** |
@@ -250,9 +252,9 @@ cockpit asks "Launch into space?"** — confirm with the button, **E** or **Ente
 | **V** | Toggle cockpit / third-person camera |
 | **W/A/S/D** | Fly through the **system** — every planet/moon is out there at its real position |
 | **L** | Land — on the body you've flown up to (the HUD shows "land on <name>") or, if none is near, back where you launched. Opens a confirmation (**Enter** = yes, **Esc** = no) |
-| **E** | Board a nearby space station (within range; a short dock-approach plays before you board) |
+| **E** | Board a nearby space station (within range of its hull; the ship flies round to the station's hangar mouth and docks there before you board) |
 | **P** | **Autopilot** (needs an `ai_core_mk2`+ module): flies to your nav waypoint if one is set, else the nearest station / landable body; any manual input takes the helm back |
-| **M** | **System chart**: a top-down map of the current system. Click a body/station to target it or empty space for a free **nav waypoint** — it shows on the radar with a distance readout, and the autopilot flies to it. The ship holds position while the chart is open |
+| **M** | **System chart**: a top-down map of the current system. Click a body/station to target it or empty space for a free **nav waypoint** — it shows on the radar with a distance readout, and the autopilot flies to it. The ship holds position while the chart is open. Space distances (radar, chart) read in **km**; only on a spacewalk is the way back to your ship given in metres. The chart's **Hyperspace** tab (LB/RB on a pad) shows the whole galaxy as stars in their real colours: the ringed star is where you are, named stars are systems you have visited, a **?** is one you have never entered, lines are relay jump lanes. Click a star to read about it and — with a jump generator aboard or a lane — **hyperjump to it straight from the chart** |
 | **Tab → Map** | Hyperspace **jump to another system** (needs a `jump_generator` module) — flying is within one system |
 
 Ship classes differ in **speed** and **handling** (`data/ships.json`): e.g. the scout is fast and agile,
@@ -265,9 +267,12 @@ separate unlock; admins can still disable it through server world rules.
 ## 4. Menus & HUD
 
 - **Tab menu** — tabs for Inventory, Crafting, Tech (blueprints), Ship (modules/build), Map, Missions,
-  Character (appearance), plus **Story**, **Companions** (tamed creatures, see §5), **Alliances** (see §5) and
+  Character (appearance), plus **Story** (the story log, and a **Notes** category: up to 20 titled notes of your own,
+  saved with your character — `§0`–`§f` colours a span, `§l` makes it bold, `§r` resets), **Companions** (tamed
+  creatures, see §5), **Alliances** (see §5) and
   **Achievements**, with **Settings** pinned far right. The **Achievements** tab opens with a **Progress** block —
-  research N of M blueprints, Codex discoveries, story %, achievements done — and a **Journey** grid of your
+  research N of M blueprints, Codex discoveries (with a button straight into the Codex chapter, where every entry
+  now names the planet and system it was first scanned on), story %, achievements done — and a **Journey** grid of your
   lifetime tallies (worlds visited, systems entered, blocks mined/placed, subjects scanned, missions …); the
   goals below run from the first blocks to the late game (thousands of blocks, dozens of worlds, the whole
   tech tree, your own station or ship, the Guardian finale) and each pays an item reward. The **Blueprints** tab
@@ -280,6 +285,17 @@ separate unlock; admins can still disable it through server world rules.
   Hand recipes work anywhere.
 - **Codex and DataQubes screens** — use the top-right **Close** button, **Esc**, or **Tab** to return to play.
   **< Menu** returns from the full-screen screen to the normal Tab menu.
+
+### View distance and far view (Settings → Graphics)
+
+- **View distance (chunks, 1–16)** — how far the real, walkable world streams around you. It costs the most:
+  every step up loads many more chunks. It takes effect the next time a world starts.
+- **Far view (Off · 512 · 1024 blocks)** — a lightweight low-detail horizon *beyond* the streamed chunks: mountains,
+  valleys, seas and lava seas out to the chosen distance, plus cities, settlements, ruins and player builds as they
+  stand. You cannot walk or mine it; as you get closer, the real chunks replace it. It applies at once, even from the
+  pause menu. Defaults: **1024** on the desktop client, **512** in the browser and on tablets.
+- With the far view on, the haze reaches farther: worlds with thin air show a long, clear horizon, airless moons are
+  crisp to the edge, dense atmospheres still close in — and fog, sandstorms and ash storms still pull the view in hard.
 
 ### Arcade (minigames)
 - The **DataQubes Arcade** holds 20 built-in minigames. Locked cabinets unlock through data cubes you find
@@ -304,10 +320,12 @@ separate unlock; admins can still disable it through server world rules.
 - **HUD** — health/oxygen/hunger/energy, hotbar, location, compass, scan readout (bottom-left), and the
   wreck panel (right) when near a repairable wreck.
 - **Compass** (bottom-right, on foot) — a heading-up dial: the top is the way you look, and the **N** that
-  moves around the dial marks north (the map is north-up, so the two agree). The blue
-  square is your ship and the amber pin the waypoint; the captions under the dial ("Ship 114 m", "Waypoint
-  138 m") give each distance. Beacons and saved markers show as smaller blips. Turn until the ship sits at the
-  top and walk; VEGA reminds you of this once you are a long way from the hull.
+  moves around the dial marks north (the map is north-up, so the two agree). A blue **arrow on the rim** points
+  the way to your ship and stays readable however far off it is; the blue square inside the dial is the ship
+  itself and the amber pin the waypoint, and the captions under the dial ("Ship 114 m", "Waypoint 138 m") give
+  each distance. Beacons and saved markers show as smaller blips, a landed trader ship as a gold ship icon. Turn
+  until the arrow points to the top of the dial and walk; VEGA reminds you of this once you are a long way from
+  the hull.
 - **VEGA panel** — the ship AI speaks through a typewriter speech panel with a persistent **objective
   chip** (live progress, e.g. "mine 1/3") during onboarding. Advance lines with **N** — a line stays on
   screen until you do (no auto-dismiss), and further lines wait in the queue. Advisor hints can
@@ -343,6 +361,23 @@ separate unlock; admins can still disable it through server world rules.
   the sun-side/shadow hull temperature (about +120 °C to −150 °C). The world option **Environmental
   hazards** (world creation, or live in the in-game Settings tab as world admin) scales this from Off to
   Hard; Creative/Sandbox worlds are always exempt.
+- **Titas** (a very rare frozen planet — only one per galaxy): the suit's climate control is not enough there. An
+  **exposure meter** replaces the energy drain — the HUD shows your **cold protection** (or **heat protection** in the
+  volcanic hot zones). Outside it runs out in about **40 minutes** (hot zones **30**), half as fast under a roof; liners
+  (×1.25 / ×1.5 / ×2) and the hazard setting (Light ×1.5, Hard ×0.75) stretch or shorten it. Your ship, a station, a base,
+  a campfire or digging deep refill it. At zero the cold (or heat) hurts more and more — VEGA warns at 50, 75 and 90 %.
+  The **yellow water is toxic**: a few seconds are fine, then it burns (standing on the ice is safe). The old **SPS
+  research stations** hold salvage and a log terminal — but no air and −90 °C inside, and the machines guard them.
+- **Valuma** (a rare planet of wide, flat grass plains): the animals there never bite — but one of them is not an
+  animal. A **Sreekmakra** wears the shape of a local animal and changes it now and then when nobody is looking. Kill an
+  animal of the kind it is copying, or hit it, and it comes for you (faster and harder-biting than the animal it looks
+  like) until it falls or you leave the planet. Beaten down, it drops its disguise and fights on in its true form;
+  defeating that unlocks its Codex entry and the achievement *Unmasked*. Your hand scanner shows an **anomaly** when
+  you scan the disguised one — under its true name, *Sreekmakra*. With enemies switched off it only shows itself and
+  flees. **You can also tame it** while it wears a shape: use the creature translator on it, or tame any animal of the
+  kind it is copying — then it drops its disguise and comes to you as a companion in its true form (one per player;
+  achievement *Shapeshifter's Friend*). In its true form it cannot be tamed. Stay long and VEGA starts to feel watched;
+  later the fog closes in.
 - **Heal tank** (workshop, blueprint-gated): the life-support unit for your own base or station. Everyone
   within a few blocks of a placed tank is slowly healed and fed and the suit recharges — the only off-ship
   suit recharge. Press **E** on the tank to make it your **home spawn**: on death you then choose between
@@ -350,7 +385,11 @@ separate unlock; admins can still disable it through server world rules.
 - **Bed** (hand-crafted from logs + plant fibre, no research needed): the low-tech forerunner of the heal
   tank. Press **E** on a placed bed to make it your **home spawn** (same death choice as the tank), and
   resting near it slowly mends your health — but a bed never feeds you and never recharges the suit;
-  those stay the heal tank's job.
+  those stay the heal tank's job. A bed is **two cells long**: the foot half lands on the cell you are facing.
+- **Crew bunk** (crafted at the workshop from metal panels + plant fibre): a **one-cell** wall bunk for places
+  where a bed does not fit — a narrow cabin, a corridor niche. It counts as a bed: **E** makes it your home
+  spawn and resting nearby mends your health. Your **starter ship's cabin** has one; roomier ships (hammerhead,
+  corvette, courier, hauler, thunderbolt, deathblock) carry a real two-cell bed instead.
 - **Campfire** (hand-crafted from logs + stone): a contained flame that never spreads. It lights the camp,
   counters the cold while you stand near it, and is a **cooking station** — with creature meat in your
   pockets, craft **cooked meat** at the fire (far more filling than raw, and it heals). The flame also does
@@ -378,6 +417,11 @@ separate unlock; admins can still disable it through server world rules.
   stays. Water flowing into lava still chills to obsidian at the contact face.
 - **Lava is slow, water is quick**: lava creeps at half the speed water flows, so a breached crater gives
   you time to step back.
+- **Lava and fire burn everybody**: animals, robbers and Guardian machines take contact damage exactly as
+  you do (lava −15/s, fire −10/s), so a flooded fire trench really defends a base. Land animals are kept out
+  of a lava column anyway and mostly never reach it; what burns is what flies in, what was inside when you
+  flooded it, and what gets driven in. Tame companions never burn, creatures that live in lava are at home
+  in it, and with **environmental hazards off** (or on a Creative world) nothing burns at all.
 - **Aim at water and lava**: holding a block, the crosshair stops at a fluid's surface and the block goes
   *into* that cell (the fluid makes way) — so you can bridge a lake or a lava field from its edge. Holding
   a tier-3 drill (mining beam, diamond drill) the surface is mineable too. While you are swimming the aim
@@ -408,12 +452,24 @@ separate unlock; admins can still disable it through server world rules.
 - Water is not solid: you sink in with gentle buoyancy and **dive**; hold **Space** to swim up and
   surface. Water **breaks falls**. Deep, swimmable water (lakes, ponds, seas) is common on wet worlds;
   oxygen keeps draining while submerged on non-breathable worlds.
+- Plants, ladders and shaped blocks standing in water are **under water too**: you swim through a kelp forest
+  and your suit air drains inside it — a kelp stalk or a ladder is no hidden air pocket.
+- **You can fight in the water.** Water dims the view rather than ending it: a few blocks of it are
+  see-through, so you can hit something swimming beside you or just under the surface, while a whole lake
+  still hides what is on the far side of it — nothing notices you across open water, and you cannot snipe
+  through it either.
 
 ### Mining & tools
 - Tools have a **kind** (drill/scanner/…) and **tier** (1–5). A block has a **hardness** and may require a
   minimum tool tier; mining accumulates the tool's power until it exceeds the hardness, then the block
   breaks and yields its **drops**. Powerful drills can clear a small radius — the sweep only takes blocks
   the drill could mine directly (same tier rules).
+- **The game tells you which tool a block wants.** Scanning a block lists a `Needs:` line naming the cheapest
+  tool that opens it, and a swing the held tool cannot land is refused by name ("Needs: Titanium Drill")
+  rather than a bare "wrong tool". The first time a tier gate turns you away, VEGA explains it once.
+  Tier-2 blocks (machine housings, factory terminals, titanium/platinum/tungsten and the rare ores) will not
+  budge for the starter drill — and since titanium ore is itself tier 2, your first titanium comes from a
+  wreck, from loot or from **trade**, never from digging.
 - Some powered drills (titanium drill, mining beam) **draw suit energy with every swing**; with an empty
   suit the swing is refused. The basic and diamond drills need no energy, so you can always keep mining.
 - **A full backpack does not stop you.** When neither your inventory nor (while aboard) the cargo hold has
@@ -425,6 +481,15 @@ separate unlock; admins can still disable it through server world rules.
 - Ship hull, station, settlement and other players' protected landing zones cannot be mined — **except
   plants**: you may always pick flora, wherever it grows (that is what makes a settlement greenhouse worth
   visiting), you just cannot take the building apart.
+- **Landing pads are on dry land whenever the world offers any** — the pad search looks in every direction,
+  and on ocean worlds further. A pad that still sits in open sea rises on a small island (beach, grass, a few
+  plants); only in shallow water does the ship park in a dry shaft on the seabed. The approach map draws such
+  pads **blue** and says how deep the water is ("underwater · seabed · 6 m"); your first landing and any
+  landing you do not pick by hand prefer dry ground.
+- **Never in the lava.** On worlds with lava seas, rivers or lakes a pad over lava stands on a **basalt island**. Worlds
+  created before that change keep their pads: a pad there that lies in lava is drawn **orange-red** ("lava!"), you can
+  only land on it when every other pad is taken, and a ship that was parked on one is moved to a free pad the next time
+  the world loads — you wake up aboard.
 - **Your ship is a real parked object** on its landing pad (pads are naturally flat). You can
   **furnish the interior**: place blocks in free cabin space (and mine those again) — they stay with
   the ship across launches, landings and the walk-in interior. The hull cannot be damaged and ship
@@ -453,6 +518,14 @@ separate unlock; admins can still disable it through server world rules.
   while you're aboard (in flight or standing in the landed cabin); on foot the cargo tab says so.
 - **Auto-stow (optional):** turn on *Settings → Comfort → "Auto-stow into cargo on boarding"* to have loose
   materials moved into the hold automatically each time you board. Off by default.
+- **Sandbox: All items.** In a Sandbox world (or while an admin gave you the Creative mode) the Inventory has an
+  **All items** page: every item of the game, searchable — pick one and **Take 1** or take a full stack. Nothing has
+  to be crafted.
+- **Sandbox: crafting is free.** In the same mode every recipe can simply be crafted — no materials, no blueprint,
+  no workbench in reach, a full stack per order — and the craft panel says so instead of "Materials missing". The
+  only refusal left is a full inventory.
+- **Every tool looks like itself in your hand:** the titanium and diamond drills, the mining beam, each pistol and
+  blaster, the machete, vibro knife and plasma sword and the advanced scanner all have their own model.
 - **Throwing things away:** select an item in the **Inventory** or **Cargo Hold** tab and press **"Throw
   away"** — it asks once ("Really throw away?"), and the second click destroys *every* stack of that item.
   This cannot be undone and gives nothing back. Your starting equipment (drill, scanner, suit lamp, machete,
@@ -639,16 +712,32 @@ separate unlock; admins can still disable it through server world rules.
 - Space and busy systems feel alive with **civilian trader traffic**: merchant ships **warp in** at the system
   edge, **cruise** to a station to **dock**, or head into the inner system and **land on a planet/moon** if a
   pad is free, then later depart. They are **peaceful scenery** — a trader can't be locked, shot or damaged.
-- A trader that **docks at a station** becomes a **visiting merchant**: board that station and you'll find its
-  pilot as an extra **vendor** beside the trade post — barter with them like any other vendor (press **E**).
+- A trader that **docks at a station** becomes a **visiting merchant** for **7–12 minutes**: board that station
+  and you'll find its pilot as an extra **vendor** beside the trade post — barter with them like any other
+  vendor (press **E**).
 - A trader that **lands on a world** parks its ship on a pad with the **pilot standing in front** as a merchant
-  you can trade with. One landed trader per body at a time; they re-appear when you return to that world.
+  you can trade with — it barters from the same **traders** list as a traders-themed vendor (see *Vendors /
+  market* below). It stays **10–15 minutes**, and it **never lifts off while a player is near it**
+  (within about 32 blocks of the pilot or ship) or trading: it leaves only after nobody has been close for
+  about half a minute. One landed trader per body at a time; they re-appear when you return to that world.
+- While a trader is landed, the **planet map (M)** shows a **gold ship marker** with its name at the pilot (and
+  lists it with its distance), your **compass** shows a matching gold blip, and its pad shows as taken — so a
+  trader that set down far from your pad is easy to find. The marker disappears when it lifts off.
 
 ### Stations: boarding & docking
 - **Space stations**: approach in space and press **E** to board. A station is its **own place in orbit** —
   you arrive inside it, floating in space (black sky, no planet/weather, life support), and can walk the
   interior (vendors, mission board, heal tank, quarters) and talk to its crew NPCs. Press **U** to leave and
-  travel back down to your ship on the planet.
+  travel back down to your ship on the planet. **Quit the game aboard a station and you come back aboard** — at
+  the spot where you stood; your ship waits at the planet the station orbits.
+- **What you see from the cockpit is the station you walk.** Every station floats in space as its real hull, block
+  for block and at full size — the module halls, the windows, the glowing **force-field mouth of its hangar**, solar
+  wings, antenna masts and domes. Big stations are big: a colossal one is over a hundred blocks across. The hull is
+  solid (you slide along it and can fly between its modules), the dock prompt appears near any side of it, and on
+  **E** the ship flies round to the hangar and noses in. The autopilot and a chart target fly you to the space in front
+  of the hangar. A station's layout is fixed the first time you see it.
+- **Your start system always has a station** (new and existing worlds): if the system rolled none, one hangs
+  over your start planet. Other systems may have none — VEGA then points you to the star map.
 - **Build your own**: deploy a **Station Core** on a spacewalk (press **B**), build a hull + an airlock door
   around it, and it commissions into a boardable station on the star map.
 - **Air only fills sealed rooms** in a station you built: walls, glass and doors are airtight, a hole in the
@@ -656,6 +745,22 @@ separate unlock; admins can still disable it through server world rules.
   **force-field block** seals an opening you want to keep. **Crew** (two civilians) moves in once you build a
   **trading post** or a **mission board** aboard — in a sealed room; a post open to space stays unstaffed
   until you seal it. Visiting traders still dock regardless. Windows show the planet you orbit, the sun and a moon.
+  The crew keeps the **station clock**: at station night the deck lights dim and the crew sleeps in the beds of
+  their rooms (see *Daily routines & jobs*).
+- **Stations are built from modules.** A new station is assembled from docking segments — an arrival hall,
+  corridors, a market hall, a mission office, a canteen or a bar, a medbay, hydroponics, a store room, the hangar,
+  and **crew quarters with one cabin per crew member** (bed, locker, lamp, a chair). Big stations have two decks
+  joined by a ladder shaft. The crew works its post by day, sits in the canteen in the evening and sleeps in its own
+  cabin at night; you may walk into the cabins. A station you have boarded before keeps its layout for good.
+- **Villages, towns and cities are built from modules too.** A new settlement is put together from buildings made to
+  fit the planet — the walls are sand on a desert, ice on a frozen world, iron in a town — and half of all settlements
+  are alien, with crystal trim and other roofs. Every settlement has a market and a notice house, villages and larger
+  places a **tavern** where the people meet in the evening, towns and cities a **workshop**, and houses of two or three
+  kinds. Town houses have two storeys (city flats three) joined by stairs. **Everyone who lives there has a bed**: the
+  shopkeeper, the quartermaster, the innkeeper and the gardener sleep in a back room of their building. A settlement
+  houses as many people as it has beds — at most 6 in a hamlet, 10 in a village, 20 in a town, 32 in a city and 80 in
+  the G.D.S. city. Settlements that already stand in your world keep their buildings exactly as they are; their people
+  now follow the beds that are there.
 - **Gravity ends at the hull**: inside your station's box (plus a few blocks around it) you walk; step or fall
   past that and the suit **floats** — jump rises, crouch sinks, so you drift back to the deck or build the
   outer hull from outside. Drift very far away and you are set back on the pad. **U** always returns you to
@@ -698,18 +803,22 @@ separate unlock; admins can still disable it through server world rules.
   as long as they are **sealed** and **connected to the base**. Loose stuff (dirt, sand, snow, plants) and
   shaped blocks (ramps, spheres) leak. Doorways need the **Energy Door** (workshop, blueprint-gated): its blue
   field is an **air curtain** — you walk right through, the air stays in. Ordinary doors (wood, hinged,
-  sliding) do NOT hold air. Chain rooms door by door to grow a whole airtight outpost; if a wall is mined or
+  sliding) do NOT hold air. Holding any door shows a **hologram of it in the target cell**, turned by the wall
+  beside it, so you see which way it will face before you place it. Chain rooms door by door to grow a whole airtight outpost; if a wall is mined or
   burns away, everyone at the base gets a **"no longer airtight"** warning and the rooms fall back to suit
   oxygen until the hole is closed. **Check it:** aim at your own core — the prompt shows how many cells and
   sealed rooms currently have air and whether the spot you stand on does (*here: air*). VEGA explains the
   three rules once when you found a core on a world without breathable air.
 - **Sentry post** (workshop, blueprint-gated after the Heal Tank): a small automatic turret you place inside
-  your own base zone. It fires at hostile machines and at robbers who have **already started a fight** —
-  never at players, never at tame animals, and never at somebody walking up to talk (you always get to
-  answer a hold-up yourself). It needs neither power nor ammunition, and you can build as many as you like.
-  Two things worth knowing: it only works **while you are home** on that world, and machines appear 35–50
-  blocks away from you — so a sentry is the thing that covers your back while you build, not a fence that
-  clears the neighbourhood. On **Creative** or **Peaceful** worlds it stays quiet, like everything else.
+  your own base zone. It fires at hostile machines, at **hostile animals**, and at robbers who have
+  **already started a fight** — never at players, never at tame animals, and never at somebody walking up to
+  talk (you always get to answer a hold-up yourself). It needs neither power nor ammunition, and you can
+  build as many as you like. Three things worth knowing: it has to stand **within 8 blocks of your base
+  core** (place one farther out and the game tells you on the spot that it will not fire), it reaches
+  **14 blocks**, and it only works **while you are home** on that world. Machines appear 35–50 blocks away
+  from you — so a sentry is the thing that covers your back while you build, not a fence that clears the
+  neighbourhood. Scan a post to read its range and the zone it needs back. On **Creative** or **Peaceful**
+  worlds it stays quiet, like everything else.
   A sentry's kill **counts for you**: bandit and machine bounty steps progress, a scout it finishes still
   counts towards *Guard the homestead* and the base-defended tally, and the drops land on the ground where
   the target fell. Only the plain "defeat" achievement stays yours to earn by hand.
@@ -723,6 +832,8 @@ separate unlock; admins can still disable it through server world rules.
   **Bandits** slider and **Planet enemies** on, plus Survival — with hostiles off the sentry post is silent,
   so no scouts come either, and the switch is not even offered. An update never turns it on for you: on
   worlds from before the option existed it stays off until you flip it yourself.
+- **Residents, posts and jobs**: beds bring people, and a trading post or mission board at home is staffed by
+  one of them — see *People you know* and *Daily routines & jobs* below.
 - On **Tab → Map**, a world where you have a base (or a station orbiting it) is **marked** and its details note
   *"You have a base/station here"*; you can also rename the base from there.
 
@@ -818,6 +929,12 @@ separate unlock; admins can still disable it through server world rules.
 - Want your own? Craft **seeds** by hand — 3 berries → 2 berry seeds, 3 grain → 2 grain seeds, 2 mushroom caps →
   2 mushroom spawn — and plant them on soil (mushrooms also take mud and mycelium) — or on a crafted
   **hydroponic tray** (workshop), which lets any crop root with no soil at all.
+- **Trees grow from saplings.** Craft a **sapling** by hand (1 log + 2 plant fibre → 2 saplings) or pick one up
+  now and then when you clear leaves. Plant it on soil, grass or mud with **four free blocks above it**; after a
+  couple of minutes it becomes a tree with a log trunk and a leafy crown. Under a low ceiling it simply waits.
+  Leaves, needles and fronds drop as blocks now, so you can build and shape a canopy by hand — and a sapling
+  planted on the dirt floor of a sealed station hall grows just like one on a planet, so an arboretum in orbit
+  is a matter of dirt, saplings and headroom. A sapling you pick up stays a sapling.
 
 ### Ruins & treasure chests
 - **Ruins** are the collapsed remains of fallen settlements — mostly surviving ground walls, one
@@ -862,6 +979,13 @@ separate unlock; admins can still disable it through server world rules.
 - Space holds two friendly surprises: a **life pod** sometimes drifts through a system — **fly close**
   and you rescue the survivor (a small thank-you, a new person in *People you know*, and a radio call
   later) — and an **anomaly** no catalogue explains: **scan** it for knowledge and a field record.
+- Many systems also hold a **space wreck**: the travel screen lists it with its ship's name and "Wreck",
+  it shows amber on the radar and on the system chart (**M**, click it to set a waypoint), and it is a
+  **fly-to**, never a quick-travel destination. Coming close reads its manifest (a field record, and the
+  wreck counts as visited); the **mining laser** carves it up like an asteroid for plating, cabling, a metal
+  and now and then a data fragment — an EVA pick works too.
+- Every **asteroid** listed for a system stays a visible dot from anywhere in that system, and the green
+  bearing blips on the radar's rim carry the body's name — the chart's waypoint is still the quickest way there.
 - Everything in this section is peaceful and appears under every preset — nothing here fights back.
 
 ### Bandits (robbers, camps, pirate space)
@@ -912,12 +1036,31 @@ separate unlock; admins can still disable it through server world rules.
   posts a two-part **big order** — a doubled delivery with the pay to match, then a large build or survey.
   Later parts can't be taken early (the server checks), and they stay where you started them.
 
+### NPC professions: doctor, shopkeeper, arms dealer, sage, tamer, blockfarmer, streamer, reporter
+- **Where you meet them.** Newly generated villages and towns may have a **clinic, shop, armory, library, stable, quarry,
+  studio or newsroom** — each with its keeper. Newly generated **space stations** may have a clinic, shop, armory, archive,
+  studio or newsroom (no tamer, no blockfarmer in space), and the city of **Ember Reach** has a services quarter with the
+  same six. You can also get them at home: research **Profession posts** (Station tree)
+  and build a **clinic post, shop counter, arms rack, sage's terminal, tamer's post, quarry post, streamer set or press desk**
+  inside your base or on your own station — a resident takes the job (like the trading post).
+- **Doctor:** medpacks, field medkits and — expensive — a detoxifier; a bed and a stretcher only **every other day**.
+- **Shopkeeper:** food — but only while you stand **inside the shop** with them.
+- **Arms dealer:** cables, plates, energy cells, and finished laser pistols or plasma blasters for diamonds and gold.
+- **Sage:** data fragments and AI memory fragments at a very high price.
+- **Animal tamer:** baits and the creature translator; a tame animal of the planet walks at their side.
+- **Blockfarmer:** quarries outside the settlement by day and sells stone, sand, dirt and basalt.
+- **Streamer:** a huge fan — walks by once a day asking for a **photo together**; say yes and a photo is taken, say
+  "never" and they stop asking.
+- **Reporter:** gives you an **interview** — write what you have been up to (at most 300 characters; in Safe chat mode
+  you pick a ready answer). Everyone can read the place's latest stories by asking the reporter "What's in the news?".
+
 ### People you know & NPC radio calls
 - **NPCs remember you.** Trading at a stall or taking a board job raises your standing with that vendor or
   quartermaster: **Stranger → Acquaintance → Friend**. The stage shows on their **nameplate** when you walk
   up, and everyone you know is listed under **Tab → Character → People you know** (name, role, stage, where
   they live).
-- **Talk to people.** Walk up to any NPC and press **E** (away from station blocks, which keep their own E).
+- **Talk to people.** Walk up to any NPC and press **E** (away from station blocks, which keep their own E). At a
+  **vendor**, E asks *Trade or talk?* — **E** once more opens the Market, **Talk** the conversation.
   Settlers chat with anyone; vendors open up once they know you. Some conversations offer **choices**
   ([1]/[2]/[3] or click) — your pick is remembered and can deepen a friendship, hand you something, reveal a
   piece of the story, or make someone **call you on the radio later**. Talking itself counts toward your
@@ -938,7 +1081,42 @@ separate unlock; admins can still disable it through server world rules.
   or *off*.
 - **Your base attracts life.** Trader ships prefer worlds with a founded base. Once your base holds a few
   machines (workbench, forge, …), a **settler moves in** — they know you from day one and count toward your
-  people. No visitor ever damages a block.
+  people. **Every bed** you place inside your base brings **one more resident**, up to **five** people: a bed
+  counts in the core zone, in a sealed room, inside your walls, or in any **closed room** (walls, a roof and a
+  door) at the base — a bed out in the open field brings nobody. Take a bed away and its sleeper moves on.
+  No visitor ever damages a block.
+- **E to talk.** Standing next to someone shows *"Talk to … (E)"*.
+
+### Daily routines & jobs
+- **People keep the hours of the sun above them.** By day they are at work, in the evening they sit down on a
+  **chair or bench** near home, and at night they walk to **their bed** and sleep in it (*"asleep"* on the
+  nameplate, a soft *z z z* above them). Without a bed they rest where they live. Talk to a sleeper and you get
+  a mumbled *"come back in the morning"*. This goes for your residents, for **villagers** (every house has a
+  bed) and for **station crew** — a station keeps its own clock, and its deck lights **dim at station night**
+  (the HUD clock shows it). On a modular station every crew member has a **cabin of its own** and the evening is
+  spent in the **canteen or bar**.
+- **They find their way.** People walk around walls, up single steps and **through doors**: sliding doors
+  open for them like for you, and they swing a wooden or hinged door open and it **closes behind them** (a door
+  you opened yourself is left as you left it). Only when there truly is no way — you walled someone in — and
+  **nobody is watching** do they turn up at the other side.
+- **Jobs come from what your base holds** — one job per resident, in this order:
+  - **Trading post** (the *Trade Post* block): a resident becomes your **trader** — barter right at home.
+  - **Mission board**: a resident becomes your **quartermaster** — board jobs at home (take them and hand
+    them in at the board).
+  - **Walls around the base** (or a sentry post): the **guard** walks the inside of the wall on the **night
+    shift** and sleeps by day. Bandit scouts watching your base or a robber closing in get a warning to you
+    over the radio and are **sent on their way** — the guard never fights; a robber who already attacks is the
+    sentry's business.
+  - **Crops, hydroponic trays or saplings**: the **gardener** (with a hoe) walks from bed to bed, **harvests**
+    ripe crops into a **crate** at the base (they regrow as if you had picked them) and helps saplings grow
+    faster. No crate — the gardener only tends.
+  - **Workbench or forge**: the **craftsman** (with a hammer) puts two **plant fibres** into a base crate every
+    five minutes — or, with a forge and **iron ore** in the crate, smelts **two ore into one ingot** (the same
+    as the workbench would).
+  - A crate that only takes certain items (a filter) or a full wooden box is respected: what does not fit
+    stays in the field.
+- A post, a crop or a workbench only counts **inside the base** (the same rule as for beds). A trading post
+  or a mission board placed where nobody can staff it tells you why.
 
 ### Trade
 - **Player ↔ player:** press **T** near a player (pad/touch: **Actions → trade**) to send a request; the
@@ -948,8 +1126,9 @@ separate unlock; admins can still disable it through server world rules.
   offer resets both confirmations, and your Confirm button turns green while you wait). **Esc** / pad **B**
   or **Cancel** aborts. If you know more than your partner you can also *teach knowledge* here (`−` / `+` /
   Max in the "You give" box).
-- **Vendors / market:** press **E** next to a settlement or space-station **vendor** to open the **Market**
-  (the gameplay menu's Crafting tab on the *Market* category). Barter recipes there trade your raw
+- **Vendors / market:** press **E** next to a settlement or space-station **vendor** and pick **Trade** (or press **E**
+  again) to open the **Market** (the gameplay menu's Crafting tab on the *Market* category). A vendor's themed goods
+  only trade while that vendor stands right beside you. Barter recipes there trade your raw
   resources for goods. The market is also available **aboard your ship** (Tab → Crafting → Market), via the
   ship's trade console — so you can trade without a vendor too. Vendors have **themes**: miners sell iron,
   copper and lead ore for silicate, traders buy crystal, gold and silver, researchers buy refined uranium and
@@ -995,9 +1174,9 @@ separate unlock; admins can still disable it through server world rules.
 - While raised, the mouse gets proportionally finer and the head-bob is damped, so a 6× view stays steady.
   The scope draws its own reticle and a magnification readout; the optic drops automatically when you open
   a menu, mount a speeder, switch hotbar slot or go third-person.
-- **They do not extend the render distance** — the world only exists as far as your view-distance setting
-  streams it, so magnification enlarges what is already there. Seeing *past* the haze is what thermal mode
-  is for.
+- **They do not extend the render distance** — the walkable world only exists as far as your view-distance setting
+  streams it (beyond it the low-detail far view, §4), so magnification enlarges what is already there. Seeing *past*
+  the haze is what thermal mode is for.
 - **Thermal Binoculars** (`thermal_binoculars`) are the upgrade: research the blueprint (needs the
   `binoculars` blueprint first) and craft them at the workshop — the recipe **consumes a plain pair**.
   Press **I** while looking through them to switch infrared on and off.
@@ -1021,7 +1200,8 @@ separate unlock; admins can still disable it through server world rules.
 - Craft a **Paint Tool** (`paint_tool`, workshop recipe + the cheap `paint_tool` blueprint). Select it and
   **right-click a placed solid block** — a **32×32 pixel editor** opens (same palette and tools as the
   appearance screen: left-click paints, right-click erases, **E** is the eraser swatch, **Fill area** floods,
-  **Alt+click** picks up a colour and **Undo** takes a step back; unpainted pixels show the design's paper-white
+  **Fill everything** paints the whole canvas at once, **Alt+click** picks up a colour and **Undo** / **Redo**
+  walk 32 steps back and forth (`Ctrl+Z` / `Ctrl+Y`); unpainted pixels show the design's paper-white
   canvas, which is what the block will look like). **Apply** paints the
   design onto the block for everyone; **Clear + Apply** removes it. Works on every block form — panels/plates
   on a wall are the natural canvas, but slabs, ramps and plain cubes take a design too (all faces show it).
@@ -1070,7 +1250,10 @@ separate unlock; admins can still disable it through server world rules.
   - **Off (default):** you can only quick-travel to worlds you've already **landed on manually**. To reach a
     new world, **launch into space and fly there**, then land (pick a pad). A never-visited star system shows
     only as a single **"Hyperjump to this system"** entry — jumping there drops you into its flight space, and
-    you fly to its worlds and land. Once you've been somewhere, quick-travel to it works from then on.
+    you fly to its worlds and land. Once you've been somewhere, quick-travel to it works from then on. Every
+    other system keeps its **"Hyperjump to this system"** entry above its worlds, so a system you have jumped
+    into but never landed in stays reachable — a locked world in another system offers the same jump in its
+    detail pane (#1638).
   - **On:** quick-travel works for any world/system immediately, visited or not.
 - Jumping to **another star system** always requires a fitted **`jump_generator`** module.
 - A star system you have **never entered** shows as **"Unknown system"** — its name is part of what you
@@ -1096,7 +1279,7 @@ separate unlock; admins can still disable it through server world rules.
 - **Visitors at the base** (Settings → world rules, world admin, off by default): bandit scouts look at a
   founded base from its edge while the owner is home — never inside, never destructive; see § Bases. Gated
   on the **Bandits** slider (no robbers, no scouts); the `dangerous` preset ships with it on.
-- **Growing galaxy** (world creation → Universe size → **"Growing"**): the galaxy starts at the normal 8
+- **Growing galaxy** (world creation → Universe size → **"Growing"**): the galaxy starts at the normal 12
   systems — but every time someone hyperjumps into one of the current **outermost** systems, deep-space
   telescopes report a **brand-new system beyond it**. The galaxy literally grows at your frontier, up to a
   generous cap ("the frontier is quiet"). Growth is permanent: new systems survive save/reload like any
@@ -1108,7 +1291,8 @@ separate unlock; admins can still disable it through server world rules.
   and structures line up exactly). North/south (latitude) does not wrap.
 - **Day/night is by location** — because X is a longitude, a planet has a real day/night terminator: one
   player can be in daylight while another, far away, is in night, and one lap around the world is one day.
-  The clock still advances.
+  The clock still advances. Animals and people keep the hours of the sun above **them**: on the far side of the
+  planet the day-active animals are asleep while yours are grazing.
 - **Weather comes in episodes** — it swells, holds and fades rather than switching on and off, and every
   world has its own temper: some flip between squalls, others brood under one sky for minutes. Storms
   build through the afternoon, mist gathers around dawn, and a slow wet/dry season rides on top.
@@ -1130,6 +1314,18 @@ separate unlock; admins can still disable it through server world rules.
 - **Multiplayer:** players can be on **different planets / star systems at once**, each with their own ship
   and start point. The star map (Tab → Map) shows where everyone is ("◈ Alice, Bob").
 
+### Plant life
+- **Caves grow plants** (worlds created from 2026-09 on, terrain generation 11): the dark **cave cap**, carpets
+  of **glow moss** and **glow threads** hanging from the ceiling, and the mushrooms of the surface. Glow moss, glow
+  threads and the prism bloom **light up the rock around them** in their own colour — a planted cave is never
+  pitch black. Even a barren world or an asteroid may hide them: about every second one does.
+- **The prism bloom** glows in every colour — each plant its own. It grows in caves and, rarely, in small
+  clusters on the surface: a find worth marking on the map.
+- **Cold worlds have plants too:** frost flowers, snow bushes, ice reeds and lichen grow on snow and ice (on a
+  tundra, an ice world, a snow-capped mountain) where every other plant gives up.
+- The glowing plants' colour (and every other wild plant's) is this world's own; harvested cave plants regrow on
+  their rock like any other flora.
+
 ### Creatures
 - Fauna spawn near players (habitat-gated), with temperaments; hostile creatures show visible attacks.
   Flora regrows when its host block survives. Nothing spawns inside a **sealed room** of a founded base
@@ -1144,6 +1340,30 @@ separate unlock; admins can still disable it through server world rules.
   own size (most near the normal size, the occasional runt or giant) — a wood is a mix of saplings and tall
   trees with varying crown widths, a herd has small and large animals. The variation is cosmetic (a creature's
   size doesn't change its health, damage or loot).
+- **Arachnids** are eight-legged animals as big as a speeder that some worlds roll into their fauna (about every
+  third or fourth world has one species). Their heads are boxes or pyramids of several kinds, their eyes come in
+  clusters of 2, 4, 6 or 8, and their temper is rolled like any other animal's: many graze or run away, but a
+  hunting or territorial arachnid **lies in wait** — it sits perfectly still like a rock until you come within
+  about six blocks, then rushes. The **scanner** tells you which kind you are looking at ("Eight-legged", "Lies
+  in wait"), and VEGA points out the first one you get near. You bump into its body, your shots land where you
+  aim on it, and it can be tamed like any other animal.
+
+### Giants (the colossus and the sandworm)
+- **A colossus** is a 40–60 block tall four-legged giant. It only lives on **very flat, very light worlds** (the lighter
+  moons of plains, downs and dune types) and even there only on one world in three. Every colossus is different:
+  peaceful ones migrate and graze on treetops, shy ones walk away, territorial ones fight back when hit, aggressive
+  ones stalk you. Before it stomps, a **dark ring** marks the spot — get out of it, or get under a roof or into a
+  cave: a stomp never reaches inside. You bump into its legs; you can fight it (it takes a long time — bring friends).
+- **A sandworm** lives only on **sand-sea worlds** — a planet class (new worlds) where half the surface is a sea of deep
+  sand between rock islands, mountains, canyons, lava and water. It hears you through the sand: walking, mining,
+  drilling, blasting, a hard landing, a speeder. **Sneaking** (crouching) barely makes a sound, and **rock, a landing pad
+  or a floor you built are silent** — only the sand of the sand sea carries a step. When it comes, the sand ripples and
+  rumbles and VEGA warns you: get onto rock. It breaches in an arc, or rears up as a tower and strikes the spot it heard.
+  You can only hit it while it is above the sand.
+- **Thumper** (workshop recipe): place it on sand-sea ground and it pounds the ground every two seconds for a minute
+  and a half — the worm comes for it and swallows it. Use it to lure the worm away from you or to watch it. On rock
+  nothing hears it; mine it back to switch it off.
+- A defeated giant is gone for a few in-game days, then another one comes. Neither ever changes a block.
 
 ### Taming creatures (companions)
 - Craft a **Creature Translator** (`creature_translator`, workshop recipe + blueprint) and some **bait**
@@ -1189,6 +1409,20 @@ separate unlock; admins can still disable it through server world rules.
   and **F** dismounts. Press **X** near a parked speeder you own to **pack it back up** into the item.
 - The speeder has its **own energy tank** (driving drains it) and a **voxel hull** that takes collision damage —
   hard impacts dent it and enough damage destroys it. It persists with you across reloads (like a companion).
+- It is a **land vehicle**: it unfolds only on dry ground (deploying towards water is refused) and **stops at the
+  shoreline** — water ahead caps the throttle, and if it does get pushed into water it floats and can only back out.
+  A speeder wedged against a lip hops over it by itself after a moment; a hull that ends up inside a block lifts out.
+- **Dismounting** puts you on the ground **beside** the hull, and a parked speeder or boat is **solid** — you can
+  stand on it, not walk through it.
+- **Boarding:** walk up to your parked speeder or boat — the centre prompt reads **Board (E) · Pack up (X)** (pad and
+  touch: the USE button boards, the ACT list carries the pack-up).
+- **Lost it?** Walk within 5 m to pack it up (the HUD names the vehicle and its distance while it is within 30 m).
+  If it is somewhere you cannot get to — the far shore, a ravine — go to your landed ship's **cockpit or console**
+  and press **X**: the ship **recalls** every speeder and boat you left out on this world **straight into your
+  inventory**. Only when no slot is free is it parked beside the ship instead — on the cell nearest you, with a
+  "look here" marker on the spot and its distance in the message. Only from the landed ship, never while someone
+  drives it, never from another world. Dying while driving releases the seat, so you can board or pack it up again
+  afterwards.
 
 #### Boat (water vehicle)
 - The **boat** (`boat`) is the water kind of the same system — an early-game workshop craft with **no
@@ -1208,13 +1442,16 @@ separate unlock; admins can still disable it through server world rules.
 - Any held **building material** can be re-formed into a non-cube **shape** — **slab, pyramid, dome (half-sphere),
   sphere, ramp, stairs, cone, cylinder, panel** (thin plate), **post** (slim pillar), **beam** (horizontal bar),
   **low ramp** (gentle half-height wedge), **quarter cube** (small corner block), plus the **furniture forms**:
-  **table, chair, fence** (posts + rails that connect across cells), **sheet** (an ultra-thin 1/16 plate for
-  veneers) and **pot** (a small planter) — so a *wooden* table and an *iron* table are the same form on
+  **table, chair, bench, fence** (posts + rails that connect across cells; benches join up too), **sheet** (an
+  ultra-thin 1/16 plate for veneers) and **pot** (a small planter) — so a *wooden* table and an *iron* table are the same form on
   different materials. Every shape still places, mines and
   stacks like a block (form and dye colour combine freely). Shaped forms are **player-craft only**: world-gen,
   settlements, stations and ships stay plain cubes.
-- **Sitting:** press **E** on any **chair**-shaped cell to sit down — the camera settles to seat height and
-  other players see you sitting. Stand up with **E**, jump, crouch or any movement key.
+- **Sitting:** press **E** on any **chair**- or **bench**-shaped cell to sit down — the camera settles to seat height
+  and other players see you sitting. Stand up with **E**, jump, crouch or any movement key.
+- **Beds are two cells long:** placing a bed writes the head end where you aim and the foot end in the cell you are
+  facing (the preview shows both); the foot cell must be free. Mining either half takes the whole bed back, and **E**
+  on either half sets your home spawn. Beds placed before this change stay one cell.
 - Do it in the **Crafting** menu under the **"Formen" / "Shape"** category: pick a building block, choose a form
   button (it's a free 1:1 reshape that keeps the block's colour), and **cube** reverts to a plain block.
 - **Orientation:** by default a shape **auto-orients** — it follows the way you're facing, and building against a
@@ -1259,6 +1496,13 @@ separate unlock; admins can still disable it through server world rules.
   them normally. If a form is ever wiped by an operator, blocks still holding it fall back to plain cubes.
 - **Reporting:** `/reportshape` flags the nearest self-made form for the server operator, the same way
   `/reportpaint` flags a painted block.
+- **Forms over several blocks** — a wardrobe two blocks high, a table two blocks long — are designed in the
+  **Form Editor of the main menu** (§6), not with the small editor here (it tells you so when you open one). In
+  the world they behave like this: the form is **one item**, made from **one block of material per block it
+  spans** and giving them back when you turn it into cubes again; the placement ghost shows **every block** it
+  will take and the game refuses the place when one of them is not free; it can be **turned but not tipped
+  over**; and it comes down **in one piece**, whichever of its blocks is removed and whatever removes it. Not
+  aboard ships and stations, where a self-made form becomes a plain cube as before.
 
 ### Appearance: colours, your pixel face and body paint
 - **Tab → Settings → Appearance** opens one screen for how your figure looks. Along the top are tabs for
@@ -1271,9 +1515,14 @@ separate unlock; admins can still disable it through server world rules.
   in that colour on the canvas, because that is what will show through. The helmet takes the torso colour.
 - **Painting** — left-click paints, right-click erases, **E** is the eraser swatch. **Fill area** floods the
   area you click with the current colour (right-click fills it back to empty, **Shift** replaces that colour
-  everywhere on the face you are on). **Pick colour** takes the colour under the cursor for one click —
-  **Alt+click** or the **middle mouse button** do the same at any time. **Undo** takes the last step back;
-  press it again and the step returns.
+  everywhere on the face you are on); an armed tool colours its own button and label, and the line under the
+  buttons says what your next click will do. **Fill everything** needs no click on the canvas at all: it
+  paints the whole face you are on in the current colour, whatever was there. **Pick colour** takes the colour
+  under the cursor for one click — **Alt+click** or the **middle mouse button** do the same at any time.
+- **Undo / Redo** — **32 steps**, forwards and backwards, with `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y` and **RB**
+  on the pad. The history covers the whole screen: it survives switching tabs, brings the tab back with the
+  step, and it takes back a **base colour** you changed by accident as readily as a brush stroke (one sweep of
+  the colour wheel is one step). Both buttons grey out when there is nothing left to take back or put back.
 - **Colours** — 32 paint colours plus the eraser, arranged so each hue has a lighter and a darker partner for
   shading. The colour wheel picks by hue (outward = more saturated) with a **brightness column** beside it, and
   snaps to the closest palette entry. Faces drawn at the old 16×16 size still work — they are scaled up
@@ -1283,8 +1532,16 @@ separate unlock; admins can still disable it through server world rules.
   limb, headed Left/Right) — click a tile to paint that face, and the tiles update while you draw so you always
   see the whole part. **Clear** wipes only the face you are on, and a fill never runs over onto another face.
   The helmet's front stays open, so your face always shows.
+- **Outfits** — the column on the right keeps up to **eight named looks** (the four body colours, your pixel
+  face and all four paintings). Type a name and press **Save outfit** to store what you are wearing (a new
+  outfit, or an update of the one that already has that name); **click a row to put that outfit on** — every
+  part and every colour at once; **Rename selected** renames the highlighted one, ✕ deletes it. Deleting the
+  outfit you are wearing does not undress you: what you wear is a copy. The same shelf is in the main-menu
+  **Avatar Designer**, over the same eight saved looks — there, loading one only puts it on the figure in the
+  designer and its **Apply** is still what makes it yours.
 - Everything here appears on **your figure** and **on your avatar for every other player** — it is
-  server-persistent, so your look follows you to any world.
+  server-persistent, so your look follows you to any world. When you put a whole outfit on in the game your own
+  figure changes at once; the other players' screens catch up over the next few seconds, one part at a time.
 
 ### Death & respawn
 - At 0 health you respawn at the ship's **Medbay heal-tank** (vitals restored); a salvage capsule may drop
@@ -1299,9 +1556,65 @@ matching Python merge tool (review the diff, translate locale placeholders, comm
 controls (Ship/Station/Town/Material 3D editors): **hold Right-mouse** to look, **WASD** to fly, **Q/E**
 (or Space/Ctrl) up/down, **Mouse wheel** zoom (dolly along your view), **Shift** faster, **F** frame the
 build (or the floor centre when nothing is placed yet), **Left-click** place, **Middle-click** remove,
-**Esc** to exit. A translucent ghost cube shows where a click lands (green = free, red = occupied / out of
-bounds); the floor grid marks every cell with a brighter line every 8 cells. The palette on the left has a
-search box (typing there never moves the camera) and a scrollbar.
+**Esc** to exit. A translucent ghost shows where a click lands **and what it leaves there**: the block in the
+form it will take (a bed as head + foot), the **door** the game will hang (turned by the wall beside the cell,
+as wide as the gap), or a marker's silhouette (a figure on an NPC post, a board, a chest, a terminal, a plate on
+the floor for an area marker, the ship hatch's frame, a ship station's decor). Green = fine; red = occupied,
+out of bounds, or a door with no wall beside it / no two free cells above it — the status line says why.
+Placed doors, silhouettes and decor are drawn in the build and re-fit when a neighbouring cell changes. The
+floor grid marks every cell with a brighter line every 8 cells. The palette on the left has a search box
+(typing there never moves the camera) and a scrollbar.
+
+**Form brush.** The block brush's *Form* row opens the same form grid as the in-game Shape action. *Automatic*
+(the default) gives a block its own form, exactly as the game stamps it when you place it in a world: a bed is
+placed as head **and** foot (removing one half removes both; refused where the foot would not fit), a campfire
+as a slab, a rug as a sheet, a flower pot as a pot, a ladder as a plate against the wall you clicked (a pole
+with no wall), stairs and the stretcher in their forms. *Cube* is an explicit choice. **Doors** are placed as
+door **markers** (Station / Town editor) or door **elements** (Ship editor): click the doorway's floor cell —
+the game finds the wall and the width. Door *blocks* are no longer in the block palette (they stamped as a
+solid wall); only the Station editor keeps them as **hull airlock** blocks, the airtight block in a station's
+outer hull.
+
+**The three editors that need no developer** — what you make in them is yours at once, on any install:
+
+- **Texture Editor.** Every texture of the game on a 64×64 pixel canvas: block tiles, the picture tiles of
+  furniture (bed, campfire — with the areas each face uses drawn in), plants, torches, creature hides, avatar
+  fabrics, the leaves and frames of **doors**, the parts of **factory machines** and, in **icon mode**, the item
+  icons. A block texture with several frames **plays in the world** — a campfire can really flicker. Brush, eraser, fill, pipette, line, rectangle, brush size,
+  mirror symmetry, flip / shift / brightness, undo and redo, up to eight **animation frames**, a 3-D preview on
+  the real shape and a 3×3 view that shows how a tile repeats. **Use for me** puts the texture into *your*
+  texture pack (a folder next to your settings; PNG files you can also edit in any paint program — *Open
+  folder* / *Reload folder*); **Remove mine** brings the shipped one back; **hold "Before"** to compare;
+  **Copy / Paste code** shares a texture as text. A block tile can never get a hole — the editor fills it, so
+  nobody can paint themselves an X-ray view. The editor also opens **inside a world** (Settings tab →
+  *Textures*), where a **world admin** additionally gets **Publish for everyone** / **Take back**.
+  - **World textures:** what an admin publishes is shown to everyone in that world and **wins over your own
+    pack** there. Two switches in the Settings tab are yours alone: *Use my textures* and *Show this world's
+    textures* — the second one is the way out if you do not like what a world shows. The world option *World
+    textures: Admins / Off* decides whether admins may publish at all. `/reporttexture <key>` flags a world
+    texture for the operator; admins remove them with `/texturewipe <key | player | all>`.
+  - **Submit to the developers:** offers your texture for the game itself. You give it a name and a
+    **nickname** (please not your real name — or choose *No name*), may add a note, and tick three boxes: you
+    painted it yourself, the developers may use, change and distribute it with the game, and you are at least 16
+    or your parents agreed. Sent are the texture, those texts, the game version and an anonymous id for the
+    answer — **no e-mail, no location**. The developers look at every submission by hand and answer you **in the
+    game**; a submission that is not adopted is deleted after twelve months at the latest.
+- **Form Editor.** Design the forms your shaping tool places — with a large layer canvas, undo, mirror, shift,
+  a turntable preview in **any material and dye**, and a library that lists every form (duplicate, rename by
+  saving under a new name, delete). The left column holds *My forms* above and the **material list** below —
+  every material with its picture, with a **search field** on top; the material only dresses the preview (in
+  the world a form takes the material you make it from), and the editor remembers it. The *Size in blocks* steppers make a form span **several blocks** (up to
+  3 × 3 × 3, at most eight); the canvas then shows the whole form from above with neighbouring blocks shaded
+  differently, and the budget line counts the most detailed block. It writes the same *My forms* library the
+  shaping tool reads, so everything appears in the world as before.
+- **My Tools.** Give your drill, pistol, blade or scanner **a look of your own**: a small coloured voxel model
+  from fifteen colours, each of which can glow. The look belongs to **you**, not to the tool — everyone sees
+  it in your hand from the next time you enter a world, it changes nothing about what the tool does, and a
+  tool you hand over shows the new owner's look. Up to sixteen tools; *Back to the standard look* undoes it.
+
+All three work with a **gamepad**: the stick moves a cell cursor, **(A)** paints or adds, **(X)** erases,
+**(Y)** picks a colour, the **d-pad up / down** walks layers or frames, **RB** undoes, **Start** switches
+between the canvas and the buttons, **(B)** steps back.
 
 **LOAD — start from an existing design.** The LOAD button in the Ship, Station and Town editors opens a
 sectioned list: **Built-in ships** (every shipped ship type that has a layout — scout, corvette, courier,
@@ -1323,14 +1636,68 @@ and press **Generate**: the same generator the world uses builds a station / set
 room, markers included, ready to edit and save as a template. Villages use the **Surface block** field as their
 material (e.g. `grass`, `sand`, `stone`).
 
+**Town editor — whole settlement or building module (Use as).** Every settlement template is either a **whole
+structure** (the default: world-gen may drop the complete settlement onto a planet exactly as you built it) or a
+**building module**: set **Use as** to *House*, *Market*, *Mission board* or *Greenhouse* and the procedural
+settlement builder uses your building for one plot of that kind — in hamlets and villages when the tier is
+*Hamlet* / *Village*, in towns and cities when it is *Town* / *City*. The size line under the tier then shows the
+plot envelope it must fit (6 × 6 blocks, up to the tier's storey height). The *City …* roles are 32 × 32
+districts of the G.D.S. city (tier *Metropolis*). Place the markers the role needs (an inhabitant, a vendor, a
+mission board, a door); a missing vendor / board / inhabitant is added automatically over the module's centre.
+Put a **Room** marker on the floor of any room you want furnished: the game floods that floor and places a bed,
+a table and chair, crates, a plant and a light in the settlement's style, keeping the door lane and the
+residents' spots clear — procedural buildings are furnished the same way. How often modules appear follows the
+world option *Settlement templates* (*Off* disables whole templates and modules alike); a world keeps the
+layout it was created with. The option is the **share of hand-built settlements** in a new world: *Very rare* 5 %,
+*Rare* 15 %, *Normal* 40 %, *Frequent* 75 % — every other settlement is put together from a kit (*Station templates*
+works the same way for stations).
+
+**Station / Town editor — kit modules, ports and the seal.** Set **Use as** to *Kit module* to build a piece of a
+modular structure. Type the **Kit** it belongs to (or pick one with **Kits…**) and step the **Function**: a
+station module is a *Hub*, *Corridor*, *Crew cabins*, *Canteen*, *Bar*, *Market hall*, *Mission office*,
+*Medbay*, *Hydroponics*, *Storage*, *Hangar* or plain *Room*; a town module takes the plot / district roles
+above. Mark where another module may dock with the **port brushes** at the top of the palette — *Port: door*,
+*Port: wide* and *Port: ladder* (floor / ceiling, the composer drops a ladder into the shaft). Left-click paints
+the port onto an existing wall block, middle-click with a port brush clears it again (the block stays); the
+**Port door** stepper chooses what fills the opened joint (*Slide*, *Energy*, *Hinge* or *Open*). A port is a
+rectangle of wall blocks on one outer face with air behind it; two ports dock when their tag and rectangle match
+on opposite faces. Put a **Cabin** marker where each resident sleeps (one cabin per crew member) and **Lounge**
+markers on canteen / bar seats. **Check seal** flood-fills from outside: every cell where open space would reach
+the inside turns red — a station module with a leak or a broken port is never saved. **Assemble** runs the real
+composer with the kit named in the field and the current **Seed** and loads the result as a whole structure to
+walk through (your own templates are included), so you can see how the pieces fit before you start a new world.
+
+**Town editor — planet materials, style, taverns and workshops.** The *Planet materials* section of the palette holds
+*Wall*, *Accent*, *Roof*, *Floor* and *Path*: build with them and the game puts the planet's own material there when the
+module is stamped — a village wall becomes sand, ice or grass, a town wall iron; the accent is crystal for aliens. With
+*Use as* on *Kit module*, the **Built for** stepper marks a module for *Humans* or *Aliens*; a kit only puts the
+settlement's own kind into its plots. *Tavern* and *Workshop* are functions of their own (they take a house plot): put
+the **Innkeeper** or **Craftsman** marker into the room and it is furnished as a tavern (counter, tables and chairs — the
+residents' evening seats) or a workshop (workbench, forge, crates). Every building people live in needs a room with a
+**Room** marker and space for a bed. Kit modules of the shipped kits are 8 × 8 blocks; the size line shows the storey
+height they may use.
+
+**Kits…** (on the *Use as* row, in both modes) opens the kit panel: every shipped kit of the editor's kind plus your own.
+The **…** button beside a module row opens the module picker — every module of the kit's kind with its function, tier,
+size and style, filterable. A kit has a key, name, kind
+(*station*, *settlement* or *city*), size tier, weight and planet types, how many modules it uses (min / max)
+and one row per module: minimum and maximum copies, *Required*, draw weight and whether the composer may rotate
+it. Station kits also name a start module and a maximum extent, and how many **Solar wings**, **Antennas** and
+**Domes** the station gets on the outside (0 = none; **Assemble** shows them, blue solar cells included); settlement kits set the plot grid (columns,
+rows, plot stride, building size, storeys, *Modules only*); city kits set the district grid, district size,
+street width, height and the district map. **Save kit** writes it to the user-content folder (live in the next
+new world, drawn from the same weighted table as the complete templates) and an export bundle for
+`tools/merge_structure.py`. Saved worlds keep the exact composition they were created with — reloading never
+rebuilds a station, village or city differently.
+
 **Textures.** Placed blocks show their real block textures (dye and glow tint them like in-game); station tiles,
 ship elements and interaction markers are drawn as plain colour swatches so they stand out.
 
 | Editor | Designs | Export → merge tool |
 |---|---|---|
 | **Ship Editor** | Custom ship types (hull, viewports, lights, engine, hatch, station tiles) | `ship.json` + `layout.json` → `tools/merge_ship.py` |
-| **Station Editor** | Space stations (hull/glass/light + hangar/vendor/mission/heal/quarters/console markers) | `structure.json` + `layout.json` → `tools/merge_structure.py` |
-| **Town Editor** | Settlements/villages (walls, windows, ladders/stairs, lamps + vendor/mission/NPC markers) | `structure.json` + `layout.json` → `tools/merge_structure.py` |
+| **Station Editor** | Space stations or station kit modules (hull/glass/light + hangar/vendor/mission/heal/quarters/console/cabin/lounge markers, docking ports) and station kits | `structure.json` + `layout.json` (+ `kit.json`) → `tools/merge_structure.py` |
+| **Town Editor** | Settlements/villages or their modules (walls, windows, ladders/stairs, lamps + vendor/mission/NPC markers) and settlement / city kits | `structure.json` + `layout.json` (+ `kit.json`) → `tools/merge_structure.py` |
 | **Avatar Editor** | Player skin (per-part colours + gear preview) and up to eight saved **outfits** | `skin.json` → `tools/merge_avatar.py` (Apply also saves locally) |
 | **Item & Recipe Editor** | Items (stats, tool/weapon properties, worn + eaten effects) + recipes (station, inputs, market vendor theme) + optional blueprint gating | `content.json` → `tools/merge_recipe.py` |
 | **Material Editor** | Block materials: paint a 64×64 tile, set mining (hardness/tool/drops), palette section, dyeable/shapeable, look (gloss/metal/glow/colour), world spawn (frequency/depth/world-type) | `material.json` + `texture.bytes` → `tools/merge_material.py` |
@@ -1340,7 +1707,9 @@ ship elements and interaction markers are drawn as plain colour swatches so they
 look shown on the figure (a new outfit, or an update of the one that already has that name); click an
 outfit to load it back onto the figure, **Rename selected** renames the highlighted one to the name field,
 ✕ deletes it. Only **Apply** changes the avatar you wear in the game — loading or deleting an outfit never
-does — so the same look stays on your avatar until you apply another one.
+does — so the same look stays on your avatar until you apply another one. The same eight outfits are also
+reachable **in the game**, in the Appearance screen's outfit column, where clicking one puts it on straight
+away (see §Appearance).
 
 **Material Editor painting:** Left-click paints with the selected swatch, Right-click erases to the base
 colour; Fill/Flat/Clear and an RGB base-colour picker are in the side panel. "World type" targets which
@@ -1362,7 +1731,9 @@ reminds you.
 - Press **Enter**, type, **Enter** to send (scrollback in the chat panel). Normal chat requires a **comm
   radio** in your inventory; messages are rate-limited and length-capped.
 - The scrollback **fades out on its own** a few seconds after the last line (opening the chat box always
-  brings the recent lines back). Prefer it always visible — or never? **Settings → Comfort → Chat
+  brings the recent lines back). **Long answers scroll:** while the chat box is open, the **mouse wheel** or
+  **PageUp/PageDown** pages back through the recent lines — a dim ▲/▼ row says when more is out of view. The
+  answer to a command you typed keeps the whole chat column for a moment, even while VEGA is talking. Prefer it always visible — or never? **Settings → Comfort → Chat
   display** offers *Fade out / Always on / Off*, and **J** hides/shows it on the spot for the session.
 - **Kept friendly by default.** The server screens every line before it is relayed: swear words are
   replaced by `***` (you are told once per session), slurs and hate terms are not sent at all (you are
@@ -1467,6 +1838,8 @@ rejections) appear in the **chat scrollback**, not just the brief HUD toast.
 | `/tpp Player` | Teleport to a player on the body you are on — you land **beside** them, never inside them (#1055) |
 | `/settime day\|night\|…` | Set the world time of day |
 | `/setweather clear\|storm\|…` | Set the world weather |
+| `/giant colossus\|sandworm` | Summon this world's colossus or sandworm near you (a sandworm needs a sand sea) — for testing |
+| `/arachnid` | Summon this world's arachnid near you (rolls one into the world's fauna first if it has none) — for testing |
 | `/fly` | Toggle free flight for yourself (no gravity). In **Creative/Sandbox** worlds everybody can already fly — double-tap **Space**; this is the per-player admin cheat for the other modes |
 | `/god` | Toggle invulnerability |
 | `/instant` | Toggle free/instant crafting |
@@ -1489,7 +1862,8 @@ and easy to mistype. The numbering is stable for a world: `village2` is the same
 |---|---|
 | `ship` | Your own parked ship (the medbay heal tank — same spot the suit teleporter recalls to) |
 | `pad` | A landing pad |
-| `village` / `ruin` | An inhabited settlement / a ruined one (`settlement` also works) |
+| `city` | A city or town — the G.D.S. metropolis too (`stadt` also works) |
+| `village` / `ruin` | An inhabited village or hamlet / a ruined settlement (`settlement`, `dorf`, `siedlung` also work) |
 | `vault` | A buried vault's surface pillar ring |
 | `wreck` | The crashed ship — even before an NPC has pointed you at it |
 | `factory` | A factory's production terminal |
@@ -1523,6 +1897,7 @@ and that option is off by default on hosted worlds.
 | `/kick Player` | Ends that player's session right now. **Momentary** — they can come back; to keep someone out for good, block them in *Manage world → Manage players* (below) |
 | `/paintwipe Player` (or `#designId`) | Removes that player's painted block designs **everywhere at once** (or a single design by id, taken from the report log). Wiped designs stay wiped across restarts |
 | `/mode Player survival\|creative\|world` | Per-player game mode — see *Per-player mode* below |
+| `/gamemode explorer\|creative\|sandbox` | The whole world's mode — see *World mode* below. Alone it names the current mode |
 
 #### `/silence` — a pause instead of a kick
 
@@ -1550,6 +1925,15 @@ and the setting **persists** — it survives rejoins and restarts until an admin
 tools in this section it is moderation, not a cheat: it works even when admin cheats are off. The world's
 own difficulty sliders (oxygen/hunger rates, hazards) still apply to a survival-playing player, and world
 options like PvP or structure damage are never per-player.
+
+#### World mode — Explorer, Creative or Sandbox on a running world
+
+The three modes of the new-world screen can be switched later: **`/gamemode sandbox`** (also `/mode sandbox`,
+`/modus`, and the German words `entdecker`, `kreativ`, `sandkasten`). **Explorer** is the normal survival game;
+**Creative** keeps survival but everybody flies and gets every blueprint, every ship and the creative kit;
+**Sandbox** adds free crafting, no oxygen or hunger and no planet enemies — and the inventory's **All items** page.
+The change is saved with the world and reaches everyone online at once. Going back to Explorer takes nothing away:
+unlocked blueprints, ships and kit items stay. World admins only; it works with cheats off.
 
 #### Blocking players from your own hosted world
 

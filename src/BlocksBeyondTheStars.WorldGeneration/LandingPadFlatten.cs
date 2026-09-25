@@ -13,24 +13,83 @@ public readonly struct LandingPadFlatten
     public readonly int SurfaceY;
     public readonly int Radius;
 
-    /// <summary>An islet pad (#1453): the pad sits ABOVE the sea on an ocean-class world whose pad column
-    /// is all water, so the generator raises a sand mound from the seabed up to <see cref="SurfaceY"/> —
-    /// flat over <see cref="Radius"/>, then a 1:1 beach slope out to <see cref="IsletRadius"/>.</summary>
+    /// <summary>An islet pad (#1453/#1620): the pad sits ABOVE the sea on a world whose pad footprint is
+    /// all water, so the generator raises a mound from the seabed up to <see cref="SurfaceY"/> — level
+    /// over <see cref="PlateauRadius"/>, then a 2:1 beach slope out to <see cref="IsletRadius"/>, both
+    /// rims wobbled by seeded noise so the island is not a perfect disc.</summary>
     public readonly bool Islet;
+    public readonly int PlateauRadius;
     public readonly int IsletRadius;
 
+    /// <summary>The islet as worlds before terrain generation 2 got it (#1453, #1665): a plain sand mound with a
+    /// 1:1 slope from the pad rim straight down to the sea, no plateau, no rim wobble, no flora. A save created
+    /// before the ocean-pad wave keeps exactly this shape, so the mound a player already lives on never changes
+    /// under them when a neighbouring chunk generates later.</summary>
+    public readonly bool ClassicShape;
+
+    /// <summary>A lava islet (terrain generation 8): the islet stands in lava, so it is built from basalt through and
+    /// through — ash and sand are granular and would sink into woken lava — and grows no flora.</summary>
+    public readonly bool Molten;
+
     public LandingPadFlatten(int centerX, int centerZ, int surfaceY, int radius)
-        : this(centerX, centerZ, surfaceY, radius, islet: false, isletRadius: radius)
+        : this(centerX, centerZ, surfaceY, radius, islet: false, plateauRadius: radius, isletRadius: radius)
     {
     }
 
-    public LandingPadFlatten(int centerX, int centerZ, int surfaceY, int radius, bool islet, int isletRadius)
+    public LandingPadFlatten(int centerX, int centerZ, int surfaceY, int radius, bool islet, int plateauRadius, int isletRadius, bool classicShape = false,
+        bool molten = false)
     {
         CenterX = centerX;
         CenterZ = centerZ;
         SurfaceY = surfaceY;
         Radius = radius;
         Islet = islet;
-        IsletRadius = islet ? System.Math.Max(radius, isletRadius) : radius;
+        PlateauRadius = islet ? System.Math.Max(radius, plateauRadius) : radius;
+        IsletRadius = islet ? System.Math.Max(PlateauRadius, isletRadius) : radius;
+        ClassicShape = islet && classicShape;
+        Molten = islet && !classicShape && molten;
+    }
+
+    /// <summary>Field-wise equality (the generator's mode checks and the chunk-generation pool compare pad lists).</summary>
+    public bool SameAs(LandingPadFlatten other)
+        => CenterX == other.CenterX && CenterZ == other.CenterZ && SurfaceY == other.SurfaceY && Radius == other.Radius
+            && Islet == other.Islet && PlateauRadius == other.PlateauRadius && IsletRadius == other.IsletRadius
+            && ClassicShape == other.ClassicShape && Molten == other.Molten;
+
+    /// <summary>Whether two pad lists hold the same pads in the same order (null = empty).</summary>
+    public static bool SameList(IReadOnlyList<LandingPadFlatten>? a, IReadOnlyList<LandingPadFlatten>? b)
+    {
+        int count = a?.Count ?? 0;
+        if ((b?.Count ?? 0) != count)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            if (!a![i].SameAs(b![i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>A detached copy of a pad list (the server's list is mutable and grows in place).</summary>
+    public static LandingPadFlatten[] Snapshot(IReadOnlyList<LandingPadFlatten>? pads)
+    {
+        if (pads is null || pads.Count == 0)
+        {
+            return System.Array.Empty<LandingPadFlatten>();
+        }
+
+        var copy = new LandingPadFlatten[pads.Count];
+        for (int i = 0; i < copy.Length; i++)
+        {
+            copy[i] = pads[i];
+        }
+
+        return copy;
     }
 }

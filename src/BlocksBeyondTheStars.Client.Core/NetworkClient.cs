@@ -63,6 +63,9 @@ namespace BlocksBeyondTheStars.Client
         public event Action<PlanetEnemyDefeated>? PlanetEnemyDefeated;
         public event Action<SentryShot>? SentryShotReceived; // #1214: cosmetic base-turret tracer
         public event Action<CreatureList>? CreaturesReceived;
+
+        /// <summary>#1998: a thump, stomp, breach or strike at a spot — dust, a camera shake, maybe a push.</summary>
+        public event Action<WorldFx>? WorldFxReceived;
         public event Action<ContainerList>? ContainersReceived;
 
         /// <summary>Ground drop packets on this body (#853) — the bundles a full inventory left lying around.
@@ -102,6 +105,7 @@ namespace BlocksBeyondTheStars.Client
         public event Action<PlayerLeft>? PlayerLeftReceived;
         public event Action<PlayerFace>? PlayerFaceReceived; // another player's custom pixel face
         public event Action<PlayerBodyPaint>? PlayerBodyPaintReceived; // another player's body painting (#874)
+        public event Action<PlayerToolLook>? PlayerToolLookReceived;   // another player's look for a tool (#1963)
 
         // Player-painted block designs (#817): the save-global registry (join list + live additions/wipes).
         public event Action<PaintDesignData>? PaintDesignReceived;
@@ -110,6 +114,10 @@ namespace BlocksBeyondTheStars.Client
         // Player-designed block forms (#843): the same pair for the form registry.
         public event Action<CustomShapeData>? CustomShapeReceived;
         public event Action<CustomShapeList>? CustomShapeListReceived;
+
+        // World textures (#1959): the list arrives in pages after the join, single changes while playing.
+        public event Action<WorldTextureData>? WorldTextureReceived;
+        public event Action<WorldTextureList>? WorldTextureListReceived;
         public event Action<OwnedShips>? OwnedShipsReceived;
         public event Action<WorldEnvironment>? WorldEnvironmentReceived;
         public event Action<WorldReset>? WorldResetReceived;
@@ -161,6 +169,12 @@ namespace BlocksBeyondTheStars.Client
         // Weather-scanner reading (#900): what the sky is doing, what is coming and how far off the front is.
         public event Action<WeatherForecast>? WeatherForecastReceived;
 
+        // Far terrain (#1821): the persisted builds of one far-view tile (only for the current world).
+        public event Action<FarTerrainTile>? FarTerrainTileReceived;
+
+        // Far terrain (#1820): the current world's generator settings (after every join / world switch).
+        public event Action<FarTerrainWorldInfo>? FarTerrainWorldInfoReceived;
+
         // First-scan ledger backing the Codex "Discoveries" chapter (#484): a full snapshot on join,
         // then a one-entry delta per first-time scan.
         public event Action<DiscoveryLog>? DiscoveryLogReceived;
@@ -189,6 +203,9 @@ namespace BlocksBeyondTheStars.Client
         public event Action<CrewList>? CrewListReceived;
         public event Action<CrewInviteNotice>? CrewInviteReceived;
         public event Action<MarkerList>? MarkerListReceived;
+
+        // Player notes (#1844): the server pushes the full set on join and after every set/remove.
+        public event Action<NoteList>? NoteListReceived;
 
         // Creature taming + companions: the live ritual state, the finished result, and the player's roster.
         public event Action<TameProgress>? TameProgressReceived;
@@ -380,6 +397,12 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>Picks a reply in the active NPC dialogue (#1127). The server owns the walk.</summary>
         public void SendNpcDialogChoice(int choiceIndex) => Send(new NpcDialogChoiceIntent { ChoiceIndex = choiceIndex });
 
+        /// <summary>Answers a reporter's interview (2026-09 professions) — the server screens and stores it as local news.</summary>
+        public void SendInterviewAnswer(int npcId, string text) => Send(new InterviewAnswerIntent { NpcId = npcId, Text = text ?? string.Empty });
+
+        /// <summary>Takes an item from the Sandbox "All items" catalog (#1930; the server checks the mode).</summary>
+        public void SendCreativeTakeItem(string itemKey, int count) => Send(new CreativeTakeItemIntent { ItemKey = itemKey ?? string.Empty, Count = count });
+
         /// <summary>Skips the VEGA onboarding (grants the whole stage chain server-side) — or restarts it
         /// from the intro when <paramref name="restart"/> is set (the way back after a skip).</summary>
         public void SendSkipOnboarding(bool restart = false) => Send(new SkipOnboardingIntent { Restart = restart });
@@ -387,9 +410,11 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>World admin: live-edits the gameplay world options (empty fields = unchanged).</summary>
         public void SendSetWorldRules(string creatures = "", string planetEnemies = "", string spaceNpcs = "", string ufos = "",
             string bandits = "", string instantTravel = "", string keepInventory = "", string keepShip = "", string hazards = "",
-            string autoAim = "", string starterTeleporter = "", string frontierDanger = "", string baseVisitors = "")
+            string autoAim = "", string starterTeleporter = "", string frontierDanger = "", string baseVisitors = "",
+            string worldTextures = "")
             => Send(new SetWorldRulesIntent
             {
+                WorldTextures = worldTextures,
                 CreatureAbundance = creatures,
                 PlanetEnemies = planetEnemies,
                 SpaceNpcEnemies = spaceNpcs,
@@ -404,6 +429,30 @@ namespace BlocksBeyondTheStars.Client
                 FrontierDanger = frontierDanger,
                 BaseVisitors = baseVisitors,
             });
+
+        /// <summary>World admin: publishes a texture for everyone in this world (#1959). The server validates key,
+        /// animation, pixels and the alpha rule again, and answers non-admins with a reject toast. False when the
+        /// frames are not something the game could show (nothing is sent then).</summary>
+        public bool SendPublishWorldTexture(string key, IReadOnlyList<byte[]> frames, int fps)
+        {
+            if (!BlocksBeyondTheStars.Shared.Textures.TextureTiles.IsValidKey(key) || frames == null
+                || !BlocksBeyondTheStars.Shared.Textures.TextureTiles.IsValidAnimation(frames.Count, fps))
+            {
+                return false;
+            }
+
+            string data = BlocksBeyondTheStars.Shared.Textures.WorldTextureCodec.Encode(frames);
+            if (data.Length == 0)
+            {
+                return false;
+            }
+
+            Send(new PublishWorldTextureIntent { Key = key, Frames = frames.Count, Fps = frames.Count > 1 ? fps : 0, Data = data });
+            return true;
+        }
+
+        /// <summary>World admin: takes a world texture back — everyone sees the official one again.</summary>
+        public void SendRemoveWorldTexture(string key) => Send(new RemoveWorldTextureIntent { Key = key ?? string.Empty });
 
         /// <summary>Hyperjump into a (possibly unvisited) star system, arriving in flight mode there.</summary>
         public void SendHyperjumpSystem(string systemId) => Send(new HyperjumpSystemIntent { SystemId = systemId });
@@ -555,6 +604,8 @@ namespace BlocksBeyondTheStars.Client
 
         public void SendLeaveSpace() => Send(new LeaveSpaceIntent());
 
+        public void SendTransitLaunchDone() => Send(new TransitLaunchDoneIntent());
+
         /// <summary>Leave space and land on a body (empty = the current body), on a chosen landing pad (item 38;
         /// padIndex -1 = auto-pick the first free pad).</summary>
         public void SendLeaveSpace(string destinationBodyId, int padIndex = -1)
@@ -621,7 +672,8 @@ namespace BlocksBeyondTheStars.Client
 
         public void SendDisassemble(string itemKey) => Send(new DisassembleIntent { ItemKey = itemKey });
 
-        public void SendScan(string subjectType, string subjectKey) => Send(new ScanIntent { SubjectType = subjectType, SubjectKey = subjectKey });
+        public void SendScan(string subjectType, string subjectKey, string? entityId = null)
+            => Send(new ScanIntent { SubjectType = subjectType, SubjectKey = subjectKey, EntityId = entityId ?? string.Empty });
 
         public void SendScanEntity(string entityId) => Send(new ScanEntityIntent { EntityId = entityId });
 
@@ -667,8 +719,19 @@ namespace BlocksBeyondTheStars.Client
         public void SendShipMove(Vector3f pos, float yaw = 0f) => Send(new ShipMoveIntent { X = pos.X, Y = pos.Y, Z = pos.Z, Yaw = yaw });
 
         /// <summary>EVA build/mine on a voxel structure (item 20 S2). Design-local cell coords.</summary>
-        public void SendStructureEdit(string structureId, int x, int y, int z, bool mine, string itemKey = "")
-            => Send(new StructureEditIntent { StructureId = structureId, X = x, Y = y, Z = z, Mine = mine, ItemKey = itemKey });
+        public void SendStructureEdit(string structureId, int x, int y, int z, bool mine, string itemKey = "",
+            int upFace = -1, int yaw = -1)
+            => Send(new StructureEditIntent
+            {
+                StructureId = structureId,
+                X = x,
+                Y = y,
+                Z = z,
+                Mine = mine,
+                ItemKey = itemKey,
+                UpFace = upFace,
+                Yaw = yaw,
+            });
 
         /// <summary>Deploy a station core in front of the suit to start a player-built station (item 20 S4).</summary>
         public void SendDeployStationCore() => Send(new DeployStationCoreIntent());
@@ -676,6 +739,9 @@ namespace BlocksBeyondTheStars.Client
         public void SendBoardStation(string stationId) => Send(new BoardStationIntent { StationId = stationId });
 
         public void SendLeaveStation() => Send(new LeaveStationIntent());
+
+        /// <summary>#1842: switch zero-g construction mode on the boarded player station on/off for this player.</summary>
+        public void SendSetStationZeroG(bool enabled) => Send(new SetStationZeroGIntent { Enabled = enabled });
 
         public void SendUseStation(string station) => Send(new UseStationIntent { Station = station });
 
@@ -716,6 +782,12 @@ namespace BlocksBeyondTheStars.Client
         public void SendMinigameResult(string gameKey, int score, int rating, bool completed)
             => Send(new MinigameResultIntent { GameKey = gameKey ?? string.Empty, Score = score, Rating = rating, Completed = completed });
 
+        // --- Far terrain (#1821) ---
+
+        /// <summary>Asks for the persisted builds of far-view tiles: flat (tileX, tileZ) pairs on the canonical grid.</summary>
+        public void SendFarTerrainTileRequest(int[] tilePairs)
+            => Send(new FarTerrainTileRequest { WorldId = CurrentWorldId, Tiles = tilePairs });
+
         // --- Navigation & missions (M23) ---
         public void SendRequestStarMap() => Send(new RequestStarMap());
 
@@ -742,6 +814,11 @@ namespace BlocksBeyondTheStars.Client
         /// clears it). Sent per painted part on join and on each edit — out of band from presence (#874).</summary>
         public void SendBodyPaint(int part, string pixels)
             => Send(new SetBodyPaintIntent { Part = part, Pixels = pixels ?? string.Empty });
+
+        /// <summary>Sets (or, with an empty model, clears) the player's own look for a tool (#1963). Shares the
+        /// server's 2 s appearance throttle with the face and the body paintings — pace the sends.</summary>
+        public void SendToolLook(string itemKey, string model)
+            => Send(new SetToolLookIntent { ItemKey = itemKey ?? string.Empty, Model = model ?? string.Empty });
 
         /// <summary>Paints a 32×32 design onto a placed world block (empty pixels clears the paint). The
         /// server dedups the bitmap into the save-global design registry and answers via the ordinary
@@ -781,6 +858,15 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>Raises a transient "look here" ping at a world position (server-side TTL + rate limit).</summary>
         public void SendMarkerPing(float x, float y, float z)
             => Send(new MarkerActionIntent { Kind = "ping", X = x, Y = y, Z = z });
+
+        // --- Player notes (#1844) ---
+        /// <summary>Creates (empty id) or updates (own id) a titled note. The server clamps, screens and echoes
+        /// the whole list back.</summary>
+        public void SendNoteSet(string id, string title, string body)
+            => Send(new NoteActionIntent { Kind = "set", Id = id ?? string.Empty, Title = title ?? string.Empty, Body = body ?? string.Empty });
+
+        /// <summary>Deletes one of my notes.</summary>
+        public void SendNoteRemove(string id) => Send(new NoteActionIntent { Kind = "remove", Id = id ?? string.Empty });
 
         /// <summary>Ends an existing alliance with a partner (one-sided — either side may dissolve it).</summary>
         public void SendDissolveAlliance(string partnerId) => Send(new DissolveAllianceIntent { PartnerId = partnerId ?? string.Empty });
@@ -828,6 +914,9 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>Report a hard collision while driving (the server computes the hull damage).</summary>
         public void SendSpeederImpact(string speederId, float speed)
             => Send(new SpeederImpactIntent { SpeederId = speederId ?? string.Empty, Speed = speed });
+
+        /// <summary>Ask the landed ship to bring one of my deployed vehicles back beside it (#1661).</summary>
+        public void SendRecallVehicle(string vehicleId) => Send(new RecallVehicleIntent { VehicleId = vehicleId ?? string.Empty });
 
         /// <summary>Pumps the transport and dispatches up to one frame's worth of queued payloads; call once
         /// per frame from a MonoBehaviour Update. Anything beyond the budget stays queued for the next frame
@@ -890,6 +979,10 @@ namespace BlocksBeyondTheStars.Client
                 case JoinRejected m: JoinRejected?.Invoke(m); break;
                 case ChunkDataMessage m: if (AcceptWorldStream(m.WorldId, m)) { ChunkReceived?.Invoke(m); } break;
                 case BlockChanged m: if (AcceptWorldStream(m.WorldId, m)) { BlockChanged?.Invoke(m); } break;
+                case FarTerrainWorldInfo m: FarTerrainWorldInfoReceived?.Invoke(m); break; // #1820
+                case FarTerrainTile m: // #1821: another world's tile is simply dropped — the far view re-asks per world
+                    if (m.WorldId == 0 || m.WorldId == CurrentWorldId) { FarTerrainTileReceived?.Invoke(m); }
+                    break;
                 case InventoryUpdate m: InventoryUpdated?.Invoke(m); break;
                 case PlayerStateUpdate m: PlayerStateUpdated?.Invoke(m); break;
                 case CraftResult m: CraftCompleted?.Invoke(m); break;
@@ -913,6 +1006,7 @@ namespace BlocksBeyondTheStars.Client
                 case PlanetEnemyDefeated m: PlanetEnemyDefeated?.Invoke(m); break;
                 case SentryShot m: SentryShotReceived?.Invoke(m); break;
                 case CreatureList m: CreaturesReceived?.Invoke(m); break;
+                case WorldFx m: WorldFxReceived?.Invoke(m); break;
                 case ContainerList m: ContainersReceived?.Invoke(m); break;
                 case DropPacketList m: DropPacketsReceived?.Invoke(m); break;
                 case ShipPlacement m: ShipPlacementReceived?.Invoke(m); break;
@@ -940,10 +1034,13 @@ namespace BlocksBeyondTheStars.Client
                 case PlayerLeft m: PlayerLeftReceived?.Invoke(m); break;
                 case PlayerFace m: PlayerFaceReceived?.Invoke(m); break;
                 case PlayerBodyPaint m: PlayerBodyPaintReceived?.Invoke(m); break;
+                case PlayerToolLook m: PlayerToolLookReceived?.Invoke(m); break;
                 case PaintDesignData m: PaintDesignReceived?.Invoke(m); break;
                 case PaintDesignList m: PaintDesignListReceived?.Invoke(m); break;
                 case CustomShapeData m: CustomShapeReceived?.Invoke(m); break;
                 case CustomShapeList m: CustomShapeListReceived?.Invoke(m); break;
+                case WorldTextureData m: WorldTextureReceived?.Invoke(m); break;
+                case WorldTextureList m: WorldTextureListReceived?.Invoke(m); break;
                 case OwnedShips m: OwnedShipsReceived?.Invoke(m); break;
                 case WorldEnvironment m: WorldEnvironmentReceived?.Invoke(m); break;
                 case WorldReset m:
@@ -982,6 +1079,7 @@ namespace BlocksBeyondTheStars.Client
                 case CrewList m: CrewListReceived?.Invoke(m); break;
                 case CrewInviteNotice m: CrewInviteReceived?.Invoke(m); break;
                 case MarkerList m: MarkerListReceived?.Invoke(m); break;
+                case NoteList m: NoteListReceived?.Invoke(m); break;
                 case StoryStateMessage m: StoryStateReceived?.Invoke(m); break;
                 case NetFragmentList m: NetFragmentsReceived?.Invoke(m); break;
                 case NetFragmentRevealed m: NetFragmentRevealedReceived?.Invoke(m); break;

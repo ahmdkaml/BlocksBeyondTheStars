@@ -46,6 +46,38 @@ namespace BlocksBeyondTheStars.Client
             _go.SetActive(true);
         }
 
+        /// <summary>Shows a closed door of <paramref name="kind"/> (width 1) in a world cell, turned for the wall
+        /// axis (#1975): the door the server will hang when the held door block is placed here. The mesh comes from
+        /// the shared <see cref="DoorGeometry"/>, so the hologram cannot promise a door the world then hangs differently.</summary>
+        public void ShowDoor(Vector3Int cell, string kind, bool axisX)
+        {
+            if (_go == null)
+            {
+                Create();
+            }
+
+            // Door keys live below zero, apart from the (shape, yaw, up-face) keys of block ghosts.
+            int kindIndex = kind switch { DoorBlocks.Slide => 0, DoorBlocks.Wood => 1, DoorBlocks.Energy => 2, _ => 3 };
+            int key = -1 - (kindIndex * 2 + (axisX ? 1 : 0));
+            if (key != _builtKey)
+            {
+                _builtKey = key;
+                var verts = new List<Vector3>();
+                var cols = new List<Color>();
+                var tris = new List<int>();
+                DoorMesh.Append(verts, cols, tris, DoorGeometry.Closed(kind, 1f), axisX, Vector3.zero, _ => Color.white, withField: false);
+                _mesh.Clear();
+                _mesh.SetVertices(verts);
+                _mesh.SetTriangles(tris, 0);
+                _mesh.RecalculateNormals();
+                _mesh.RecalculateBounds();
+            }
+
+            // The door's origin is the doorway centre on the floor, not the cell's min corner.
+            _go.transform.position = new Vector3(cell.x + 0.5f, cell.y, cell.z + 0.5f);
+            _go.SetActive(true);
+        }
+
         public void Hide()
         {
             if (_go != null && _go.activeSelf)
@@ -92,20 +124,75 @@ namespace BlocksBeyondTheStars.Client
 
         private void BuildMesh(int shapeIndex, int yaw, int upFace)
         {
+            // A player form over several blocks (#1961) turns but never tips — the server pins it upright, so the
+            // ghost must not promise a tilt. Its further blocks are drawn below, like the bed's foot half.
+            string formVoxels = null;
+            if (ShapeCode.IsCustomShape(shapeIndex) && BlockShapeGeometry.TryGetCustomVoxels(shapeIndex, out string registered)
+                && CustomShape.IsMulti(registered))
+            {
+                formVoxels = registered;
+                upFace = ShapeCode.UpPlusY;
+            }
+
             var faces = BlockShapeGeometry.Build(shapeIndex, yaw, upFace);
             var verts = new List<Vector3>();
             var tris = new List<int>();
+
+            void Add(BlockShapeGeometry.Face f)
+            {
+                int b = verts.Count;
+                verts.Add(f.A); verts.Add(f.B); verts.Add(f.C);
+                tris.Add(b); tris.Add(b + 1); tris.Add(b + 2);
+                if (f.IsQuad)
+                {
+                    verts.Add(f.D);
+                    tris.Add(b); tris.Add(b + 2); tris.Add(b + 3);
+                }
+            }
+
             if (faces != null && faces.Count > 0)
             {
                 foreach (var f in faces)
                 {
-                    int b = verts.Count;
-                    verts.Add(f.A); verts.Add(f.B); verts.Add(f.C);
-                    tris.Add(b); tris.Add(b + 1); tris.Add(b + 2);
-                    if (f.IsQuad)
+                    Add(f);
+                }
+
+                if (formVoxels != null)
+                {
+                    // Every block the form will take — the server refuses the place when one of them is not
+                    // free, so a ghost block inside a wall is the warning itself.
+                    int cells = CustomShape.CellCount(formVoxels);
+                    for (int cell = 1; cell < cells; cell++)
                     {
-                        verts.Add(f.D);
-                        tris.Add(b); tris.Add(b + 2); tris.Add(b + 3);
+                        var part = BlockShapeGeometry.Build(shapeIndex, yaw, upFace, cell);
+                        if (part == null)
+                        {
+                            continue;
+                        }
+
+                        var (ox, oy, oz) = CustomShape.CellOffset(formVoxels, cell, yaw);
+                        var offset = new Vector3(ox, oy, oz);
+                        foreach (var f in part)
+                        {
+                            Add(f.Map(p => p + offset));
+                        }
+                    }
+                }
+
+                // A bed is two cells (#1846): preview the foot half on the cell the head's yaw points to, so
+                // "where does the other half go?" is answered by looking. The server refuses the place when
+                // that cell is not free, so a ghost foot inside a wall is the warning itself.
+                if (shapeIndex == (int)BlockShape.BedHead
+                    && FurnitureShapes.TryBedPartnerOffset(ShapeCode.Pack(shapeIndex, yaw, upFace), out int dx, out int dz))
+                {
+                    var foot = BlockShapeGeometry.Build((int)BlockShape.BedFoot, yaw, upFace);
+                    var shift = new Vector3(dx, 0f, dz);
+                    if (foot != null)
+                    {
+                        foreach (var f in foot)
+                        {
+                            Add(f.Map(p => p + shift));
+                        }
                     }
                 }
             }

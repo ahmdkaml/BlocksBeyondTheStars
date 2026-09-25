@@ -107,7 +107,11 @@ public static class FrequencyExtensions
 /// </summary>
 public sealed class WorldDescription
 {
-    public int StarSystemCount { get; set; } = 8;
+    /// <summary>Systems in a fixed galaxy. 12 since #1616 (was 8): the launcher's "Normal" tier sends no
+    /// explicit count, so this default IS a normal singleplayer world and every dedicated server without
+    /// <c>--systems</c>. The galaxy is metadata only (worlds load per occupied body), so the count is a
+    /// content knob, not a performance one; the CLI clamps it to 1..32.</summary>
+    public int StarSystemCount { get; set; } = 12;
 
     public int PlanetsPerSystemMin { get; set; } = 2;
     public int PlanetsPerSystemMax { get; set; } = 6;
@@ -149,6 +153,98 @@ public sealed class WorldDescription
     /// base could wake up on the seabed. New worlds switch it on at creation (ServerConfig's default
     /// description carries true; a loaded save keeps whatever it stored).</summary>
     public bool TerrainContinents { get; set; }
+
+    /// <summary>Volcanoes on every lava-core world + sea-mount cones (#1631): when true, every non-cratered body
+    /// may grow basalt cones (not only watery breathable worlds) and a cone whose base lies under a sea is
+    /// lifted into a volcanic island. MUST default to false like <see cref="TerrainContinents"/>: terrain is
+    /// re-derived from the seed, and a new mountain on an existing desert save could bury a player base. New
+    /// worlds switch it on at creation (ServerConfig's default description carries true).</summary>
+    public bool LavaCoreVolcanoes { get; set; }
+
+    /// <summary>Terrain generation number (#1644): which wave of landform generators a world was created with.
+    /// 0 = every world created before the landscape-variety package (the classic generators only); 1 = the
+    /// 2026-09 package (regional style pools, per-world scale, biome relief, new landmarks, water bodies,
+    /// paints, props); 2 = the ocean-pad wave (#1618–#1622, gated by #1665: the two-dimensional dry-land
+    /// nudge, deep-water islets on every world with a water sea, the plateau-and-beach islet shape);
+    /// 3 = the landform completion package (2026-09): landmark paints that fill a whole column, sea-relative
+    /// landmark rows (sea-floor landforms), ice/fluid overhang bands, sub-surface fluid spans, river
+    /// morphology, and the landform families built on them; 4 = the flora-roster wave (#1715): the biome
+    /// themes take part in the species activation roll (the terrain of a generation-4 world equals
+    /// generation 3 — the roster is what changes, and a roster is as much "the world" as a mountain). MUST
+    /// default to 0 like <see cref="TerrainContinents"/>: terrain is re-derived from the seed, so a loaded
+    /// save keeps the generation it was created with and its terrain never moves — and neither do its
+    /// landing pads, which are re-derived the same way. New worlds get the current generation from
+    /// ServerConfig's creation-time description (<see cref="CurrentTerrainGeneration"/>). One integer instead
+    /// of one bool per wave — every later wave is a single compare.</summary>
+    public int TerrainGeneration { get; set; }
+
+    /// <summary>The terrain generation new worlds are created with today (#1644, #1665, landform package,
+    /// #1715 flora roster, #1778-#1783 new creature kinds + giant trees, 2026-09 lava pads + the Titas and Valuma
+    /// planet types, 2026-09 the giants + the sand-sea planet class, #2009 the arachnid body plan, 2026-09 cave flora).</summary>
+    public const int CurrentTerrainGeneration = 11;
+
+    /// <summary>The generation of the cave flora wave (2026-09): plants in caves (a cave habitat with its own species,
+    /// the fungi of the surface also growing underground, glowers that light their surroundings), the rainbow glow
+    /// class (every plant its own colour, in caves and in rare surface clusters), and cold-adapted species that
+    /// survive the cold (plus altitude snow and ice hosting their own flora). Species of this wave carry
+    /// <c>MinGeneration</c> 11 and every generator change is gated on it, so an older world keeps its plants bit
+    /// for bit.</summary>
+    public const int CaveFloraGeneration = 11;
+
+    /// <summary>The generation of the arachnid body plan (#2009): a speeder-sized eight-legger rolled into the Land pool
+    /// AFTER every older roll (the same discipline as the generation-6 kinds), so a world of any older generation keeps
+    /// its roster bit for bit. No terrain changes in this wave — a seed lands on the same planet type as before.</summary>
+    public const int ArachnidGeneration = 10;
+
+    /// <summary>The generation of the giants (#2004): the sand-sea planet class (a calibrated sea region of deep sand with
+    /// no caves under it), the procedural colossus on very flat, light worlds and the sandworm of the sand seas. Every
+    /// field of this wave has a classic no-op default and every giant lives outside the procedural roster, so an older
+    /// world's terrain and fauna stay bit-for-bit what they were.</summary>
+    public const int GiantsGeneration = 9;
+
+    /// <summary>The generation of the city worlds (#1793): the G.D.S. lava desert with its one walled city. A
+    /// data-only planet type gated on this generation, so no older galaxy ever rolls it; the composer itself
+    /// keys off the type, not the generation.</summary>
+    public const int CityWorldsGeneration = 7;
+
+    /// <summary>The generation of the new-kinds wave (#1778-#1783): the Ray body plan (water + sky), the air fish,
+    /// multi-headed / multi-winged / multi-finned bodies and the giant trees. Every roll of this wave is appended
+    /// AFTER the last generation-5 roll and only applied on a world of this generation or later, so an older
+    /// world's roster stays bit-for-bit what it was; the giant trees are a separate stamp pass gated the same
+    /// way (an older world's woods never change).</summary>
+    public const int NewKindsGeneration = 6;
+
+    /// <summary>The generation of the school club wave 3 (#1756): the gen-5 planet types, the authored species
+    /// overlay on the creature rosters, the strict floral theme, hanging flora, the new prop / giant-flora /
+    /// landmark rows and per-world water tints. The terrain of every older type equals generation 4; everything
+    /// in this wave is an appended table row or a data field with a classic no-op default.</summary>
+    public const int AuthoredContentGeneration = 5;
+
+    /// <summary>The generation from which the flora roster's activation roll reads the biome themes as well as
+    /// the planet theme (#1715). Older worlds keep the planet-only roll — a changed roll would rename and
+    /// re-pick every species they ever grew.</summary>
+    public const int BiomeThemeRosterGeneration = 4;
+
+    /// <summary>The generation from which landing pads use the ocean-pad rules (#1665): the 2-D nudge with the
+    /// ocean search budget, islets under every deep all-water pad, the plateau islet shape. Older saves keep the
+    /// longitude-only march, the rolled ocean-world islet and the plain sand mound they were created with.</summary>
+    public const int OceanPadsGeneration = 2;
+
+    /// <summary>The generation from which landing pads treat LAVA like deep water (2026-09, "landed in the lava"): the
+    /// dry-footprint test reads every lava and water body the generator makes (lava rivers, caldera and shield lakes,
+    /// gen-3 flows, gen-1 lakes — not just the seas and craters), and a pad that still stands in lava after the
+    /// nudge gets a basalt islet over the melt instead of a shaft cut into it. Older saves keep the pads they were
+    /// created with; their lava pads are only flagged (<c>Molten</c>) so a ship is parked elsewhere.</summary>
+    public const int LavaPadsGeneration = 8;
+
+    /// <summary>Generation 8 also reads the extreme-planet fields of a type (2026-09, Titas + Valuma): snow cover, fixed ice
+    /// sheets, hot zones, dead forests, calm terrain, the structure whitelist. Every other type leaves them at their no-op.</summary>
+    public const int ExtremePlanetsGeneration = 8;
+
+    /// <summary>The generation from which a start system in <c>sys0</c> gets a REAL station when it rolled none (#1924) —
+    /// older saves keep the synthesized <c>sys0-st-local</c> fallback they may already have boarded. A start system
+    /// anywhere else gets the real station on every save: nothing guaranteed one there before.</summary>
+    public const int StartStationGeneration = 8;
 
     /// <summary>Growing galaxy (#1123): when true, hyperjumping into one of the current OUTERMOST systems
     /// appends a brand-new system beyond it (deterministic — system N is a pure function of seed + N — and

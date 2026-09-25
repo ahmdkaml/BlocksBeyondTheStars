@@ -31,20 +31,29 @@ namespace BlocksBeyondTheStars.Client
         private static readonly int SunDirId = Shader.PropertyToID("_Sc_SunDir");
         private static readonly int SkyId = Shader.PropertyToID("_Sc_Sky");
         private static readonly int ColorId = Shader.PropertyToID("_Color");
-        private static readonly int GradeTintId = Shader.PropertyToID("_Sc_GradeTint");
-        private static readonly int GradeParamsId = Shader.PropertyToID("_Sc_GradeParams");
         private static readonly int IndoorId = Shader.PropertyToID("_Sc_Indoor");
         private static readonly int FloraTintId = Shader.PropertyToID("_Sc_FloraTint");
+        private static readonly int WaterTintId = Shader.PropertyToID("_Sc_WaterTint"); // #1758: per-world water colour
+        private static readonly int WaterModeId = Shader.PropertyToID("_Sc_WaterMode"); // #1758: 0 classic, 1 tint, 2 rainbow
         private static readonly int LampColorId = Shader.PropertyToID("_Sc_LampColor");
         // Explicit distance haze for the block shaders (Unity's MixFog doesn't engage on the unlit voxels):
         // x=start, y=end, z=max strength (already faded out indoors), w=on.
         private static readonly int FogId = Shader.PropertyToID("_Sc_Fog");
         private float _indoor; // smoothed ship-interior fill (0 outside → 1 aboard)
+        private float _stationDim = 1f; // #1869: smoothed station deck light (1 by day → StationNightFloor at night)
+
+        /// <summary>How far a station's deck light drops at station night (#1869) — dim, never dark: the corridors
+        /// stay walkable, the strip lights still glow.</summary>
+        private const float StationNightFloor = 0.45f;
 
         /// <summary>Twilight band half-width in sun-height units: dusk/dawn is active while the sun is within this
         /// of the horizon (|sin(sunAngle)| ≤ band). 0.34 ≈ the sun within ~20° of the horizon — a civil+nautical
         /// dusk wide enough to read as a real sunset. Larger = a longer, softer golden hour.</summary>
         private const float TwilightBand = 0.34f;
+
+        /// <summary>sRGB luma of the server star ramp's sun-like anchor (FFF1CE, <c>GameServerWeather.StarRamp</c>) —
+        /// the reference the block light is normalised against (#1610).</summary>
+        private const float SunLikeLuma = 0.947f;
 
         private Light _sun;
         private Transform _sunDisc;     // visible glowing sun billboard in the sky
@@ -147,8 +156,7 @@ namespace BlocksBeyondTheStars.Client
             if (Game.SpaceViewActive)
             {
                 Shader.SetGlobalColor(LightId, new Color(1f, 1f, 1f, 1f));   // neutral, full-bright
-                Shader.SetGlobalColor(GradeTintId, new Color(0f, 0f, 0f, 0f)); // colour grade off
-                UrpScenePost.Instance?.ApplyGrade(Color.white, 1f, 1f);        // …and off on the URP volume too
+                UrpScenePost.Instance?.ApplyGrade(Color.white, 1f, 1f);        // colour grade off on the URP volume
                 UrpScenePost.Instance?.SetMoodLut(null);                       // …and drop the biome mood LUT in space
                 Shader.SetGlobalColor(LampColorId, new Color(0f, 0f, 0f, 0f));
                 Shader.SetGlobalFloat(IndoorId, 0f);
@@ -216,10 +224,16 @@ namespace BlocksBeyondTheStars.Client
                 Color flora = Rgb(env.FloraTint);
                 flora.a = 1f;
                 Shader.SetGlobalColor(FloraTintId, ShaderColor.Srgb(flora));
+                // #1758: the water colour of this world (mode 0 = the classic blue, so an older server changes nothing).
+                Color water = Rgb(env.WaterTint);
+                water.a = 1f;
+                Shader.SetGlobalColor(WaterTintId, ShaderColor.Srgb(water));
+                Shader.SetGlobalFloat(WaterModeId, env.WaterTintMode);
             }
             else
             {
                 Shader.SetGlobalColor(FloraTintId, new Color(0f, 0f, 0f, 0f));
+                Shader.SetGlobalFloat(WaterModeId, 0f);
             }
 
             ApplyLighting(_time, intensity, sun, skyBase, spaceSky, constantLight: boarded);
@@ -235,8 +249,14 @@ namespace BlocksBeyondTheStars.Client
             // spends less of the cycle reading as dark. The sky colour + fog below still use the raw `day` so the
             // visible terminator stays tied to the real sun height.
             float dayLit = day * (2f - day);
-            // Inside an orbital station there is no day/night — it's lit by its own constant lighting.
-            float brightness = constantLight ? 1f : Mathf.Lerp(0.35f, 1f, dayLit); // night floor → noon
+            // Inside an orbital station there is no sun — it's lit by its own lighting. Since #1869 that lighting keeps
+            // the station clock: the deck dims at station night (the crew is asleep) and comes back up by morning.
+            // Emissive strip lights stay bright (they are the lamps); only the fill drops. Smoothed so a clock step
+            // or boarding at night fades instead of snapping.
+            float stationTarget = constantLight ? Mathf.Lerp(StationNightFloor, 1f, dayLit) : 1f;
+            _stationDim = Mathf.MoveTowards(_stationDim, stationTarget, Time.deltaTime * 0.5f);
+            float stationDim = constantLight ? _stationDim : 1f;
+            float brightness = constantLight ? stationDim : Mathf.Lerp(0.35f, 1f, dayLit); // night floor → noon
             // Storms darken — but only to 0.78 now (was 0.65, #1457): the block light goes through the sRGB→linear
             // conversion below, so 0.65 landed in the shader as ~0.38 of noon, and on the overcast-only worlds
             // (swamp, ashen, fungal never clear) every daytime read as dusk. A grey day should still be a day.
@@ -260,8 +280,17 @@ namespace BlocksBeyondTheStars.Client
             // takes on the golden-hour cast, then cools back to its true colour high in the sky. Kept off on stations.
             Color warmSun = constantLight ? sunColor : Color.Lerp(sunColor, sunColor * new Color(1f, 0.72f, 0.5f), twilight * 0.7f);
 
+            // #1610: the star colour should TINT the world, not dim it. The ramp's cool / red anchors carry 20–36 %
+            // less luma than the sun-like one, so about a fifth of all systems lit every face darker all day long.
+            // Lift the block light so its sRGB luma never drops below 93 % of the sun-like anchor (≈ 85 % once the
+            // value goes linear); the hue is untouched, and the sun disc / god-rays / grade keep the raw star colour.
+            // Measured on the RAW star (not warmSun) so the golden-hour warming still dims dusk as before.
+            float starLuma = 0.299f * sunColor.r + 0.587f * sunColor.g + 0.114f * sunColor.b;
+            float lift = starLuma > 0.001f ? Mathf.Max(1f, SunLikeLuma * 0.93f / starLuma) : 1f;
+            Color litSun = constantLight ? warmSun : warmSun * lift;
+
             // Stations use a clean neutral interior light (not the system sun's tint).
-            Color tint = constantLight ? new Color(0.95f, 0.96f, 1f) : warmSun * (brightness * weatherDim);
+            Color tint = constantLight ? new Color(0.95f, 0.96f, 1f) * stationDim : litSun * (brightness * weatherDim);
 
             // A lightning strike lights the WORLD for a moment (#900), not just the screen: the block light
             // global is pushed toward a cold white, so the whole landscape flares out of a dark storm.
@@ -280,7 +309,7 @@ namespace BlocksBeyondTheStars.Client
             // sunlit outdoors seen through the windows. Smoothed so boarding/leaving fades.
             // Interior fill light: aboard your ship, or boarded on a station (its life-support lighting).
             bool litInterior = Game != null && (Game.Aboard || !string.IsNullOrEmpty(Game.StationName));
-            float indoorTarget = litInterior ? 1f : 0f;
+            float indoorTarget = litInterior ? stationDim : 0f; // #1869: a station's fill follows its night
             _indoor = Mathf.MoveTowards(_indoor, indoorTarget, Time.deltaTime * 3f);
             Shader.SetGlobalFloat(IndoorId, _indoor);
 
@@ -339,7 +368,7 @@ namespace BlocksBeyondTheStars.Client
 
             if (_sun != null)
             {
-                _sun.color = warmSun;
+                _sun.color = litSun; // Lit-shaded props / creatures follow the same normalised light as the blocks
                 _sun.intensity = brightness;
                 _sun.transform.rotation = Quaternion.Euler(time * 360f - 90f, 160f, 0f);
                 // The lit block shader reads the sun direction from this global (direction TO the sun).
@@ -372,8 +401,8 @@ namespace BlocksBeyondTheStars.Client
             // light, atmospheric wash — raised from 0.25 so the per-system sun colour clearly reads).
             Color blended = tint * Color.Lerp(Color.white, norm, 0.4f);
             blended.a = 0.7f; // grade strength
-            Shader.SetGlobalColor(GradeTintId, ShaderColor.Srgb(blended));
-            Shader.SetGlobalVector(GradeParamsId, new Vector4(sat, contrast, 0f, 0f));
+            // #1612: the old _Sc_GradeTint / _Sc_GradeParams shader globals are gone — no shader read them since
+            // the grade moved onto the URP volume below.
             // ApplyGrade keeps the sRGB value: URP's ColorAdjustments colorFilter converts internally.
             UrpScenePost.Instance?.ApplyGrade(blended, sat, contrast); // URP colour grade (ColorAdjustments)
             UrpScenePost.Instance?.SetMoodLut(biome); // WS4: layer the per-biome cinematic mood LUT on top
@@ -403,6 +432,11 @@ namespace BlocksBeyondTheStars.Client
         {
             bool fog = !spaceSky && (Game == null || !Game.SpaceViewActive);
             RenderSettings.fog = fog;
+            if (Game != null)
+            {
+                Game.FogActive = fog; // #1822: the renderer cull reads it
+            }
+
             if (!fog)
             {
                 Shader.SetGlobalVector(FogId, new Vector4(0f, 1f, 0f, 0f)); // distance haze off
@@ -424,7 +458,10 @@ namespace BlocksBeyondTheStars.Client
             // the server streams one chunk beyond this basis (GameServer.StreamChunks), the last VISIBLE ring is
             // fully hazed before it materializes and fades in as the player approaches.
             float airDensity = Game?.Environment?.AtmosphereDensity ?? 0.4f;
-            float far = renderDist * Mathf.Lerp(1.0f, 0.85f, Mathf.Clamp01(airDensity));
+            // #1822: with far terrain behind the chunks the haze no longer has to hide their edge — it reaches out
+            // toward the far-view range, by how thin the air is (FarHaze). Far view off = the mapping above, unchanged.
+            int farView = Game?.FarView != null ? Game.FarView.ActiveRange : 0;
+            float far = BlocksBeyondTheStars.Client.FarTerrain.FarHaze.BaseFar(renderDist, farView, airDensity);
 
             far *= Mathf.Lerp(1f, 0.8f, weatherIntensity); // storms haze in a bit more
             far *= Mathf.Lerp(0.9f, 1f, day);                // night a touch hazier than day
@@ -535,7 +572,6 @@ namespace BlocksBeyondTheStars.Client
             // Clear the tint so other scenes (menu) aren't affected.
             Shader.SetGlobalColor(LightId, new Color(1f, 1f, 1f, 0f));
             Shader.SetGlobalColor(LampColorId, new Color(0f, 0f, 0f, 0f)); // headlamp off
-            Shader.SetGlobalColor(GradeTintId, new Color(0f, 0f, 0f, 0f)); // colour grade off (menu/space)
             UrpScenePost.Instance?.SetMoodLut(null); // drop the biome mood LUT (menu/space)
             Shader.SetGlobalFloat(IndoorId, 0f); // interior fill off (menu/space)
             Shader.SetGlobalColor(FloraTintId, new Color(0f, 0f, 0f, 0f)); // flora tint off (menu/space)

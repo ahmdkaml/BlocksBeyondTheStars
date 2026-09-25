@@ -43,9 +43,11 @@ namespace BlocksBeyondTheStars.Client
                 || !string.IsNullOrEmpty(Game.PendingTradeFrom);
             Game.SetMenuOwner(this, modal);
 
-            if (modal || Game.MenuOpen || Game.SpaceViewActive || Game.ChatTyping)
+            // The text-entry gate is already inside InputMap.Down (#1858); named here too so a "U" typed into
+            // any field stays a letter even if a future verb here reads a raw key.
+            if (modal || Game.MenuOpen || Game.SpaceViewActive || Game.ChatTyping || InputMap.TextEntryActive)
             {
-                return; // don't start new interactions while a panel/space view/chat is up
+                return; // don't start new interactions while a panel/space view/chat/text field is up
             }
 
             // Leave a boarded space station (returns you to your ship). Boarding it is otherwise a one-way trip.
@@ -54,6 +56,12 @@ namespace BlocksBeyondTheStars.Client
                 if (InputMap.Down(InputAction.Disembark))
                 {
                     Game.Network.SendLeaveStation();
+                }
+                else if (CanToggleStationZeroG && InputMap.Down(InputAction.ToggleStationZeroG))
+                {
+                    // #1842: zero-g construction mode on a player-built station — the server owns the flag and
+                    // answers with the player state; the HUD hint comes from that, not from here.
+                    Game.Network.SendSetStationZeroG(!Game.StationZeroG);
                 }
 
                 return;
@@ -106,6 +114,13 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>True while <see cref="InputAction.Disembark"/> would do something (docked, or aboard a station).</summary>
         public bool CanDisembark =>
             Game != null && (!string.IsNullOrEmpty(Game.StationName) || (Game.Dock != null && Game.Dock.Docked));
+
+        /// <summary>True while <see cref="InputAction.ToggleStationZeroG"/> would do something (#1842): boarded on a
+        /// PLAYER-built station — NPC / template stations keep their decks' gravity, and the server ignores the
+        /// intent there anyway. Gates the key and the context-actions entry.</summary>
+        public bool CanToggleStationZeroG =>
+            Game != null && !string.IsNullOrEmpty(Game.StationName)
+            && Game.CurrentStationId.StartsWith("pstation:", System.StringComparison.Ordinal);
 
         // ── uGUI build ────────────────────────────────────────────────────────────────────────
         // Restyled for #1058: the three windows (trade, incoming trade request, incoming dock request)

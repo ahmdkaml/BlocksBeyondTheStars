@@ -44,6 +44,9 @@ TEXTURES = [
     ("carbon", "black carbon coal rock with shiny flecks"),
     ("wood_log", "brown tree bark wood log surface with vertical wood grain"),
     ("tree_leaves", "dense leafy green tree foliage canopy with small overlapping leaves, top-down"),
+    # #1783 generation 6 — the giant trees' own block pair (a scan names them as their own species).
+    ("giant_log", "ancient giant tree bark, deeply furrowed dark reddish-brown wood with thick vertical ridges and moss in the grooves"),
+    ("giant_leaves", "dense canopy of large broad dark green leaves of an ancient giant tree with pale veins, overlapping, top-down"),
     ("iron_wall", "grey sci-fi metal hull plate with rivets and panel seams"),
     ("crystal", "pale glowing blue crystal facets"),
     ("glass", "clear pale blue glass pane with a faint reflection"),
@@ -73,6 +76,8 @@ TEXTURES = [
     ("flora_fern", "lush green fern with feathery fronds, top-down"),
     ("flora_flower", "small wildflowers with pink and yellow blossoms on green stems, top-down"),
     ("flora_bush", "round leafy green bush with small red berries, top-down"),
+    # #1774: the plantable sapling — a young tree, read as a small plant billboard like the other flora_* tiles.
+    ("flora_sapling", "small young tree sapling with a thin brown stem and a few fresh bright green leaves, seen from the side, on a plain flat background"),
     ("flora_vine", "tangled green climbing vines with leaves, top-down"),
     ("flora_mushroom", "cluster of small mushrooms with red caps and white stems, top-down"),
     ("flora_cactus", "green desert cactus with spines and small flowers, top-down"),
@@ -194,16 +199,54 @@ TEXTURES = [
     ("station_vendor", "a sci-fi trading post kiosk counter, a dark metal booth with a warm amber-lit display shelf of goods and a small price screen, front view"),
     ("mission_board", "a sci-fi mission notice board, a dark metal panel covered in small glowing blue holographic job postings and status lights, front view"),
     ("station_container", "a sci-fi station storage container, an orange ribbed metal cargo locker with a hinged front hatch and a small status light, front view"),
+    # 2026-09 NPC professions: the post blocks a player builds at home / on a station, plus the doctor's stretcher.
+    ("clinic_post", "a sci-fi clinic reception counter, a white and mint-green medical cabinet with a glowing green cross sign, small medicine drawers and a vital-signs screen, front view"),
+    ("shop_counter", "a cosy shop counter, a wooden sales counter with baskets of fresh fruit, bread and jars on shelves behind it and a small hanging chalkboard, front view"),
+    ("arms_rack", "a sci-fi weapon rack, a dark gunmetal wall rack holding futuristic blaster pistols and energy cells on hooks behind a steel grille, small red status lights, front view"),
+    # #1938: the sage's post reads as a COMPUTER now. A lectern drawn on a background looked like a picture
+    # glued onto a cube from every side ("einfach nur eine Textur auf Blöcken"); a terminal cabinet is a box.
+    ("sage_lectern", "a sage's data terminal, a dark violet armoured console cabinet filling the whole tile edge to edge with no background, a glowing amber screen of scrolling data runes in the middle, engraved circuit lines, small crystal indicator lights, front view"),
+    ("tamer_post", "an animal tamer's post, a wooden stable gate with leather leashes, a coiled whip, bags of animal feed and a small paw print sign, front view"),
+    # #1939: these three were scenes with floors and furniture legs — redrawn as the block itself.
+    ("quarry_post", "a quarry supply cabinet, a rough timber crate with iron corner bands filling the whole tile edge to edge with no background and no floor, a hanging pickaxe and chisel on its front, stone dust and small ore chunks, front view"),
+    ("streamer_post", "a streaming console cabinet, a dark purple metal housing filling the whole tile edge to edge with no background and no legs, a glowing magenta ring light, a small camera lens and a screen with live chat lines, front view"),
+    ("press_desk", "a newsroom press terminal cabinet, a blue-grey metal housing filling the whole tile edge to edge with no background and no legs, a glowing blue screen with headline bars, a paper tray with a printed sheet and a small desk microphone, front view"),
+    # #1942: the starter cabin's wall bunk — the one-cell sleeping place a cramped ship has room for.
+    ("crew_bunk", "a spaceship wall sleeping bunk, a white metal capsule frame filling the whole tile edge to edge with no background, a padded grey-blue mattress with a folded blanket and a small pillow inside it, a soft cyan reading light strip along the top edge, front view"),
+    ("stretcher", "white medical stretcher canvas fabric filling the whole tile edge to edge with no background, a faint green cross in the middle and grey stitched seams, top-down"),
+    # 2026-09 Titas: the yellow sulfur stone under the snow.
+    ("sulfur_stone", "bright yellow sulfur stone rock, crystalline sulfur crust with pale yellow and ochre patches and small dark pores"),
     # Factory look (#1050): the machine housing, its pipe stack and the production terminal had no tile.
     ("machine_block", "a heavy sci-fi industrial machine housing, dark grey armoured metal casing with rivets, bolted seams, ventilation slits and a small amber indicator light, front view"),
     ("factory_pipe", "an industrial factory pipe duct, a thick riveted olive-grey metal pipe with flanged joints and a pressure valve, front view"),
     ("factory_terminal", "a sci-fi factory production terminal, a dark metal console with a glowing cyan holographic screen showing production graphs, buttons and a status light, front view"),
+    # #1714: carries base power out to a sentry post beyond the base zone. Reads as a relay, not a generator —
+    # heavy insulators and a conduit running through, so a chain of them looks like a power line.
+    ("power_relay", "a sci-fi power relay pylon, a dark grey metal housing with two ceramic insulator rings, a thick cable conduit running through it and a bright glowing cyan energy core between the rings, small status lights, front view"),
+    # #1726: the waterfall spout — a machine block that pours a column of water straight down and never sideways.
+    # Reads as plumbing, not as water: a riveted housing with a wide nozzle underneath, so the player can see
+    # which way it pours before placing it over an edge.
+    ("water_spout", "a sci-fi water spout block, a dark blue-grey riveted metal housing with a wide round nozzle opening at the bottom edge, a short pipe running down into the nozzle, clear blue-white water pouring out of the nozzle underneath, a small blue status light, front view"),
     # Guardian machines (#1338): the plating tile WorldEntities/SpaceView load for the robot, scan-drone,
     # space drone, UFO and cruiser hulls — grey circuit-board armour, no lights (the red eyes are separate).
     # Post-processed by `guardian_plating` (see POST_PROCESS) before the tile is written, since the entity
     # loaders do NOT brighten tiles like CreatureBuilder does: desaturated 70 % and lifted
     # v' = 1 - (1 - v) * 0.76 so the plates sit at ~0.40 mean grey.
     ("enemy_robot", "dark grey armoured sci-fi robot plating with bolted panel seams and etched light-grey circuit-board traces and solder pads, matte metal, coarse large panels, no lights, no glow, no colour"),
+    # Landscape variety 4/6 (#1647): the five terrain blocks of the generation-1 paints, fluids and props.
+    ("moss_stone", "grey cobbled stone rock surface thickly overgrown with soft green moss patches in the cracks, damp, top-down"),
+    ("tar", "glossy black tar pitch surface with a few slow dull bubbles and faint oily sheen, very dark, top-down"),
+    ("bone", "bleached pale ivory bone surface, a dense mass of old dry bones and skull fragments, slightly yellowed, top-down"),
+    ("sandstone", "warm ochre sandstone rock with fine horizontal sediment banding in tan, rust and cream, top-down"),
+    ("scree", "loose grey and brown angular rock fragments and gravel, a talus slope of broken stone, top-down"),
+    # Cave flora (terrain generation 11). Wild flora is re-coloured by the world's hue in the shader, so these carry the
+    # light/dark pattern: moss + threads are cutout billboards (dark background → bake_leaf_alpha punches it out), the
+    # threads hang from the TOP edge (a hanging billboard roots in the tile's top row), the prism bloom is near-white
+    # so each plant's own rainbow colour comes through at full strength.
+    ("flora_cavecap", "a cluster of dark cave mushrooms with broad dusky grey-violet caps speckled with small pale spots, damp cave floor, top-down"),
+    ("flora_glowmoss", "side view of one low wide mound of softly glowing pale green-white cave moss tufts with tiny luminous tips, growing along the bottom edge of the image, the rest of the image solid pitch-black empty background"),
+    ("flora_glowthread", "many thin softly glowing pale silky threads hanging straight down from the top edge of the image, each ending in a small bright luminous bead, on a pure black background, side view"),
+    ("flora_prismbloom", "densely packed luminous pale white flower petals filling the whole image edge to edge, overlapping soft shining petals with small bright white centres, no background visible, top-down"),
 ]
 
 if TYPE_CHECKING:

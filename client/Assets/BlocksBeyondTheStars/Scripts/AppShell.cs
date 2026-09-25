@@ -11,7 +11,7 @@ using UnityEngine;
 namespace BlocksBeyondTheStars.Client
 {
     /// <summary>The shell phases: splash, main menu, settings, credits, loading, in-game.</summary>
-    public enum ShellPhase { Splash, MainMenu, Settings, Credits, Loading, InGame, ShipEditor, AvatarEditor, StructureEditor, ContentEditor, MaterialEditor, Editors, SaveSelect, Studio, Intro }
+    public enum ShellPhase { Splash, MainMenu, Settings, Credits, Loading, InGame, ShipEditor, AvatarEditor, StructureEditor, ContentEditor, MaterialEditor, Editors, SaveSelect, Studio, Intro, TextureEditor, FormEditor, ToolLookEditor }
 
     /// <summary>
     /// Client front-end state machine (M20 / `anf_textures.md`): drives splash → main menu →
@@ -104,6 +104,11 @@ namespace BlocksBeyondTheStars.Client
         private readonly LocalServerLauncher _localServer = new LocalServerLauncher();
         private bool _hostLocal;
 
+        /// <summary>The bundled server this shell is starting for the world being entered, or null when the
+        /// target is a remote host. GameBootstrap's connect loop keeps knocking while it comes up
+        /// (<see cref="ConnectRetryPolicy"/>) instead of applying the remote-host retry budget.</summary>
+        public LocalServerLauncher LocalServer => _hostLocal ? _localServer : null;
+
         /// <summary>The in-process singleplayer host (browser builds; usable in the editor for testing).
         /// Null until the first browser-singleplayer start; survives returns to the menu stopped.</summary>
         public BrowserLocalServer BrowserServer { get; private set; }
@@ -119,6 +124,18 @@ namespace BlocksBeyondTheStars.Client
         public bool BrowserWorldBooting { get; private set; }
         private bool _serverPending;                          // prepared, waiting to spawn once the screen is up
         private System.Threading.Tasks.Task<bool> _serverLaunch; // the off-thread spawn (so Process.Start can't freeze us)
+
+        /// <summary>The desktop twin of <see cref="BrowserWorldBooting"/>: true while the bundled server this
+        /// shell spawned for the world being entered has not yet reported that it listens (its "started on
+        /// port" line, relayed by <see cref="LocalServerLauncher.Ready"/>). A fresh world generates for
+        /// 10–20 s first. The loading screen holds its hand-off on this (<see cref="LoadingHandoffPolicy"/>),
+        /// so the progress bar — not the rig's nameless "Loading world…" curtain — covers the boot (#1800).
+        /// False when no bundled server was launched (remote join, or the manual-server fallback).</summary>
+        public bool LocalServerBooting => _hostLocal && (_serverPending || _serverLaunch != null) && !_localServer.Ready;
+
+        /// <summary>How far that boot has come, 0..1 — negative while the server has reported no pass yet
+        /// (#1988). The loading bar follows this instead of the clock, so it moves with the world build.</summary>
+        public float LocalServerBootProgress => _hostLocal ? _localServer.BootProgress : -1f;
         private GameObject _gameRoot;
 
         public bool ContentReady { get; private set; }
@@ -171,6 +188,12 @@ namespace BlocksBeyondTheStars.Client
             crashGo.AddComponent<CrashReporter>().Settings = Settings;
             InputMap.Use(Settings); // route remappable controls through the loaded bindings (Stream C)
             Settings.Apply();
+
+            // The player's local texture pack (#1952) — read once, before the first atlas is built, so the menu
+            // backdrop already shows it. A missing folder is the normal case and costs nothing.
+            GameTextures.UseLocalPack = Settings.UseTexturePack;
+            GameTextures.ShowWorldTextures = Settings.ShowWorldTextures;
+            TexturePackFolder.Reload();
 
             // Browser build (#1423): a phone/tablet-class device is touch-first before any touch happens —
             // pre-latch so the very first canvas gets touch-sized hit behavior — and the shell frame-time
@@ -622,6 +645,14 @@ namespace BlocksBeyondTheStars.Client
                 Content = loaded;
                 ContentDataDir = dataDir;
                 ContentLoadError = "";
+                foreach (var block in Content.Blocks.Values)
+                {
+                    if (block.Anim != null)
+                    {
+                        GameTextures.SetOfficialFps(block.Key, block.Anim.Fps); // the speed of its bundled frames (#1957)
+                    }
+                }
+
                 Debug.Log($"Content loaded from '{dataDir}' ({Content.Blocks.Count} blocks, {Content.Items.Count} items, {Content.Recipes.Count} recipes, {Content.Planets.Count} planet types).");
             }
 
@@ -835,7 +866,7 @@ namespace BlocksBeyondTheStars.Client
                 Port = _localServer.Port.ToString();
                 Password = password ?? "";
                 HostInfo = hosting ? $"{LocalLanIp()}:{_localServer.Port}" : "";
-                _loading.MinShow = 2.5f; // give the server time to start listening
+                _loading.MinShow = 2.5f; // minimum only — the hand-off then waits for the server's ready line (LocalServerBooting)
                 _serverPending = true;
             }
             else
@@ -1070,6 +1101,17 @@ namespace BlocksBeyondTheStars.Client
             Cursor.lockState = CursorLockMode.Locked;
             Cursor.visible = false;
             Phase = ShellPhase.InGame;
+        }
+
+        /// <summary>The loading screen waited the whole <see cref="LoadingHandoffPolicy.LocalBootCeilingSeconds"/>
+        /// for the bundled server to report ready and it never did (alive but wedged, or its log line never
+        /// came): stop it and go back to the menu with the launch-failed notice instead of launching into a
+        /// world that cannot be joined. A server that DIES is caught earlier by the launch watcher in Update.</summary>
+        public void AbortLocalServerBoot()
+        {
+            Debug.LogError($"Local server did not report ready within {LoadingHandoffPolicy.LocalBootCeilingSeconds:0} s — returning to menu.");
+            ReturnToMenu();
+            MenuNotice = L("ui.sp.server_failed");
         }
 
         // NOTE (#413 N2): Alt-Tab cursor re-lock used to live in an OnApplicationFocus handler here — with
@@ -1414,6 +1456,78 @@ namespace BlocksBeyondTheStars.Client
             Phase = ShellPhase.MaterialEditor;
         }
 
+        /// <summary>Opens the texture editor (#1955): paint any texture of the game, use it for yourself or export it.</summary>
+        public void OpenTextureEditor()
+        {
+            DestroyMenuBackground();
+            _editorRoot = new GameObject("TextureEditor");
+            _editorRoot.AddComponent<TextureEditor>().Shell = this;
+            Phase = ShellPhase.TextureEditor;
+        }
+
+        /// <summary>Opens the form editor (#1960): design the forms the form tool places — also over several blocks.</summary>
+        public void OpenFormEditor()
+        {
+            DestroyMenuBackground();
+            _editorRoot = new GameObject("FormEditor");
+            _editorRoot.AddComponent<FormEditor>().Shell = this;
+            Phase = ShellPhase.FormEditor;
+        }
+
+        /// <summary>Closes the form editor and returns to the editors submenu.</summary>
+        public void CloseFormEditor()
+        {
+            if (_editorRoot != null)
+            {
+                Destroy(_editorRoot);
+                _editorRoot = null;
+            }
+
+            EnsureMenuBackground();
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+            Phase = ShellPhase.Editors;
+        }
+
+        /// <summary>Opens "My tools" (#1963): the player's own looks for drills, guns, blades and scanners.</summary>
+        public void OpenToolLookEditor()
+        {
+            DestroyMenuBackground();
+            _editorRoot = new GameObject("ToolLookEditor");
+            _editorRoot.AddComponent<ToolLookEditor>().Shell = this;
+            Phase = ShellPhase.ToolLookEditor;
+        }
+
+        /// <summary>Closes "My tools" and returns to the editors submenu.</summary>
+        public void CloseToolLookEditor()
+        {
+            if (_editorRoot != null)
+            {
+                Destroy(_editorRoot);
+                _editorRoot = null;
+            }
+
+            EnsureMenuBackground();
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+            Phase = ShellPhase.Editors;
+        }
+
+        /// <summary>Closes the texture editor and returns to the editors submenu.</summary>
+        public void CloseTextureEditor()
+        {
+            if (_editorRoot != null)
+            {
+                Destroy(_editorRoot);
+                _editorRoot = null;
+            }
+
+            EnsureMenuBackground();
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+            Phase = ShellPhase.Editors;
+        }
+
         /// <summary>Closes the material designer and returns to the editors submenu.</summary>
         public void CloseMaterialEditor()
         {
@@ -1533,6 +1647,7 @@ namespace BlocksBeyondTheStars.Client
             if (Phase == ShellPhase.MainMenu && _uiMenu == null)
             {
                 _uiMenu = UiMainMenu.Build(this);
+                UiKit.BootScreen(_uiMenu); // the HUD's boot-up feel for the shell screens too (#1796)
                 WhatsNew.BeginFetch(this); // one-per-session background load of the release notes (#543)
 
                 // Land the bombastic intro sting on the first menu reveal (logo + full UI), rather
@@ -1625,7 +1740,8 @@ namespace BlocksBeyondTheStars.Client
 
             // With the loading screen now on screen, spawn the prepared local server on a background thread —
             // so a blocking Process.Start (Defender first-scan of the freshly-built EXE) can't freeze the menu
-            // or the loading bar. The connect happens after MinShow, by which time it's listening.
+            // or the loading bar. The loading screen then holds until the server reports that it listens
+            // (LocalServerBooting → LoadingHandoffPolicy), so the rig dials a server that is already there.
             if (_serverPending && _uiLoading != null)
             {
                 _serverPending = false;
@@ -1662,6 +1778,7 @@ namespace BlocksBeyondTheStars.Client
             if (Phase == ShellPhase.Settings && _uiSettings == null)
             {
                 _uiSettings = UiSettings.Build(this);
+                UiKit.BootScreen(_uiSettings);
             }
             else if (Phase != ShellPhase.Settings && _uiSettings != null)
             {
@@ -1672,6 +1789,7 @@ namespace BlocksBeyondTheStars.Client
             if (Phase == ShellPhase.Credits && _uiCredits == null)
             {
                 _uiCredits = UiCredits.Build(this);
+                UiKit.BootScreen(_uiCredits);
             }
             else if (Phase != ShellPhase.Credits && _uiCredits != null)
             {
@@ -1682,6 +1800,7 @@ namespace BlocksBeyondTheStars.Client
             if (Phase == ShellPhase.Editors && _uiEditors == null)
             {
                 _uiEditors = UiEditors.Build(this);
+                UiKit.BootScreen(_uiEditors);
             }
             else if (Phase != ShellPhase.Editors && _uiEditors != null)
             {
@@ -1692,6 +1811,7 @@ namespace BlocksBeyondTheStars.Client
             if (Phase == ShellPhase.SaveSelect && _uiSaveSelect == null)
             {
                 _uiSaveSelect = UiSaveSelect.Build(this);
+                UiKit.BootScreen(_uiSaveSelect);
             }
             else if (Phase != ShellPhase.SaveSelect && _uiSaveSelect != null)
             {
@@ -1822,6 +1942,18 @@ namespace BlocksBeyondTheStars.Client
                 else if (Phase == ShellPhase.MaterialEditor)
                 {
                     CloseMaterialEditor();
+                }
+                else if (Phase == ShellPhase.TextureEditor && !TextureSubmitDialog.OwnsCancel && !PadCanvasFocus.OwnsCancel)
+                {
+                    CloseTextureEditor(); // the submit dialog (#1965) and the pad's canvas mode take their own cancel first
+                }
+                else if (Phase == ShellPhase.FormEditor && !PadCanvasFocus.OwnsCancel)
+                {
+                    CloseFormEditor();
+                }
+                else if (Phase == ShellPhase.ToolLookEditor && !PadCanvasFocus.OwnsCancel)
+                {
+                    CloseToolLookEditor();
                 }
             }
         }

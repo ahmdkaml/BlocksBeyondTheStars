@@ -32,6 +32,7 @@ namespace BlocksBeyondTheStars.Client
             // to the in-browser server directly instead of opening any socket.
             boot.Loopback = shell.BrowserServer != null && shell.BrowserServer.Running ? shell.BrowserServer.Link : null;
             boot.Host = shell.Host;
+            boot.LocalServer = shell.LocalServer; // null for remote hosts — picks the patient local connect budget
             // A port that doesn't parse can only come from the hand-typed connect dialog, and that dialog
             // exists for LAN/self-host joins — so fall back to the hosted-world port, not the official one (#978).
             boot.Port = int.TryParse(shell.Port, out var p) && p > 0 ? p : LocalServerLauncher.DefaultPort;
@@ -336,6 +337,14 @@ namespace BlocksBeyondTheStars.Client
             var launchPrompt = root.AddComponent<LaunchPrompt>();
             launchPrompt.Game = boot;
 
+            // "Trade or talk?" — E at a vendor NPC offers both instead of always opening the market.
+            var vendorChoice = root.AddComponent<VendorChoicePrompt>();
+            vendorChoice.Game = boot;
+
+            // The reporter's interview box (2026-09 NPC professions).
+            var interview = root.AddComponent<InterviewUi>();
+            interview.Game = boot;
+
             // Maintenance announcements (#249): persistent restart-countdown banner + delayed-ack info modal.
             var maintenance = root.AddComponent<MaintenanceUi>();
             maintenance.Game = boot;
@@ -403,6 +412,14 @@ namespace BlocksBeyondTheStars.Client
             sky.ViewChunks = shell.Settings.ViewDistanceChunks; // scale distance fog to the render distance
             sky.FogEnabled = shell.Settings.VolumetricFog;      // "Volumetric fog / light shafts" toggle → distance haze + god-rays
 
+            // Far terrain (#1820): the low-resolution horizon beyond the streamed chunks, and the haze that reaches it (#1822).
+            var farView = root.AddComponent<FarTerrainView>();
+            farView.Game = boot;
+            farView.Camera = cam;
+            farView.RangeSetting = shell.Settings.FarViewBlocks;
+            boot.FarView = farView;
+            boot.FarViewBlocks = shell.Settings.FarViewBlocks;
+
             // Procedural nebula backdrop behind the stars in deep space (colour + depth instead of flat black).
             var nebula = root.AddComponent<NebulaField>();
             nebula.Game = boot;
@@ -458,6 +475,7 @@ namespace BlocksBeyondTheStars.Client
             // Procedural creatures / fauna (World systems §12).
             var creatures = root.AddComponent<CreatureView>();
             creatures.Game = boot;
+            creatures.ReducedEffects = shell.Settings.ReducedEffects; // pulls the rig detail distances in
 
             // Geyser / vent eruptions (item 21): rising plume + hiss at geyser_vent blocks.
             var geysers = root.AddComponent<GeyserView>();

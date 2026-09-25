@@ -58,6 +58,12 @@ public sealed partial class GameServer
     /// <summary>Number of inhabited (non-ruin) settlements on this world.</summary>
     public int InhabitedSettlementCount => _settlements.Count(s => !s.Ruined);
 
+    /// <summary>Test seam (#1793): the city world's footprint, null on every other world.</summary>
+    public (int MinX, int MinZ, int MaxX, int MaxZ)? CityFootprintForTest => _worlds.Active.CityFootprint;
+
+    /// <summary>Test seam: the settlement tiers on this world, in stamp order.</summary>
+    public IReadOnlyList<string> SettlementTiersForTest => _settlements.Select(s => s.Tier).ToList();
+
     /// <summary>Per-settlement world-space bounds + flags — test seam for placement/collision checks.</summary>
     public IReadOnlyList<(int MinX, int MinZ, int MaxX, int MaxZ, bool Ruined, bool OnIsland)> SettlementsForTest
         => _settlements.Select(s => (s.Min.X, s.Min.Z, s.Max.X, s.Max.Z, s.Ruined, s.OnIsland)).ToList();
@@ -196,6 +202,7 @@ public sealed partial class GameServer
         }
 
         AppendUniqueSitePois(session, pois); // #1129: this world's one-of-a-kind place, once shared
+        AppendLandedTraderPoi(session, pois); // #1904: a trader ship parked here right now (live, never persisted)
 
         return pois;
     }
@@ -230,6 +237,24 @@ public sealed partial class GameServer
 
         // World options: the chosen settlement frequency scales the density (Off ⇒ none).
         double factor = _meta.Description.Settlements.StructureFactor();
+
+        // #1827: the authored building modules this world may compose into its settlements — pack- and
+        // planet-filtered once here, picked per plot by hash in the composers. The template-use option is the
+        // one knob: its probability is the per-plot module chance, and Off switches modules off with it.
+        var modules = _content.SettlementModulesFor(_meta.Description.EnabledStructurePacks, planet.Key);
+        double moduleChance = modules.Count == 0 ? 0.0 : _meta.Description.SettlementTemplateUse.Probability();
+
+        // #1876: kit entries name modules by key, from every pack — a pack toggled off later must not make a pinned
+        // module vanish under a stamped settlement.
+        var kitPool = _content.SettlementTemplates.Where(t => t.IsModule).ToList();
+
+        if (factor > 0 && planet.CityWorld.Length > 0)
+        {
+            // #1793: a city world gets its one composed city instead of the roll — no hospitality, no ruins.
+            StampCityWorld(planet, rng, sSeed, planet.Biomes.Count > 0 ? planet.Biomes[0].SurfaceBlock : planet.SurfaceBlock, modules, moduleChance, kitPool);
+            return;
+        }
+
         double h = Hospitability(planet);
         if (factor <= 0 || h <= 0)
         {
@@ -259,9 +284,8 @@ public sealed partial class GameServer
             reserved.Add((pad.CenterX, pad.CenterZ, LandingPadRadius + 2, LandingPadRadius + 2));
         }
 
-        int pad0X = _landingPads.Count > 0 ? _landingPads[0].CenterX : 0;
-        int pad0Z = _landingPads.Count > 0 ? _landingPads[0].CenterZ : 0;
-        reserved.Add((pad0X - 56, pad0Z + 56, 14, 14)); // wreck zone (see GameServerWrecks.StampWreck)
+        var (wreckX, wreckZ) = WreckAnchorFor(_landingPads); // one shared rule, not a second copy of the offset (#1684)
+        reserved.Add((wreckX, wreckZ, WreckReservedHalfExtent, WreckReservedHalfExtent));
 
         // Phase A — decide each settlement's design + a collision-free, dry/flat (or sky-island) spot.
         var placed = new List<PlacedSettlement>();
@@ -275,33 +299,84 @@ public sealed partial class GameServer
             bool ruined;
             SettlementStructure structure;
 
-            // #1115: the record is consulted BEFORE the template pick — a pinned instance replays its
-            // exact template, and a pre-pinning record replays against the LEGACY pool only, which
-            // reproduces the old selection stream draw-for-draw. The template ROLL itself is stream-stable
-            // (same probability from the metadata, same draw), so hit/miss never changes on a replay.
+            // #1115 / #1876: the record is consulted BEFORE any pick — a pinned instance replays its template or its
+            // kit composition, a pre-pinning record replays against the LEGACY pool only (draw for draw), and a
+            // FRESH instance draws from the joint table of complete templates and kits (modular is the standard)
+            // on a lane of its own, so the per-instance stream — the legacy roll, ruined, island — is the same at
+            // the stamp and on every replay.
             var pinRec = FindPlacementRecord("settlement", i);
-            bool legacyReplay = pinRec is { Placed: true, Template.Length: 0 }  // pinned era, before pinning
-                || (pinRec is null && !_worlds.Active.VirginAtLoad);            // pre-#586 world, same deal
-            var template = ir.NextDouble() < _meta.Description.SettlementTemplateUse.Probability()
-                ? _content.PickSettlementTemplate(tier, _meta.Description.EnabledStructurePacks, ir, _world.Planet.Key,
-                    legacyOnly: legacyReplay)
+            bool pinnedKit = pinRec is { Placed: true, Modules: >= 2 };
+            bool fresh = pinRec is null && _worlds.Active.VirginAtLoad;
+            bool legacyReplay = (pinRec is { Placed: true, Template.Length: 0 } && !pinnedKit) // pinned era, before pinning
+                || (pinRec is null && !_worlds.Active.VirginAtLoad);                         // pre-#586 world, same deal
+
+            // #1827: modules only where the record allows them — a fresh world records 1 (2 for a kit); records from
+            // before modules existed and legacy re-derives stay 0, so their layout never changes under the blocks.
+            bool modulesOn = pinRec is null ? _worlds.Active.VirginAtLoad : pinRec.Modules >= 1;
+            double useP = _meta.Description.SettlementTemplateUse.Probability();
+            var packs = _meta.Description.EnabledStructurePacks;
+            // The legacy roll is drawn for every instance, and its pick when it hits (stream contract).
+            var template = ir.NextDouble() < useP
+                ? _content.PickSettlementTemplate(tier, packs, ir, _world.Planet.Key, legacyOnly: legacyReplay)
                 : null;
-            if (pinRec is { Placed: true, Template.Length: > 0 } && template != null)
+            StructureKit? kit = null;
+            SettlementLayoutSpec? layout = null;
+            if (pinRec is { Placed: true, Template.Length: > 0 })
             {
-                // The roll's draw is consumed above (stream contract); the pinned layout wins.
-                template = _content.SettlementTemplateByKey(pinRec.Template) ?? template;
+                template = _content.SettlementTemplateByKey(pinRec.Template) ?? template; // the pinned layout wins
+            }
+            else if (pinnedKit)
+            {
+                template = null;
+                kit = _content.KitByKey(pinRec!.Kit); // may be gone: the pinned grid + composition replay without it
+                if (SettlementLayoutSpec.TryParse(pinRec.KitLayout, out var pinnedLayout))
+                {
+                    layout = pinnedLayout;
+                }
+            }
+            else if (fresh && useP > 0)
+            {
+                // D1 (Marcel 2026-09-13): one joint random table of complete templates and kits, drawn by weight.
+                // #1888 (Marcel 2026-09-14): the option is the SHARE of complete templates — a coin at its probability on
+                // the instance's own lane, then a weighted pick among the tier's templates or its kits.
+                var templates = _content.CompleteTemplatesFor(StructureKit.KindSettlement, tier, packs, _world.Planet.Key);
+                var kits = _content.KitsFor(StructureKit.KindSettlement, tier, packs, _world.Planet.Key);
+                var lane = RngFor(instSeed, "kitpick");
+                (template, kit) = PickTemplateOrKit(templates, kits, lane.NextDouble() < useP, lane);
+
+                if (kit != null)
+                {
+                    layout = SettlementLayoutSpec.FromKit(kit, tier, RngFor(instSeed, "kitlayout"));
+                }
+            }
+
+            // #1872: the module per plot is pinned in the record — a pinned list replays, a fresh (or not yet pinned)
+            // instance records what the composer picks, so a later pool change never morphs the buildings.
+            List<string>? composition = null;
+            if (modulesOn)
+            {
+                composition = pinRec?.Composition is { } pinned ? new List<string>(pinned) : new List<string>();
             }
 
             if (template != null)
             {
                 tier = template.Tier;
                 ruined = false;
-                structure = SettlementGenerator.FromTemplate(template, _content);
+                // #1885: a template's material tokens take this planet's surface (complete templates are human settlements).
+                structure = SettlementGenerator.FromTemplate(template, _content, ModuleMaterials.ForSettlement(template.Tier, surface, alien: false, _content));
+                composition = null; // a whole template holds no plots
             }
             else
             {
                 ruined = ir.NextDouble() < RuinChance(h);
-                structure = SettlementGenerator.Generate(tier, ruined, instSeed, surface, _content);
+                bool kitPath = kit != null || pinnedKit;
+                structure = SettlementGenerator.Generate(tier, ruined, instSeed, surface, _content,
+                    modulesOn ? modules : null, moduleChance, composition, _log.Warn, layout, kit, kitPath ? kitPool : null);
+                if (pinRec is { Placed: true } && pinRec.Composition is null && composition is { Count: > 0 })
+                {
+                    pinRec.Composition = composition; // freeze the current picks of a pre-#1872 record once
+                    _placementRecordsDirty = true;
+                }
             }
 
             bool wantIsland = planet.FloatingIslands && ir.NextDouble() < 0.5;
@@ -342,7 +417,7 @@ public sealed partial class GameServer
 
                 seat = "legacy";
                 name = UniqueName(SettlementDisplayName(tier, ruined, ir), usedNames);
-                RecordPlacement("settlement", i, origin, groundY, onIsland, seat, name, template?.Key ?? string.Empty);
+                RecordPlacement("settlement", i, origin, groundY, onIsland, seat, name, template?.Key ?? string.Empty, modules: 0);
             }
             else
             {
@@ -358,7 +433,9 @@ public sealed partial class GameServer
                 }
 
                 name = UniqueName(SettlementDisplayName(tier, ruined, RngFor(instSeed, "name")), usedNames);
-                RecordPlacement("settlement", i, origin, groundY, onIsland, seat, name, template?.Key ?? string.Empty);
+                RecordPlacement("settlement", i, origin, groundY, onIsland, seat, name, template?.Key ?? string.Empty,
+                    modules: kit != null ? 2 : 1, composition: composition, kit: kit?.Key ?? string.Empty,
+                    kitLayout: kit != null && layout is { } spec ? spec.Serialize() : string.Empty);
             }
 
             placed.Add(new PlacedSettlement
@@ -384,18 +461,41 @@ public sealed partial class GameServer
             return;
         }
 
-        // Phase B — stamp every settlement's voxels in ONE transaction (hundreds–thousands of cells each).
-        _repo.RunInTransaction(() =>
+        CommitSettlements(placed, surface, rng);
+
+        int ruins = _settlements.Count(s => s.Ruined);
+        _log.Info($"Stamped {placed.Count}/{requested} settlement(s) on '{_world.LocationId}' " +
+                  $"({_settlements.Count - ruins} inhabited, {ruins} ruined; H={h:F2}, size={sizeFactor:F2}, char={character:F1}).");
+    }
+
+    /// <summary>Phases B–D of a settlement stamp, shared by the hospitality roll and the city composer (#1793):
+    /// voxels in one transaction, then instances + markers + boards + loot, then residents and doors.</summary>
+    private void CommitSettlements(List<PlacedSettlement> placed, string surface, System.Random rng)
+    {
+        // Phase B — stamp every settlement's voxels in ONE transaction (hundreds–thousands of cells each),
+        // and only the FIRST time (#1990): a settlement that is already in the world is left exactly as the
+        // players left it. See StructureBlocksFeature.
+        var fresh = placed.FindAll(p => !StructureBlocksStamped(p));
+        if (fresh.Count > 0)
         {
-            foreach (var p in placed)
+            _repo.RunInTransaction(() =>
             {
-                StampSettlementBlocks(p, surface);
+                foreach (var p in fresh)
+                {
+                    StampSettlementBlocks(p, surface);
+                }
+            });
+
+            foreach (var p in fresh)
+            {
+                MarkStructureBlocksStamped(p); // after the transaction: a crash mid-stamp re-stamps, never half-marks
             }
-        });
+        }
 
         // Phase C — record instances, markers (world space), missions + ruin loot.
         _settlements.Clear();
         _settlementMarkers.Clear();
+        _worlds.Active.SettlementDoorFits.Clear(); // #1986/#1994: rebuilt with the markers below
         foreach (var p in placed)
         {
             var inst = new SettlementInstance
@@ -407,6 +507,8 @@ public sealed partial class GameServer
                 Name = p.Name,
                 Inhabitant = p.Structure.Inhabitant,
                 OnIsland = p.OnIsland,
+                GroundY = p.GroundY,
+                Layout = p.Structure,
             };
 
             foreach (var m in p.Structure.Markers)
@@ -414,6 +516,14 @@ public sealed partial class GameServer
                 var pos = new Vector3f(p.Origin.X + m.LocalPos.X + 0.5f, p.GroundY + m.LocalPos.Y + 0.5f, p.Origin.Z + m.LocalPos.Z + 0.5f);
                 inst.Markers.Add((m.Type, pos));
                 _settlementMarkers.Add((m.Type, pos));
+
+                // #1986/#1994: the structure knows its own doorway — the wall the generator cut it into, and
+                // how wide the opening is, measured on the layout that is in hand right now. Remembered by
+                // cell so the door registry neither guesses the wall nor reads a single world block for it.
+                if (m.Type.StartsWith("door", StringComparison.Ordinal))
+                {
+                    RecordAuthoredDoor(p, m);
+                }
 
                 if (m.Type == "loot")
                 {
@@ -433,12 +543,133 @@ public sealed partial class GameServer
         }
 
         // Phase D — populate inhabited settlements with NPCs and hang real doors in the doorways.
-        SpawnSettlementNpcs(rng);
-        RegisterDoors();
+        BootDetail("  npcs", () => SpawnSettlementNpcs(rng));
+        BootDetail("  doors", RegisterDoors);
+    }
 
-        int ruins = _settlements.Count(s => s.Ruined);
-        _log.Info($"Stamped {placed.Count}/{requested} settlement(s) on '{_world.LocationId}' " +
-                  $"({_settlements.Count - ruins} inhabited, {ruins} ruined; H={h:F2}, size={sizeFactor:F2}, char={character:F1}).");
+    /// <summary>The city world (#1793): instead of the hospitality roll, exactly ONE gigantic walled city composed
+    /// by <see cref="CityGenerator"/>, centred on landing pad 0 so the ship comes down on the plaza inside the
+    /// walls. The pad ring and the wreck crash site are handed to the composer as open zones — the crash site
+    /// becomes a square inside the city, the pad its landing plaza. Pinned like every settlement (kind
+    /// "settlement", index 0, template "city:gds") so an existing save keeps its city where it stood.</summary>
+    private void StampCityWorld(PlanetType planet, System.Random rng, long sSeed, string surface,
+        IReadOnlyList<StructureTemplate> modules, double moduleChance, IReadOnlyList<StructureTemplate> kitPool)
+    {
+        if (_landingPads.Count == 0)
+        {
+            return;
+        }
+
+        var pad = _landingPads[0];
+        var rec = FindPlacementRecord("settlement", 0);
+
+        // #1876: a kit city — the record pins the kit and its grid; a fresh city draws a city kit for this planet
+        // type (by weight) when one exists, else the composer's own map. Off keeps the map procedural.
+        StructureKit? cityKit = null;
+        var cityLayout = CityLayoutSpec.Default;
+        bool kitCity = false;
+        if (rec is { Placed: true, Modules: >= 2 })
+        {
+            kitCity = true;
+            cityKit = _content.KitByKey(rec.Kit);
+            if (!CityLayoutSpec.TryParse(rec.KitLayout, out cityLayout))
+            {
+                cityLayout = CityLayoutSpec.Default;
+            }
+        }
+        else if (rec is null && _meta.Description.SettlementTemplateUse.Probability() > 0)
+        {
+            var kits = _content.KitsFor(StructureKit.KindCity, null, _meta.Description.EnabledStructurePacks, planet.Key);
+            int total = 0;
+            foreach (var k in kits) total += System.Math.Max(1, k.Weight);
+            if (total > 0)
+            {
+                int r = RngFor(sSeed, "citykit").Next(total);
+                foreach (var k in kits)
+                {
+                    r -= System.Math.Max(1, k.Weight);
+                    if (r < 0) { cityKit = k; break; }
+                }
+
+                if (cityKit != null)
+                {
+                    kitCity = true;
+                    cityLayout = CityLayoutSpec.FromKit(cityKit);
+                }
+            }
+        }
+
+        int size = cityLayout.Footprint;
+        var origin = new Vector3i(pad.CenterX - size / 2, pad.CenterY, pad.CenterZ - size / 2);
+        int groundY = pad.CenterY;
+        string name;
+        bool modulesOn;
+        if (rec is { Placed: true })
+        {
+            origin = new Vector3i(rec.X, rec.GroundY, rec.Z);
+            groundY = rec.GroundY;
+            name = rec.Name;
+            modulesOn = rec.Modules >= 1; // #1827: a city stamped before modules existed keeps its districts
+        }
+        else
+        {
+            name = CityDisplayName(RngFor(sSeed, "cityname"));
+            modulesOn = true;
+            RecordPlacement("settlement", 0, origin, groundY, false, "shelf", name, "city:" + planet.CityWorld,
+                modules: kitCity ? 2 : 1, kit: cityKit?.Key ?? string.Empty, kitLayout: kitCity ? cityLayout.Serialize() : string.Empty);
+        }
+
+        // Open zones in structure-local coordinates: the pad ring (the plaza keeps it clear for the ship) and
+        // the wreck crash site, which stamps at its fixed offset from pad 0 whatever stands there.
+        int padHalf = LandingPadRadius + 3;
+        var (wreckX, wreckZ) = WreckAnchorFor(_landingPads);
+        var zones = new List<CityGenerator.OpenZone>
+        {
+            new(pad.CenterX - padHalf - origin.X, pad.CenterZ - padHalf - origin.Z, pad.CenterX + padHalf - origin.X, pad.CenterZ + padHalf - origin.Z),
+            new(wreckX - WreckReservedHalfExtent - origin.X, wreckZ - WreckReservedHalfExtent - origin.Z,
+                wreckX + WreckReservedHalfExtent - origin.X, wreckZ + WreckReservedHalfExtent - origin.Z),
+        };
+
+        // #1872: the module per district is pinned like a settlement's plots (see StampSettlement).
+        List<string>? composition = modulesOn
+            ? (rec?.Composition is { } pinned ? new List<string>(pinned) : new List<string>())
+            : null;
+        var structure = CityGenerator.Generate(sSeed, _content, zones, modulesOn ? modules : null, moduleChance, composition, _log.Warn,
+            kitCity ? cityLayout : null, cityKit, kitCity ? kitPool : null);
+        if (composition is { Count: > 0 } && (rec ?? FindPlacementRecord("settlement", 0)) is { } cityRec && cityRec.Composition is null)
+        {
+            cityRec.Composition = composition;
+            _placementRecordsDirty = true;
+            SavePlacementRecords();
+        }
+
+        var placed = new List<PlacedSettlement>
+        {
+            new PlacedSettlement
+            {
+                Structure = structure,
+                Origin = origin,
+                GroundY = groundY,
+                Tier = CityGenerator.Tier,
+                Ruined = false,
+                OnIsland = false,
+                Name = name,
+                Rng = rng,
+                Seat = "shelf",
+            },
+        };
+        SavePlacementRecords();
+        ReportStamp("settlement", 1, 1);
+        _worlds.Active.CityFootprint = (origin.X, origin.Z, origin.X + structure.Width - 1, origin.Z + structure.Length - 1);
+        CommitSettlements(placed, surface, rng);
+        _log.Info($"Stamped the '{planet.CityWorld}' city '{name}' ({structure.Width}×{structure.Length}, {_npcs.Count} residents) around pad 0 on '{_world.LocationId}'.");
+    }
+
+    /// <summary>The G.D.S. city's name (#1793): a root the desert-world names share, under the initials nobody explains.</summary>
+    private static string CityDisplayName(System.Random rng)
+    {
+        string[] roots = { "Veyra", "Sarath", "Ossira", "Tarmun", "Zephar", "Kel-Dun", "Ilvane", "Quorra" };
+        return "G.D.S. " + roots[rng.Next(roots.Length)];
     }
 
     /// <summary>Carves the footprint clear of terrain, lays a flat foundation, then stamps the structure's blocks.
@@ -490,6 +721,44 @@ public sealed partial class GameServer
                 {
                     _world.SetBlock(new Vector3i(origin.X + x, gy + y, origin.Z + z), BlockId.Air);
                 }
+
+        // 1b) Vegetation carve (#1659). The terrain carve above is only as deep as the ground rises — on flat
+        //    ground two rows — but a tree stands up to MaxStampRise cells over the surface and the tree
+        //    stamper knows nothing about settlements. So the rows of a trunk from the third cell up, and the
+        //    whole crown, used to survive INSIDE the protected box: a tree in front of a door that nobody
+        //    could ever fell (a player report). This pass takes every tree block out of the footprint up to
+        //    tree height, and out of a crown-wide ring around it (a trunk just outside the box hangs its
+        //    crown into the lanes). Only tree blocks go — terrain and anything built stays — and the ring is
+        //    left alone entirely when a player has built there (a log cabin beside the village is theirs).
+        //    Runs on every load, so worlds stamped before this pass heal on their next start.
+        var vegetation = SettlementVegetationIds;
+        bool ringIsSomeonesBuild = FootprintHasPlayerEdits(origin.X - (SettlementCrownMargin - 2), origin.Z - (SettlementCrownMargin - 2),
+            gy, s.Width + 2 * (SettlementCrownMargin - 2), SettlementVegetationRise, s.Length + 2 * (SettlementCrownMargin - 2));
+        for (int x = -SettlementCrownMargin; x < s.Width + SettlementCrownMargin; x++)
+            for (int z = -SettlementCrownMargin; z < s.Length + SettlementCrownMargin; z++)
+            {
+                bool inside = x >= 0 && x < s.Width && z >= 0 && z < s.Length;
+                if (!inside && ringIsSomeonesBuild)
+                {
+                    continue;
+                }
+
+                // Inside, everything below clearH is air already; the ring starts a few rows down so a trunk
+                // rooted on lower ground beside the plinth goes with its crown instead of leaving a stump.
+                for (int y = inside ? clearH : -SettlementCrownMargin; y <= SettlementVegetationRise; y++)
+                {
+                    var cell = new Vector3i(origin.X + x, gy + y, origin.Z + z);
+                    if (!WithinBuildHeight(cell.Y))
+                    {
+                        continue;
+                    }
+
+                    if (vegetation.Contains(_world.GetBlock(cell).Value))
+                    {
+                        _world.SetBlock(cell, BlockId.Air);
+                    }
+                }
+            }
 
         // 2) Foundation row + support skirt. The buildings are authored on one flat plane, so the floor at gy
         //    must stay level — but on a slope a single flat slab would hang in mid-air on the downhill side. So
@@ -683,6 +952,53 @@ public sealed partial class GameServer
         return new System.Random(unchecked((int)(s ^ (s >> 32))));
     }
 
+    /// <summary>
+    /// Measures one stamped doorway on its own structure (#1994) and remembers it by world cell for
+    /// <c>RegisterDoors</c>: the wall the generator recorded (<see cref="SettlementMarker.DoorAxis"/>, #1986)
+    /// or, for a template that names none, the layout's own jambs; the width from the layout's air run.
+    /// <para>The registry used to ask the WORLD for both, which is 232 block probes on a city — enough to pull
+    /// the whole footprint's chunks into memory at boot (4.8 s of a 4.9 s pass). The layout gives the same
+    /// answer for free: it is what those blocks were stamped from.</para>
+    /// </summary>
+    private void RecordAuthoredDoor(PlacedSettlement p, SettlementMarker marker)
+    {
+        var s = p.Structure;
+        bool Solid(int x, int y, int z)
+            => x >= 0 && y >= 0 && z >= 0 && x < s.Width && y < s.Height && z < s.Length && s.Get(x, y, z) != 0;
+
+        bool? forced = marker.DoorAxis switch
+        {
+            DoorWall.AlongX => true,
+            DoorWall.AlongZ => false,
+            _ => null,
+        };
+
+        var fit = DoorProbe.Measure(Solid, marker.LocalPos.X, marker.LocalPos.Y, marker.LocalPos.Z, forced);
+        var cell = new Vector3i(p.Origin.X + marker.LocalPos.X, p.GroundY + marker.LocalPos.Y, p.Origin.Z + marker.LocalPos.Z);
+        var centre = new Vector3f(fit.CentreX(cell.X), cell.Y, fit.CentreZ(cell.Z));
+        _worlds.Active.SettlementDoorFits[WorldConstants.CanonicalBlock(cell, _world.Circumference)]
+            = new AuthoredDoor(fit.AxisX, fit.Width, centre);
+    }
+
+    /// <summary>
+    /// The stamped-feature key for one structure's voxels (#1990) — its pinned origin column, so it is the same
+    /// key on every load and two structures on one world can never share it.
+    /// <para>Settlements, cities and factories used to write their whole structure into the world on EVERY
+    /// server start: a 256×256 city re-wrote 405 332 cells per load, and a wall a player had mined grew back
+    /// with them. The rest of the world has worked the other way round for a long time — a vault, a monument,
+    /// a ruin and a bandit camp are stamped once and "a mined [one] stays mined" — and this brings the
+    /// buildings in line with it. A save that has the structure but not the mark (every world made before
+    /// this) stamps once more and is marked from then on, so nothing has to be migrated.</para>
+    /// </summary>
+    private static string StructureBlocksFeature(Vector3i origin, int groundY)
+        => $"structblocks:{origin.X}:{groundY}:{origin.Z}";
+
+    /// <summary>Whether this structure's voxels are already in the world (#1990).</summary>
+    private bool StructureBlocksStamped(PlacedSettlement p) => FeatureStamped(StructureBlocksFeature(p.Origin, p.GroundY));
+
+    /// <summary>Records that this structure's voxels are in the world, so no later load writes them again (#1990).</summary>
+    private void MarkStructureBlocksStamped(PlacedSettlement p) => MarkFeatureStamped(StructureBlocksFeature(p.Origin, p.GroundY));
+
     /// <summary>The pinned placement record for a structure instance on the active world, or null.</summary>
     private StructurePlacementRecord? FindPlacementRecord(string kind, int index)
         => _meta.Placements.Find(r => r.LocationId == _world.LocationId && r.Kind == kind && r.Index == index);
@@ -692,14 +1008,23 @@ public sealed partial class GameServer
     /// <summary>Pins where a structure instance landed (#586). Batched — call
     /// <see cref="SavePlacementRecords"/> once per stamper after its loop.</summary>
     private void RecordPlacement(string kind, int index, Vector3i origin, int groundY, bool onIsland,
-        string seat, string name, string template = "")
+        string seat, string name, string template = "", int modules = 0, List<string>? composition = null, string kit = "",
+        string kitLayout = "")
     {
         var rec = FindPlacementRecord(kind, index);
         if (rec is null)
         {
-            rec = new StructurePlacementRecord { LocationId = _world.LocationId, Kind = kind, Index = index };
+            rec = new StructurePlacementRecord { LocationId = _world.LocationId, Kind = kind, Index = index, Modules = modules };
             _meta.Placements.Add(rec);
         }
+
+        if (composition is not null)
+        {
+            rec.Composition = composition; // #1872: which module went into each slot
+        }
+
+        rec.Kit = kit; // #1876
+        rec.KitLayout = kitLayout;
 
         rec.Placed = true;
         rec.X = origin.X;
@@ -1246,6 +1571,47 @@ public sealed partial class GameServer
 
     /// <summary>Picks a settlement size tier weighted by hospitability: liveable worlds skew toward towns/cities,
     /// harsh worlds toward hamlets/villages.</summary>
+    /// <summary>
+    /// #1888: a fresh structure's pick — a complete template when <paramref name="wantTemplate"/> (the option's share) and
+    /// the tier has one, else a kit; a tier without kits always takes a template, one without templates a kit. Weighted
+    /// within the chosen table, in pool order. (null, null) when both tables are empty.
+    /// </summary>
+    internal static (StructureTemplate? Template, StructureKit? Kit) PickTemplateOrKit(IReadOnlyList<StructureTemplate> templates,
+        IReadOnlyList<StructureKit> kits, bool wantTemplate, System.Random rng)
+    {
+        if (templates.Count > 0 && (wantTemplate || kits.Count == 0))
+        {
+            int total = 0;
+            foreach (var t in templates) total += System.Math.Max(1, t.Weight);
+            int r = rng.Next(total);
+            foreach (var t in templates)
+            {
+                r -= System.Math.Max(1, t.Weight);
+                if (r < 0) return (t, null);
+            }
+        }
+        else if (kits.Count > 0)
+        {
+            int total = 0;
+            foreach (var k in kits) total += System.Math.Max(1, k.Weight);
+            int r = rng.Next(total);
+            foreach (var k in kits)
+            {
+                r -= System.Math.Max(1, k.Weight);
+                if (r < 0) return (null, k);
+            }
+        }
+
+        return (null, null);
+    }
+
+    /// <summary>Test seam (#1888): the pick for a table and a coin.</summary>
+    public static (string Template, string Kit) PickTemplateOrKitForTest(IReadOnlyList<StructureTemplate> templates, IReadOnlyList<StructureKit> kits, bool wantTemplate, System.Random rng)
+    {
+        var (t, k) = PickTemplateOrKit(templates, kits, wantTemplate, rng);
+        return (t?.Key ?? string.Empty, k?.Key ?? string.Empty);
+    }
+
     private static string RollTier(System.Random rng, double h)
     {
         double city = 0.10 + h * 0.20;     // 0.10 .. 0.30
@@ -1365,14 +1731,20 @@ public sealed partial class GameServer
     /// when none is in reach (B55). Drives which themed market goods the server accepts — per actual vendor, not
     /// one theme per location — so different vendors at one place trade different goods.</summary>
     private string VendorThemeAt(Shared.State.PlayerState player)
-        => (NearSettlementVendor(player) || NearSpaceStationVendor(player) || NearLandedTraderPilot(player))
+        => (NearSettlementVendor(player) || NearSpaceStationVendor(player) || NearLandedTraderPilot(player) || NearBaseVendor(player))
            && NearestNpc(player, "vendor") is { } v
+           && WrapDistSq(player.Position, v.Pos) <= VendorThemeReach * VendorThemeReach
             ? v.Theme
             : string.Empty;
 
+    /// <summary>How far the vendor NPC itself may stand from the player for its theme to count: the 4-block stall
+    /// reach plus room for the NPC's post leash. Without it the nearest vendor ANYWHERE on the world decided the
+    /// theme — a player at one stall could trade another village's goods while its vendor slept at home.</summary>
+    private const float VendorThemeReach = 6f;
+
     /// <summary>True if the player is standing next to a settlement vendor (enables market barter there).</summary>
     public bool NearSettlementVendor(Shared.State.PlayerState player)
-        => NearMarker(player, "vendor", SettlementVendorReach);
+        => NearTradeMarker(player, SettlementVendorReach);
 
     /// <summary>True if the player is standing next to a settlement's mission board.</summary>
     public bool NearSettlementMissionBoard(Shared.State.PlayerState player)
@@ -1392,6 +1764,20 @@ public sealed partial class GameServer
 
         int z = (int)System.Math.Floor(player.Position.Z);
         return z >= s.Min.Z - margin && z <= s.Max.Z + margin;
+    }
+
+    /// <summary>True if any trading post — the classic vendor or a trading profession's post (2026-09) — is in reach.</summary>
+    private bool NearTradeMarker(Shared.State.PlayerState player, float reach)
+    {
+        foreach (var (markerType, pos) in _settlementMarkers)
+        {
+            if (NpcProfessions.IsTradeMarker(markerType) && WrapDistSq(player.Position, pos) <= reach * reach)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private bool NearMarker(Shared.State.PlayerState player, string type, float reach)
@@ -1439,6 +1825,69 @@ public sealed partial class GameServer
 
         return null;
     }
+
+    /// <summary>How far over the foundation row the vegetation carve reaches: the tallest tree the stamper
+    /// grows (<c>WorldGenerator.MaxStampRise</c> = 18) plus the three rows the terrain carve minimum covers.</summary>
+    private const int SettlementVegetationRise = 21;
+
+    /// <summary>Ring around the footprint the vegetation carve also clears — the widest crown the tree stamper
+    /// grows (its own chunk-edge scan margin), so a trunk just outside the box cannot hang leaves into it.</summary>
+    private const int SettlementCrownMargin = 4;
+
+    private HashSet<ushort>? _settlementVegetationIds;
+
+    /// <summary>The blocks a natural tree is made of — never structural, so never the settlement's (#1659).
+    /// Small flora is not listed: it is walk-through and already exempt from protection as harvestable.</summary>
+    private HashSet<ushort> SettlementVegetationIds
+        => _settlementVegetationIds ??= HostIds("wood_log", "tree_leaves", "pine_needles", "palm_frond",
+            BlocksBeyondTheStars.WorldGeneration.WorldGenerator.GiantLogKey, BlocksBeyondTheStars.WorldGeneration.WorldGenerator.GiantLeavesKey);
+
+    /// <summary>Whether the settlement's own layout puts a block at this world cell — the greenhouse frame,
+    /// a stilt pile, a wall — as opposed to whatever else happens to stand inside its box.</summary>
+    private bool IsSettlementLayoutCell(Vector3i pos)
+    {
+        int circ = _world.Circumference;
+        foreach (var s in _settlements)
+        {
+            if (s.Layout is not { } layout)
+            {
+                continue;
+            }
+
+            int lx = WorldConstants.WrapDeltaX(pos.X - s.Min.X, circ);
+            int ly = pos.Y - s.GroundY;
+            int lz = pos.Z - s.Min.Z;
+            if (lx < 0 || lx >= layout.Width || ly < 0 || ly >= layout.Height || lz < 0 || lz >= layout.Length)
+            {
+                continue;
+            }
+
+            if (layout.Get(lx, ly, lz) != 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Settlement protection for one block: inside an intact settlement's box, unless the block is a
+    /// natural tree the layout never placed there (#1659). Protection exists so nobody tears the houses down;
+    /// a tree that grew in a lane is not a house, and until this rule a tree in front of a door locked the
+    /// building for good — the carve in <c>StampSettlementBlocks</c> removes such trees on load, this is the
+    /// belt to that brace for anything it misses.</summary>
+    private bool IsSettlementProtected(Vector3i pos, BlockId id)
+        => IsSettlementBlock(pos) && !(SettlementVegetationIds.Contains(id.Value) && !IsSettlementLayoutCell(pos));
+
+    /// <summary>Test seam for <see cref="IsSettlementProtected"/> against the block currently at the cell.</summary>
+    public bool IsSettlementProtectedForTest(Vector3i pos) => IsSettlementProtected(pos, _world.GetBlock(pos));
+
+    /// <summary>Test seam for <see cref="IsSettlementLayoutCell"/>.</summary>
+    public bool IsSettlementLayoutCellForTest(Vector3i pos) => IsSettlementLayoutCell(pos);
+
+    /// <summary>Per-settlement full 3-D box + foundation row — test seam for the vegetation carve (#1659).</summary>
+    public IReadOnlyList<(Vector3i Min, Vector3i Max, int GroundY, bool Ruined)> SettlementBoxesForTest
+        => _settlements.Select(s => (s.Min, s.Max, s.GroundY, s.Ruined)).ToList();
 
     /// <summary>True if the block belongs to an intact (protected) settlement — ruins are scavengeable.</summary>
     public bool IsSettlementBlock(Vector3i pos)

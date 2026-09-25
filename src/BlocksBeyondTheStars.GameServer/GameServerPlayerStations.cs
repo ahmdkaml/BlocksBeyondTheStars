@@ -206,6 +206,9 @@ public sealed partial class GameServer
             SystemX = current?.SystemX ?? 0f,
             SystemY = current?.SystemY ?? 0f,
             SystemZ = current?.SystemZ ?? 0f,
+            // #1856: the host body, so the client's sky aboard the station is the host's sky without a coordinate
+            // scan. Only the Moon pass of the space view reads ParentId, so a station carrying one is inert there.
+            ParentId = current?.Id ?? string.Empty,
         });
     }
 
@@ -531,6 +534,7 @@ public sealed partial class GameServer
     private bool AbsorbStampedWorldIntoCells(BoardableStation station, SpaceStructure src)
     {
         string loc = _world.LocationId;
+        int moved = NormaliseStationCells(station, src); // #1773: phantom east cells first, so the box below is the real one
         var (min, max) = CellBox(src);
         var wmin = StationCellToWorld(station, min);
         var wmax = StationCellToWorld(station, max);
@@ -559,7 +563,8 @@ public sealed partial class GameServer
                                 continue; // see the summary: a mined cell and the pad cut look the same here
                             }
 
-                            var cell = WorldToStationCell(station, e.WorldPosition);
+                            var w = StationLocalWorld(station, e.WorldPosition); // #1773: chunk edits are canonical, the build is not
+                            var cell = WorldToStationCell(station, w);
                             if (src.Cells.ContainsKey(cell) && src.Get(cell).Value == e.Block)
                             {
                                 continue; // the grid already says so
@@ -567,7 +572,6 @@ public sealed partial class GameServer
 
                             src.Set(cell, new BlockId(e.Block), e.Tint, e.Glow, e.Shape);
                             added++;
-                            var w = e.WorldPosition;
                             if (w.X < minX) { minX = w.X; grew = true; }
                             if (w.Y < minY) { minY = w.Y; grew = true; }
                             if (w.Z < minZ) { minZ = w.Z; grew = true; }
@@ -583,7 +587,7 @@ public sealed partial class GameServer
             }
         }
 
-        if (added == 0)
+        if (added == 0 && moved == 0)
         {
             return false;
         }
@@ -593,7 +597,16 @@ public sealed partial class GameServer
             PersistStation(hostLoc, src);
         }
 
-        _log.Info($"Player station '{station.Name}': absorbed {added} interior block(s) from its world into the build (#1559).");
+        if (moved > 0)
+        {
+            _log.Info($"Player station '{station.Name}': moved {moved} cell(s) built west of the origin back from a lap east (#1773).");
+        }
+
+        if (added > 0)
+        {
+            _log.Info($"Player station '{station.Name}': absorbed {added} interior block(s) from its world into the build (#1559).");
+        }
+
         return true;
     }
 
@@ -638,13 +651,24 @@ public sealed partial class GameServer
     /// lies nearest to <paramref name="near"/> — the spawn spot when the box centre is built shut (#1493).</summary>
     private bool TryFindStandableInStation(BoardableStation station, Vector3i near, out Vector3i spot)
     {
+        // #1833: two passes — a standable cell that HOLDS AIR first, any standable cell only when the build has no
+        // sealed pocket at all. The roof's outer face is "standable" too (support below, two free cells of vacuum
+        // above) and on a build whose centre column is walled in it was the NEAREST such cell: Lyxette docked and
+        // was set down on top of her station, in the vacuum.
+        _stationAir.Remove(station.Id); // the stamp just rewrote the hull — judge the pockets on what the world holds now
+        return TryFindStandableInStation(station, near, sealedOnly: true, out spot)
+            || TryFindStandableInStation(station, near, sealedOnly: false, out spot);
+    }
+
+    private bool TryFindStandableInStation(BoardableStation station, Vector3i near, bool sealedOnly, out Vector3i spot)
+    {
         spot = default;
         long best = long.MaxValue;
         for (int x = station.BoundsMin.X; x <= station.BoundsMax.X; x++)
             for (int z = station.BoundsMin.Z; z <= station.BoundsMax.Z; z++)
                 for (int y = station.BoundsMin.Y + 1; y <= station.BoundsMax.Y + 1; y++)
                 {
-                    if (!StandableAt(x, y, z))
+                    if (!StandableAt(x, y, z) || (sealedOnly && !InSealedStationPocket(station, new Vector3i(x, y, z))))
                     {
                         continue;
                     }
@@ -677,7 +701,7 @@ public sealed partial class GameServer
                     continue;
                 }
 
-                var cell = d.Pos.ToBlock();
+                var cell = StationLocalWorld(station, d.Pos.ToBlock()); // a door west of the origin is stored a lap east (#1773)
                 bmin = new Vector3i(System.Math.Min(bmin.X, cell.X), System.Math.Min(bmin.Y, cell.Y), System.Math.Min(bmin.Z, cell.Z));
                 bmax = new Vector3i(System.Math.Max(bmax.X, cell.X), System.Math.Max(bmax.Y, cell.Y + 2), System.Math.Max(bmax.Z, cell.Z));
             }
@@ -695,44 +719,150 @@ public sealed partial class GameServer
     private static Vector3i WorldToStationCell(BoardableStation station, Vector3i world)
         => new(world.X - station.Origin.X + station.StampMin.X, world.Y - station.Origin.Y + station.StampMin.Y, world.Z - station.Origin.Z + station.StampMin.Z);
 
+    /// <summary>The interior-world position of a block as the station sees it (#1773): the void world still
+    /// carries a circumference, so every block WRITE canonicalises X into [0, circ) — a wall built at x = −5 is
+    /// stored at x ≈ 5947. Boarders, doors and the air/gravity box live in the unwrapped space around the origin
+    /// (#1558), so the cell grid must too, or a whole west wing lands far east of the build and the pocket fill
+    /// reads x &lt; 0 as the void. Unwraps X to the lap nearest the origin; Z's latitude domain is already centred
+    /// on 0 and needs nothing.</summary>
+    private Vector3i StationLocalWorld(BoardableStation station, Vector3i world)
+    {
+        int circ = _world.Circumference;
+        if (circ <= 0)
+        {
+            return world;
+        }
+
+        return new Vector3i(station.Origin.X + WorldConstants.WrapDeltaX(world.X - station.Origin.X, circ), world.Y, world.Z);
+    }
+
+    /// <summary>Moves every cell whose interior-world position sits a lap east of the origin back to the
+    /// unwrapped spot it was built at (#1773): saves written between the unwrapped boarder (#1558) and this fix
+    /// hold a west wing as phantom cells at x ≈ 5947+. Returns how many cells moved.</summary>
+    private int NormaliseStationCells(BoardableStation station, SpaceStructure src)
+    {
+        List<Vector3i>? phantom = null;
+        foreach (var cell in src.Cells.Keys)
+        {
+            var world = StationCellToWorld(station, cell);
+            if (StationLocalWorld(station, world) != world)
+            {
+                (phantom ??= new List<Vector3i>()).Add(cell);
+            }
+        }
+
+        if (phantom == null)
+        {
+            return 0;
+        }
+
+        foreach (var cell in phantom)
+        {
+            var block = src.Get(cell);
+            var (tint, glow) = src.Mods.TryGetValue(cell, out var m) ? m : (0, 0);
+            int shape = src.Shapes.TryGetValue(cell, out var sh) ? sh : 0;
+            src.Set(cell, BlockId.Air);
+            src.Set(WorldToStationCell(station, StationLocalWorld(station, StationCellToWorld(station, cell))), block, tint, glow, shape);
+        }
+
+        return phantom.Count;
+    }
+
     /// <summary>A block changed inside a player station's interior world (#1481): mirror it into the station's
     /// cell grid and persist, so the edit survives the next server start (the re-stamp finds the cell already
     /// matching — or gone — and leaves it alone) and the hull seen from a spacewalk shows the rebuilt wall. Doors
     /// built inside are door entities, not blocks, and persist with the world on their own. No-op outside
     /// player-station worlds. Called after the world write, for player edits only — station stamps, fluids and
-    /// fires never go through here.</summary>
+    /// fires never go through here — blocks the SERVER grows (a sapling's tree, regrown flora) take the batched
+    /// <see cref="MirrorStationCellDeferred"/> route instead (#1857).</summary>
     private void WriteBackStationCell(Vector3i world, BlockId block, int tint = 0, int glow = 0, int shape = 0)
+    {
+        if (MirrorStationCell(world, block, tint, glow, shape) is { } stationId)
+        {
+            PublishStationCells(stationId);
+        }
+    }
+
+    /// <summary>Player stations whose cell grid changed through <see cref="MirrorStationCellDeferred"/> and still
+    /// owe their pilots outside a design refresh + a persisted row (#1857).</summary>
+    private readonly HashSet<string> _stationCellsDirty = new();
+
+    /// <summary>A block the server grew inside a player station (#1857): the grid takes it like a player edit, but
+    /// the row write + the design broadcast wait for <see cref="FlushMirroredStationCells"/> — a tree is forty-odd
+    /// cells, and each one re-sending the whole design (and re-serialising every cell to the row) is the cost this
+    /// avoids. No-op outside player-station worlds.</summary>
+    private void MirrorStationCellDeferred(Vector3i world, BlockId block)
+    {
+        if (MirrorStationCell(world, block) is { } stationId)
+        {
+            _stationCellsDirty.Add(stationId);
+        }
+    }
+
+    /// <summary>Persists + re-broadcasts every station <see cref="MirrorStationCellDeferred"/> touched since the
+    /// last flush — once per station, however many cells changed (#1857).</summary>
+    private void FlushMirroredStationCells()
+    {
+        if (_stationCellsDirty.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var stationId in _stationCellsDirty)
+        {
+            PublishStationCells(stationId);
+        }
+
+        _stationCellsDirty.Clear();
+    }
+
+    /// <summary>The grid half of the write-back: mirrors one cell of the ACTIVE world into its player station's
+    /// cell grid and refreshes the bounds. Returns the station id when the grid changed, null when the world is
+    /// no materialised player station or the grid already said so.</summary>
+    private string? MirrorStationCell(Vector3i world, BlockId block, int tint = 0, int glow = 0, int shape = 0)
     {
         if (!IsPlayerStationWorld(_world.LocationId))
         {
-            return;
+            return null;
         }
 
         string stationId = _world.LocationId.Substring("station:".Length);
         if (!_stationsById.TryGetValue(stationId, out var station) || !station.Materialised
             || !_playerStationCells.TryGetValue(stationId, out var s))
         {
-            return;
+            return null;
         }
 
-        var cell = WorldToStationCell(station, world);
+        var cell = WorldToStationCell(station, StationLocalWorld(station, world)); // #1773: the edit arrives canonical
         bool sameMods = s.Mods.TryGetValue(cell, out var mods) ? mods == (tint, glow) : tint == 0 && glow == 0;
         bool sameShape = (s.Shapes.TryGetValue(cell, out var sh) ? sh : 0) == shape;
         if (block.IsAir ? !s.Cells.ContainsKey(cell) : s.Get(cell).Value == block.Value && sameMods && sameShape)
         {
-            return; // nothing the grid doesn't already say
+            return null; // nothing the grid doesn't already say
         }
 
         s.Set(cell, block, tint, glow, shape); // #1493: dye + form ride along, so the hull seen from a spacewalk matches
         var (min, max) = CellBox(s);
         RefreshStationBounds(station, min, max);
+        return stationId;
+    }
+
+    /// <summary>The publish half of the write-back: persists the station's row and re-sends its design to the
+    /// pilots floating beside the hull right now, so they see the rebuilt wall (or the grown tree) too.</summary>
+    private void PublishStationCells(string stationId)
+    {
+        if (!_playerStationCells.TryGetValue(stationId, out var s))
+        {
+            return;
+        }
+
         if (_stationHostBody.TryGetValue(stationId, out var hostLoc))
         {
             PersistStation(hostLoc, s);
         }
 
-        // Pilots floating beside the hull right now see the rebuilt wall too. The instance is found by the structure
-        // it holds, not by key: a never-landed ship's instance is keyed by the planet-type placeholder (#1493).
+        // The instance is found by the structure it holds, not by key: a never-landed ship's instance is keyed by
+        // the planet-type placeholder (#1493).
         if (_spaceInstances.Values.FirstOrDefault(i => i.Structures.ContainsKey(s.Id)) is { } instance)
         {
             foreach (var pid in instance.Players)
@@ -783,6 +913,10 @@ public sealed partial class GameServer
             else if (!container.IsAir && kv.Value.Value == container.Value)
             {
                 RegisterStationContainer(station, w);
+            }
+            else if (_content.BlockById(kv.Value) is { } def && NpcProfessions.ByPostBlock(def.Key) is { } profession)
+            {
+                station.Markers.Add((profession.Marker, center)); // a profession post (2026-09): staffed like the trading post
             }
         }
 

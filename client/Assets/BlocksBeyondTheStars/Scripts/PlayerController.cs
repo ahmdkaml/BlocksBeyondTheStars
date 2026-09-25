@@ -72,7 +72,8 @@ namespace BlocksBeyondTheStars.Client
         public float SpeederHopSpeed = 6f;       // Space gives a quick lift over a low obstacle
         public float SpeederImpactThreshold = 9f; // a hard stop above this speed reports a collision
         public float SpeederBoardRange = 3.2f;
-        public float SpeederStowRange = 3.5f;
+        public float SpeederStowRange = 5f;       // = the server's pack-up reach (was 3.5: a sunk speeder was silently out of reach, #1661)
+        public float SpeederHintRange = 14f;      // own parked vehicle within this but beyond stow reach → the HUD says so
 
         // Boat (#1215) — the water kind of the same vehicle system: slower, lazier steering, it drifts, and it
         // floats on the water column instead of hovering over a ground raycast. Speeds come from the item's
@@ -126,6 +127,35 @@ namespace BlocksBeyondTheStars.Client
                 }
 
                 return false;
+            }
+        }
+
+        /// <summary>Standing at the own landed ship's cockpit or console with a deployed vehicle out on this world
+        /// (RecallVehicle applies, #1661). Never aboard the floating interior — the ship is not landed there.</summary>
+        public bool CanRecallVehicle
+            => Game != null && (Game.NearbyStation == "cockpit" || Game.NearbyStation == "console")
+               && Game.LoadingPlanetType != "ship_interior" && OwnParkedVehicleCount > 0;
+
+        /// <summary>How many of our own vehicles stand parked (not driven) on this world.</summary>
+        public int OwnParkedVehicleCount
+        {
+            get
+            {
+                if (Game?.Speeders == null)
+                {
+                    return 0;
+                }
+
+                int n = 0;
+                foreach (var s in Game.Speeders)
+                {
+                    if (s != null && s.OwnerId == Game.LocalPlayerId && string.IsNullOrEmpty(s.DriverId))
+                    {
+                        n++;
+                    }
+                }
+
+                return n;
             }
         }
 
@@ -264,6 +294,7 @@ namespace BlocksBeyondTheStars.Client
         /// when the spawn chunk truly never streams; the server's void rescue then takes over as before.</summary>
         private const float AwaitFloorMaxSeconds = 30f;
         private bool _wasGrounded = true;
+        private bool _marketFromVendor; // NearbyStation "market" came from a vendor NPC in reach, not a market block
         private bool _jetpackActive; // last reported jetpack thrust state (server drains energy on this)
         private float _stepTimer;
         private int _lastWorldEpoch;
@@ -275,6 +306,10 @@ namespace BlocksBeyondTheStars.Client
 
         // Boat drive state (#1215).
         private bool _drivingBoat;        // the vehicle we boarded is a boat (remembered for the dismount cue)
+        private float _speederBlockedSeconds; // the speeder wants to move but the capsule does not: wedged against a lip (#1660)
+        private bool _speederAutoHop;         // next frame's hover gets a hop to clear that lip
+        private Vector3 _speederLastDryPos;   // last driven pose with no water under the hull (shore stop, #1660)
+        private bool _speederHasDryPos;
         private Vector3 _boatVel;         // planar hull velocity — lags the bow, so the boat drifts through turns
         private float _boatBobPhase;      // sine phase of the idle bob
         private float _boatDrySeconds;    // how long the hull has had no water under it (aground)
@@ -284,6 +319,27 @@ namespace BlocksBeyondTheStars.Client
         // Camera feel (first-person head-bob, FOV kick, landing shake).
         private float _bobPhase;
         private float _camShake;
+
+        /// <summary>#1998: a push from a stomp or a sandworm strike (horizontal, blocks/s), easing off.</summary>
+        private Vector3 _knock;
+
+        /// <summary>#1998: every environment raycast of the player (ground snap, spawn search, headroom, camera boom)
+        /// ignores the giants' colliders — they block the capsule, but nobody should "stand" on a foot or snap onto a leg.</summary>
+        private static int WorldRayMask => ~(1 << CreatureView.GiantLayer);
+
+        /// <summary>#1998: shakes the camera (0..1), e.g. a giant's footfall or a sandworm breaching nearby. The camera-
+        /// motion comfort setting still scales it away.</summary>
+        public void AddCameraShake(float amount) => _camShake = Mathf.Max(_camShake, Mathf.Clamp01(amount));
+
+        /// <summary>#1998: knocks the player away (a stomp, a strike): an upward pop plus a horizontal push that eases off.</summary>
+        public void ApplyKnock(Vector3 impulse)
+        {
+            _knock = new Vector3(impulse.x, 0f, impulse.z);
+            if (impulse.y > 0f)
+            {
+                _verticalVelocity = Mathf.Max(_verticalVelocity, impulse.y);
+            }
+        }
         private float _baseFov = 60f;
         private bool _moving;
 
@@ -365,8 +421,9 @@ namespace BlocksBeyondTheStars.Client
             _heldKey = key;
             _optic?.SetHeldItem(key); // swapping away from the binoculars can never strand a zoomed view
             var (kind, tint, blockKey) = HeldItem.For(Game?.Content, key);
-            Avatar?.SetHeldItem(kind, tint, blockKey);
-            _viewmodel?.SetHeldItem(kind, tint, blockKey);
+            var look = Game?.LocalToolLook(key); // the player's own look for this tool (#1963), null = standard
+            Avatar?.SetHeldItem(kind, tint, blockKey, key, look);
+            _viewmodel?.SetHeldItem(kind, tint, blockKey, key, look);
         }
 
         private void Update()
@@ -455,7 +512,7 @@ namespace BlocksBeyondTheStars.Client
                 // has streamed and says "air". Otherwise the collider answering is terrain under a slab whose
                 // chunk has not arrived yet, and releasing on it drops the player through that slab once it
                 // does (#1449, the beam pad on a mine ceiling). A hit right under the feet is the floor itself.
-                bool groundBelow = Physics.Raycast(_spawnPos + Vector3.up * 0.5f, Vector3.down, out var gHit, 10f)
+                bool groundBelow = Physics.Raycast(_spawnPos + Vector3.up * 0.5f, Vector3.down, out var gHit, 10f, WorldRayMask)
                                    && gHit.collider != _controller
                                    && (!_snapOntoFloor
                                        || gHit.distance <= SnapFloorOnIt
@@ -569,7 +626,7 @@ namespace BlocksBeyondTheStars.Client
 
                 bool chairGone = Game?.World == null
                     || Game.Health <= 0f // dying stands you up so the respawn teleport gets a live controller
-                    || ShapeCode.ShapeOf(Game.World.GetShape(seat.x, seat.y, seat.z)) != (int)BlockShape.Chair;
+                    || !FurnitureShapes.IsSeat(ShapeCode.ShapeOf(Game.World.GetShape(seat.x, seat.y, seat.z)));
                 bool wantsUp = Time.frameCount != _satFrame
                     && (InputMap.JumpDown() || InputMap.CrouchHeld() || InputMap.Down(InputAction.Interact)
                         || Mathf.Abs(InputMap.MoveX()) > 0.3f || Mathf.Abs(InputMap.MoveY()) > 0.3f);
@@ -605,6 +662,12 @@ namespace BlocksBeyondTheStars.Client
             }
 
             if (InputMap.Down(InputAction.StowVehicle) && TryStowNearbySpeeder())
+            {
+                return;
+            }
+
+            // Same key at the own cockpit/console: ask the ship for a vehicle left out on this world (#1661).
+            if (InputMap.Down(InputAction.RecallVehicle) && TryRecallVehiclesAtConsole())
             {
                 return;
             }
@@ -822,8 +885,22 @@ namespace BlocksBeyondTheStars.Client
                 }
             }
 
+            // #1998: a giant is hit where the ray meets its body — its colliders, not a sphere at its feet.
+            if (Physics.Raycast(o, dir, out var giantHit, best, 1 << CreatureView.GiantLayer, QueryTriggerInteraction.Ignore)
+                && CreatureView.GiantIdFor(giantHit.collider) is { } giantId)
+            {
+                best = giantHit.distance;
+                id = giantId;
+                pos = giantHit.point;
+            }
+
             foreach (var c in Game.Creatures)
             {
+                if (c.GiantHeight > 0f)
+                {
+                    continue; // picked by its colliders above
+                }
+
                 float size = Mathf.Clamp(c.Size, 0.4f, 8f);
                 var basePos = Game.ScenePos(c.X, c.Y, c.Z);
                 var center = basePos + Vector3.up * (0.6f * size);
@@ -877,6 +954,17 @@ namespace BlocksBeyondTheStars.Client
             // Creatures (fauna) are attackable too — the server shares the hit path.
             foreach (var c in Game.Creatures)
             {
+                if (c.GiantHeight > 0f)
+                {
+                    // #1998: a giant counts from the nearest point of its body (and a buried sandworm not at all).
+                    if (CreatureView.GiantNearestPoint(c.Id, eye, out var near))
+                    {
+                        Consider(c.Id, near - Vector3.up * 0.9f);
+                    }
+
+                    continue;
+                }
+
                 Consider(c.Id, Game.ScenePos(c.X, c.Y, c.Z));
             }
 
@@ -1191,16 +1279,23 @@ namespace BlocksBeyondTheStars.Client
             // Same fluid-aware target as the click (#1353): a tier-3 drill that needs two hits on lava used to
             // tap the lava cell and then, held, march through it to the rock behind — the lava never broke.
             // A parked-ship cell is a structure edit, which stays a per-click action (no hold-drilling hulls).
-            if (!AimTarget(out var hitCell, out _, out var aimedShip, HeldToolFluidAim()) || aimedShip != null)
+            // #1746: a player-built door is an entity standing in an AIR cell, so the voxel march never sees it —
+            // test the doors first. One the ray reaches before any solid cell is the target, and it comes out by
+            // hand (the server hands the item back), so the hand-mineable gate below does not apply to it.
+            bool doorAimed = TryAimDoor(out var hitCell);
+            if (!doorAimed)
             {
-                return;
-            }
+                if (!AimTarget(out hitCell, out _, out var aimedShip, HeldToolFluidAim()) || aimedShip != null)
+                {
+                    return;
+                }
 
-            // By hand, only soft hand-mineable blocks keep digging; hard blocks reject without a drill, so don't
-            // hammer the server with a hold the server will only refuse (the initial tap already surfaces the hint).
-            if (!drill && !IsHandMineable(hitCell))
-            {
-                return;
+                // By hand, only soft hand-mineable blocks keep digging; hard blocks reject without a drill, so don't
+                // hammer the server with a hold the server will only refuse (the initial tap already surfaces the hint).
+                if (!drill && !IsHandMineable(hitCell))
+                {
+                    return;
+                }
             }
 
             TriggerSwing(); // keep the mining chop going while held
@@ -1414,6 +1509,7 @@ namespace BlocksBeyondTheStars.Client
             kind = null;
             key = null;
             at = default;
+            _scanEntityId = null;
             if (Game == null || Camera == null)
             {
                 return false;
@@ -1423,8 +1519,26 @@ namespace BlocksBeyondTheStars.Client
             Vector3 fwd = Camera.transform.forward;
 
             float best = float.MaxValue;
+            // #1998: a giant is scanned where the ray meets its body (a head 60 blocks up is out of arm's reach — the
+            // scanner reads a giant's flank from further away).
+            if (Physics.Raycast(eye, fwd, out var giantHit, Reach * 6f, 1 << CreatureView.GiantLayer, QueryTriggerInteraction.Ignore)
+                && CreatureView.GiantIdFor(giantHit.collider) is { } giantId
+                && System.Array.Find(Game.Creatures, g => g.Id == giantId) is { } giant)
+            {
+                best = giantHit.distance;
+                kind = "creature";
+                key = giant.SpeciesId;
+                _scanEntityId = giant.Id;
+                at = giantHit.point;
+            }
+
             foreach (var c in Game.Creatures)
             {
+                if (c.GiantHeight > 0f)
+                {
+                    continue; // picked by its colliders above
+                }
+
                 float size = Mathf.Clamp(c.Size, 0.4f, 8f);
                 var basePos = Game.ScenePos(c.X, c.Y, c.Z); // seam-aware (longitude wraps)
                 var center = basePos + Vector3.up * (0.6f * size);
@@ -1444,6 +1558,7 @@ namespace BlocksBeyondTheStars.Client
                     best = d;
                     kind = "creature";
                     key = c.SpeciesId;
+                    _scanEntityId = c.Id; // #1926: the server reads THIS individual (the Sreekmakra's disguise)
                     at = basePos + Vector3.up * (0.5f * size);
                 }
             }
@@ -1480,6 +1595,8 @@ namespace BlocksBeyondTheStars.Client
             return false;
         }
 
+        private string _scanEntityId; // the creature TryFindScanTarget last picked (#1926)
+
         /// <summary>Scans the aimed-at creature (threat assessment) or, failing that, the block in view.</summary>
         private void ScanTarget()
         {
@@ -1490,7 +1607,7 @@ namespace BlocksBeyondTheStars.Client
 
             if (TryFindScanTarget(out string kind, out string key, out var at))
             {
-                Game.Network.SendScan(kind, key);
+                Game.Network.SendScan(kind, key, kind == "creature" ? _scanEntityId : null);
                 Weapons?.Pulse(at, new Color(0.4f, 0.85f, 1f));
                 return;
             }
@@ -1517,6 +1634,10 @@ namespace BlocksBeyondTheStars.Client
         }
 
         private CameraTool _cameraTool;
+
+        /// <summary>Takes a HUD-free photo now (the streamer's "photo together", 2026-09) — the same capture the camera item
+        /// does on right-click. Returns whether a capture started.</summary>
+        public bool TakePhoto() => EnsureCameraTool().TryCapture();
 
         /// <summary>Lazily builds the client-side camera tool (HUD-free photo capture), wired to the view camera.</summary>
         private CameraTool EnsureCameraTool()
@@ -1637,9 +1758,11 @@ namespace BlocksBeyondTheStars.Client
                 Game.NearbyStation = Game.NearestStationType(transform.position, 3f);
             }
 
+            _marketFromVendor = false;
             if (string.IsNullOrEmpty(Game.NearbyStation) && Game.NearVendor)
             {
-                Game.NearbyStation = "market"; // a settlement/station vendor → "trade" prompt + E opens the market
+                Game.NearbyStation = "market"; // a settlement/station vendor → "trade" prompt + E asks trade or talk
+                _marketFromVendor = true;
             }
 
             // #1073: a placed crafting-station block you're LOOKING at (workbench, forge, …) tells you what it
@@ -1652,7 +1775,7 @@ namespace BlocksBeyondTheStars.Client
                 // bed + heal_tank (#1456): both take E for the home spawn (HandleSetSpawnPoint below), but without
                 // a prompt the bed was indistinguishable from a decorative slab ("man kann es nicht benutzen").
                 if (aimedKey is "workbench" or "forge" or "detoxifier" or "matter_forge" or "algae_tank" or "campfire"
-                    or "bed" or "heal_tank")
+                    or "bed" or "crew_bunk" or "heal_tank")
                 {
                     Game.AimedStationBlock = aimedKey;
                 }
@@ -1664,9 +1787,9 @@ namespace BlocksBeyondTheStars.Client
             // Your own base core in the crosshair → the HUD shows the rename key + the core's air readout (#1267).
             Game.AimedOwnBase = AimedOwnedBase();
 
-            if (!InputMap.Down(InputAction.Interact) || LaunchPrompt.IsOpen)
+            if (!InputMap.Down(InputAction.Interact) || LaunchPrompt.IsOpen || VendorChoicePrompt.IsOpen)
             {
-                return; // the launch question owns E while it is up (#1455)
+                return; // the launch / trade-or-talk question owns E while it is up (#1455)
             }
 
             // A radio beacon you own that you're aiming at → rename it (item 37).
@@ -1720,16 +1843,16 @@ namespace BlocksBeyondTheStars.Client
             // A heal tank — or its low-tech precursor, the bed (#804) — you're aiming at → make it your
             // home spawn point (base/station, issue #461).
             if (AimBlock(out var tankHit, out _)
-                && Game.Content?.BlockById(Game.World.GetBlock(tankHit.x, tankHit.y, tankHit.z))?.Key is "heal_tank" or "bed")
+                && Game.Content?.BlockById(Game.World.GetBlock(tankHit.x, tankHit.y, tankHit.z))?.Key is "heal_tank" or "bed" or "crew_bunk")
             {
                 Game.Network?.SendSetSpawnPoint(tankHit.x, tankHit.y, tankHit.z);
                 ClientAudio.Instance?.Cue("heal");
                 return;
             }
 
-            // A chair-shaped cell in any material seats the player (#806).
+            // A chair- or bench-shaped cell in any material seats the player (#806, #1846).
             if (_seatCell is null && AimBlock(out var chairHit, out _)
-                && ShapeCode.ShapeOf(Game.World.GetShape(chairHit.x, chairHit.y, chairHit.z)) == (int)BlockShape.Chair)
+                && FurnitureShapes.IsSeat(ShapeCode.ShapeOf(Game.World.GetShape(chairHit.x, chairHit.y, chairHit.z))))
             {
                 SitDown(chairHit);
                 return;
@@ -1853,7 +1976,14 @@ namespace BlocksBeyondTheStars.Client
 
                     break;
                 case "workshop": Menu?.OpenCrafting(); break;
-                case "market": Menu?.OpenMarket(); Game.Network?.SendNpcGreet("vendor"); break; // item 15: vendor greeting
+                case "market":
+                    if (!_marketFromVendor || !OfferVendorChoice())
+                    {
+                        Menu?.OpenMarket();
+                        Game.Network?.SendNpcGreet("vendor"); // item 15: vendor greeting
+                    }
+
+                    break;
                 case "cargo": Menu?.OpenInventory(); break;
                 case "console": Menu?.OpenShip(); Game.Network?.SendUseStation("console"); break; // ship status/repairs (#463)
                 default:
@@ -1861,6 +1991,53 @@ namespace BlocksBeyondTheStars.Client
                     Game.Network?.SendUseStation(Game.NearbyStation);
                     break; // medbay, quarters
             }
+        }
+
+        /// <summary>E at a vendor NPC: ask "trade or talk?" — a vendor is a market station, so E used to open the market
+        /// every time and its dialogues were unreachable. False when no prompt could be shown (the caller then opens the
+        /// market as before).</summary>
+        private bool OfferVendorChoice()
+        {
+            var prompt = VendorChoicePrompt.Instance;
+            if (prompt == null)
+            {
+                return false;
+            }
+
+            var npcs = Game.Npcs;
+            BlocksBeyondTheStars.Networking.Messages.NetNpc vendor = null;
+            float bestSq = 3.6f * 3.6f; // the same reach as Game.NearVendor
+            var here = Game.PlayerPosition;
+            foreach (var n in npcs)
+            {
+                if (n.Role != "vendor")
+                {
+                    continue;
+                }
+
+                float sq = (Game.ScenePos(n.X, n.Y, n.Z) - here).sqrMagnitude;
+                if (sq <= bestSq)
+                {
+                    bestSq = sq;
+                    vendor = n;
+                }
+            }
+
+            if (vendor == null)
+            {
+                return false;
+            }
+
+            int id = vendor.Id;
+            string role = Game.Localizer != null && !string.IsNullOrEmpty(vendor.NameKey) ? Game.Localizer.Get(vendor.NameKey) : string.Empty;
+            string label = string.IsNullOrEmpty(vendor.Name) ? role : string.IsNullOrEmpty(role) ? vendor.Name : $"{vendor.Name} · {role}";
+            return prompt.TryOffer(label,
+                () =>
+                {
+                    Menu?.OpenMarket();
+                    Game.Network?.SendNpcGreet("vendor");
+                },
+                () => Game.Network?.SendTalkToNpc(id));
         }
 
         /// <summary>True if the player is looking at a radio beacon block they own — returns its id + current label
@@ -2125,15 +2302,49 @@ namespace BlocksBeyondTheStars.Client
         /// Problem"; the earlier skin-width fix only removed part of the cause). Step height is therefore capped
         /// to the headroom actually available, which still climbs slabs and stair treads in the open.
         /// </summary>
-        private void UpdateStepOffset()
+        private void UpdateStepOffset(Vector3 move)
         {
             float capsuleTop = _crouched ? CrouchHeight : StandHeight;
 
-            // Walk upward from the head in step-sized samples and stop at the first solid cell.
+            // Walk upward from the head in step-sized samples and stop at the first solid cell. #1790: the capsule is
+            // radius + skin wide, so the probe covers its whole footprint — the centre, the four sides and the four
+            // diagonals — not just the column under transform.position. Walking a 2-high corridor a little off the
+            // column centre, or reaching a lintel whose ceiling block sits in the NEXT column, the single centre sample
+            // still read "air", the full 0.6 m sweep stayed armed and the player wedged exactly as before ("Ich kann
+            // immernoch nicht durch 2 Blöcke hohe Gänge"). Same neighbouring-column reach the wedge guard in
+            // LiftOutOfBlockAt already uses (#1460).
             float headroom = DefaultStepOffset;
+            float reach = _controller.radius + _controller.skinWidth;
+            float diag = reach * 0.7071f;
+            var feet = transform.position;
+
+            // #1837: the lintel of a 2-high doorway sits in the NEXT column, and the step-up engages the moment the
+            // forward sweep touches it — with the capsule centre still radius + skin (plus a frame of approach) short
+            // of that column, where every footprint sample above reads air. So the 0.6 m sweep stayed armed, the
+            // raised capsule (1.8 + 0.6) met the lintel at 2.0 and the walk wedged; a crouch or a jump got through
+            // ("Ich kann immernoch nur unter 2 Blöcken durch wenn ich springe oder mich ducke"). Sample the column
+            // ahead along the move as well — centre and both shoulders — so the cap is set before the sweep can reach.
+            bool moving = move.x * move.x + move.z * move.z > 1e-6f;
+            float ax = 0f, az = 0f, lx = 0f, lz = 0f;
+            if (moving)
+            {
+                var dir = new Vector3(move.x, 0f, move.z).normalized;
+                ax = dir.x * (reach + AheadProbe);
+                az = dir.z * (reach + AheadProbe);
+                lx = -dir.z * reach;
+                lz = dir.x * reach;
+            }
+
             for (float probe = 0.1f; probe <= DefaultStepOffset + 0.05f; probe += 0.1f)
             {
-                if (IsCollidingKey(BlockKeyAt(transform.position + Vector3.up * (capsuleTop + probe))))
+                float up = capsuleTop + probe;
+                if (CeilingAt(feet, up, 0f, 0f)
+                    || CeilingAt(feet, up, reach, 0f) || CeilingAt(feet, up, -reach, 0f)
+                    || CeilingAt(feet, up, 0f, reach) || CeilingAt(feet, up, 0f, -reach)
+                    || CeilingAt(feet, up, diag, diag) || CeilingAt(feet, up, -diag, diag)
+                    || CeilingAt(feet, up, diag, -diag) || CeilingAt(feet, up, -diag, -diag)
+                    || (moving && (CeilingAt(feet, up, ax, az)
+                        || CeilingAt(feet, up, ax + lx, az + lz) || CeilingAt(feet, up, ax - lx, az - lz))))
                 {
                     headroom = Mathf.Max(0f, probe - 0.1f);
                     break;
@@ -2143,9 +2354,18 @@ namespace BlocksBeyondTheStars.Client
             _controller.stepOffset = Mathf.Min(DefaultStepOffset, headroom);
         }
 
+        /// <summary>A colliding block <paramref name="up"/> above the feet, sampled <paramref name="dx"/>/<paramref name="dz"/>
+        /// off the capsule axis (the step-offset probe's footprint samples, #1790).</summary>
+        private bool CeilingAt(Vector3 feet, float up, float dx, float dz)
+            => IsCollidingKey(BlockKeyAt(new Vector3(feet.x + dx, feet.y + up, feet.z + dz)));
+
         /// <summary>The step height used in the open — matches the value WorldRig sets up so a slab (0.5) and each
         /// stair tread are walked up without jumping.</summary>
         private const float DefaultStepOffset = 0.6f;
+
+        /// <summary>How far beyond the capsule edge the step-offset probe looks along the move (#1837): past the
+        /// contact distance (radius + skin) and a frame of approach, into the column the next sweep would enter.</summary>
+        private const float AheadProbe = 0.55f;
 
         // --- Observer mode (issue #487) -------------------------------------------------------------
 
@@ -2284,7 +2504,7 @@ namespace BlocksBeyondTheStars.Client
 
                     // Surface under this spot? Start the ray well above any local terrain so a hill doesn't make us
                     // start inside a collider.
-                    if (!Physics.Raycast(new Vector3(x, anchor.y + 60f, z), Vector3.down, out var hit, 120f, ~0, QueryTriggerInteraction.Ignore)
+                    if (!Physics.Raycast(new Vector3(x, anchor.y + 60f, z), Vector3.down, out var hit, 120f, WorldRayMask, QueryTriggerInteraction.Ignore)
                         || hit.collider == _controller)
                     {
                         continue;
@@ -2307,7 +2527,7 @@ namespace BlocksBeyondTheStars.Client
                     // Open sky overhead? A hit means a solid ceiling above us (cave / overhang / hull under a solid
                     // roof) → indoors. (The ship's glass skylight has no collider, so this passes for an interior spot
                     // under it — the enclosure check below is what catches those.)
-                    if (Physics.Raycast(stand + Vector3.up * 0.3f, Vector3.up, out var up, 5f, ~0, QueryTriggerInteraction.Ignore)
+                    if (Physics.Raycast(stand + Vector3.up * 0.3f, Vector3.up, out var up, 5f, WorldRayMask, QueryTriggerInteraction.Ignore)
                         && up.collider != _controller)
                     {
                         continue;
@@ -2322,7 +2542,7 @@ namespace BlocksBeyondTheStars.Client
                     Vector3[] sides = { Vector3.forward, Vector3.back, Vector3.left, Vector3.right };
                     foreach (var s in sides)
                     {
-                        if (Physics.Raycast(eye, s, out var w, 5f, ~0, QueryTriggerInteraction.Ignore) && w.collider != _controller)
+                        if (Physics.Raycast(eye, s, out var w, 5f, WorldRayMask, QueryTriggerInteraction.Ignore) && w.collider != _controller)
                         {
                             walls++;
                         }
@@ -2410,7 +2630,7 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>True when a streamed collider (terrain, ship deck, pad) sits within a short drop below us —
         /// after a snap onto a floor cell, only the floor right under the feet counts (#1276).</summary>
         private bool ColliderBelow()
-            => Physics.Raycast(transform.position + Vector3.up * 0.5f, Vector3.down, out var hit, _snapOntoFloor ? SnapFloorMaxDrop : 10f)
+            => Physics.Raycast(transform.position + Vector3.up * 0.5f, Vector3.down, out var hit, _snapOntoFloor ? SnapFloorMaxDrop : 10f, WorldRayMask)
                && hit.collider != _controller;
 
         private void LookAround()
@@ -2503,6 +2723,9 @@ namespace BlocksBeyondTheStars.Client
                 _boatVel = Vector3.zero;
                 _boatDrySeconds = 0f;
                 _boatHasWetPos = false;
+                _speederBlockedSeconds = 0f;
+                _speederAutoHop = false;
+                _speederHasDryPos = false;
                 Avatar?.SetVisible(true);   // sit visibly in the vehicle
                 _viewmodel?.SetVisible(false);
                 ClientAudio.Instance?.SpeederStart(boat);
@@ -2577,13 +2800,59 @@ namespace BlocksBeyondTheStars.Client
             }
             else
             {
-                _speederSpeed = Mathf.MoveTowards(_speederSpeed, targetSpeed, accel * Time.deltaTime);
+                // Shore stop (#1660): the hover speeder is a LAND vehicle (the boat exists for the water). Water in
+                // the cells it is about to enter caps the throttle at zero — reverse stays free — and if it is
+                // over water anyway (a slope pushed it in, or it was deployed into the sea before the deploy
+                // check existed) it floats on the surface, can only back out, and eases toward the last dry
+                // pose the way a beached boat eases back to the water.
+                bool overWater = SpeederOverWater(transform.position, out float waterSurface);
+                if (overWater)
+                {
+                    targetSpeed = Mathf.Min(0f, throttle) * cruise * 0.3f;
+                    _speederSpeed = Mathf.MoveTowards(_speederSpeed, targetSpeed, accel * 2.5f * Time.deltaTime);
+                }
+                else
+                {
+                    _speederLastDryPos = transform.position;
+                    _speederHasDryPos = true;
+                    if (_speederSpeed > 0f && WaterAhead(transform.position, transform.forward, 1.6f + _speederSpeed * 0.3f))
+                    {
+                        targetSpeed = Mathf.Min(targetSpeed, 0f);
+                        _speederSpeed = Mathf.MoveTowards(_speederSpeed, targetSpeed, accel * 2.5f * Time.deltaTime);
+                    }
+                    else
+                    {
+                        _speederSpeed = Mathf.MoveTowards(_speederSpeed, targetSpeed, accel * Time.deltaTime);
+                    }
+                }
 
-                // Hover: hold a fixed height above whatever ground is below; sink gently over a void/edge.
-                if (Physics.Raycast(transform.position + Vector3.up * 2.5f, Vector3.down, out var hit, 12f, ~0, QueryTriggerInteraction.Ignore)
+                // Hover: hold a fixed height above whatever ground is below; sink gently over a void/edge. The
+                // ray starts INSIDE the driver's capsule — from 2.5 m up it met the capsule's own top first
+                // (1.8 m), failed the self-hit guard and fell through to the "sink" branch every frame, so
+                // hover never really engaged and nothing stopped a speeder from following the seabed (#1660).
+                // The block column backs the physics ray up: it knows a chunk whose collider is still baking,
+                // and it is what lifts a hull that got wedged into a block back out.
+                float groundY = float.NaN;
+                if (Physics.Raycast(transform.position + Vector3.up * 1.0f, Vector3.down, out var hit, 12f, WorldRayMask, QueryTriggerInteraction.Ignore)
                     && hit.collider != _controller)
                 {
-                    float targetY = hit.point.y + SpeederHoverHeight;
+                    groundY = hit.point.y;
+                }
+
+                if (BlockColumnGround(transform.position, out float columnY) && (float.IsNaN(groundY) || columnY > groundY))
+                {
+                    groundY = columnY;
+                }
+
+                bool hovering = !float.IsNaN(groundY) || overWater;
+                if (hovering)
+                {
+                    float targetY = float.IsNaN(groundY) ? waterSurface + 0.4f : groundY + SpeederHoverHeight;
+                    if (overWater)
+                    {
+                        targetY = Mathf.Max(targetY, waterSurface + 0.4f); // never below the surface
+                    }
+
                     vSpeed = Mathf.Clamp((targetY - transform.position.y) * 6f, -10f, 8f);
                 }
                 else
@@ -2591,17 +2860,47 @@ namespace BlocksBeyondTheStars.Client
                     vSpeed = -Gravity * 0.2f;
                 }
 
-                if (InputMap.JumpDown() && !outOfFuel)
+                if ((InputMap.JumpDown() || _speederAutoHop) && !outOfFuel)
                 {
                     vSpeed = SpeederHopSpeed; // a quick hover-hop over a low obstacle
+                    _speederAutoHop = false;
                 }
 
                 planar = transform.forward * _speederSpeed;
-                Game.VehicleAground = false;
+                if (overWater && _speederHasDryPos)
+                {
+                    Vector3 back = _speederLastDryPos - transform.position;
+                    back.y = 0f;
+                    if (back.sqrMagnitude > 0.01f)
+                    {
+                        planar += back.normalized * 1.2f;
+                    }
+                }
+
+                Game.VehicleAground = overWater;
             }
 
             Vector3 before = transform.position;
             _controller.Move((planar + Vector3.up * vSpeed) * Time.deltaTime);
+
+            if (!boat)
+            {
+                // Wedged (#1660): the speeder wants to move but the capsule does not — a lip it cannot slide
+                // over, a block it drove into. After a moment it hops by itself, and the on-foot rescue keeps
+                // watching for a capsule that ended up inside geometry.
+                Vector3 step = transform.position - before;
+                step.y = 0f;
+                bool blocked = Mathf.Abs(_speederSpeed) > 2f && step.magnitude / Mathf.Max(1e-4f, Time.deltaTime) < 0.3f;
+                _speederBlockedSeconds = blocked ? _speederBlockedSeconds + Time.deltaTime : 0f;
+                if (_speederBlockedSeconds > 0.8f)
+                {
+                    _speederBlockedSeconds = 0f;
+                    _speederAutoHop = true;
+                }
+
+                _verticalVelocity = 0f;
+                GuardAgainstFallingOut(grounded: Mathf.Abs(vSpeed) < 2f, inWater: false, onLadder: false);
+            }
 
             // A hard horizontal stop at speed = ran into a wall/cliff → report the impact (server scales the hull
             // damage from the speed and jolts the driver). For the boat the intended speed is the drifting hull's,
@@ -2663,7 +2962,7 @@ namespace BlocksBeyondTheStars.Client
             if (float.IsNaN(surface))
             {
                 _boatDrySeconds += Time.deltaTime;
-                if (Physics.Raycast(pos + Vector3.up * 1.5f, Vector3.down, out var hit, 6f, ~0, QueryTriggerInteraction.Ignore)
+                if (Physics.Raycast(pos + Vector3.up * 1.5f, Vector3.down, out var hit, 6f, WorldRayMask, QueryTriggerInteraction.Ignore)
                     && hit.collider != _controller)
                 {
                     vSpeed = Mathf.Clamp((hit.point.y + 0.4f - pos.y) * 6f, -6f, 4f);
@@ -2683,6 +2982,102 @@ namespace BlocksBeyondTheStars.Client
             float targetY = surface + BoatFloatHeight + Mathf.Sin(_boatBobPhase) * 0.06f;
             vSpeed = Mathf.Clamp((targetY - pos.y) * 5f, -6f, 6f);
             return true;
+        }
+
+        /// <summary>Whether the hover speeder at <paramref name="pos"/> has water under its hull (the feet cell or
+        /// the two below), and the top of that water. Unknown terrain (a chunk not streamed yet) is not judged.</summary>
+        private bool SpeederOverWater(Vector3 pos, out float surface)
+        {
+            surface = float.NaN;
+            int fx = Mathf.FloorToInt(pos.x), fz = Mathf.FloorToInt(pos.z), feet = Mathf.FloorToInt(pos.y);
+            if (Game?.World == null || !Game.World.TryGetBlock(fx, feet, fz, out _))
+            {
+                return false;
+            }
+
+            for (int y = feet; y >= feet - 2; y--)
+            {
+                if (BlockKeyAt(new Vector3(pos.x, y + 0.5f, pos.z)) == "water")
+                {
+                    surface = y + 1f;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>Water within <paramref name="dist"/> metres ahead at hull height (feet down to two below) —
+        /// the shore stop's look-ahead, scaled by speed by the caller so the speeder brakes before the bank.</summary>
+        private bool WaterAhead(Vector3 pos, Vector3 forward, float dist)
+        {
+            forward.y = 0f;
+            if (forward.sqrMagnitude < 1e-4f)
+            {
+                return false;
+            }
+
+            forward.Normalize();
+            int feet = Mathf.FloorToInt(pos.y);
+            for (float d = 1f; d <= dist; d += 1f)
+            {
+                Vector3 probe = pos + forward * d;
+                for (int y = feet; y >= feet - 2; y--)
+                {
+                    if (BlockKeyAt(new Vector3(probe.x, y + 0.5f, probe.z)) == "water")
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>The top face of the first colliding block in the column from the feet cell down (eight cells),
+        /// from the streamed block data rather than the physics scene. A colliding FEET cell means the hull is
+        /// inside a block — the surface reported is then the top of that block, which lifts it out.</summary>
+        private bool BlockColumnGround(Vector3 pos, out float surfaceY)
+        {
+            surfaceY = float.NaN;
+            if (Game?.World == null)
+            {
+                return false;
+            }
+
+            int feet = Mathf.FloorToInt(pos.y);
+            for (int y = feet; y >= feet - 8; y--)
+            {
+                if (IsCollidingKey(BlockKeyAt(new Vector3(pos.x, y + 0.5f, pos.z))))
+                {
+                    surfaceY = y + 1f;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>X at the own cockpit/console: asks the ship to bring every vehicle we left out on this world
+        /// back beside it (#1661). Returns true if at least one request went out.</summary>
+        private bool TryRecallVehiclesAtConsole()
+        {
+            if (Game?.Network == null || Game.Speeders == null || !CanRecallVehicle)
+            {
+                return false;
+            }
+
+            bool any = false;
+            foreach (var s in Game.Speeders)
+            {
+                if (s != null && s.OwnerId == Game.LocalPlayerId && string.IsNullOrEmpty(s.DriverId))
+                {
+                    Game.Network.SendRecallVehicle(s.Id);
+                    any = true;
+                }
+            }
+
+            return any;
         }
 
         /// <summary>Sends a "look here" ping (#1217) at whatever the crosshair rests on: the aimed voxel when one
@@ -2951,6 +3346,12 @@ namespace BlocksBeyondTheStars.Client
             UpdateJetpack(jetpacking);
 
             move.y = _verticalVelocity;
+            if (_knock.sqrMagnitude > 0.01f)
+            {
+                move.x += _knock.x; // #1998: a giant's push rides on top of the player's own move
+                move.z += _knock.z;
+                _knock = Vector3.MoveTowards(_knock, Vector3.zero, 14f * Time.deltaTime);
+            }
 
             // Sneak edge-stop: while crouched and standing on the ground, cancel any horizontal component that
             // would carry the feet off a ledge into open air (checked per axis so you can still slide ALONG the
@@ -2982,7 +3383,7 @@ namespace BlocksBeyondTheStars.Client
 
             // Cap the auto-step to the headroom above the head before moving, so a 2-block-high opening stays
             // walkable instead of wedging the capsule (see UpdateStepOffset).
-            UpdateStepOffset();
+            UpdateStepOffset(move);
 
             _controller.Move(move * Time.deltaTime);
 
@@ -3028,16 +3429,17 @@ namespace BlocksBeyondTheStars.Client
             _wasGrounded = grounded;
         }
 
-        /// <summary>True when the player's upper body sits in a water block — the cue to switch to swimming
-        /// (sampled at chest height, so wading through shallow water still walks; only deep water swims).</summary>
-        private bool IsSubmerged() => BlockKeyAt(transform.position + Vector3.up * 1.1f) == "water";
+        /// <summary>True when the player's upper body sits in water — the cue to switch to swimming (sampled at chest
+        /// height, so wading through shallow water still walks; only deep water swims). A submerged kelp stalk, ladder
+        /// or form counts as water (#1902), so a diver swims through a kelp forest instead of dropping to the seabed.</summary>
+        private bool IsSubmerged() => Game != null && Game.IsWaterAt(transform.position + Vector3.up * 1.1f);
 
         /// <summary>True when the player's feet touch water on landing — sampled low so even a single block of
         /// water counts. Used to cushion the fall (no splash damage) the way any depth of water does in Minecraft;
         /// <see cref="IsSubmerged"/> alone (chest height) missed shallow pools (Severin playtest).</summary>
         private bool FeetInWater() =>
-            BlockKeyAt(transform.position + Vector3.up * 0.1f) == "water"
-            || BlockKeyAt(transform.position + Vector3.up * 0.6f) == "water";
+            Game != null
+            && (Game.IsWaterAt(transform.position + Vector3.up * 0.1f) || Game.IsWaterAt(transform.position + Vector3.up * 0.6f));
 
         /// <summary>True when a low (≤1 block) solid bank sits directly ahead of the swimmer — a wall at knee
         /// height with clear space just above it — the cue to mantle out of the water onto land (#131).</summary>
@@ -3229,7 +3631,7 @@ namespace BlocksBeyondTheStars.Client
 
             Vector3 dir = to / full;
             float allowed = full;
-            if (Physics.SphereCast(pivot, CameraBoomRadius, dir, out var hit, full, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)
+            if (Physics.SphereCast(pivot, CameraBoomRadius, dir, out var hit, full, Physics.DefaultRaycastLayers & WorldRayMask, QueryTriggerInteraction.Ignore)
                 && hit.collider != _controller)
             {
                 allowed = Mathf.Max(CameraBoomMinimum, hit.distance - 0.05f);
@@ -3467,6 +3869,16 @@ namespace BlocksBeyondTheStars.Client
             // Water/lava surfaces are targets too (#1310) — for a placeable item (the block displaces the fluid,
             // #851) and for a tool that can actually mine a fluid (a tier-3 drill: mining beam, diamond drill);
             // anything else keeps aiming through them, so a basic drill still reaches the rock under a pond.
+            // #1746: a door the player built stands in an air cell the voxel march below cannot see. When the
+            // aim ray crosses one before any solid cell, that door is the thing to mine. Mining only — a block is
+            // still placed against real geometry, never "on" a door.
+            if (mine && TryAimDoor(out var doorCell))
+            {
+                SendMineHit(doorCell, HoldingDrill());
+                TriggerSwing();
+                return;
+            }
+
             if (!AimTarget(out var hitCell, out var placeCell, out var aimedShip,
                     fluidSurfaces: mine ? HeldToolFluidAim() : PlaceFluidAim()))
             {
@@ -3506,7 +3918,12 @@ namespace BlocksBeyondTheStars.Client
                     var boundsShip = Game.LandedShipBoundsAt(placeCell.x, placeCell.y, placeCell.z, out var lp);
                     if (boundsShip != null && boundsShip == aimedShip)
                     {
-                        Game.Network.SendStructureEdit(boundsShip.StructureId, lp.X, lp.Y, lp.Z, mine: false, item);
+                        // Furnishing a cabin sends the same orientation a world place would (#1943), so a bed
+                        // built aboard lies the way its ghost showed instead of stamping as a cube.
+                        bool shipOriented = PendingPlacement(item, hitCell, placeCell, out _, out int shipUp, out int shipYaw);
+                        Game.Network.SendStructureEdit(boundsShip.StructureId, lp.X, lp.Y, lp.Z, mine: false, item,
+                            upFace: shipOriented ? shipUp : _placeUpFace,
+                            yaw: shipOriented ? shipYaw : _placeYaw);
                         TriggerSwing();
                         return;
                     }
@@ -3517,7 +3934,10 @@ namespace BlocksBeyondTheStars.Client
                     if (aimedShip != null && aimedShip.StructureId.StartsWith("shipyard:", System.StringComparison.Ordinal))
                     {
                         var gl = ShipLocal(aimedShip, placeCell);
-                        Game.Network.SendStructureEdit(aimedShip.StructureId, gl.x, gl.y, gl.z, mine: false, item);
+                        bool siteOriented = PendingPlacement(item, hitCell, placeCell, out _, out int siteUp, out int siteYaw);
+                        Game.Network.SendStructureEdit(aimedShip.StructureId, gl.x, gl.y, gl.z, mine: false, item,
+                            upFace: siteOriented ? siteUp : _placeUpFace,
+                            yaw: siteOriented ? siteYaw : _placeYaw);
                         TriggerSwing();
                         return;
                     }
@@ -3562,6 +3982,40 @@ namespace BlocksBeyondTheStars.Client
                 BlocksBeyondTheStars.Shared.World.WorldConstants.WrapDeltaX(worldCell.x - ship.Origin.X, Game.Circumference),
                 worldCell.y - ship.Origin.Y,
                 worldCell.z - ship.Origin.Z);
+
+        /// <summary>#1746: the base cell of a player-built door under the crosshair, when nothing solid stands
+        /// between the camera and it. Doors are entities (<see cref="DoorView"/>) in air cells, so the voxel
+        /// march in <see cref="AimTarget"/> walks straight through them — which is why mining a door did nothing
+        /// (and, until #1710, answered as "ship hull"). The server removes a door for any of its cells
+        /// (<c>RemovePlayerDoorAt</c>) and tells the player when a stamped door is protected instead.</summary>
+        private bool TryAimDoor(out Vector3Int cell)
+        {
+            cell = default;
+            if (DoorView.Instance == null || Camera == null || Game?.World == null)
+            {
+                return false;
+            }
+
+            Vector3 o = Camera.transform.position;
+            Vector3 dir = Camera.transform.forward;
+            if (!DoorView.Instance.AimDoor(o, dir, Reach, out cell, out float doorDist))
+            {
+                return false;
+            }
+
+            // A wall, a hull or the ground in front of the door wins — only a door the ray reaches first counts.
+            if (AimTarget(out var solid, out _, out _, FluidAim.None))
+            {
+                float solidDist = RayBox.Entry(o.x, o.y, o.z, dir.x, dir.y, dir.z,
+                    solid.x, solid.y, solid.z, solid.x + 1f, solid.y + 1f, solid.z + 1f);
+                if (solidDist < doorDist)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
 
         /// <summary>Like <see cref="AimBlock"/>, but the march also targets the cells of parked ship OBJECTS
         /// (ship-as-object): whichever solid cell the ray reaches first wins. <paramref name="ship"/> is set
@@ -3700,6 +4154,14 @@ namespace BlocksBeyondTheStars.Client
             int shape = BlocksBeyondTheStars.Shared.State.ItemKey.Shape(held);
             if (shape > 0)
             {
+                // #1834: the server honours a carried form only on a Shapeable block (HandlePlace); on anything else
+                // the item places a plain cube — so the ghost and the rotate key must say cube too, not pillar.
+                string placed = Game?.Content?.GetItem(BlocksBeyondTheStars.Shared.State.ItemKey.Base(held))?.PlacesBlock;
+                if (!string.IsNullOrEmpty(placed) && Game.Content.GetBlock(placed) is { Shapeable: false })
+                {
+                    return 0;
+                }
+
                 cycle = PropOrientation.Full; // a crafted form is a building block: all 24 orientations
                 return shape;
             }
@@ -3816,6 +4278,13 @@ namespace BlocksBeyondTheStars.Client
 
                 case PropOrientation.YawOnly:
                     upFace = ShapeCode.UpPlusY; // the server pins it; promising anything else would be a lie
+                    if (shape == (int)BlockShape.BedHead && _placeYaw < 0)
+                    {
+                        // Auto: the server puts the bed's foot in the cell the player faces (#1846), which for
+                        // ±X is not the raw heading yaw — mirror that here or the ghost's headboard flips.
+                        yaw = ShapeCode.YawFacingForward(yaw);
+                    }
+
                     break;
 
                 default:
@@ -3858,6 +4327,25 @@ namespace BlocksBeyondTheStars.Client
                 Game.HoldingRotatableBlock = rotatable;
             }
 
+            // A held door (#1975): nothing to rotate, but the server hangs a real door — show it in the target cell,
+            // turned by the wall beside it (the shared placed-door rule), so its facing is no surprise. A parked
+            // ship's cells get no ghost, like every other placement there.
+            if (!rotatable && HeldDoorKind(held) is { } doorKind)
+            {
+                if (AimTarget(out _, out var doorCell, out var doorShip) && doorShip == null)
+                {
+                    bool axisX = DoorProbe.AxisForPlacedDoor(IsSolidWorldCell, doorCell.x, doorCell.y, doorCell.z, transform.eulerAngles.y);
+                    _placementGhost ??= new PlacementGhost();
+                    _placementGhost.ShowDoor(doorCell, doorKind, axisX);
+                }
+                else
+                {
+                    _placementGhost?.Hide();
+                }
+
+                return;
+            }
+
             // Same fluid-aware target as the place click (#1353): a held slab/stair gets its ghost over water
             // and lava, where the click sets the block into the fluid cell.
             if (!rotatable || !AimTarget(out var hitCell, out var placeCell, out var aimedShip, PlaceFluidAim()) || aimedShip != null
@@ -3872,6 +4360,21 @@ namespace BlocksBeyondTheStars.Client
             _placementGhost ??= new PlacementGhost();
             _placementGhost.Show(placeCell, shape, yaw, upFace);
         }
+
+        /// <summary>The door kind the held item places, or null when it places no door (#1975).</summary>
+        private string HeldDoorKind(string held)
+        {
+            if (string.IsNullOrEmpty(held) || Game?.Content == null)
+            {
+                return null;
+            }
+
+            string placed = Game.Content.GetItem(held)?.PlacesBlock;
+            return DoorBlocks.IsDoorBlock(placed) ? DoorBlocks.KindForBlock(placed) : null;
+        }
+
+        /// <summary>The world grid as the door probe reads it: anything but air is a jamb.</summary>
+        private bool IsSolidWorldCell(int x, int y, int z) => !Game.World.GetBlock(x, y, z).IsAir;
 
         /// <summary>The up-face for an Auto placement: the shape's base rests on the surface it was built
         /// against — the floor first (→ +Y up, the common case of laying a slab on the ground), then the WALL

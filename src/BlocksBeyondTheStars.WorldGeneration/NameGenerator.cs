@@ -39,7 +39,7 @@ public static class NameGenerator
 
     /// <summary>A two-part coined creature name, e.g. "Vexilth Krool" — a genus stem + a shorter epithet.</summary>
     public static string Creature(Random rng)
-        => Word(rng, 2, 3) + " " + Word(rng, 1, 2).ToLowerInvariant();
+        => Clean(Word(rng, 2, 3) + " " + Word(rng, 1, 2).ToLowerInvariant());
 
     private static readonly string[] TreeSuffixes =
     {
@@ -50,19 +50,19 @@ public static class NameGenerator
     public static string Flora(Random rng)
     {
         string stem = Word(rng, 2, 3);
-        return rng.NextDouble() < 0.75 ? stem + FloraSuffixes[rng.Next(FloraSuffixes.Length)] : stem;
+        return Clean(rng.NextDouble() < 0.75 ? stem + FloraSuffixes[rng.Next(FloraSuffixes.Length)] : stem);
     }
 
     /// <summary>A coined tree name, e.g. "Skarnwood" or "Threlloak" — a stem with an arboreal suffix.</summary>
     public static string Tree(Random rng)
-        => Word(rng, 2, 3) + TreeSuffixes[rng.Next(TreeSuffixes.Length)];
+        => Clean(Word(rng, 2, 3) + TreeSuffixes[rng.Next(TreeSuffixes.Length)]);
 
     /// <summary>A coined personal name for an NPC, e.g. "Kra Thraxon" — a short given name + a longer surname,
     /// both capitalised (so it reads as a person, not a lowercase-epithet creature). Thousands of combinations.</summary>
-    public static string Person(Random rng) => Word(rng, 1, 2) + " " + Word(rng, 2, 3);
+    public static string Person(Random rng) => Clean(Word(rng, 1, 2) + " " + Word(rng, 2, 3));
 
     /// <summary>A coined robot/android designation, e.g. "Vex-42" — a short stem plus a unit number.</summary>
-    public static string Robot(Random rng) => Word(rng, 1, 2) + "-" + rng.Next(2, 99);
+    public static string Robot(Random rng) => Clean(Word(rng, 1, 2) + "-" + rng.Next(2, 99));
 
     private static string Word(Random rng, int minSyllables, int maxSyllables)
     {
@@ -134,6 +134,26 @@ public static class NameGenerator
         ["ocean"] = (new[] { "m", "n", "th", "s", "l", "ner" }, new[] { "mar", "une", "ea", "ys", "aris", "ion" }),
         ["crystal"] = (new[] { "k", "z", "x", "ch", "s", "kr" }, new[] { "iel", "ith", "yne", "ir", "iss", "ax" }),
         ["crystal_living"] = (new[] { "k", "z", "x", "ch", "s", "kr" }, new[] { "iel", "ith", "yne", "ir", "iss", "ax" }),
+        // Landscape variety 6/6 (#1649): the eight data-only types borrow the flavour of their nearest classic kin.
+        ["red_desert"] = (new[] { "s", "z", "k", "r", "dr", "sh" }, new[] { "ara", "un", "akh", "ir", "um", "at" }),
+        ["dust_bowl"] = (new[] { "s", "z", "k", "r", "dr", "sh" }, new[] { "ara", "un", "akh", "ir", "um", "at" }),
+        ["boreal"] = (new[] { "fr", "kr", "th", "v", "sk", "h", "gl" }, new[] { "heim", "fell", "gard", "yr", "os", "ost" }),
+        ["glacier"] = (new[] { "fr", "kr", "th", "v", "sk", "h", "gl" }, new[] { "heim", "fell", "gard", "yr", "os", "ost" }),
+        ["frozen_ocean"] = (new[] { "fr", "kr", "th", "v", "sk", "h", "gl" }, new[] { "mar", "fell", "ea", "yr", "os", "ion" }),
+        ["archipelago"] = (new[] { "m", "n", "th", "s", "l", "ner" }, new[] { "mar", "une", "ea", "ys", "aris", "ion" }),
+        ["meadowlands"] = (new[] { "l", "m", "n", "v", "s", "y" }, new[] { "ia", "ora", "une", "elle", "ys", "ana" }),
+        ["ashen_ocean"] = (new[] { "p", "k", "dr", "z", "r", "kr", "v" }, new[] { "ax", "arr", "eth", "ur", "ash", "gar" }),
+        // Terrain generation 3 (part 8): the three new types borrow their kin's flavour too.
+        ["coral_sea"] = (new[] { "m", "n", "th", "s", "l", "ner" }, new[] { "mar", "une", "ea", "ys", "aris", "ion" }),
+        ["icecap"] = (new[] { "fr", "kr", "th", "v", "sk", "h", "gl" }, new[] { "heim", "fell", "gard", "yr", "os", "ost" }),
+        ["river_lowlands"] = (new[] { "l", "m", "n", "v", "s", "y" }, new[] { "ia", "ora", "une", "elle", "ys", "ana" }),
+        // School club wave 3 (#1756): the four generation-5 types borrow their nearest kin's flavour.
+        ["rainbow_sea"] = (new[] { "m", "n", "th", "s", "l", "ner" }, new[] { "mar", "une", "ea", "ys", "aris", "ion" }),
+        ["flower_fields"] = (new[] { "l", "m", "n", "v", "s", "y" }, new[] { "ia", "ora", "une", "elle", "ys", "ana" }),
+        ["scrapyard"] = (new[] { "s", "z", "k", "r", "dr", "sh" }, new[] { "ara", "un", "akh", "ir", "um", "at" }),
+        ["gamer_hills"] = (new[] { "l", "m", "n", "v", "s", "y" }, new[] { "ia", "ora", "une", "elle", "ys", "ana" }),
+        // The G.D.S. lava desert (#1793) sounds like its desert kin.
+        ["gds_desert"] = (new[] { "s", "z", "k", "r", "dr", "sh" }, new[] { "ara", "un", "akh", "ir", "um", "at" }),
     };
 
     /// <summary>Substrings no coined celestial name may contain (EN + DE) — the syllable mill can and
@@ -144,6 +164,15 @@ public static class NameGenerator
     {
         "rape", "nazi", "anal", "penis", "vagin", "fuck", "shit", "cunt", "porn", "sperm",
         "arsch", "fotze", "hure", "titt",
+    };
+
+    /// <summary>More substrings no coined name may contain (2026-09: a hub station was called "Port Sex" — "s" + "e" + "x" is
+    /// an ordinary syllable). Checked by <see cref="Clean"/> on every finished name, NOT inside the retry loops above: those
+    /// draw from the world's naming stream, and a new retry would shift every later name of an existing galaxy.</summary>
+    private static readonly string[] MoreBlockedSubstrings =
+    {
+        "sex", "tits", "boob", "dick", "cock", "puss", "slut", "whore", "bitch", "dildo", "jizz", "anus", "piss",
+        "nigg", "neger", "hitler", "fick", "wichs", "pimmel", "nackt", "nude", "kack", "scheis", "schlampe", "wixx",
     };
 
     private static bool IsClean(string s)
@@ -159,8 +188,118 @@ public static class NameGenerator
         return true;
     }
 
+    /// <summary>True when the text contains no substring of either block list.</summary>
+    public static bool IsFullyClean(string s)
+    {
+        if (!IsClean(s))
+        {
+            return false;
+        }
+
+        foreach (var blocked in MoreBlockedSubstrings)
+        {
+            if (s.Contains(blocked, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>Every coined name leaves through here (2026-09). A letter run that contains a blocked substring is replaced
+    /// by a clean coined word from a LOCAL generator seeded by that run — never from the caller's stream — so every other
+    /// name of a world, and every later draw, stays exactly what it was: only the offending name changes (and an existing
+    /// save shows the new name the next time its galaxy is generated). A botanical/arboreal suffix is kept.</summary>
+    public static string Clean(string name)
+    {
+        if (string.IsNullOrEmpty(name) || IsFullyClean(name))
+        {
+            return name;
+        }
+
+        var sb = new StringBuilder(name.Length);
+        int i = 0;
+        while (i < name.Length)
+        {
+            if (!char.IsLetter(name[i]))
+            {
+                sb.Append(name[i]);
+                i++;
+                continue;
+            }
+
+            int start = i;
+            while (i < name.Length && char.IsLetter(name[i]))
+            {
+                i++;
+            }
+
+            string run = name.Substring(start, i - start);
+            sb.Append(IsFullyClean(run) ? run : ReplaceRun(run));
+        }
+
+        string cleaned = sb.ToString();
+        return IsFullyClean(cleaned) ? cleaned : "Xel"; // a term spanning two runs — no coined name does that today
+    }
+
+    private static string ReplaceRun(string run)
+    {
+        string suffix = string.Empty;
+        foreach (var candidate in FloraSuffixes)
+        {
+            if (candidate.Length > suffix.Length && run.Length - candidate.Length >= 2
+                && run.EndsWith(candidate, StringComparison.OrdinalIgnoreCase) && IsFullyClean(candidate))
+            {
+                suffix = candidate;
+            }
+        }
+
+        foreach (var candidate in TreeSuffixes)
+        {
+            if (candidate.Length > suffix.Length && run.Length - candidate.Length >= 2
+                && run.EndsWith(candidate, StringComparison.OrdinalIgnoreCase) && IsFullyClean(candidate))
+            {
+                suffix = candidate;
+            }
+        }
+
+        string stem = run.Substring(0, run.Length - suffix.Length);
+        bool capital = char.IsUpper(stem[0]);
+        int syllables = Math.Max(1, Math.Min(3, (int)Math.Round(stem.Length / 3.0)));
+        var rng = new DeterministicRandom(WorldGenerator.StableHash("clean:" + run.ToLowerInvariant()));
+        for (int attempt = 0; attempt < 64; attempt++)
+        {
+            var w = new StringBuilder();
+            for (int k = 0; k < syllables; k++)
+            {
+                w.Append(Onsets[rng.Range(0, Onsets.Length - 1)]);
+                w.Append(Vowels[rng.Range(0, Vowels.Length - 1)]);
+            }
+
+            if (rng.NextDouble() < 0.6)
+            {
+                w.Append(Codas[rng.Range(0, Codas.Length - 1)]);
+            }
+
+            string word = w.ToString();
+            if (capital)
+            {
+                word = char.ToUpperInvariant(word[0]) + word.Substring(1);
+            }
+
+            string replaced = word + suffix;
+            if (IsFullyClean(replaced) && !HasTripleLetter(replaced))
+            {
+                return replaced;
+            }
+        }
+
+        return capital ? "Xel" : "xel";
+    }
+
     /// <summary>A coined star name, e.g. "Tharion" — the bread-and-butter system registry.</summary>
-    public static string Star(DeterministicRandom rng) => Word(rng, 2, 3);
+    public static string Star(DeterministicRandom rng) => Clean(Word(rng, 2, 3));
 
     /// <summary>A catalog designation, e.g. "HX-113" — evokes real star catalogs (HD/Gliese/Kepler);
     /// keeping these a minority makes the coined proper names feel earned.</summary>
@@ -176,7 +315,7 @@ public static class NameGenerator
     public static string Region(DeterministicRandom rng)
     {
         string first = rng.NextDouble() < 0.5 ? Word(rng, 1, 2) + "'s" : RegionFirsts[rng.Range(0, RegionFirsts.Length - 1)];
-        return first + " " + RegionEpithets[rng.Range(0, RegionEpithets.Length - 1)];
+        return Clean(first + " " + RegionEpithets[rng.Range(0, RegionEpithets.Length - 1)]);
     }
 
     /// <summary>An archetype-flavored system name (pirate space sounds menacing, hub space busy) —
@@ -196,7 +335,7 @@ public static class NameGenerator
     {
         if (planetType is null || !PlanetFlavors.TryGetValue(planetType, out var flavor))
         {
-            return Word(rng, 2, 3);
+            return Clean(Word(rng, 2, 3));
         }
 
         for (int attempt = 0; ; attempt++)
@@ -214,7 +353,7 @@ public static class NameGenerator
             s = char.ToUpperInvariant(s[0]) + s.Substring(1);
             if (IsClean(s) || attempt >= 8)
             {
-                return s;
+                return Clean(s);
             }
         }
     }
@@ -230,22 +369,22 @@ public static class NameGenerator
             var (ea, eb) = endings[rng.Range(0, endings.Length - 1)];
             if ((IsClean(stem + ea) && IsClean(stem + eb)) || attempt >= 8)
             {
-                return (stem + ea, stem + eb);
+                return (Clean(stem + ea), Clean(stem + eb));
             }
         }
     }
 
     /// <summary>A coined moon name, short like the real ones (e.g. "Skell", "Vore").</summary>
-    public static string Moon(DeterministicRandom rng) => Word(rng, 1, 2);
+    public static string Moon(DeterministicRandom rng) => Clean(Word(rng, 1, 2));
 
     /// <summary>A coined name for a landable asteroid body, e.g. "Skarrak".</summary>
-    public static string Asteroid(DeterministicRandom rng) => Word(rng, 2, 2);
+    public static string Asteroid(DeterministicRandom rng) => Clean(Word(rng, 2, 2));
 
     /// <summary>A coined port name for a Hub-archetype trade station, e.g. "Port Halvek".</summary>
-    public static string Port(DeterministicRandom rng) => "Port " + Word(rng, 1, 2);
+    public static string Port(DeterministicRandom rng) => "Port " + Clean(Word(rng, 1, 2)); // never "Port Sex" again (2026-09)
 
     /// <summary>A coined name for a wrecked ship — wrecks are dead ships, so they carry one.</summary>
-    public static string Ship(DeterministicRandom rng) => Word(rng, 2, 3);
+    public static string Ship(DeterministicRandom rng) => Clean(Word(rng, 2, 3));
 
     /// <summary>Roman numeral for planet designations ("Tharion II"); supports any realistic count.</summary>
     public static string Roman(int n)

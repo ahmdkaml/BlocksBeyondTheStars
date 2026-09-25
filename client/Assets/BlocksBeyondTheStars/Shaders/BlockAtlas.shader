@@ -92,16 +92,37 @@ Shader "BlocksBeyondTheStars/BlockAtlas"
                 float3 blDir : TEXCOORD9;
             };
 
+            // #1957 animated tiles. TEXCOORD1.y = tint mode (low 4 bits) + 16*frames + 256*speedIndex + 1024*stripStart
+            // (BlockTextureAtlas.AnimationCode) — every term is exact in a float. The mesh UV stays on the block's
+            // OWN atlas cell; an animated face is moved onto the strip cell of the current frame here, in the vertex
+            // stage, so it costs the fragment stage nothing. 32 = atlas cells per side (AtlasBands.Cols/Rows).
+            float2 BbtsAnimatedUv(float2 uv, float code, out float mode)
+            {
+                mode = fmod(code, 16.0);
+                float frames = fmod(floor(code / 16.0), 16.0);
+                if (frames < 1.5)
+                {
+                    return uv;
+                }
+
+                float speedIndex = fmod(floor(code / 256.0), 4.0);
+                float fps = speedIndex < 0.5 ? 2.0 : speedIndex < 1.5 ? 4.0 : speedIndex < 2.5 ? 8.0 : 12.0;
+                float slot = floor(code / 1024.0) + fmod(floor(_Time.y * fps), frames);
+                float2 cell = floor(uv * 32.0);
+                return (float2(fmod(slot, 32.0), floor(slot / 32.0)) + (uv * 32.0 - cell)) / 32.0;
+            }
+
             Varyings vert(Attributes v)
             {
                 Varyings o = (Varyings)0;
                 float3 wp = TransformObjectToWorld(v.positionOS.xyz);
                 o.positionCS = TransformWorldToHClip(wp);
-                o.uv = v.uv;
+                float tintMode;
+                o.uv = BbtsAnimatedUv(v.uv, v.sky.y, tintMode);
                 o.wn = TransformObjectToWorldNormal(v.normal);
                 o.wt = float4(TransformObjectToWorldDir(v.tangent.xyz), v.tangent.w);
                 o.wp = wp;
-                o.skyl = v.sky;
+                o.skyl = float2(v.sky.x, tintMode); // the fragment stage sees the plain tint mode
                 o.leaf = v.leaf;
                 o.mat = v.color;
                 o.bl = v.bl;
@@ -177,13 +198,24 @@ Shader "BlocksBeyondTheStars/BlockAtlas"
                 // #1518: the lookup only feeds terms multiplied by ndl*sky, so a face turned away from the sun
                 // or without skylight (caves, interiors — about half of all voxel faces) skips the soft-shadow
                 // tent filter entirely; the branch is per-face coherent and the result is identical.
-                float shadow = (ndl * sky > 0.0) ? MainLightRealtimeShadow(TransformWorldToShadowCoord(i.wp)) : 0.0;
+                // #1612: blended toward "lit" by the URP shadow-distance fade, so the shadow map's edge dissolves
+                // instead of marching across the terrain as a hard line at the preset distance (40/70/110 m).
+                float shadow = (ndl * sky > 0.0)
+                    ? lerp(MainLightRealtimeShadow(TransformWorldToShadowCoord(i.wp)), 1.0, GetMainLightShadowFade(i.wp))
+                    : 0.0;
 
                 // Per-vertex AO (mesher, in .b) widened to a visible contact-shadow range, then multiplied by
                 // the texture-scale cavity AO (normal map alpha). Diffuse-only — spec/reflection stay crisp.
                 float faceAo = lerp(0.62, 1.0, i.mat.b) * lerp(1.0, nrm.a, 0.6);
-                float amb = lerp(0.26, 0.78, sky); // #1457: sky-lit faces turned away from the sun sat at 0.70 — a shade too dark by day
-                float3 col = albedo * (light * (amb + 0.5 * ndl * sky * shadow) + 0.05) * faceAo;
+                // #1611: the fully occluded (cave / interior) end of the ambient sat at 0.26 — lifted to 0.32 so a
+                // cave wall keeps a faint readable texture while still clearly asking for the lamp.
+                float amb = lerp(0.32, 0.78, sky); // #1457: sky-lit faces turned away from the sun sat at 0.70 — a shade too dark by day
+                // #1608: the shadow map owns "is the sun blocked". The mesher skylight gates the direct sun (and the
+                // specular below) at half weight only — saturate(sky*2) — so partially covered ground keeps the sun
+                // spots the foliage alpha-clip punches through a canopy (dappled light), instead of the skylight
+                // zeroing them before the shadow map ever gets a say.
+                float sunOpen = saturate(sky * 2.0);
+                float3 col = albedo * (light * (amb + 0.5 * ndl * sunOpen * shadow) + 0.05) * faceAo;
                 col += albedo * (_Sc_Indoor * 0.5 * (1.0 - sky)) * faceAo;
 
                 // Night/atmosphere ambient floor: a faint cool fill on open-sky faces, strongest when the sun
@@ -206,7 +238,7 @@ Shader "BlocksBeyondTheStars/BlockAtlas"
                 float dterm = nh * nh * (r2 - 1.0) + 1.00001;
                 float specTerm = r2 / ((dterm * dterm) * max(0.1, lh * lh) * (rough * 4.0 + 2.0));
                 float3 F0 = lerp(float3(0.04, 0.04, 0.04), albedo, metal);
-                col += light * F0 * (specTerm * ndl * sky * shadow);
+                col += light * F0 * (specTerm * ndl * sunOpen * shadow);
 
                 // Environment reflection of the sky colour, roughness-aware: metals reflect strongly (tinted by
                 // F0) even head-on, dielectrics mostly at grazing angles (Fresnel). Additive, faded by skylight.
@@ -296,6 +328,12 @@ Shader "BlocksBeyondTheStars/BlockAtlas"
                     float haze = saturate((camDist - _Sc_Fog.x) / max(1.0, _Sc_Fog.y - _Sc_Fog.x)) * _Sc_Fog.z;
                     float3 hazeCol = (_Sc_Sky.a < 0.5) ? light : _Sc_Sky.rgb;
                     col = lerp(col, hazeCol, haze);
+
+                    // #1748: a beacon must outlast the haze. The emission above went into `col` BEFORE this
+                    // lerp, so a warning light on a far tower faded exactly like the rock beside it. Half the
+                    // glow comes back in proportion to the haze: rock still dissolves into the sky, a light
+                    // still reads as a light at the edge of the view.
+                    col += albedo * i.mat.a * (3.0 * lavaGlow) * haze * 0.5;
                 }
 
                 half4 outc = half4(col, 1);
@@ -454,15 +492,36 @@ Shader "BlocksBeyondTheStars/BlockAtlas"
                 UNITY_FOG_COORDS(3)
             };
 
+            // #1957 animated tiles. TEXCOORD1.y = tint mode (low 4 bits) + 16*frames + 256*speedIndex + 1024*stripStart
+            // (BlockTextureAtlas.AnimationCode) — every term is exact in a float. The mesh UV stays on the block's
+            // OWN atlas cell; an animated face is moved onto the strip cell of the current frame here, in the vertex
+            // stage, so it costs the fragment stage nothing. 32 = atlas cells per side (AtlasBands.Cols/Rows).
+            float2 BbtsAnimatedUv(float2 uv, float code, out float mode)
+            {
+                mode = fmod(code, 16.0);
+                float frames = fmod(floor(code / 16.0), 16.0);
+                if (frames < 1.5)
+                {
+                    return uv;
+                }
+
+                float speedIndex = fmod(floor(code / 256.0), 4.0);
+                float fps = speedIndex < 0.5 ? 2.0 : speedIndex < 1.5 ? 4.0 : speedIndex < 2.5 ? 8.0 : 12.0;
+                float slot = floor(code / 1024.0) + fmod(floor(_Time.y * fps), frames);
+                float2 cell = floor(uv * 32.0);
+                return (float2(fmod(slot, 32.0), floor(slot / 32.0)) + (uv * 32.0 - cell)) / 32.0;
+            }
+
             v2f vert(appdata v)
             {
                 v2f o;
                 o.pos = UnityObjectToClipPos(v.vertex);
-                o.uv = v.uv;
+                float tintMode;
+                o.uv = BbtsAnimatedUv(v.uv, v.sky.y, tintMode);
                 o.wn = UnityObjectToWorldNormal(v.normal);
                 o.wt = float4(UnityObjectToWorldDir(v.tangent.xyz), v.tangent.w);
                 o.wp = mul(unity_ObjectToWorld, v.vertex).xyz;
-                o.skyl = v.sky;
+                o.skyl = float2(v.sky.x, tintMode);
                 o.leaf = v.leaf;
                 o.bl = v.bl;
                 o.blDir = v.blDir;
@@ -550,7 +609,7 @@ Shader "BlocksBeyondTheStars/BlockAtlas"
                 // (outdoors ~0.70, a readable cave floor of 0.24). The directional adds the sunny side on top.
                 // A small flat term (sun/sky-independent) guarantees a minimum readable level, so blocks in a
                 // dark hole or deep cave are dim but never pure black.
-                float amb = lerp(0.26, 0.78, sky); // #1457: sky-lit faces turned away from the sun sat at 0.70 — a shade too dark by day
+                float amb = lerp(0.32, 0.78, sky); // #1457 (0.70 → 0.78); #1611 (0.26 → 0.32): occluded faces keep a faint readable texture
                 fixed3 col = albedo * (light * (amb + 0.5 * ndl * sky) + 0.05) * faceAo;
 
                 // Ship interior fill: a neutral, day/night-independent fill on skylight-occluded faces only

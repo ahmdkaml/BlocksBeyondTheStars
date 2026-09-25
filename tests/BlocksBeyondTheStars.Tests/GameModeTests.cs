@@ -30,7 +30,18 @@ public sealed class GameModeTests : IDisposable
         Assert.Equal(GameMode.Creative, rules.GameMode);
         Assert.False(rules.OxygenEnabled);
         Assert.False(rules.CraftingCostsMaterials);
-        Assert.Equal(WeaponMode.None, rules.WeaponMode);
+    }
+
+    [Fact]
+    public void SavedRules_FromBeforeTheWeaponModeRemoval_StillLoad()
+    {
+        // Hand weapons are part of every world; the never-enforced per-world WeaponMode switch was removed
+        // (2026-09). A save that still carries the old field in its baked RulesOverride must load with its other
+        // rules intact — System.Text.Json skips the unknown member.
+        const string json = "{\"WorldName\":\"old\",\"RulesOverride\":{\"GameMode\":1,\"WeaponMode\":1,\"Pvp\":0}}";
+        var meta = System.Text.Json.JsonSerializer.Deserialize<BlocksBeyondTheStars.Shared.State.WorldMetadata>(json)!;
+        Assert.NotNull(meta.RulesOverride);
+        Assert.Equal(GameMode.Creative, meta.RulesOverride!.GameMode);
     }
 
     [Fact]
@@ -66,6 +77,38 @@ public sealed class GameModeTests : IDisposable
 
         // No materials were present, but Creative mode produces the output for free.
         Assert.Equal(3, player.Inventory.CountOf("iron_ingot"));
+    }
+
+    [Fact]
+    public void CreativeMode_RefusesACraftThatDoesNotFit_InsteadOfLosingIt()
+    {
+        // #1937: the free path added the output and reported success without asking whether it fits, so a
+        // craft into a full backpack (no ship hold aboard) silently destroyed what it had just made.
+        using var repo = new SqliteWorldRepository(new SaveGamePaths(_root, "crfull"));
+        var link = new LoopbackLink();
+        using var st = new LoopbackServerTransport(link);
+        using var client = new LoopbackClientTransport(link);
+
+        var config = new ServerConfig { WorldName = "crfull", Seed = 1, AutoSaveIntervalMinutes = 9999 };
+        config.Rules.GameMode = GameMode.Creative;
+
+        var server = new SvGameServer(config, _content, st, repo);
+        server.Start();
+        client.Connect("loopback", 0);
+        client.Send(NetCodec.Encode(new JoinRequest { PlayerName = "Builder" }), DeliveryMode.ReliableOrdered);
+        server.Tick(0.1);
+
+        var player = server.Sessions[1].State;
+        player.AboardShip = false; // no cargo hold to spill into — the backpack is the whole inventory
+        for (int slot = 0; slot < player.Inventory.SlotCount; slot++)
+        {
+            player.Inventory.SetSlot(slot, new BlocksBeyondTheStars.Shared.State.ItemStack("stone", 999));
+        }
+
+        client.Send(NetCodec.Encode(new CraftIntent { RecipeKey = "iron_ingot", Count = 1 }), DeliveryMode.ReliableOrdered);
+        server.Tick(0.1);
+
+        Assert.Equal(0, player.Inventory.CountOf("iron_ingot"));
     }
 
     [Fact]

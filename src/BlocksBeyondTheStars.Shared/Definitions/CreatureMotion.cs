@@ -43,7 +43,11 @@ public static class CreatureMotion
 
         if (sp.Habitat == CreatureHabitat.Air)
         {
+            // A sky glider (#1778 sky ray, #1779 air fish) is a hoverer too: it never lands — the server keeps it
+            // on the buoyant band and the client never folds anything up on a perch — but it cruises and swoops
+            // like a flier (see <see cref="IsSkyGlider"/>).
             return sp.BodyPlan == CreatureBodyPlan.Medusa || sp.HasGasSac || sp.LocoStyle == LocomotionStyle.Drifter
+                || IsSkyGlider(sp)
                 ? MotionClass.Hoverer
                 : MotionClass.Flier;
         }
@@ -60,6 +64,74 @@ public static class CreatureMotion
 
         return MotionClass.Walker;
     }
+
+    /// <summary>Whether a species carries fins. Deliberately <b>not</b> a generator roll: it folds the
+    /// species' own voice seed (which is itself derived, not drawn) so no RNG is consumed and every world
+    /// created before fins existed keeps its species bit-for-bit — the same discipline
+    /// <see cref="ClassOf"/> follows. Legless water and amphibian bodies almost always have them, a legged
+    /// water body sometimes does, and a medusa never does (its bell and rim arms are its whole anatomy).
+    /// </summary>
+    public static bool FinsFor(CreatureSpecies sp)
+    {
+        if (sp.BodyPlan is CreatureBodyPlan.Medusa or CreatureBodyPlan.Ray)
+        {
+            return false; // a ray's wings are its whole anatomy, like the medusa's bell
+        }
+
+        if (IsAirFish(sp))
+        {
+            return true; // #1779: fins are the air fish's only limbs. No existing Air species is legless, so this
+                         // branch changes nothing for any world created before it existed.
+        }
+
+        bool water = sp.Habitat == CreatureHabitat.Water;
+        bool amphibian = sp.Habitat == CreatureHabitat.Amphibian;
+        if (!water && !amphibian)
+        {
+            return false;
+        }
+
+        // A stable 0..99 from the seed, mixed so it does not correlate with anything else derived from it.
+        int roll = (int)((uint)(sp.VoiceSeed * 2654435761u ^ 0x9E3779B9u) % 100u);
+        return sp.Legs <= 0 ? roll < 75 : water && roll < 15;
+    }
+
+    /// <summary>Whether this species should be drawn with fins, self-healing for companion snapshots saved
+    /// before the trait existed (their stored flag is false, but every input <see cref="FinsFor"/> needs is
+    /// persisted, so the derivation fills it back in). Use this at the wire boundary, not the raw property.
+    /// </summary>
+    public static bool HasFins(CreatureSpecies? sp) => sp != null && (sp.HasFins || FinsFor(sp));
+
+    /// <summary>An air fish (#1779): a legless, finned Air body that is neither a medusa nor a ray — a fish shape
+    /// that lives in the air like a bird. Derived from the body, not from the fins flag, so it holds before the
+    /// flag is set.</summary>
+    public static bool IsAirFish(CreatureSpecies sp)
+        => sp.Habitat == CreatureHabitat.Air && sp.Legs <= 0
+           && sp.BodyPlan != CreatureBodyPlan.Medusa && sp.BodyPlan != CreatureBodyPlan.Ray;
+
+    /// <summary>A sky glider (#1778 / #1779): the class between hoverer and flier — never lands (it is a
+    /// <see cref="MotionClass.Hoverer"/>), but cruises at a flier's pace, swoops on its wave and banks into turns.
+    /// The sky ray and the air fish.</summary>
+    public static bool IsSkyGlider(CreatureSpecies sp)
+        => sp.Habitat == CreatureHabitat.Air && (sp.BodyPlan == CreatureBodyPlan.Ray || IsAirFish(sp));
+
+    /// <summary>The same rule from the wire descriptor's fields, for the client (which draws the pitch and the
+    /// banking from it).</summary>
+    public static bool IsSkyGliderBody(string? habitat, string? bodyPlan, int legs)
+    {
+        if (!string.Equals(habitat, "Air", System.StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        bool ray = string.Equals(bodyPlan, "Ray", System.StringComparison.OrdinalIgnoreCase);
+        bool medusa = string.Equals(bodyPlan, "Medusa", System.StringComparison.OrdinalIgnoreCase);
+        return ray || (legs <= 0 && !medusa);
+    }
+
+    /// <summary>A water ray (#1778) hugs the bed of its column instead of porpoising the whole water body.</summary>
+    public static bool IsBottomDweller(CreatureSpecies sp)
+        => sp.Habitat == CreatureHabitat.Water && sp.BodyPlan == CreatureBodyPlan.Ray;
 
     /// <summary>The class in effect right now: amphibians swim while in water and walk/crawl ashore
     /// (#1334); everyone else keeps <see cref="ClassOf"/>.</summary>
@@ -98,6 +170,19 @@ public static class CreatureMotion
 
     /// <summary>Whether the class lives on the ground under gravity (as opposed to flying, hovering or swimming).</summary>
     public static bool IsGroundBound(MotionClass cls) => cls is MotionClass.Walker or MotionClass.Crawler;
+
+    /// <summary>A gas-sac LAND species hovers (see <see cref="ClassOf"/>) but lives at ground level, 0.8 above its
+    /// feet cell: it is a grazer that floats, not a flier. #1862: it used to keep a flier's freedom from the terrain
+    /// gate and drifted over a two-block wall and across a moat into a fortress. Air-habitat hoverers (a medusa, a
+    /// sky ray) keep that freedom — they are above the walls.</summary>
+    public static bool IsLandHoverer(CreatureSpecies sp, MotionClass cls)
+        => cls == MotionClass.Hoverer && sp.Habitat != CreatureHabitat.Air;
+
+    /// <summary>Whether a creature in this class is held to the walker's terrain rules — a one-block step-up
+    /// limit, a drop tolerance, no swimming — and stopped by a shut door: everything ground-bound plus the land
+    /// hoverer (#1862).</summary>
+    public static bool ObeysGroundRules(CreatureSpecies sp, MotionClass cls)
+        => IsGroundBound(cls) || IsLandHoverer(sp, cls);
 
     /// <summary>Lower-case name for locale keys (<c>ui.scan.motion.*</c>) and the wire.</summary>
     public static string Key(MotionClass cls) => cls switch

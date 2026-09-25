@@ -69,6 +69,18 @@ public sealed class ServerWorld
     /// that key on the block grid (the walled-base fill invalidates the levels whose box the cell lies in).</summary>
     public event System.Action<Vector3i>? BlockSet;
 
+    /// <summary>Raised after a <see cref="SetBlock"/> that carries a player <c>owner</c> (#1862) — a build, a dig, a
+    /// dye — for the listeners that care WHO changed a cell, not only that it changed: the walled-base fill grows
+    /// a base's box with what its players build, and must not grow it with fluid flow, fire or regrowth.</summary>
+    public event System.Action<Vector3i>? PlayerBlockSet;
+
+    /// <summary>Raised after a <see cref="SetBlock"/> that took a SHAPED block away (#1961): the cell held a
+    /// non-cube form and now holds another block or another form. Carries what was there — the one thing
+    /// <see cref="BlockSet"/> cannot tell. A form that spans several blocks listens here to fall as one piece,
+    /// whoever removed the cell: the mining beam, fire, a fluid, falling sand, a bomb, a stamped structure.
+    /// Repainting or re-dyeing a cell (same block, same form) does not raise it.</summary>
+    public event System.Action<Vector3i, BlockId, int>? ShapedBlockReplaced;
+
     /// <summary>Whether a chunk is currently resident in the cache (canonicalized like the cache keys). For
     /// tests/diagnostics — e.g. asserting far-chunk eviction by <see cref="UnloadFarChunks"/>.</summary>
     public bool IsChunkLoaded(ChunkCoord coord) => _loaded.ContainsKey(WorldConstants.CanonicalChunk(coord, Circumference));
@@ -88,7 +100,20 @@ public sealed class ServerWorld
         // airless-moon cratering, pad flattening AND the body identity (#478) together — a partial set
         // here previously left stale state of whatever world was configured last.
         _generator.SetWorldMode(Circumference, Cratered, LandingPadFlats, LocationId, FrontierOreBoost);
-        var chunk = _generator.Generate(Planet, coord);
+        return Store(coord, _generator.Generate(Planet, coord));
+    }
+
+    /// <summary>#1817: takes a chunk a worker generated for this world (with this world's mode) into the cache —
+    /// persisted edits are applied here, on the tick thread, exactly as <see cref="GetOrLoadChunk"/> does. A chunk
+    /// that got loaded inline in the meantime wins (generation is deterministic, the two are identical).</summary>
+    public ChunkData AdoptGenerated(ChunkCoord coord, ChunkData generated)
+    {
+        coord = WorldConstants.CanonicalChunk(coord, Circumference);
+        return _loaded.TryGetValue(coord, out var cached) ? cached : Store(coord, generated);
+    }
+
+    private ChunkData Store(ChunkCoord coord, ChunkData chunk)
+    {
         foreach (var edit in _repo.LoadChunkEdits(LocationId, coord))
         {
             var local = WorldConstants.WorldToLocal(edit.WorldPosition);
@@ -105,7 +130,34 @@ public sealed class ServerWorld
         }
 
         _loaded[coord] = chunk;
+        ChunkLoads++;
         return chunk;
+    }
+
+    /// <summary>#1824: how many chunks this world has loaded so far — a cheap "something new is resident" signal
+    /// for systems that wait on terrain (parked fluid cells re-check when it moves).</summary>
+    public long ChunkLoads { get; private set; }
+
+    /// <summary>#1824: whether every chunk within <paramref name="reach"/> cells of <paramref name="world"/> is resident
+    /// or may be loaded (<paramref name="mayLoad"/>, null = never). Only the chunks the reach box actually crosses are
+    /// probed (a cell deep inside its chunk costs one lookup).</summary>
+    public bool IsNeighbourhoodLoaded(Vector3i world, int reach, System.Func<ChunkCoord, bool>? mayLoad = null)
+    {
+        world = WorldConstants.CanonicalBlock(world, Circumference);
+        var lo = WorldConstants.WorldToChunk(new Vector3i(world.X - reach, world.Y - reach, world.Z - reach));
+        var hi = WorldConstants.WorldToChunk(new Vector3i(world.X + reach, world.Y + reach, world.Z + reach));
+        for (int cx = lo.X; cx <= hi.X; cx++)
+            for (int cy = lo.Y; cy <= hi.Y; cy++)
+                for (int cz = lo.Z; cz <= hi.Z; cz++)
+                {
+                    var coord = WorldConstants.CanonicalChunk(new ChunkCoord(cx, cy, cz), Circumference);
+                    if (!_loaded.ContainsKey(coord) && (mayLoad is null || !mayLoad(coord)))
+                    {
+                        return false;
+                    }
+                }
+
+        return true;
     }
 
     public BlockId GetBlock(Vector3i world)
@@ -143,11 +195,39 @@ public sealed class ServerWorld
         var chunk = GetOrLoadChunk(WorldConstants.WorldToChunk(world));
         var local = WorldConstants.WorldToLocal(world);
         var previous = chunk.Get(local.X, local.Y, local.Z);
+        var previousModifier = chunk.GetModifier(local.X, local.Y, local.Z);
+        int previousShape = chunk.GetShape(local.X, local.Y, local.Z);
+
+        // #1990: a cell that already holds exactly this block needs no delta row. Settlements and stations
+        // re-stamp their whole structure on every server start — a 256×256 city wrote 405 332 identical rows
+        // per load — and the only thing that made the write necessary was that nobody compared first. A
+        // player's build (owner set) always writes, so ownership and its timestamp stay authoritative, and a
+        // cell that happens to match the terrain the seed generates needs no row either: the generator
+        // produces it again, byte for byte, on the next load.
+        bool unchanged = previous.Value == block.Value
+                         && previousModifier.Tint == tint
+                         && previousModifier.Glow == glow
+                         && previousShape == shape;
+
         chunk.Set(local.X, local.Y, local.Z, block); // clears any old modifier/shape when set to air
         chunk.SetModifier(local.X, local.Y, local.Z, tint, glow);
         chunk.SetShape(local.X, local.Y, local.Z, shape);
-        _repo.SetBlock(LocationId, world, block.Value, tint, glow, shape, owner);
+        if (!unchanged || !string.IsNullOrEmpty(owner))
+        {
+            _repo.SetBlock(LocationId, world, block.Value, tint, glow, shape, owner);
+        }
         BlockSet?.Invoke(world);
+        if (!string.IsNullOrEmpty(owner))
+        {
+            PlayerBlockSet?.Invoke(world);
+        }
+
+        if (previousShape != 0
+            && (previous.Value != block.Value || ShapeCode.WithoutDesign(previousShape) != ShapeCode.WithoutDesign(shape)))
+        {
+            ShapedBlockReplaced?.Invoke(world, previous, previousShape);
+        }
+
         return previous;
     }
 
@@ -165,6 +245,20 @@ public sealed class ServerWorld
     {
         world = WorldConstants.CanonicalBlock(world, Circumference);
         var chunk = GetOrLoadChunk(WorldConstants.WorldToChunk(world));
+        var local = WorldConstants.WorldToLocal(world);
+        return chunk.GetShape(local.X, local.Y, local.Z);
+    }
+
+    /// <summary>Like <see cref="GetShape"/> but never loads or generates: a cell in an unloaded chunk reads as a plain
+    /// cube (0), matching <see cref="GetBlockIfLoaded"/> reading it as air. For the per-tick NPC movement (#1895).</summary>
+    public int GetShapeIfLoaded(Vector3i world)
+    {
+        world = WorldConstants.CanonicalBlock(world, Circumference);
+        if (!_loaded.TryGetValue(WorldConstants.WorldToChunk(world), out var chunk))
+        {
+            return 0;
+        }
+
         var local = WorldConstants.WorldToLocal(world);
         return chunk.GetShape(local.X, local.Y, local.Z);
     }

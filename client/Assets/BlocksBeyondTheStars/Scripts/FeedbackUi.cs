@@ -73,6 +73,14 @@ namespace BlocksBeyondTheStars.Client
         private GameObject _dialog;
         private InputField _titleInput, _descInput, _emailInput;
         private Text _status;
+        private Text _descCounter;
+        private bool _limitWarned; // the "text reached the limit" hint was shown; the next Send goes through
+
+        /// <summary>Description and answer length cap. Stays below the inbox's 5000-character description limit even
+        /// with the /bump twin's "[feedback] " + 80-character title + " — " prefix, so the two rows of one report
+        /// still contain each other and pair up in the inbox. Before 2026-09 it was 1500 and cut long idea texts
+        /// silently mid-sentence.</summary>
+        public const int DescLimit = 4800;
         private Button _sendBtn, _cancelBtn;
 
         private bool _open;
@@ -144,17 +152,52 @@ namespace BlocksBeyondTheStars.Client
             }
         }
 
+        /// <summary>
+        /// Both dialogs are TOP-LEVEL canvases (UiKit.CreateCanvas parents nothing), while this component lives on
+        /// the world rig root — so they outlived the rig (#1789). A reply overlay open while the world was torn down
+        /// (ReturnToMenu) stayed on screen in the main menu; its OK button then ran <see cref="AcknowledgeAndClose"/>
+        /// on the destroyed component and <c>CancelInvoke</c> threw <c>ArgumentNullException: self</c>. And every
+        /// world join leaked two hidden canvases. Same treatment as <c>ChatUi.OnDestroy</c>.
+        /// </summary>
+        private void OnDestroy()
+        {
+            if (_open || _replyOpen)
+            {
+                // Balance the hold taken by Open/ShowThread; the network is gone by now, so the pause message is a
+                // no-op, but the local counter must not carry into the next world.
+                _open = false;
+                _replyOpen = false;
+                WorldHold.Release();
+            }
+
+            if (_dialogCanvas != null)
+            {
+                Destroy(_dialogCanvas.gameObject);
+                _dialogCanvas = null;
+            }
+
+            if (_replyCanvas != null)
+            {
+                Destroy(_replyCanvas.gameObject);
+                _replyCanvas = null;
+            }
+        }
+
         /// <summary>The install's reply-thread credential: a one-way hash of the install secret. Desktop and
         /// play.* builds hash the name-claim token (stable per install — the <c>/play/</c> path never changes);
         /// the glitch.fun arcade hashes the Glitch install id instead, because the browser-local token there
         /// resets with every deployment (#1177) while the install id follows the player across deployments
         /// and browsers. Whoever learns the key can read replies — never claim a name.</summary>
-        private string ComputeReplyKey()
+        private string ComputeReplyKey() => ReplyKeyFor(Settings);
+
+        /// <summary>The same credential for senders outside a world — the texture editor's submit dialog (#1965)
+        /// runs in the main menu, and the answer must arrive in the thread this component polls later.</summary>
+        public static string ReplyKeyFor(ClientSettings settings)
         {
             string secret = GlitchIntegration.ArcadeInstallId; // empty everywhere except the arcade
-            if (string.IsNullOrEmpty(secret) && Settings != null)
+            if (string.IsNullOrEmpty(secret) && settings != null)
             {
-                secret = Settings.PlayerToken;
+                secret = settings.PlayerToken;
             }
 
             return FeedbackReplyKey.Derive(secret);
@@ -211,13 +254,26 @@ namespace BlocksBeyondTheStars.Client
             }
 
             _open = true;
+
+            // Modal: free the cursor + pause player/flight control (mirrors GameMenu / BeamPadUi; SpaceView
+            // holds position while MenuOpen). Registered HERE, on the frame the hotkey fires, not at the end of
+            // it with the screenshot (#1858): the gap between _open and the owner flag was a frame in which
+            // every gameplay verb still read its key. The arbiter recomputes on close, so a flight sub-screen
+            // the dialog opened over (e.g. the landing-pad chooser) keeps its free cursor without us having to
+            // save/restore the prior state by hand (#413).
+            //
+            // The screenshot still shows the HUD: HudUi (and the flight overlay) only drop their canvases in
+            // THEIR Update, and this frame's HudUi.Update has already run — WorldRig adds HudUi to the rig
+            // before FeedbackUi, so it updates first — while the flight overlay's prompts are the only thing
+            // that can go missing from the shot when SpaceView.Update runs after us.
+            Game.SetMenuOwner(this, true);
             StartCoroutine(OpenRoutine());
         }
 
         private IEnumerator OpenRoutine()
         {
-            // Capture at end of frame, before the dialog is shown and before MenuOpen hides the HUD: the shot
-            // is the full frame WITH the HUD but WITHOUT this dialog (the requested look).
+            // Capture at end of frame, before the dialog is shown: the shot is the full frame WITH the HUD but
+            // WITHOUT this dialog (the requested look).
             yield return new WaitForEndOfFrame();
             if (!_open)
             {
@@ -233,12 +289,6 @@ namespace BlocksBeyondTheStars.Client
             ResetFields();
             _dialog.SetActive(true);
 
-            // Modal: free the cursor + pause player/flight control (mirrors GameMenu / BeamPadUi; SpaceView
-            // holds position while MenuOpen). The arbiter recomputes on close, so a flight sub-screen the
-            // dialog opened over (e.g. the landing-pad chooser) keeps its free cursor without us having to
-            // save/restore the prior state by hand (#413).
-            Game.SetMenuOwner(this, true);
-
             // Hold the world like the Esc menu does (#1330) — after the screenshot, so the shot shows live play.
             // The server decides what it means (#973): alone, the world stops right here; with others joined it
             // only counts as "this player is in a menu" until everyone else is too.
@@ -251,10 +301,40 @@ namespace BlocksBeyondTheStars.Client
             _open = false;
             _sending = false;
             _shotJpg = null;
+            ReleaseInputFocus(_titleInput, _descInput, _emailInput);
             if (_dialog != null) _dialog.SetActive(false);
 
             WorldHold.Release(); // every close path ends here (Esc, Cancel, the auto-close after a send) — sends once
             Game?.SetMenuOwner(this, false); // arbiter re-locks only once NO other owner is open (#413)
+        }
+
+        /// <summary>
+        /// Hands focus back before a dialog is hidden (#1683). uGUI never deselects a deactivated
+        /// <see cref="InputField"/> on its own: the caret keeps its place in the canvas rebuild queue, and
+        /// rebuilding it after the field's own objects have gone throws inside <c>InputField.GenerateCaret</c>
+        /// — a client crash report arrived from exactly that window, seconds after a send auto-closed the
+        /// dialog while the reply overlay was opening its own field. Same treatment the chat box got in #1634.
+        /// </summary>
+        private static void ReleaseInputFocus(params InputField[] fields)
+        {
+            var es = UnityEngine.EventSystems.EventSystem.current;
+            foreach (var field in fields)
+            {
+                if (field == null)
+                {
+                    continue;
+                }
+
+                if (field.isFocused)
+                {
+                    field.DeactivateInputField();
+                }
+
+                if (es != null && es.currentSelectedGameObject == field.gameObject)
+                {
+                    es.SetSelectedGameObject(null);
+                }
+            }
         }
 
         private void ResetFields()
@@ -263,7 +343,29 @@ namespace BlocksBeyondTheStars.Client
             if (_descInput != null) _descInput.text = string.Empty;
             if (_emailInput != null) _emailInput.text = string.Empty;
             if (_status != null) { _status.text = string.Empty; _status.color = UiKit.CyanDim; }
+            _limitWarned = false;
+            UpdateDescCounter(string.Empty);
             SetSendInteractable(true);
+        }
+
+        /// <summary>Live "used / limit" count next to the description label, in warning colour from 90 % on — uGUI
+        /// simply stops accepting keys (and pasted text) at the limit, which a player could not see before.</summary>
+        private void UpdateDescCounter(string text)
+        {
+            int used = text != null ? text.Length : 0;
+            if (used < DescLimit)
+            {
+                _limitWarned = false;
+            }
+
+            if (_descCounter == null)
+            {
+                return;
+            }
+
+            _descCounter.text = used.ToString(System.Globalization.CultureInfo.InvariantCulture) + " / "
+                + DescLimit.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            _descCounter.color = used >= DescLimit * 9 / 10 ? UiKit.Warn : UiKit.CyanDim;
         }
 
         private void SetSendInteractable(bool on)
@@ -296,7 +398,9 @@ namespace BlocksBeyondTheStars.Client
             _titleInput = UiKit.AddInput(panel, m, 96, innerW, 40, string.Empty, null, L("ui.feedback.title_placeholder"), 80);
 
             UiKit.AddText(panel, m, 146, innerW, 20, L("ui.feedback.desc_label"), 15, UiKit.TextCol, TextAnchor.MiddleLeft);
-            _descInput = UiKit.AddInput(panel, m, 168, innerW, 150, string.Empty, null, L("ui.feedback.desc_placeholder"), 1500);
+            _descCounter = UiKit.AddText(panel, m, 146, innerW, 20, string.Empty, 14, UiKit.CyanDim, TextAnchor.MiddleRight);
+            _descInput = UiKit.AddInput(panel, m, 168, innerW, 150, string.Empty, UpdateDescCounter, L("ui.feedback.desc_placeholder"), DescLimit);
+            UpdateDescCounter(string.Empty);
             _descInput.lineType = InputField.LineType.MultiLineNewline;
             if (_descInput.textComponent != null) _descInput.textComponent.alignment = TextAnchor.UpperLeft;
 
@@ -324,10 +428,20 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
-            string desc = _descInput != null ? (_descInput.text ?? string.Empty).Trim() : string.Empty;
+            string raw = _descInput != null ? _descInput.text ?? string.Empty : string.Empty;
+            string desc = raw.Trim();
             if (desc.Length < 3)
             {
                 if (_status != null) { _status.text = L("ui.feedback.need_text"); _status.color = UiKit.Warn; }
+                return;
+            }
+
+            // A text that filled the field to the brim was most likely cut (a long paste stops silently at the
+            // limit): say so once, the next click sends as it is.
+            if (raw.Length >= DescLimit && !_limitWarned)
+            {
+                _limitWarned = true;
+                if (_status != null) { _status.text = L("ui.feedback.limit_reached"); _status.color = UiKit.Warn; }
                 return;
             }
 
@@ -448,6 +562,9 @@ namespace BlocksBeyondTheStars.Client
             // screen / driver-reset report can be judged without asking the player (#1564). Main thread here.
             DeviceInfo.Get().WriteTo(reportJson);
             SessionMarker.WriteTo(reportJson);
+            // Which textures were NOT the game's own (#1964): "the grass looks wrong" means something else when
+            // the player — or the world's admin — repainted the grass. Keys only, never pixels.
+            GameTextures.ReportInfo.WriteTo(reportJson);
 
             var report = new FeedbackReport
             {
@@ -777,7 +894,7 @@ namespace BlocksBeyondTheStars.Client
             BuildReplyBodyScroll(panel, m, 100f, innerW, ReplyBodyH);
 
             _answerLabel = UiKit.AddText(panel, m, 404, innerW, 20, L("ui.feedback.reply.answer_label"), 15, UiKit.TextCol, TextAnchor.MiddleLeft);
-            _answerInput = UiKit.AddInput(panel, m, 426, innerW, 110, string.Empty, null, L("ui.feedback.reply.answer_placeholder"), 1500);
+            _answerInput = UiKit.AddInput(panel, m, 426, innerW, 110, string.Empty, null, L("ui.feedback.reply.answer_placeholder"), DescLimit);
             _answerInput.lineType = InputField.LineType.MultiLineNewline;
             if (_answerInput.textComponent != null) _answerInput.textComponent.alignment = TextAnchor.UpperLeft;
 
@@ -861,6 +978,7 @@ namespace BlocksBeyondTheStars.Client
             _replyOpen = false;
             _answering = false;
             _shown = null;
+            ReleaseInputFocus(_answerInput);
             if (_replyOverlay != null) _replyOverlay.SetActive(false);
             WorldHold.Release();
             Game?.SetMenuOwner(_replyOwner, false);

@@ -54,7 +54,7 @@ namespace BlocksBeyondTheStars.Client
         // because desktop geometry builds run on thread-pool workers (each thread runs at most one build at a
         // time, and none of these ever escapes the call), so a Clear() at the point of use is all the isolation
         // needed. On WebGL everything runs on the single main thread — same invariant, one buffer set.
-        [System.ThreadStatic] private static Dictionary<(int X, int Y, int Z), Vector4> _waterCellsScratch;
+        [System.ThreadStatic] private static Dictionary<(int X, int Y, int Z), WaterSurfaceData> _waterCellsScratch;
         // #1528: dense per-build scratch for the world-chunk path — the AO occluder probes, the skylight column
         // tops and the block-light flood all address a bounded window around the chunk, so a flat array indexed by
         // (coordinate - window origin) replaces a tuple-keyed dictionary (order 10^5 hash lookups per chunk).
@@ -353,9 +353,18 @@ namespace BlocksBeyondTheStars.Client
             // old hard 0/1 edge into a gradient, so a cave MOUTH (some open neighbours) is softly lit and
             // overhang shadows feather, while a DEEP cave (no open neighbours) stays ~0 and still needs a lamp.
             const int SkyKernel = 2; // 5x5 (radius 2)
+            // Shade vs. underground (#1608): a cell just below its column top — under a tree canopy, an overhang,
+            // a roof — used to get the same 0 as a cell twenty blocks down a cave, so every shaded patch lit like
+            // a cave (ambient at the cave floor, no direct sun, no night fill) and needed the lamp at noon. The
+            // depth below the top now sets a floor: full shade (ShadeFloor) within ShadeDepthFull blocks of the
+            // cover, fading to the old 0 by ShadeDepthNone blocks, so deep caves stay dark and still need a lamp.
+            const int ShadeDepthFull = 6;
+            const int ShadeDepthNone = 14;
+            const float ShadeFloor = 0.55f;
             float Skylight(int wx, int wy, int wz)
             {
-                if (wy > Top(wx, wz))
+                int top = Top(wx, wz);
+                if (wy > top)
                 {
                     return 1f; // open straight up to the sky
                 }
@@ -373,7 +382,14 @@ namespace BlocksBeyondTheStars.Client
 
                 // Linear fraction: a mouth (≈half its neighbourhood open) lands mid-bright and softly lit, a
                 // couple of blocks deeper falls off to the dark cave floor — a smooth gradient, deep stays ~0.
-                return open / (float)total;
+                float fraction = open / (float)total;
+
+                // Depth below the cover (1 = directly under it) → the shade floor; deep = the plain fraction.
+                int depth = top - wy + 1;
+                float shade = depth <= ShadeDepthFull
+                    ? ShadeFloor
+                    : ShadeFloor * Mathf.Clamp01((ShadeDepthNone - depth) / (float)(ShadeDepthNone - ShadeDepthFull));
+                return Mathf.Max(fraction, shade);
             }
 
             // A cell in a chunk the client does not hold is NOT open air — the streamer either has not sent it
@@ -389,29 +405,74 @@ namespace BlocksBeyondTheStars.Client
             System.Func<int, int, int, bool> loadedFn = Loaded;
 
             // Per-cell water classification cache for this build (each cell is sampled by up to four
-            // corners; classify it once).
-            var waterCells = _waterCellsScratch ??= new Dictionary<(int X, int Y, int Z), Vector4>();
+            // corners; classify it once). Plants and slim props standing in the water do not bound the body
+            // (#1749): a reed is not a shore, so the shore runs step over them.
+            var waterCells = _waterCellsScratch ??= new Dictionary<(int X, int Y, int Z), WaterSurfaceData>();
             waterCells.Clear();
-            Vector4 WaterCellData(BlockId waterId, int cwx, int cwy, int cwz)
+            bool PassableInWater(int px, int py, int pz)
+            {
+                var b = worldBlock(px, py, pz);
+                return traits.Has(b, TraitFlora) || traits.Has(b, TraitFoliage) || traits.Has(b, TraitSlimProp);
+            }
+
+            System.Func<int, int, int, bool> passableFn = PassableInWater;
+
+            // #1902: a cell holds one block id, so a plant or slim prop standing in water deleted the water of its cell
+            // and the surface showed a dry hole around every reed and kelp stalk. A plant/prop the water surrounds
+            // (WetCell — the same rule as the server's oxygen drain) now gets the water volume of its cell drawn, and
+            // real water keeps its faces hidden toward it. Building forms are left out: a water box would flicker
+            // against their faces (they still count as wet for breathing).
+            var wetWaterDef = content.GetBlock("water");
+            BlockId wetWaterId = wetWaterDef != null ? wetWaterDef.NumericId : BlockId.Air;
+            System.Func<int, int, int, ushort> blockValueFn = (bx, by, bz) => worldBlock(bx, by, bz).Value;
+            bool WetProp(int px, int py, int pz)
+            {
+                return !wetWaterId.IsAir
+                    && (traits.FlagsOf(worldBlock(px, py, pz)) & (TraitFloraPrefix | TraitSlimProp)) != 0
+                    && WetCell.WaterSurrounds(blockValueFn, wetWaterId.Value, px, py, pz);
+            }
+
+            // The water carries on into this cell, so a face toward it stays hidden: water, or a wet plant/prop.
+            bool WaterContinues(int px, int py, int pz)
+                => (!wetWaterId.IsAir && worldBlock(px, py, pz).Value == wetWaterId.Value) || WetProp(px, py, pz);
+
+            // Water shows a face toward this cell: loaded air, or a plant/prop the water does NOT surround (the bank).
+            bool OpenForWater(int px, int py, int pz) => OpenForWaterBlock(worldBlock(px, py, pz), px, py, pz);
+
+            bool OpenForWaterBlock(BlockId b, int px, int py, int pz)
+            {
+                if (b.IsAir)
+                {
+                    return Loaded(px, py, pz);
+                }
+
+                return (traits.FlagsOf(b) & (TraitFloraPrefix | TraitSlimProp)) != 0 && !WetProp(px, py, pz);
+            }
+
+            WaterSurfaceData WaterCellData(BlockId waterId, int cwx, int cwy, int cwz)
             {
                 var key = (cwx, cwy, cwz);
                 if (!waterCells.TryGetValue(key, out var d))
                 {
-                    d = WaterSurface.Classify(worldBlock, waterId, cwx, cwy, cwz, loadedFn);
+                    d = WaterSurface.Classify(worldBlock, waterId, cwx, cwy, cwz, loadedFn, passableFn);
                     waterCells[key] = d;
                 }
 
                 return d;
             }
 
-            // Corner-smoothed foam + wave-amplitude factor for the water-surface corner at (cwx, cwz):
-            // averaged over the 4 cells meeting there, so a corner shared by neighbouring faces gets the
-            // IDENTICAL value from each — foam fades in smooth gradients instead of per-block steps, and
-            // wave displacement stays crack-free across block (and body-type) boundaries. Bank/step cells
-            // count as shore: full foam, zero amplitude — waves die exactly at the waterline.
-            Vector2 WaterCorner(BlockId waterId, int cwx, int cwy, int cwz)
+
+            // Corner-smoothed water weights for the water-surface corner at (cwx, cwz): averaged over the
+            // 4 cells meeting there, so a corner shared by neighbouring faces gets the IDENTICAL value from
+            // each — foam, openness and the brook weights all fade in smooth gradients instead of per-block
+            // steps, and wave displacement stays crack-free across block boundaries. Bank/step cells count
+            // as shore: full foam, nothing else — waves die exactly at the waterline. Since #1749 EVERYTHING
+            // the shader reads is averaged here; there is no per-face mode left to branch on.
+            // Layout: x = 1 + open (the "is water" marker stays > 0.5, #1374), y = foam, z = brook along X,
+            // w = brook along Z.
+            Vector4 WaterCorner(BlockId waterId, int cwx, int cwy, int cwz)
             {
-                float foam = 0f, amp = 0f;
+                float open = 0f, foam = 0f, flowX = 0f, flowZ = 0f;
                 for (int ox = -1; ox <= 0; ox++)
                 for (int oz = -1; oz <= 0; oz++)
                 {
@@ -420,16 +481,46 @@ namespace BlocksBeyondTheStars.Client
                         && worldBlock(cx, cwy + 1, cz).IsAir && Loaded(cx, cwy + 1, cz);
                     if (!surface)
                     {
+                        // A plant standing in the surface is part of the body, not its shore (#1749).
+                        if (PassableInWater(cx, cwy, cz))
+                        {
+                            continue;
+                        }
+
                         foam += 1f; // the shore itself
                         continue;
                     }
 
                     var d = WaterCellData(waterId, cx, cwy, cz);
-                    foam += d.y;
-                    amp += d.x > 1.5f && d.x < 2.5f ? 1f : d.x > 0.5f && d.x < 1.5f ? 0.25f : 0f;
+                    open += d.Open;
+                    foam += d.Foam;
+                    flowX += d.FlowX;
+                    flowZ += d.FlowZ;
                 }
 
-                return new Vector2(foam * 0.25f, amp * 0.25f);
+                return new Vector4(1f + open * 0.25f, foam * 0.25f, flowX * 0.25f, flowZ * 0.25f);
+            }
+
+            // #1701: per-corner light for a fluid's top face. Averages skylight and coloured block light over
+            // the four AIR cells meeting at the corner (lx, lz) ∈ {0,1}² above the cell — a corner shared by
+            // two neighbouring faces therefore gets the identical value from both, and a wide flat surface
+            // lights as one plane instead of a grid of per-face tiles with hard borders. The face mode rides
+            // along unchanged in the second channel (lava surface / falling flank / flora tint mode).
+            void AddCornerLight(List<Vector2> skyOut, List<Vector3> blOut, int bx, int airY, int bz,
+                int lx, int lz, float mode)
+            {
+                float skySum = 0f;
+                Vector3 blSum = Vector3.zero;
+                for (int ox = -1; ox <= 0; ox++)
+                for (int oz = -1; oz <= 0; oz++)
+                {
+                    int cx = bx + lx + ox, cz = bz + lz + oz;
+                    skySum += Skylight(cx, airY, cz);
+                    blSum += BlockLightAt(cx, airY, cz);
+                }
+
+                skyOut.Add(new Vector2(skySum * 0.25f, mode));
+                blOut.Add(blSum * 0.25f);
             }
 
             // Per-vertex ambient occlusion ("smooth lighting"): each face corner is darkened by how many of
@@ -495,6 +586,56 @@ namespace BlocksBeyondTheStars.Client
                 return res;
             }
 
+            // #1902: the water volume of a wet plant/prop cell — the faces a water block in that cell would draw (toward
+            // open air and dry bank plants, the inset surface on top, no flanks under water), in the transparent submesh
+            // with the water tile and the water-surface corner weights. The plant itself is meshed afterwards as usual.
+            void EmitWetCellWater(int lx, int ly, int lz, int cwx, int cwy, int cwz)
+            {
+                var cell = new Vector3(lx, ly, lz);
+                Rect waterUv = atlas.TileUv(wetWaterId.Value);
+                var waterMat = traits.MaterialOf(wetWaterId);
+                float waterEmission = traits.EmissionOf(wetWaterId);
+                bool surface = OpenForWater(cwx, cwy + 1, cwz);
+                bool submerged = WaterContinues(cwx, cwy + 1, cwz);
+                for (int f = 0; f < Faces.Length; f++)
+                {
+                    var dir = Faces[f];
+                    int nx = cwx + dir.X, ny = cwy + dir.Y, nz = cwz + dir.Z;
+                    bool draw = OpenForWater(nx, ny, nz) || (worldShape != null && !ShapeCode.IsCube(worldShape(nx, ny, nz)));
+                    if (!draw || (dir.Y == 0 && submerged))
+                    {
+                        continue;
+                    }
+
+                    var col = new Color(waterMat.x, waterMat.y, FaceShade(f), waterEmission);
+                    AddFace(verts, trisT, colors, uvs, tangents, cell, f, col, col, col, col, waterUv, 0,
+                        surface && dir.Y >= 0 ? WaterSurfaceQuad(cell, f) : null);
+                    if (surface && dir.Y == 1)
+                    {
+                        AddCornerLight(skyUv, blockLight, cwx, ny, cwz, 0, 0, 0f);
+                        AddCornerLight(skyUv, blockLight, cwx, ny, cwz, 0, 1, 0f);
+                        AddCornerLight(skyUv, blockLight, cwx, ny, cwz, 1, 1, 0f);
+                        AddCornerLight(skyUv, blockLight, cwx, ny, cwz, 1, 0, 0f);
+                        leafUv.Add(WaterCorner(wetWaterId, cwx, cwy, cwz));
+                        leafUv.Add(WaterCorner(wetWaterId, cwx, cwy, cwz + 1));
+                        leafUv.Add(WaterCorner(wetWaterId, cwx + 1, cwy, cwz + 1));
+                        leafUv.Add(WaterCorner(wetWaterId, cwx + 1, cwy, cwz));
+                    }
+                    else
+                    {
+                        float sky = Skylight(nx, ny, nz);
+                        Vector3 faceBl = BlockLightAt(nx, ny, nz);
+                        skyUv.Add(new Vector2(sky, 0f)); skyUv.Add(new Vector2(sky, 0f));
+                        skyUv.Add(new Vector2(sky, 0f)); skyUv.Add(new Vector2(sky, 0f));
+                        blockLight.Add(faceBl); blockLight.Add(faceBl); blockLight.Add(faceBl); blockLight.Add(faceBl);
+                        leafUv.Add(Vector4.zero); leafUv.Add(Vector4.zero); leafUv.Add(Vector4.zero); leafUv.Add(Vector4.zero);
+                    }
+
+                    Vector3 faceBlDir = BlockLightDirAt(nx, ny, nz);
+                    blockLightDir.Add(faceBlDir); blockLightDir.Add(faceBlDir); blockLightDir.Add(faceBlDir); blockLightDir.Add(faceBlDir);
+                }
+            }
+
             for (int x = 0; x < n; x++)
             for (int y = 0; y < n; y++)
             for (int z = 0; z < n; z++)
@@ -514,6 +655,11 @@ namespace BlocksBeyondTheStars.Client
                 // per-face shade; without one, fall back to the flat palette × shade.
                 Color baseColor = atlas == null ? BlockColor(content, id) : Color.white;
                 Rect uv = atlas != null ? atlas.TileUv(id.Value) : new Rect(0f, 0f, 1f, 1f);
+                // Animated tile (#1957): "frames, speed, strip start", added to the tint mode of every face that
+                // shows the block's OWN tile — the shader moves the UV onto the current frame of the strip. 0 for
+                // a still tile. Faces that show another tile (a log's cap, a furniture part's slot, a painted
+                // design, a variant) must not carry it.
+                float animCode = atlas != null ? atlas.AnimationCode(id.Value) : 0f;
                 // Per-block reflection params (gloss, metal) for the lit atlas shader.
                 var mat = traits.MaterialOf(id);
                 float matR = mat.x, matG = mat.y;
@@ -530,6 +676,17 @@ namespace BlocksBeyondTheStars.Client
                 // resolver, so wood_log stays a normal paintable hull block there.
                 bool isWood = floraTint != null && (tf & TraitWood) != 0;
                 Color speciesTint = (isFlora || isWood) && floraTint != null ? floraTint(id) : Color.black;
+                // Generation 11, the rainbow class: every plant takes its own colour from its cell instead of the one
+                // per-world species hue (planet chunks only, like every flora tint).
+                if (floraTint != null && (tf & TraitRainbowFlora) != 0)
+                {
+                    speciesTint = RainbowTint(origin.X + x, origin.Y + y, origin.Z + z);
+                }
+                // #1716: a farmed crop is flora for everything BUT the tint. It carries no species colour (the
+                // tint map skips crops so a berry reads as ripe fruit on every world), and a black species tint
+                // in tint mode 1 made the shader fall back to the WORLD hue — violet berries on a violet world,
+                // the very confusion the exclusion was written to prevent. Mode 0 = the authored tile as is.
+                bool floraTinted = isFlora && (tf & TraitCultivated) == 0;
                 // Hull paint (item 32): ship meshes pass a per-block paint resolver — a painted face raises
                 // the tint-mode flag (TEXCOORD1.y) to 2 and carries the ship's hull colour in TEXCOORD2.yzw
                 // (the atlas shader multiplies it into the albedo; black = unpainted).
@@ -541,7 +698,7 @@ namespace BlocksBeyondTheStars.Client
                 var (modTint, _) = chunk.GetModifierLocal(WorldConstants.LocalIndex(x, y, z));
                 bool dyed = modTint != 0;
                 Color dye = dyed ? RgbToColor(modTint) : Color.black;
-                float floraFlag = dyed ? 3f : isWood ? 4f : isFlora ? 1f : painted ? 2f : 0f;
+                float floraFlag = dyed ? 3f : isWood ? 4f : floraTinted ? 1f : painted ? 2f : 0f;
                 // Foliage flag (TEXCOORD2.x): tree crowns + leafy plants whose tile carries a baked alpha
                 // mask — the shader clips it so the leaves are see-through (holes), not a solid cube.
                 bool foliage = (tf & TraitFoliage) != 0;
@@ -590,7 +747,7 @@ namespace BlocksBeyondTheStars.Client
                 // identical on all clients) picks one of the block's variant tiles and a 90° rotation
                 // for the top/bottom faces — breaking the visible texture tiling on open ground.
                 int uvRot = 0;
-                if (atlas != null && atlas.TryGetVariants(id.Value, out var variantSlots))
+                if (animCode == 0f && atlas != null && atlas.TryGetVariants(id.Value, out var variantSlots))
                 {
                     int hash = unchecked(wx * 73856093 ^ wy * 19349663 ^ wz * 83492791);
                     int pick = (int)((uint)hash % (uint)(variantSlots.Length + 1));
@@ -613,12 +770,12 @@ namespace BlocksBeyondTheStars.Client
                     hasCap = true;
                 }
 
-                // Water SURFACE cells (air above) get a body classification — open water with gentle
-                // waves + coastal foam, calm lake, or flowing river — packed into the top face's
-                // TEXCOORD2 for the transparent shader. Other faces/blocks keep the flora-tint layout.
+                // Water SURFACE cells (air above) get their body weights — open water with gentle waves +
+                // coastal foam, brook ripples along X or Z, calm basin for the rest — packed per corner into
+                // the top face's TEXCOORD2 for the transparent shader. Other faces/blocks keep the flora-tint layout.
                 bool isWater = (tf & TraitWater) != 0;
-                bool isWaterSurface = isWater && worldBlock(wx, wy + 1, wz).IsAir && Loaded(wx, wy + 1, wz);
-                Vector4 waterData = isWaterSurface ? WaterCellData(id, wx, wy, wz) : Vector4.zero;
+                // #1902: a dry plant poking out of the water above also leaves the surface open.
+                bool isWaterSurface = isWater && OpenForWater(wx, wy + 1, wz);
                 // Falling-water column (a waterfall): fed from above + open on its sides. Its vertical flanks
                 // would normally be culled (see the submerged-fluid test below) so the cascade reads flat; keep
                 // them and tag them mode 4 so the transparent shader streaks them downward.
@@ -633,6 +790,12 @@ namespace BlocksBeyondTheStars.Client
                 // a hot glow straight DOWN the vertical flanks. WaterfallDetect is fluid-agnostic (takes the id).
                 bool isFallingLava = isLava && WaterfallDetect.IsFalling(worldBlock, id, wx, wy, wz, loadedFn);
 
+                // #1902: a plant or slim prop the water surrounds stands IN the water — draw its cell's water volume.
+                if (atlas != null && (tf & (TraitFloraPrefix | TraitSlimProp)) != 0 && WetProp(wx, wy, wz))
+                {
+                    EmitWetCellWater(x, y, z, wx, wy, wz);
+                }
+
                 // Graphics quick-win: small leafy plants render as classic CROSS BILLBOARDS (two crossed
                 // cutout quads, both windings) instead of decal-textured cubes — they read as real plants.
                 // Tree crowns keep the cutout shell (a volume), solid flora (cactus/crystal/caps) stay cubes.
@@ -644,7 +807,9 @@ namespace BlocksBeyondTheStars.Client
                 if (atlas != null
                     && (isTorchProp || (foliage && (tf & TraitFloraPrefix) != 0)))
                 {
-                    float plantSky = Skylight(wx, wy + 1, wz); // open sky above the plant
+                    // #1759: a hanging plant roots in the ceiling and grows DOWN — its light comes from below.
+                    bool hangingPlant = (tf & TraitHangingFlora) != 0;
+                    float plantSky = Skylight(wx, hangingPlant ? wy - 1 : wy + 1, wz); // open sky above the plant (below a hanging one)
                     Vector3 plantBl = BlockLightAt(wx, wy, wz);  // coloured block-light reaching the plant
                     Vector3 plantBlDir = BlockLightDirAt(wx, wy, wz); // dominant light direction at the plant
                     var plantCol = new Color(matR, matG, 0.9f, emission);
@@ -696,7 +861,8 @@ namespace BlocksBeyondTheStars.Client
                         new Vector3(x, y, z), plantCol, uv, plantSky, isTorchProp && dyed ? dye : speciesTint,
                         plantBl, plantBlDir, plantLean,
                         plantJitter, plantSpin, plantH, plantW,
-                        isTorchProp ? (dyed ? 3f : 7f) : 1f); // 7 = flame flicker (no tint); 3 = dye; 1 = flora
+                        (isTorchProp ? (dyed ? 3f : 7f) : 1f) + animCode, // 7 = flame flicker (no tint); 3 = dye; 1 = flora
+                        hangingPlant);
                     continue;
                 }
 
@@ -727,7 +893,8 @@ namespace BlocksBeyondTheStars.Client
                     AddShapedBlock(verts, tris, dumpTris, dumpVerts, colors, uvs, tangents, skyUv, leafUv, blockLight, blockLightDir,
                         ladUp >= 2 ? (int)BlockShape.Panel : (int)BlockShape.Post,
                         0, ladUp >= 2 ? ladUp : ShapeCode.UpPlusY, new Vector3(x, y, z), uv,
-                        matR, matG, emission, Color.black, 0f, ladSky, ladBl, ladBlDir);
+                        matR, matG, emission, Color.black, 0f, ladSky, ladBl, ladBlDir,
+                        slots: ShapeFaceTextures.SlotsFor(content, id), slotAtlas: atlas);
                     continue;
                 }
 
@@ -739,8 +906,8 @@ namespace BlocksBeyondTheStars.Client
                     float flSky = Skylight(wx, wy + 1, wz);
                     Vector3 flBl = BlockLightAt(wx, wy + 1, wz);
                     Vector3 flBlDir = BlockLightDirAt(wx, wy + 1, wz);
-                    Color flTint = dyed ? dye : isFlora ? speciesTint : Color.black;
-                    float flMode = dyed ? 3f : isFlora ? 1f : 0f;
+                    Color flTint = dyed ? dye : floraTinted ? speciesTint : Color.black;
+                    float flMode = dyed ? 3f : floraTinted ? 1f : 0f;
                     // Per-plant scale + squash (#675): solid flora used to stamp the identical full-cell shape
                     // for every individual — the single strongest "all flora is the same size" tell. A patchy
                     // bell (FloraScale) × rare runt/giant outliers gives ~0.45..1.0 overall size, and an
@@ -755,7 +922,7 @@ namespace BlocksBeyondTheStars.Client
                     float flSizeXZ = Mathf.Clamp(flBase * (1f - flSquash * 0.6f), 0.4f, 1f);
                     AddShapedBlock(verts, tris, colliderTris, colliderVerts, colors, uvs, tangents, skyUv, leafUv, blockLight, blockLightDir,
                         traits.SolidFloraShapeOf(id), 0, ShapeCode.UpPlusY, new Vector3(x, y, z), uv,
-                        matR, matG, emission, flTint, flMode, flSky, flBl, flBlDir, flSizeXZ, flSizeY);
+                        matR, matG, emission, flTint, flMode, flSky, flBl, flBlDir, flSizeXZ, flSizeY, animCode: animCode);
                     continue;
                 }
 
@@ -784,12 +951,15 @@ namespace BlocksBeyondTheStars.Client
                     float shSky = Skylight(wx, wy + 1, wz);          // open sky above the shaped block
                     Vector3 shBl = BlockLightAt(wx, wy + 1, wz);     // coloured block-light reaching it
                     Vector3 shBlDir = BlockLightDirAt(wx, wy + 1, wz);
-                    Color shTint = designId != 0 ? Color.black : dyed ? dye : (isWood || isFlora) ? speciesTint : Color.black;
-                    float shTintMode = designId != 0 ? 0f : dyed ? 3f : isWood ? 4f : isFlora ? 1f : 0f; // 3 dye, 4 bark, 1 flora (matches cubes)
+                    Color shTint = designId != 0 ? Color.black : dyed ? dye : (isWood || floraTinted) ? speciesTint : Color.black;
+                    float shTintMode = designId != 0 ? 0f : dyed ? 3f : isWood ? 4f : floraTinted ? 1f : 0f; // 3 dye, 4 bark, 1 flora (matches cubes)
                     AddShapedBlock(verts, designId != 0 ? trisP : tris, colliderTris, colliderVerts, colors, uvs, tangents, skyUv, leafUv, blockLight, blockLightDir,
                         ShapeCode.ShapeOf(shapeDesc), ShapeCode.OrientationOf(shapeDesc), ShapeCode.UpFaceOf(shapeDesc), new Vector3(x, y, z),
                         designId != 0 ? designRect : uv,
-                        matR, matG, emission, shTint, shTintMode, shSky, shBl, shBlDir);
+                        matR, matG, emission, shTint, shTintMode, shSky, shBl, shBlDir,
+                        slots: designId != 0 ? null : ShapeFaceTextures.SlotsFor(content, id), slotAtlas: atlas, // a painted design IS the surface
+                        formCell: ShapeCode.CellOf(shapeDesc), // #1961: which block of a form over several blocks this is
+                        animCode: designId != 0 ? 0f : animCode, ownTile: uv);
 
                     // Flower pot (#809): a small cross-billboard flower sits on the shaped planter, tinted
                     // like wild flora on this world (per-world species hue). Purely visual — no collider.
@@ -860,7 +1030,8 @@ namespace BlocksBeyondTheStars.Client
                     // chunk we simply don't have would draw a water/glass pane into the void at the streamed
                     // region's edge. Opaque blocks deliberately keep theirs — culling those would turn the edge
                     // of the loaded world see-through instead of closing it off with an ordinary wall.
-                    bool drawFace = transparent ? (nb.IsAir && Loaded(nx, ny, nz))
+                    // #1902: water also faces a dry bank plant, and never a wet one (its cell draws the water itself).
+                    bool drawFace = transparent ? (isWater ? OpenForWaterBlock(nb, nx, ny, nz) : nb.IsAir && Loaded(nx, ny, nz))
                         : foliage ? (nb.IsAir || traits.Has(nb, TraitTransparent))
                         : traits.ExposesOpaqueFace(nb);
 
@@ -876,7 +1047,9 @@ namespace BlocksBeyondTheStars.Client
                     // SIDE faces: they'd paint the surface-looking water tile onto an underwater edge — e.g. the
                     // step between deep (swimmable) and shallow water — which looks wrong seen from below (B43).
                     // Only the true top layer (air above) keeps its faces, so the real water surface still shows.
-                    if (drawFace && dir.Y == 0 && (tf & TraitFluid) != 0 && worldBlock(wx, wy + 1, wz).Value == id.Value && !isFallingWater && !isFallingLava)
+                    if (drawFace && dir.Y == 0 && (tf & TraitFluid) != 0
+                        && (isWater ? WaterContinues(wx, wy + 1, wz) : worldBlock(wx, wy + 1, wz).Value == id.Value)
+                        && !isFallingWater && !isFallingLava)
                     {
                         drawFace = false;
                     }
@@ -939,29 +1112,53 @@ namespace BlocksBeyondTheStars.Client
                     // mode 5 = animated molten lava surface; mode 6 = falling-lava flank (vertical hot streak).
                     // Painted faces force mode 0 — a dye tint (mode 3) would luminance-recolour the design.
                     float faceMode = designId != 0 ? 0f : isLavaSurface ? 5f : (isFallingLava && dir.Y == 0) ? 6f : floraFlag;
-                    skyUv.Add(new Vector2(sky, faceMode)); skyUv.Add(new Vector2(sky, faceMode));
-                    skyUv.Add(new Vector2(sky, faceMode)); skyUv.Add(new Vector2(sky, faceMode));
-                    // Coloured block-light reaching the air cell this face looks into (same cell the skylight
-                    // samples) — placed lights illuminate the wall regardless of sun/skylight.
+                    if (designId == 0 && !(hasCap && dir.Y != 0))
+                    {
+                        faceMode += animCode; // #1957 — only a face that shows the block's own tile
+                    }
+
                     Vector3 faceBl = BlockLightAt(nx, ny, nz);
-                    blockLight.Add(faceBl); blockLight.Add(faceBl); blockLight.Add(faceBl); blockLight.Add(faceBl);
+
+                    // #1701: a FLUID's top face lights per CORNER, not per face. Every other block gets its
+                    // edges feathered by per-vertex AO, but transparent faces skip AO entirely and took one
+                    // skylight + one block-light value for all four vertices — invisible on a textured wall,
+                    // glaring on a wide flat water surface, which then read as a grid of block-sized tiles with
+                    // hard borders (a player photographed exactly that in a torch-lit moat). Averaging the four
+                    // cells that meet at each corner makes neighbouring faces agree along their shared edge, so
+                    // the plane lights as one surface. Fluid tops only — nothing else changes.
+                    bool cornerLit = dir.Y == 1 && (isWaterSurface || isLavaSurface);
+                    if (cornerLit)
+                    {
+                        // Corner offsets follow FaceQuad's +Y order: (0,0) (0,1) (1,1) (1,0).
+                        AddCornerLight(skyUv, blockLight, wx, ny, wz, 0, 0, faceMode);
+                        AddCornerLight(skyUv, blockLight, wx, ny, wz, 0, 1, faceMode);
+                        AddCornerLight(skyUv, blockLight, wx, ny, wz, 1, 1, faceMode);
+                        AddCornerLight(skyUv, blockLight, wx, ny, wz, 1, 0, faceMode);
+                    }
+                    else
+                    {
+                        skyUv.Add(new Vector2(sky, faceMode)); skyUv.Add(new Vector2(sky, faceMode));
+                        skyUv.Add(new Vector2(sky, faceMode)); skyUv.Add(new Vector2(sky, faceMode));
+                        // Coloured block-light reaching the air cell this face looks into (same cell the skylight
+                        // samples) — placed lights illuminate the wall regardless of sun/skylight.
+                        blockLight.Add(faceBl); blockLight.Add(faceBl); blockLight.Add(faceBl); blockLight.Add(faceBl);
+                    }
+
                     Vector3 faceBlDir = BlockLightDirAt(nx, ny, nz);
                     blockLightDir.Add(faceBlDir); blockLightDir.Add(faceBlDir); blockLightDir.Add(faceBlDir); blockLightDir.Add(faceBlDir);
                     // Water top faces carry the water-body data instead of the (always-zero-for-water)
-                    // flora tint; only the transparent shader ever reads these vertices. Foam + wave
-                    // amplitude are CORNER-smoothed (x=mode, y=foam, z=amp factor, w=flow axis 0=X/1=Z)
-                    // so they interpolate seamlessly across neighbouring blocks; mode/flow stay per-face.
+                    // flora tint; only the transparent shader ever reads these vertices. Every channel is
+                    // CORNER-smoothed (x = 1 + open, y = foam, z = brook along X, w = brook along Z) so the
+                    // look blends seamlessly across neighbouring blocks. Until #1749 the mode and flow axis
+                    // were per-face hard branches, and a body of varying width — or one full of reeds — drew
+                    // a mosaic of ripple directions and brightness steps.
                     if (isWaterSurface && dir.Y == 1)
                     {
                         // Corner offsets follow FaceQuad's +Y order: (0,0) (0,1) (1,1) (1,0).
-                        var c00 = WaterCorner(id, wx, wy, wz);
-                        var c01 = WaterCorner(id, wx, wy, wz + 1);
-                        var c11 = WaterCorner(id, wx + 1, wy, wz + 1);
-                        var c10 = WaterCorner(id, wx + 1, wy, wz);
-                        leafUv.Add(new Vector4(waterData.x, c00.x, c00.y, waterData.w));
-                        leafUv.Add(new Vector4(waterData.x, c01.x, c01.y, waterData.w));
-                        leafUv.Add(new Vector4(waterData.x, c11.x, c11.y, waterData.w));
-                        leafUv.Add(new Vector4(waterData.x, c10.x, c10.y, waterData.w));
+                        leafUv.Add(WaterCorner(id, wx, wy, wz));
+                        leafUv.Add(WaterCorner(id, wx, wy, wz + 1));
+                        leafUv.Add(WaterCorner(id, wx + 1, wy, wz + 1));
+                        leafUv.Add(WaterCorner(id, wx + 1, wy, wz));
                     }
                     else if (isFallingWater && dir.Y == 0)
                     {
@@ -1028,6 +1225,13 @@ namespace BlocksBeyondTheStars.Client
             // build (worker) thread, because it is pure struct maths — doing it in ToMeshes would put a
             // per-vertex loop back on the main thread right next to the upload.
             data.ColliderHash = ChunkMeshData.HashCollider(colliderVerts, colliderTris); // #1529: on the worker
+            // #1823: which faces see each other through non-opaque cells — the visibility walk's input. A cell blocks
+            // sight only as a plain opaque cube: air, glass, fluids, flora, foliage, props and shaped blocks let it through.
+            data.Connectivity = BlocksBeyondTheStars.Client.ChunkVisibility.ComputeConnectivity((x, y, z) =>
+            {
+                var id = chunk.Get(x, y, z);
+                return traits.ExposesOpaqueFace(id) || chunk.GetShape(x, y, z) != 0;
+            });
             data.Pack();
 
             // Return plain data — the Unity Mesh upload happens in ChunkMeshData.ToMeshes() on the main thread.
@@ -1245,16 +1449,19 @@ namespace BlocksBeyondTheStars.Client
         private static void AddCrossPlant(List<Vector3> verts, List<int> tris, List<Color> colors, List<Vector2> uvs,
             List<Vector4> tangents, List<Vector2> skyUv, List<Vector4> leafUv, List<Vector3> blockLight, List<Vector3> blockLightDir, Vector3 cell, Color col, Rect uv, float sky,
             Color tint, Vector3 bl, Vector3 blDir, Vector2 lean, Vector2 centerJitter, float spinDeg,
-            float heightScale = 1f, float widthScale = 1f, float tintMode = 1f)
+            float heightScale = 1f, float widthScale = 1f, float tintMode = 1f, bool hanging = false)
         {
             // Each plane is a vertical quad through the cell centre, its floor line along a rosette angle; the
             // width scales about the middle and is clamped inside the cell to avoid bleeding into neighbours.
             // An off-centre rosette gives back the room its offset takes (radial bound), so the floor line
             // stays inside the cell — only the existing top lean ever crosses a cell border, as before.
+            // #1759: a HANGING plant is the same rosette mirrored — its root line is the cell's ceiling and the
+            // tip hangs down, with the tile's root end kept at the top (the V axis flips with it).
             float half = Mathf.Clamp(0.42f * widthScale, 0.18f, 0.49f);
             half = Mathf.Min(half, Mathf.Max(0.15f, 0.49f - centerJitter.magnitude));
-            float cx = cell.x + 0.5f + centerJitter.x, cz = cell.z + 0.5f + centerJitter.y, cy = cell.y;
-            var up = new Vector3(lean.x, heightScale, lean.y); // top tilts by the per-plant lean
+            float cx = cell.x + 0.5f + centerJitter.x, cz = cell.z + 0.5f + centerJitter.y, cy = hanging ? cell.y + 1f : cell.y;
+            var up = new Vector3(lean.x, hanging ? -heightScale : heightScale, lean.y); // top tilts by the per-plant lean
+            float vRoot = hanging ? uv.yMax : uv.y, vTip = hanging ? uv.y : uv.yMax;
 
             foreach (float deg in PlantPlaneAngles)
             {
@@ -1277,8 +1484,8 @@ namespace BlocksBeyondTheStars.Client
                         verts.Add(b); verts.Add(a); verts.Add(a + up); verts.Add(b + up);
                     }
 
-                    uvs.Add(new Vector2(uv.x, uv.y)); uvs.Add(new Vector2(uv.xMax, uv.y));
-                    uvs.Add(new Vector2(uv.xMax, uv.yMax)); uvs.Add(new Vector2(uv.x, uv.yMax));
+                    uvs.Add(new Vector2(uv.x, vRoot)); uvs.Add(new Vector2(uv.xMax, vRoot));
+                    uvs.Add(new Vector2(uv.xMax, vTip)); uvs.Add(new Vector2(uv.x, vTip));
                     for (int i = 0; i < 4; i++)
                     {
                         colors.Add(col);
@@ -1305,9 +1512,10 @@ namespace BlocksBeyondTheStars.Client
         private static void AddShapedBlock(List<Vector3> verts, List<int> tris, List<int> colliderTris, List<Vector3> colliderVerts,
             List<Color> colors, List<Vector2> uvs, List<Vector4> tangents, List<Vector2> skyUv, List<Vector4> leafUv, List<Vector3> blockLight,
             List<Vector3> blockLightDir, int shapeIndex, int orientation, int upFace, Vector3 cell, Rect uv, float matR, float matG,
-            float emission, Color tint, float tintMode, float sky, Vector3 bl, Vector3 blDir, float sizeXZ = 1f, float sizeY = 1f)
+            float emission, Color tint, float tintMode, float sky, Vector3 bl, Vector3 blDir, float sizeXZ = 1f, float sizeY = 1f,
+            FaceSlot[] slots = null, BlockTextureAtlas slotAtlas = null, int formCell = 0, float animCode = 0f, Rect ownTile = default)
         {
-            var faces = BlockShapeGeometry.Build(shapeIndex, orientation, upFace);
+            var faces = BlockShapeGeometry.Build(shapeIndex, orientation, upFace, formCell);
             if (faces == null)
             {
                 return;
@@ -1341,33 +1549,33 @@ namespace BlocksBeyondTheStars.Client
                 int n = face.IsQuad ? 4 : 3;
                 verts.Add(a); verts.Add(b); verts.Add(c);
                 colliderVerts.Add(a); colliderVerts.Add(b); colliderVerts.Add(c);
+
+                // #1900: every face carries the slice of the tile it covers (form-local, so it rotates with the form);
+                // a block with texture slots dresses a part's faces with another tile or a stretched region instead.
+                ShapeFaceTextures.FaceUvs(face, uv, slots, slotAtlas, out var uvA, out var uvB, out var uvC, out var uvD);
+                uvs.Add(uvA); uvs.Add(uvB); uvs.Add(uvC);
+                // #1957: a furniture part may be dressed with ANOTHER block's tile (a slot) — such a face must not
+                // be moved onto this block's frame strip. Without slots every face shows the own tile.
+                float faceMode = tintMode;
+                if (animCode != 0f && (slots == null || ownTile.width <= 0f
+                    || (uvA.x >= ownTile.xMin - 0.0005f && uvA.x <= ownTile.xMax + 0.0005f
+                        && uvA.y >= ownTile.yMin - 0.0005f && uvA.y <= ownTile.yMax + 0.0005f)))
+                {
+                    faceMode += animCode;
+                }
+
                 if (face.IsQuad)
                 {
                     verts.Add(d);
                     colliderVerts.Add(d);
-                    if (face.HasUv)
-                    {
-                        // Player-designed forms carry their own tile FRACTIONS (a micro box shows the slice of
-                        // the material it covers); map them into this block's atlas rect.
-                        uvs.Add(InTile(uv, face.UvA)); uvs.Add(InTile(uv, face.UvB));
-                        uvs.Add(InTile(uv, face.UvC)); uvs.Add(InTile(uv, face.UvD));
-                    }
-                    else
-                    {
-                        uvs.Add(new Vector2(uv.xMin, uv.yMin)); uvs.Add(new Vector2(uv.xMin, uv.yMax));
-                        uvs.Add(new Vector2(uv.xMax, uv.yMax)); uvs.Add(new Vector2(uv.xMax, uv.yMin));
-                    }
-                }
-                else
-                {
-                    uvs.Add(new Vector2(uv.xMin, uv.yMin)); uvs.Add(new Vector2(uv.xMax, uv.yMin)); uvs.Add(new Vector2(uv.xMax, uv.yMax));
+                    uvs.Add(uvD);
                 }
 
                 for (int i = 0; i < n; i++)
                 {
                     colors.Add(col);
                     tangents.Add(tan);
-                    skyUv.Add(new Vector2(sky, tintMode));
+                    skyUv.Add(new Vector2(sky, faceMode));
                     leafUv.Add(leaf);
                     blockLight.Add(bl);
                     blockLightDir.Add(blDir);
@@ -1382,10 +1590,6 @@ namespace BlocksBeyondTheStars.Client
                 }
             }
         }
-
-        /// <summary>Maps a 0..1 tile fraction into a block's atlas rect (player-designed form UVs).</summary>
-        private static Vector2 InTile(Rect uv, Vector2 fraction)
-            => new Vector2(uv.xMin + fraction.x * uv.width, uv.yMin + fraction.y * uv.height);
 
         /// <summary>Deterministic "does this hull face carry a greeble panel" test (~1/3 of faces), stable per
         /// world cell + face so a ship looks the same on every client and across rebuilds.</summary>
@@ -1462,10 +1666,12 @@ namespace BlocksBeyondTheStars.Client
         /// y=metal (0 dielectric .. 1 metal — metals tint their highlight + reflection by the albedo).
         /// Ice/glass/crystal are glossy, hull/ore metals reflective, soils matte.
         /// </summary>
-        /// <summary>True for plant foliage that takes the planet's uniform flora hue (B38): the small flora
-        /// plants (block key "flora_*") and tree crowns ("tree_leaves"). The server's flora colour is "one hue
-        /// for all of a planet's plant life", so leaves recolour per planet too; the wood_log trunk keeps its
-        /// natural bark colour.</summary>
+        /// <summary>True for plant foliage the block shader re-tints: the small flora plants (block key
+        /// "flora_*") and tree crowns ("tree_leaves" …). Each species carries its own per-world colour
+        /// (FloraTints.For, mesh tint mode 1); a face without one falls back to the world's base hue
+        /// (FloraTints.ForWorld, shipped by the server). Farmed crops are flora here (collision, exposure, the
+        /// upper vegetation layer) but are NOT tinted — see TraitCultivated (#1716). The wood_log trunk takes
+        /// its own dark bark hue (mode 4).</summary>
         private static bool IsFloraBlock(GameContent content, BlockId id) => TraitsFor(content).Has(id, TraitFlora);
 
         private static bool IsFloraBlockSlow(GameContent content, BlockId id)
@@ -1473,7 +1679,7 @@ namespace BlocksBeyondTheStars.Client
             var key = content.BlockById(id)?.Key;
             return key != null
                 && (key.StartsWith("flora_", System.StringComparison.Ordinal)
-                    || key == "tree_leaves" || key == "pine_needles" || key == "palm_frond");
+                    || key == "tree_leaves" || key == "pine_needles" || key == "palm_frond" || key == "giant_leaves");
         }
 
         /// <summary>True for the tree trunk (wood_log): the block shader recolours it with a per-world DARK
@@ -1482,26 +1688,19 @@ namespace BlocksBeyondTheStars.Client
         private static bool IsWoodBlock(GameContent content, BlockId id) => TraitsFor(content).Has(id, TraitWood);
 
         private static bool IsWoodBlockSlow(GameContent content, BlockId id)
-            => content.BlockById(id)?.Key == "wood_log";
+            => content.BlockById(id)?.Key is "wood_log" or "giant_log";
 
-        // Tall cross-billboard flora (an upper vegetation layer above the low ground cover). MUST mirror the
-        // FloraHeight.Tall, non-solid entries in FloraCatalog. Solid/cube flora ignore height, so they're absent.
-        private static readonly HashSet<string> TallFlora = new HashSet<string>
-        {
-            "flora_fern", "flora_vine", "flora_reed", "flora_thornbush", "flora_kelp", "flora_seagrass",
-            "flora_tendril", "flora_alienfern", "flora_palm", "flora_grasstuft", "flora_icereed", "flora_saltgrass",
-            "flora_cropgrain", // farmed cereal (#1204) — stands as tall as the wild grass tuft
-        };
+        // Tall cross-billboard flora (an upper vegetation layer above the low ground cover) and the structural /
+        // solid / glowing-cap flora that read better as solid cubes (everything else leafy, plus tree crowns,
+        // gets the alpha-cutout leaf look). #1721: both sets come from the ONE catalog (FloraCatalog.Species
+        // .Height / .Solid) — they used to be hand-mirrored here, and a species added to Shared without a
+        // client edit rendered at the wrong height or as a cutout with no baked mask. A server test holds
+        // bake_leaf_alpha.py's FOLIAGE list to the same catalog.
+        private static readonly HashSet<string> TallFlora =
+            new HashSet<string>(BlocksBeyondTheStars.Shared.Definitions.FloraCatalog.TallKeys());
 
-        // The structural / solid / glowing-cap flora that read better as solid cubes — everything else
-        // leafy (plus tree crowns) gets the alpha-cutout leaf look. MUST match bake_leaf_alpha.py's FOLIAGE.
-        private static readonly HashSet<string> SolidFlora = new HashSet<string>
-        {
-            "flora_cactus", "flora_crystal", "flora_succulent", "flora_mushroom", "flora_puffball",
-            "flora_pitcher", "flora_glowcap", "flora_emberbloom", "flora_sporepod", "flora_glowvine",
-            "flora_bulb", "flora_gasbloom", "flora_shardbloom", // item 21 V3 alien flora (bulbous/crystalline)
-            "flora_cropshroom", // farmed mushroom bed (#1204) — a cap dome like the wild mushroom
-        };
+        private static readonly HashSet<string> SolidFlora =
+            new HashSet<string>(BlocksBeyondTheStars.Shared.Definitions.FloraCatalog.SolidKeys());
 
         /// <summary>True for foliage that renders with alpha-cutout leaves (holes punched into the tile):
         /// tree crowns + leafy/flowering plants. The leaf tiles carry a baked alpha mask; the block shader
@@ -1522,7 +1721,7 @@ namespace BlocksBeyondTheStars.Client
                 return false;
             }
 
-            return key == "tree_leaves" || key == "pine_needles" || key == "palm_frond"
+            return key == "tree_leaves" || key == "pine_needles" || key == "palm_frond" || key == "giant_leaves"
                 || (key.StartsWith("flora_", System.StringComparison.Ordinal) && !SolidFlora.Contains(key));
         }
 
@@ -1604,7 +1803,7 @@ namespace BlocksBeyondTheStars.Client
         {
             "flora_cactus" or "flora_pitcher" or "flora_sporepod" or "flora_glowvine" => 8, // cylinder (columns)
             "flora_crystal" or "flora_shardbloom" or "flora_emberbloom" or "flora_frostflower" => 7, // cone (shards)
-            "flora_mushroom" or "flora_glowcap" or "flora_cropshroom" => 3, // dome (caps)
+            "flora_mushroom" or "flora_glowcap" or "flora_cropshroom" or "flora_cavecap" => 3, // dome (caps)
             _ => 4, // sphere (puffball, succulent, bulb, gasbloom, …)
         };
 
@@ -1677,6 +1876,22 @@ namespace BlocksBeyondTheStars.Client
                 default: return 0f;
             }
         }
+
+        /// <summary>Whether the project renders in Linear space — captured on the main thread (GameBootstrap) because the
+        /// mesher may run on a worker, where Unity's QualitySettings must not be touched.</summary>
+        internal static volatile bool LinearColorSpace;
+
+        /// <summary>A rainbow-class plant's own colour (generation 11) as the value the block shader multiplies: the
+        /// sRGB hue of <see cref="FloraTints.RainbowAt"/>, converted like <c>ShaderColor.Srgb</c> converts the
+        /// per-species tints (by hand, so it is safe off the main thread).</summary>
+        private static Color RainbowTint(int x, int y, int z)
+        {
+            var (r, g, b) = FloraTints.RainbowAt(x, y, z);
+            return LinearColorSpace ? new Color(SrgbToLinear(r), SrgbToLinear(g), SrgbToLinear(b)) : new Color(r, g, b);
+        }
+
+        private static float SrgbToLinear(float c)
+            => c <= 0.04045f ? c / 12.92f : (float)System.Math.Pow((c + 0.055) / 1.055, 2.4);
 
         /// <summary>Converts a 0xRRGGBB integer to a linear-ish UnityEngine.Color (0..1 per channel).</summary>
         private static Color RgbToColor(int rgb)
@@ -1945,6 +2160,9 @@ namespace BlocksBeyondTheStars.Client
         private const uint TraitFlowerPot = 1u << 17;
         private const uint TraitFire = 1u << 18;
         private const uint TraitExposesOpaqueFace = 1u << 19; // transparent | flora | foliage | slim prop (air handled by the caller)
+        private const uint TraitCultivated = 1u << 20;        // #1716: a farmed crop — flora that keeps its authored colour (no tint mode)
+        private const uint TraitHangingFlora = 1u << 21;      // #1759: a plant rooted in the block ABOVE — the billboard grows downward
+        private const uint TraitRainbowFlora = 1u << 22;      // generation 11: every plant its own colour (FloraTints.RainbowAt)
 
         private sealed class BlockTraits
         {
@@ -1985,6 +2203,9 @@ namespace BlocksBeyondTheStars.Client
                     if (key != null && key.StartsWith("flora_", System.StringComparison.Ordinal)) f |= TraitFloraPrefix;
                     if (key != null && TallFlora.Contains(key)) f |= TraitTallFlora;
                     if (key != null && SolidFlora.Contains(key)) f |= TraitSolidFlora;
+                    if (key != null && BlocksBeyondTheStars.Shared.Definitions.FloraCatalog.IsCultivated(key)) f |= TraitCultivated;
+                    if (key != null && BlocksBeyondTheStars.Shared.Definitions.FloraCatalog.IsHanging(key)) f |= TraitHangingFlora;
+                    if (key != null && BlocksBeyondTheStars.Shared.Definitions.FloraCatalog.IsRainbow(key)) f |= TraitRainbowFlora;
                     if (key == "water") f |= TraitWater;
                     if (key == "lava") f |= TraitLava;
                     if (key == "fire") f |= TraitFire;
@@ -2347,6 +2568,10 @@ namespace BlocksBeyondTheStars.Client
         /// the one the chunk already carries (tint/glow/paint edits, neighbour re-dirties). 0 = not computed.</summary>
         public ulong ColliderHash;
 
+        /// <summary>#1823: face-to-face connectivity through non-opaque cells (see <c>ChunkVisibility</c>), computed on
+        /// the worker. Not part of the mesh; GameBootstrap feeds it to the visibility walk.</summary>
+        public ushort Connectivity = BlocksBeyondTheStars.Client.ChunkVisibility.AllConnected;
+
         public static ulong HashCollider(List<Vector3> verts, List<int> tris)
         {
             ulong h = 14695981039346656037UL;
@@ -2408,6 +2633,7 @@ namespace BlocksBeyondTheStars.Client
                 BlockLight.Clear(); BlockLightDir.Clear(); Tangents.Clear(); Normals.Clear(); Scatter.Clear();
                 PackedCount = 0; // the array itself stays — it is the buffer the next build packs into
                 ColliderHash = 0;
+                Connectivity = BlocksBeyondTheStars.Client.ChunkVisibility.AllConnected;
                 Bounds = default;
                 ColliderBounds = default;
                 _pooled = true;

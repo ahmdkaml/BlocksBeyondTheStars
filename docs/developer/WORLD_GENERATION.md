@@ -39,7 +39,10 @@ SEED
 Built by [`UniverseGenerator.cs`](../../src/BlocksBeyondTheStars.WorldGeneration/UniverseGenerator.cs).
 The data shapes are in [`Galaxy.cs`](../../src/BlocksBeyondTheStars.Shared/World/Galaxy.cs).
 
-- **~8 star systems** per galaxy (`StarSystemCount`), each with a random 2D star-map position.
+- **12 star systems** per galaxy by default (`StarSystemCount`, #1616), each with a random 2D star-map
+  position. The launcher's Universe-size tiers send 6 / 12 / 20 / 32 (Small / Normal / Large / Huge, #1615);
+  "Growing" starts at 12 and appends systems at the frontier (#1123, soft cap 48). The CLI clamps
+  `--systems` to 1..32. The galaxy is metadata only — a system costs nothing until a player is in it.
 - Per system: **2–6 planets**, each with **0–3 moons**, plus **2–3 landable asteroids** and (rarely)
   **1–3 space stations**.
 - Each asteroid rolls one of five **families** (#515) — `asteroid` (stony), `asteroid_metallic`,
@@ -190,13 +193,15 @@ same planet type rolls gentle on one world and jagged on the next. A **~6 % tail
 
 **d) Landmark landforms** (#477/#577/#578) — sparse discrete features on a deterministic hotspot-cell
 grid, at most **one per column** (precedence volcano > massif > table mountain > rift): volcano cones
-with molten craters, rare **massifs** (+120–220, ridged flanks, snow/ice summits), flat-topped
+with molten craters (on every non-cratered body since #1631 — a lava core — and lifted into **volcanic islands** where the centre lies under a sea), rare **massifs** (+120–220, ridged flanks, snow/ice summits), flat-topped
 **table mountains** (radius 40–120, near-vertical walls) on dry rocky-reading worlds, and **rift
 chasms** (50–130 deep, fjord-flooded below sea level). `SurfaceHeight` clamps everything at **Y 288**,
 safely under the ~Y 320 atmosphere line.
 
 **e) Overriding shapes** — `TerrainStyle` (mesa, **tablelands**, dunes, **badlands**, spires,
-**karst**, flats… — the bold three are #579), `Cratered` (flat regolith + impact craters for airless
+**karst**, flats… — the bold three are #579; generation-1 worlds roll 1–3 styles from a per-type
+`terrainStyles` pool and lay them out as regions, with seven more styles — §12.1), `Cratered` (flat
+regolith + impact craters for airless
 bodies), and `FloatingIslands`. A cratered body skips (c) and (d) entirely and instead rolls a
 **`CraterProfile`** from its own body seed (#518): crater density, basin width, depth (5–12 blocks),
 rim height and how rolling the regolith between craters is — so one rock is a pounded ruin and the
@@ -255,10 +260,16 @@ worlds of the same planet type grow different species) by
 [`TreeGenerator.cs`](../../src/BlocksBeyondTheStars.WorldGeneration/TreeGenerator.cs):
 
 - **Catalogue:** 33 fixed flora archetypes (`FloraCatalog.All`).
-- **World roster:** each archetype is activated with `ActivationChance(theme, tags)` — **85 %** when
-  its climate tags match the world's theme, **40 %** otherwise. Each active species gets a
-  procedurally coined **name** and is **toxic with 30 % probability**. `EnsureCoverage` then
-  force-activates a minimum so no used surface and no sea ever goes bare.
+- **World roster:** each archetype is activated with `ActivationChance(preferred, tags)` — **85 %** when
+  its climate tags match the world's preferred tags, **40 %** otherwise. Up to generation 3 the preferred
+  tags are the planet theme's alone; from **generation 4** (#1715, `BiomeThemeRosterGeneration`) they are
+  the union of the planet theme and every biome theme in the type's pool, so a `varied` world's swamp and
+  desert biomes draw from a pool their own themes shaped (the planet-only roll thinned it to 40 % and
+  `PickWeight` could not add back what was never activated). Each active species gets a procedurally
+  coined **name** and is **toxic with 30 % probability**. `EnsureCoverage` then force-activates a
+  minimum so no used surface and no sea ever goes bare. The roster seed is
+  `WorldGenerator.RosterSeedFor(seed, locationId)` — one function shared by worldgen and the server's
+  scan lookups (#1722).
 - **Per biome:** `FloraForSurface` only draws from active species whose host surface matches the
   biome's surface block, weighted by theme (preferred species count 4:1). In practice **a handful of
   species per biome** (typically ~3–7 land plants on that biome's ground block) plus aquatic species
@@ -301,7 +312,20 @@ live by `GameServerCreatures.cs`.
   **Medusa** (25 % of Air/Water species) — translucent pulsing bell, 6–10 rim tentacles, drifting,
   usually glowing, never hostile, per-species hover altitude 3–12; **Titan** (18 % of Land species) —
   size 3.5–6, pillar legs, neck (≥2 segments reads giraffe) or trunk, horns worn as tusks, HP ×3.5,
-  drops 3–6, dangerous when provoked but never a pack-hunter. Everything else stays **Standard**.
+  drops 3–6, dangerous when provoked but never a pack-hunter; **Arachnid** (#2009, generation 10 —
+  1 in 12 standard Land species, rolled LAST in `MakeSpecies` so older rosters are untouched) — size
+  3.0–3.6 (about the speeder hull) on eight legs in four rows, cephalothorax + abdomen, a head that is a
+  box (50 %) or one of four apex-up pyramids (`CreatureHeadShape`: Pyramid / Spire / Frustum / Ziggurat),
+  2/4/6/8 eyes, fangs on most, a hide from chitin / plated / spined / banded / shaggy / mottled, HP ×2.5,
+  speed 2–4, the gait re-rolled for the body, solitary unless a pack hunter; temperament, activity and
+  colours stay the normal roll, and a hunting or territorial one **lies in wait** (`ArachnidRules.Lurks`).
+  Everything else stays **Standard**.
+- **Fins:** legless water and amphibian bodies almost always carry pectoral, caudal and dorsal fins
+  (a legged water species sometimes does; a medusa never). Like the voice seed, this is **derived
+  rather than drawn** — `CreatureMotion.FinsFor` folds the species' own seed, so it consumes no RNG
+  and existing worlds keep their species bit-for-bit. Because the derivation reads only persisted
+  fields, a companion snapshot saved before fins existed is lifted on load. See
+  [CREATURE_RIG.md](CREATURE_RIG.md).
 - **Social species (#639):** each species rolls a `SocialGroupSize` (1 = solitary): titan herds 2–4,
   schooling water species 3–5, some flocks of fliers 2–4, occasional grazer pairs/trios. The spawner
   places the whole group together (4–8 blocks apart, each member habitat-gated and cap-counted), and
@@ -315,10 +339,15 @@ live by `GameServerCreatures.cs`.
   region B's violet-ish on the same world.
 
 **Live spawning:** a dynamic world cap (scaled by circumference × abundance × √players; a lush big
-world reaches ~25–45, backstopped by a safety ceiling of 64 — #470), ring placement 18–45 blocks out
-(two rotors: the ring slot advances on every attempt, the species on success), habitat gates (water animals only in
-water columns, cave animals only in caves; titans additionally need a 3×3 level-ground clearance),
-despawn beyond 70 blocks (titans 110 — a landmark animal must not evaporate mid-approach). **No
+world reaches ~25–45, backstopped by a safety ceiling of 64 — #470; the tick's fill gate and cadence read
+the clamped value too, #1717, or a world modelling above 64 spun in the fast fill forever), ring placement 18–45 blocks out
+(two rotors: the ring slot advances on every attempt, the species on success; the player who gets the next
+spawn rotates on the wild count, #1720), habitat gates (water animals only in
+water columns — the water and lava probes read **real blocks first** and the generator only for unloaded
+columns, so a pool the player built hosts a school and a drained pond does not, and every herd member
+runs the same probe from its own spot, #1718; cave animals only in caves — the cave-floor and shoreline
+probes never load a chunk, #1719; titans additionally need a 3×3 level-ground clearance),
+despawn beyond 70 blocks (titans and arachnids 110 — a landmark animal must not evaporate mid-approach). **No
 monoculture (#1325):** each species may hold at most a **share** of the live cap — 40 %, never below 3,
 never below cap ÷ roster size — a herd counts its members against it and spawns partially (as against
 the world cap), and a species OVER its share (the cap shrank, an older save) sheds its farthest members
@@ -565,3 +594,1155 @@ mega-caverns (`TryGetCavernSpan`, water/lava lakes, crystal-studded floors).
 hotspot cell (xorshift, capsule y-spans per column) — noodle tunnels, wider lava tubes on volcano
 worlds, skylight shafts, and real cave MOUTHS (tunnels may break the surface). River waterfall
 columns incise a plunge-pool slot; ≤ −8 °C worlds grow crevasse fields.
+
+---
+
+## 12. Terrain generation 1 — the landscape-variety package (#1644–#1649, 2026-09)
+
+Six parts, one worktree, merged in order. Part 1 (#1644) is the **invisible** foundation; every visible
+change from part 2 on gates on the world's generation number and reaches **new worlds only**.
+
+**The switch — `WorldDescription.TerrainGeneration` (int).** 0 = every world created before the package
+(the classic generators; the load-safe default, like `TerrainContinents`); 1 = the 2026-09 package.
+`ServerConfig`'s creation-time description carries `WorldDescription.CurrentTerrainGeneration`; the CLI
+`--terrain-generation N` is the escape hatch (0 = classic). The launcher ALWAYS sends it
+(`WorldCreationOptions.TerrainGeneration`, the one non-default-only exception in `ToArgs`): it pins the
+new world to the generation the client bakes its previews with, so a server whose default moved on still
+creates the world the previews show; the world-options structures page lists it read-only under "Galaxy
+& terrain". The server applies it via `WorldGenerator.SetTerrainGeneration` before any height query and
+hands it to the client in `JoinAccepted.TerrainGeneration`, so the minimap / sky-body / space-view
+preview bakes use the same generation. One integer instead of one bool per wave: a later wave is a
+single `>=` compare.
+
+**Terrain tags — `PlanetType.TerrainTags` → `TerrainTag` flags.** The generator no longer gates any
+landform family on a planet-type KEY or on the style string: `volcanic` (lava rivers, basalt column
+fields, volcanic vents, basalt continents in a lava ocean), `salt` (salt polygons), `buttes` (table
+mountains + arches), `hoodoos`, `crystal` (shard props) reproduce the former `lava` / `ashen` /
+`salt_flats` / `savanna` / `varied` exceptions and style lists exactly (`planets.json` carries the tags;
+`TerrainTagsAndGenerationTests` proves the equivalence for all types). `wind`, `wetland`, `glacial`,
+`inselbergs` are reserved for the later parts. A new data-only type opts into any family by tag.
+
+**The landmark table — `LandmarkKinds`.** One row per landform family: `(name, active-gate,
+offset delegate, optional paint delegate)`. `WonderFor` resolves the active rows once per world into
+`WonderProfile.ActiveLandmarks` / `ActivePaints`; `SurfaceHeightUncached` loops the offsets (table
+order = precedence, first non-zero overlay wins — exactly the former if-chain) and `ComputeColumn` runs
+the paints after the classic ones. Adding a family = one row + its `Has*` / `*Offset` methods in a
+partial file; the height and column code never change.
+
+**The prop table — `PropKinds`.** The set-dressing stamp is table-driven the same way: `(name, salt,
+hash row, chance, material, shape)`, tried in table order per column, first hit wins (monolith >
+stone circle > boulder > crystal shard > dead tree, same salts as before). Adding a prop = one row +
+one shape method.
+
+**The file layout.** `WorldGenerator.cs` is split into partials by seam — `.Relief` (archetypes, styles,
+drama, grain, continents, the regional blend), `.Landmarks`, `.Overhangs`, `.Underground`, `.Craters`,
+`.Calibration`, `.Fluids`, `.Columns` (Generate + the per-column profile), `.Stamps`, `.Biomes`,
+`.Flora`. Pure moves; the core file keeps the constructor, the mode setters, the per-world profile and
+`SurfaceHeight`.
+
+### 12.1 Part 2 — relief variety (#1645, generation ≥ 1)
+
+Everything below reads `w.Generation >= 1`; a generation-0 world takes the classic value at every step
+(single type style, the type's `TerrainScale`, no multipliers, no regimes), so the eight classic golden
+groups stay byte-identical while three new groups (`varied-gen1`, `desert-gen1`, `highland-gen1`) pin the
+generation-1 relief.
+
+**Style pools, regionally mixed — `PlanetType.TerrainStyles`.** A styled type lists a pool
+(desert `[dunes, badlands, flats, downs]`, highland `[mountains, fjordlands, canyons]`, ocean
+`[flats, archipelago]`, tundra `[hills, downs, drumlins]`, …; 16 types carry one). `WonderFor` rolls 1–3
+of them per body (25 % / 45 % / 30 %, seeded Fisher–Yates like the biome subset) into
+`WonderProfile.Styles`. `StyleOffset` partitions the surface with a broad field (`Scale × 8`) into
+contiguous style regions — 70 % of each region is one pure style, the 30 % boundary band smoothstep-blends
+the two neighbours' OFFSETS (the archetype blend's method; decks and spires cannot be blended as
+parameters). The #703 hybrid fade stays on top and runs on every multi-style world; identity styles
+(`flats`, `spires`) stay pure only as the sole pick. An empty pool keeps the single `TerrainStyle`.
+
+**Per-world scale — `WonderProfile.Scale`.** `TerrainScale × 0.75–1.35`, one roll per body. Every relief
+field (base swell, styles, archetypes, the hybrid and region fields) reads `w.Scale`; the biome, forest
+and pond masks keep `planet.TerrainScale` so flora patch sizes do not move.
+
+**Biome relief — `Biome.ReliefMul`.** Multiplies the style/archetype relief (never the baseline or a
+landmark) under a biome: mud 0.35, sand 0.8, stone/granite 1.3–1.5 in `planets.json`. Read through the
+biome REGION field alone (`ReliefMulAt`, the same FBM `BiomeIndex` spreads, without its altitude share),
+so relief cannot feed back into its own multiplier; a ±10 % band around each region boundary lerps the
+two multipliers. `WonderProfile.ReliefMuls` is null (no extra sample) when no resolved biome differs from 1.
+
+**New styles** (cases in `StyledHeightOffset`): `archipelago` (flats + one island dome per 120-block
+hotspot cell, 60 % of cells, r 25–60), `fjordlands` (mountains with deep broad troughs that flood into
+fjords), `downs` (very smooth at `Scale × 2.5`), `shattered` (2–3 straight rifts per 900-block cell at
+fixed angles, 2.2 × amplitude deep), `terraces` (mesa quantisation, fine step, no roll), `drumlins`
+(rounded whalebacks along the grain), `glacial` (broad U-troughs along the grain). `KnownTerrainStyles`
+lists every style name; a test checks every pooled name against it.
+
+**Archetype pool 8 → 11.** `ArchetypePoolFor(w)` returns 11 from generation 1 — `moorland` (flats with
+pans the pond mask fills), `knob-and-kettle` (dense domes and pits), `coastal cliffs` (a relief step
+where the swell crosses zero). The subset roll depends on the pool size, so it stays 8 on generation 0.
+
+**Baseline regimes** (`WorldGenerator.Regimes.cs`, part of the baseline like the escarpment): `tilted`
+(~8 %, a latitude sine of 20–40 blocks — one hemisphere high, one low), `stepped` (~3 %, a second
+escarpment at its own latitude → three storeys; the first escarpment is forced on), `equatorial ridge`
+(~3 %, a 30–60-block wall 24–44 wide girdling the planet along X, meandering like the mega-rift).
+Never on sky, void or cratered worlds.
+
+### 12.2 Part 3 — landmark families, overhang bands, underground finds (#1646, generation ≥ 1)
+
+`WorldGenerator.LandmarksGen1.cs`. Every family is a hotspot-cell feature on the #477 recipe and gates on a
+profile flag that `WonderFor` only sets on generation-1 worlds, so the classic table order and every
+generation-0 world are untouched. The new rows are appended after `mega-rift` in footprint order (largest
+first): `shield-volcano` (r 200–400, h 20–40, a 6-deep summit bowl for part 4's lava lake; volcanic tag or a
+quarter of volcano worlds), `impact-basin` (r 120–250, 20–35 deep, raised rim; floods where it dips under the
+sea), `glacial-trough` (U-valley 25–45 deep whose floor slopes to one end; `glacial` tag or ≤ −5 °C),
+`yardangs` (grain-aligned rock ridges 6–12 tall inside a round field; `wind`), `drumlin-field` (rounded
+whalebacks; `glacial`, unless the world rolled the drumlins style), `inselberg` (granite dome r 60–150,
+h 40–90 with a granite paint delegate; `inselbergs`), `star-dunes` (pyramidal dune 15–30 tall with 3–5 arms;
+`wind` + sand), `mud-volcanoes` (fields of 3–6-tall cones on wet volcano worlds), `sinkhole-chain` (3–5
+sheer shafts along a line; cenote worlds), `maar` (bowl r 20–40, 8–14 deep with a low rim; the lake is part
+4), `mushroom-rock` (a 5–8 stem under a wide cap band; buttes worlds), `glacier-tongue` (paint only: ice on
+one flank sector of a cold massif). Tags in `planets.json`: `inselbergs` on rocky/savanna/desert/tablelands,
+`wind` on desert/tablelands/badlands/salt_flats, `glacial` on ice/tundra.
+
+**Bands** (`GetExtraBands`, `MaxColumnBands` 6 → 8): a natural bridge over a rift (1–2 rolled points per
+gorge, a 3-thick deck at the pre-rift rim ground, `TryGetRiftGeometry` repeats the rift's rolls so the classic
+`RiftOffset` stays byte-identical), a wave-cut coastal ledge (a 2-thick band just above the waterline on a
+shallow-water column next to ground 4+ above the sea, half of all such coasts by mask), ice cornices (a
+2-thick lip at crest level on a column 3 from a crest that stands 6+ higher, inside sparse regions of the
+coldest worlds), and the mushroom-rock cap.
+
+**Underground:** crystal geodes (hollow spheres r 6–14, 30–80 below base, crystal shell 1.6 thick, the
+interior air — `TryGetGeodeSpan` in the column profile, filled before caves and tunnels), aquifer caverns (on
+wet generation-1 worlds seven of eight mega-caverns hold a lake that fills most of the bowl), sediment strata
+(inside a 420-block region mask the upper crust between the topsoil and 48 deep carries tilted granite bands,
+2 of every 7 cells; ores keep their cells; sandstone replaces granite once part 4 ships the block).
+
+### 12.3 Part 4 — new blocks, water / lava bodies, surface paints (#1647, generation ≥ 1)
+
+**Blocks.** `moss_stone`, `tar`, `bone`, `sandstone`, `scree` (category terrain, each with a material item that
+places it, EN/DE names + descriptions, the other locales via `translate_locale.py`, AI-generated 64-px tiles
+bundled as `client/Assets/Resources/textures/<key>.bytes`, listed in NOTICES). `moss_stone`, `sandstone`,
+`scree`, `bone` join the curated dye/shape set (`GameContent.TintableDefaults`) like granite; the editors list
+every placeable block by category, so all five appear in the structure and ship editors without a code
+change. Numeric block ids are assigned alphabetically at content load, so adding a block shifts every later
+id: saves remap through the persisted block palette, and the worldgen goldens now hash block KEYS instead
+of raw ids (`WorldGenerationGoldenTests.HashChunk`) — the classic groups' terrain is unchanged, only their
+pin values moved. Sediment strata (§12.2) use sandstone now that the block exists.
+
+**Bodies — `WorldGenerator.FluidsGen1.cs`, `TryGetGen1Water`.** ONE function decides the generation-1
+bodies for a surface column no classic body (sea, pond, crater, river, travertine pool, cenote pool) claims;
+the column phase fills what it returns and the helper queries (`TryGetRawWaterColumn` → `TryGetWaterSurface`
+/ `IsSurfaceWater`, `TryGetLavaSurface`, the new `SurfaceGen1WaterDepth` the tree / prop stamps read) call
+the same function, so they agree by construction (`LandscapeFluidsPaintsTests` samples thousands of columns
+on four world types). Fixed order, first hit wins: marsh sheets (`wetland` tag, water ≥ 0.4: inside a broad
+marsh region on slope ≤ 2, a 9-block mask alternates 1-deep water with mud — the reed host), oases (dry
+sand worlds: a 6–14-radius pond 1–3 deep per 900-block cell, a grass ring, palms — `OasisPalmFringeAt`
+makes `StampTrees` grow dense palms there), hot springs (wet volcano worlds: 1–3 pools r 2–4 with a basalt
+crust), caldera lakes (the ring caldera's interior to 60 % of its basin; lava on dry volcanic worlds),
+shield-volcano summit lakes (lava, or water where there is no lava block), maar lakes, playas (salt-painted
+desert flats, the wettest tenth a film of water), tarns (the glacial trough's deep end). Lava rivers already
+route on every `volcanic` type since #1644 (a probe test now proves it).
+
+**Paints — `Gen1SurfacePaint`,** on plain dry land after the beach paint and before the snow line: marsh
+mud, oasis grass ring, hot-spring crust, playa salt; then scree where the surface slope exceeds 6 and bare
+deep rock above 10 (`SurfaceSlope`, four memoised neighbours), ash fall on the skirt from a volcano's cone
+foot to 1.5 radii (dithered), dry riverbeds on dry worlds (a ridged channel mask → scree on rock ground,
+sand elsewhere), deck banding on mesa / tablelands / terraces worlds (every third 6-block deck sandstone,
+every other third granite), soil patches in grass biomes, moss stone on the rock of temperate wet worlds.
+
+### 12.4 Part 5 — props, micro-ruins, tree kinds, giant flora (#1648, generation ≥ 1)
+
+`WorldGenerator.StampsGen1.cs`. **Prop rows.** `PropKind` gained an optional per-world `Gate`, a fixed
+`MaterialKey` and a `SecondaryKey`; the classic five rows keep their salts, order and material rule, the 16
+generation-1 rows are appended (table order = precedence) and gate on the generation plus a theme / tag /
+climate rule: fallen logs (wooded worlds), termite mounds (savanna theme), cairns (≤ 5 °C), bone piles and
+**rib cages** (dry worlds; the rib cage is 7 across and raises the set-dressing scan margin 6 → 8 — a column
+7–8 away never wrote into the chunk before, so classic output is unchanged), ice boulders (≤ −5 °C), lava
+spatter (`volcanic`), coral outcrops (wet worlds, on the dry strip within 2 above the waterline), crystal
+clusters (`crystal`), meteorites (airless bodies, iron ore), tar pools (dry `buttes` / `wind` flats), and the
+micro-ruins — wall fragment, buried pillar (ancient brick), crashed probe (iron wall + glass), abandoned
+mining rig (machine block + pipe), lone rune stone — each rolling a data cache 30–50 % of the time.
+Rows fill air only, never carve. `PropActiveForTest` / `PropRollForTest` expose gate + roll.
+
+**Trees.** `TreeKind` gained Baobab (2×2 trunk, flat crown), Mangrove (stilt roots; falls back to a
+broadleaf where no water lies within 4 — `NearWater`), Bamboo (a grove of 3–6 stems 8–12 tall), Saguaro (a
+green column with arms, built from the leaf block; allowed on sand like palms), Willow (a broad crown
+dripping strands), MushroomTree (mushroom stem + cap), CrystalTree (crystal shaft + cross). A theme lists
+them in `TreesGen1`; `Theme.PaletteFor(generation)` hands generation-0 worlds the classic `Trees`, so their
+woods never change. Palettes: temperate + willow; tropical + mangrove, bamboo; savanna + baobab; desert +
+saguaro; swamp + willow, mangrove; alien + mushroom tree, crystal tree. Every kind stays inside the stamp
+envelope (|dx|, |dz| ≤ 4, height ≤ 18 — `BuildTreeForTest`).
+
+**Giant flora.** `GiantFloraKinds` is the host-block table the giant-mushroom recipe generalises to:
+giant fern on mud (log stem, a fan of leaf fronds), giant crystal on crystal ground, giant cactus on sand
+(leaf block, two arms) — each with its own salt and density; `StampGiantFloraGen1` runs after the classic
+mushroom stamp, which is untouched.
+
+### 12.5 Part 6 — eight planet types, six monuments, structures on rugged ground (#1649)
+
+**Planet types (data only, `planets.json` + locales + name flavours):** `red_desert` (badlands / dunes /
+terraces, `buttes hoodoos wind inselbergs`, sandstone sub-surface), `boreal` (conifer woods, bogs, drumlins,
+`glacial`), `archipelago` (water 0.9, `archipelago` style, mangrove shores, `wetland`), `glacier` (ice,
+`glacial` style, −45 °C, exotic), `meadowlands` (chalk downs, temperate meadows), `ashen_ocean` (basalt
+world with a lava ocean 0.9 + `volcanic` → basalt continents in a lava sea — possible since the `volcanic`
+tag replaced the lava/ashen key check in part 1; exotic), `dust_bowl` (dry flats with a scree biome, dead
+trees, `wind buttes`), `frozen_ocean` (water 0.9 at −40 °C → a walkable ice sea with rocky islands).
+Spawn weights 4–7 so the classic types keep dominating; `NameGenerator.PlanetFlavors` borrows each type's
+nearest classic flavour; `WorldMetadata.BodyPlanetTypes` (#468) pins every body's type, so old saves never
+re-roll into the new types — and `PlanetType.MinTerrainGeneration` (`"minTerrainGeneration": 1` on the
+eight) keeps them out of the classic weighted roll altogether, so `UniverseGenerator` produces the same
+layout (ids, body counts, names, every rng draw) for every description as before
+(`GalaxyLayoutRegressionTests`). On a generation-1 description `ApplyGenerationTypes` then retypes ~18 %
+of the planets and moons outside the start system into the new types, deterministically per body, never
+the galaxy's first breathable planet (the server's start-body rule): the start world and its neighbourhood
+stay as they were, the new kinds are found further out. A retyped body keeps its classic-flavoured name. The content cross-check test walks every type: blocks, ores, biome blocks,
+styles, tags, theme, EN/DE name + description.
+
+**Monuments.** `MonumentGenerator.ArchetypesGen1` = the classic five + `bridge` (abutment piers, a
+corbelled 9–13 span with parapets, the deck partly fallen), `watchtower` (4×4 hollow tower 10–14 tall,
+doorway, arrow slits, jagged top), `tomb` (stepped mound with a walk-in chamber and a rune sarcophagus),
+`ziggurat` (three tiers, a stair ramp, a shrine on top), `colossus` (a seated 12-tall figure, one arm and
+often the head fallen), `aqueduct` (tall piers, an arcade, a walled channel, one bay collapsed). The
+server draws a generation-1 world's monuments from the larger pool (`_meta.Description.TerrainGeneration
+>= 1`); generation-0 worlds keep the classic five in the same order. The two-anchor bridge placement of
+the plan was not built: the bridge stands as a free monument over whatever it lands on.
+
+**Structures on rugged ground.** The guaranteed placement search of #586 (best-fit rings, slope / shelf /
+stilt seats) already carries generation-1 relief: the part-6 tests start fresh generation-1 highland,
+red-desert and glacier worlds and assert every stamp the rolls requested stands. No placement code changed.
+
+The landscape-variety package is complete with this part; release steps are in the runbook (whats-new
+export before the tag, non-technical changelog, devblog draft, tell ahmdkaml, the pending VPS world
+re-create covers the wave — generation 1 reaches new worlds only).
+
+---
+
+## 13. Terrain generation 3 — the landform completion package (in progress)
+
+Where generation 1 gave the surface its variety, generation 3 fills the gaps a landform audit found: the
+sea floor is designed instead of merely flooded, ice becomes a volume instead of a paint, rivers gain
+morphology, and water can exist below the surface. `WorldDescription.CurrentTerrainGeneration` is **3**;
+every visible change reads `w.Generation >= 3`, so generation 0, 1 and 2 worlds stay byte-identical and
+the classic golden checksums never move.
+
+**Two new terrain tags.** `karst` (jungle, karst, fungal, boreal) marks soluble rock: reaches that run
+underground, dripstone, stone forests. `reef` (ocean, archipelago, jungle) marks warm shallow coasts: reef
+relief, lagoons, atolls, blue holes. Like every tag since #1644 a family gates on the tag, never on a
+planet-type key, so a data-only type can opt into any of them.
+
+### 13.1 Part 1 — the foundation
+
+**Underground river reaches.** `RiverField.Build` takes an optional `sunkRegion` predicate over coarse
+cells. Where both ends of a stroke lie inside it the reach runs under a rock roof: the terrain surface is
+untouched, and the water hangs a constant cover below it — so it still descends exactly as the ground
+does and the network's downhill guarantee carries over. A stroke with one end inside ramps the cover over
+its length, and the column where the roof closes (or last opens) keeps an open shaft: the swallow hole the
+river vanishes into, and the spring it comes back out of. Each side of the channel gets a **bank** ledge,
+solid up to the waterline and air above it — that is also what seals the water sideways, so its lateral
+neighbour at its own height is rock rather than air (generated water is a bottomless source to the fluid
+automaton, and an air neighbour is what it would flow into once a player wakes it).
+
+`RiverColumn` carries `Underground`, `RoofY` and `Mouth` for this. Like the water surface, `RoofY` is the
+CENTERLINE's value for the whole cross-section, so on a slope it can sit above a band column's own ground;
+the column phase keeps a non-mouth carve under the surface.
+
+**The worm carver is a table.** `TunnelSpans` loops a family registration table, so a later wave (ice caves
+inside a glacier) adds a row instead of editing the carver. The classic worms stay row 0. The per-column
+scratch grew from 6 to 10 spans because the generation-3 column phase appends passages of its own — but a
+generation 0–2 world is still capped at six, because a column that used to drop its seventh span must keep
+dropping it or its caves would move.
+
+**Four structural extensions, each shipped with one real family** (`LandformGen3Tests` proves each by its
+feature, not by a test hook):
+
+- **Paint fill.** A landmark paint delegate may claim the column down to a `fillToY`
+  (`ColumnProfile.PaintFillToY`): every solid cell from the surface to it becomes the paint block before
+  ores, strata and data caches; caves, tunnels and caverns still carve through it. Reference: the
+  generation-3 **glacier tongue** is ice six deep where generation 1 painted only the topsoil.
+- **Sea-relative landmark rows.** A `LandmarkKind` flagged `SeaRelative` runs after every classic row and
+  **never inside the calibration sample** (the #1631 sea-mount rule generalised via `_calibrating`), so the
+  sea percentile it reads is never its own output. Contract: 0 on a dry world, 0 wherever the raw ground
+  is not at least two below the sea, never lifting the result above one below the sea — the land/sea
+  partition the calibration saw stays exactly that. Per-cell rolls are memoised in `_seaCells` and dropped
+  with the column memos. Reference: **seamounts** (`WorldGenerator.SeaFloor.cs`) — a cone on the sea floor
+  whose summit stays three below the surface; it adapts its height to the water above its centre, so the
+  shallow classic seas get knolls and the deep seas of later parts get mountains. `ocean`-class worlds
+  (water ≥ 0.6).
+- **Material bands.** `BandKind.Ice` and `BandKind.Fluid` may stand INSIDE a column's water span; the
+  y-loop writes them before the sea fill, so the sea stays below them (`ColumnProfile.MaterialBands`).
+  Reference: **icebergs** — a faceted ice mass, seven eighths below the waterline, in water at least three
+  deep on cold watery worlds (base temperature ≤ 2 °C); kelp never grows through a hull.
+- **Sub-surface fluid spans + the cave shield.** `ColumnProfile.SubFluid` holds up to two fluid spans below
+  the seabed, written after the mega-cavern and before the geode; `[ShieldLo, ShieldHi]` is never cave-carved
+  and the classic worm spans are clipped out of it, so the pocket is sealed. Reference: the **underground
+  river reaches** above, switched on for wet `karst` worlds: the column phase turns a sunk `RiverColumn`
+  into one more tunnel span (clamped under the surface unless it is the mouth) plus the water on its floor;
+  a bank column carries air only. The surface-water queries (`IsSurfaceWater`, `TryGetWaterSurface`,
+  `SurfaceRiverDepth`) skip underground columns; `TryGetUndergroundRiver` is the one helper that reports
+  them, with the column phase's own precedence (the sea, a pond or a crater owns the column outright and
+  the passage does not exist there).
+
+Golden groups `ocean-gen3`, `frozen_ocean-gen3`, `karst-gen3` pin the families; `highland-gen3` activates
+none of them and must equal `highland-gen1` — the control that generation 3 without a family IS generation
+1. A Slow-tier guard keeps a generation-3 chunk within 1.3× a generation-1 chunk (the client bakes up to
+32 768 columns on its main thread; no generation-time budget existed before).
+
+
+### 13.2 Part 2 — the rock landforms
+
+Ten forms, every one a row or a case in a table that already existed. Each gates on a profile flag
+`WonderFor` only sets from generation 3, and the rows are appended after part 1's, so no earlier
+precedence moves.
+
+**Landmark rows** (`WorldGenerator.RockGen3.cs`). *Slot canyons* are the crevasse frame at rock scale:
+1–2 blocks of half-width, 18–35 deep, near-vertical walls and a single arc over their length, so the
+walk through one turns. They need a dry wind- or butte-carved world. *Arêtes* are the same frame turned
+upward — a 60–130-long crest 25–50 high with both flanks falling away at once, saw-toothed along its
+length by a sample of the along-distance (never of the column, or the notches would pit the ridge
+instead of crossing it). *Tooth rows* set 4–7 cones 20–30 apart in a line, each keeping its own summit.
+Both need real relief: a mountain-styled world or one whose amplitude alone builds ridges.
+
+**Paint rows.** *Desert pavement* is the stone the wind left when it took the sand: inside a broad
+region mask, on ground of slope ≤ 1, scree with a dithered third of its cells bare stone. *Petrified
+dunes* give the style below a sandstone skin twelve deep on the crests, so a cut face shows the
+cross-bedding the style quantised into decks.
+
+**Worm families** (`TunnelFamilies`). A *rock gate* is neither a landmark row nor a band — a row cannot
+fire where the table mountain's own row already owns the column, and a band adds solid where the gate
+needs air. It is what it looks like: one short horizontal capsule straight through the wall at the
+height of its foot, riding the table's OWN hotspot cell so it only ever cuts a table that exists.
+*Mountain halls* likewise ride the massif's cell and re-derive the massif's radius and height from the
+same hash bits, then hollow a 3–5-segment room 5–9 wide at a third of the mountain's height, with one
+mouth out through a flank and one shaft up past the summit. Both are anchored on the RAW ground under
+their landform's centre (the family builder receives the centre; the classic worms ignore it and hang
+off `BaseHeight` as they always did) — a table rises from wherever the swell put it, not from the base.
+
+**Rainbow strata** (Bunte Berge) are the reference consumer of the **paint cycle**: a paint row may carry
+a `Cycle` delegate (`LandmarkKind.Cycle`, `ColumnProfile.PaintCycle`), and the paint fill then lays its
+blocks down in 3-thick bands parallel to the surface, top first — sandstone, granite, salt, basalt —
+forty deep, inside a broad region of hoodoo-and-butte country. A cliff, a canyon wall and a mined shaft
+all show the same stripes.
+
+**Styles** (`StyledHeightOffset`). *Labyrinth* inverts the salt-pan Voronoi: the plate interiors rise
+into walls and the narrow cell borders stay at the base, so the borders are the passages. *Stone
+forest* is the karst case at a far finer pitch and a lower bar — hundreds of slender pinnacles with a
+walkable floor between them instead of a handful of broad towers. *Petrified dunes* are the dune ridges
+at a larger amplitude, quantised into 2-block decks.
+
+**Styles are gated by generation, not only by data.** A style a later wave adds to an existing type's
+pool would otherwise be rolled by the worlds created before it and move their relief, so `PickStyles`
+filters the pool through `StyleMinGeneration` before the draw: an older world sees exactly the pool it
+always saw. `desert`, `red_desert`, `tablelands` and `badlands` gained `labyrinth` (and the two deserts
+`petrified-dunes`); `karst`, `jungle` and `fungal` gained `stone-forest`.
+
+### 13.3 Part 3 — the caves
+
+Two forms, both inside carves that already existed (`WorldGenerator.CavesGen3.cs`).
+
+**Dripstone** (Tropfsteinhöhlen) is a per-column length pair, not a landmark: the column phase resolves once
+how many cells hang from a carve span's roof (1–4 on ~8 % of columns) and how many rise from its floor
+(1–3 on ~6 %), and only on a column that carries a worm tunnel or a mega-cavern on a world that drips
+(`WonderProfile.Dripstone`: cave-bearing, air-bearing, water abundance ≥ 0.4 AND `karst` or `wetland`
+tagged — jungle, karst, fungal, boreal, swamp, ocean, archipelago). The y-loop reads the pair at the span
+ends in the tunnel branch and the cavern branch: a spike from the roof, a spike from the floor, never a
+wall — a span takes dripstone only where both fit with an air cell between them and rock stands above the
+roof (a span open to the sky is a cave mouth; a spike hanging from nothing is a floating block). The
+lava-pocket rule keeps precedence below the lava table. An underground river's passage — the one tunnel
+span inside the cave shield — never drips: its floor is water or a bank ledge, and its three cells of
+headroom are the promise that the reach is passable. On
+limestone country the block is `salt` (the white of the travertine repaint), elsewhere the deep rock.
+
+**Karst cathedrals** (Höhlenkathedralen) are the mega-cavern's own height roll widened: `TryGetCavernSpan`
+draws the half-height from 14–28 to 14–40 on a `karst`-tagged generation-3 world, so a hall can stand
+80 tall at its centre. The lake rules read the same `ry`, so a taller hall holds a deeper lake in the same
+proportion. No new gate — the tag and the generation decide.
+
+The gate is deliberately narrower than "every wet world with caves": most planet types inherit the default
+water abundance, and the `highland` control world (the generation-3 golden that must equal its
+generation-1 twin because no family is active there) has to stay a world without dripstone.
+
+### 13.4 Part 4 — volcanic and desert
+
+Four forms (`WorldGenerator.VolcanicDesertGen3.cs`), every one a row in a table that already existed, and
+all of them trig-free: a direction is a hash-drawn integer vector normalised by a square root, which every
+libm rounds the same way, so the Windows and Linux goldens agree.
+
+**Obsidian fields** (Obsidianfelder) are a paint alone: inside a ragged-edged region 40–90 across on
+flat-ish ground of a dry volcanic world, obsidian three deep (the paint fill) with a dithered 15 % of
+crystal glints on the surface — a stud, not a vein, so a glint's fill is the topsoil only.
+
+**Lava flows** (Lavafelder) are three mechanisms on one geometry. `TryGetLavaFlow` walks the volcano cones
+of the 3×3 hotspot cells around a column (a tongue may cross its cell's border) and, per cone, 2–3 tongues
+of four bent segments each, starting at the cone's foot (the cone's own row owns the cells inside its
+radius) and tapering from 8–16 wide to half that at the toe. The offset row lifts the ground 1–3 in a ropy
+ridged field; the paint lays basalt three deep; and one cell in eight on the core is a 1-deep lava pocket
+— a body of the generation-1 chain (`TryGetGen1Water`, appended after every generation-1 body), so every
+surface-fluid query agrees with what the column fills. A pocket never sits over a cave mouth: generated
+fluid is a bottomless source to the automaton, and a tunnel under the bed would drink lava forever
+(`CaveMouthNear`). The same guard covers the frost ponds below.
+
+**Barchans** (Sicheldünen) are an offset row on wind-and-sand worlds that did NOT roll the dune-sea styles
+(their crests would swallow a crescent): a field 150–300 across on a 24–40 pitch grid, modular over the
+torus, one pitch cell in eight left bare so the field breathes. Each dune is a dome 4–9 high and 10–16
+across minus a smaller dome shifted downwind, which leaves the thick convex side upwind and the two horns
+trailing downwind. The wind is the world's grain, the same one the dune crests march in.
+
+**Frost polygons** (Polygonböden) reuse the salt-polygon Voronoi net — `SaltPolygonRidge` now calls a
+shared `PolygonNet` that also reports the nearest plate's hash; the salt pans are byte-identical. On cold
+(≤ −8 °C), wet, air-bearing ground that is not a salt pan, inside a broad region mask, the ridges stand
+one block proud (an offset row) with a stone skin (a paint), and a fifth of the plates hold a 1-deep pond
+(a body) that the classic freeze pass covers with ice. The `frozen_ocean` world qualifies, so its
+generation-3 golden moved with this part.
+
+### 13.5 Part 5 — wetlands and rivers
+
+**River morphology** lives in `RiverField.Build` behind three parameters whose defaults are the classic
+no-op (`sinuosity` 0, `distributaries` 0, `floodplainWidth` 0); `BuildRiverField` passes 1.0 / 4 / 6 on a
+`RiverMorphology` world (a wet water world with land) and the defaults everywhere else, so every older
+field is byte-identical. *Meanders*: a low-gradient surface stroke (≤ 1 block between its cell centres,
+not sunk, not the sea outlet) bends into one S between the centres — the offset is perpendicular, zero at
+both ends (consecutive strokes stay joined) and at the middle, at most what keeps the band inside the
+drainage cell row — and the terrain is sampled at the OFFSET column, so the water still follows the
+ground. A quarter of the bends leave an *oxbow*: a still crescent of 1-deep water two to four blocks beyond
+the channel at the apex. *Deltas*: at every sea outlet 2–4 half-width strokes fan out ±27–45° (a hash-drawn
+(6, ±k) unit vector, trig-free) for one or two cells with beds a single block deep. *Floodplains*: the dry
+ground beside every surface reach (half the width beside a lone brook, the full six beside a reach that
+gathered two brooks — `FlowAccum` counts SOURCES, and on a default world most rivers never merge) and
+inside a delta fan, where it lies within two blocks of the water, is flagged; a river column never is. The
+column phase paints the flag mud (`floodplain` row) and floods a third of it one deep (a body of the
+generation-1 chain).
+
+**Rias** are a sea-relative row: where a valley line of a ridged field crosses the shelf coast (raw ground
+at most 6 above the sea), the ground drops in a V to 2–5 below the sea, ramping out at the head, so the sea
+runs up the valley as a branching inlet. This is the one row that turns land into sea, and the part-1
+partition test now says exactly that: a sea-relative row may drown coast land, never make new land, never
+lower the sea floor. The soluble-rock belt of an underground-river world keeps its coast (with a coarse cell
+of margin): a sunk reach carries the centerline's levels across its cross-section, and a V cut across it
+would leave a bank with its water at the ground.
+
+**Floating mats** are a material band (`BandKind.Mat`): one cell of mud at the water top of a pooled lake
+column inside a 4–9-radius hotspot patch, written by the pre-scan before the sea fill. Nothing floats
+physically — it reads as a bog island. `RiverField.TryGetPooled` exposes the pooled columns for it.
+
+**Peat bogs** are a paint six deep (the new `peat` block — dark fibrous bog soil, texture generated, named in
+all fourteen locales) across a broad region on flat ground of cool-to-cold wet wetland / glacial worlds
+(boreal, tundra, swamp, ocean), with two fifths of the bog standing one deep in water. Reeds and lichen grow
+on peat through `Species.LateHosts` — hosts a later generation added, deliberately NOT part of `Hosts`: the
+roster's host-coverage rule reads `Hosts`, and a host that only exists on new worlds must never change which
+species an older world activates (it did, in the first attempt, and moved the classic jungle golden). World
+generation pools late hosts from generation 3; the server's regrow and the client's fertile-ground cue always
+count them.
+
+**Thermokarst** ponds reuse `PolygonNet` at a 46-block pitch: three plates in four of a region hold a pond
+that is the plate's interior (so its outline is the Voronoi polygon), 2–4 deep (a body; the freeze pass ices
+it), with a 1-high rim (an offset row) in the band just outside; the frost-polygon region is excluded so the
+two cold patterns never stack.
+
+**Flora follows a generation-3 paint.** `ColumnProfile.PaintedHost` is set when a landmark paint hits on a
+generation-3 world, and the surface flora then reads the painted block as its host (like a beach): ember
+blooms on a lava flow's basalt, lichen on a frost ridge's stone, reeds on peat. Never on an older world.
+
+**A sunk reach hangs under the lowest ground of its cross-section.** Part 1 hung the passage a constant
+cover under the CENTERLINE's terrain and let every band column carry those levels. On a karst world with
+the stone-forest style a centerline on a pinnacle can have the floor forty blocks lower right beside it, and
+the band's water would then sit above its neighbours' ground — an open hillside. The rasteriser now takes
+the minimum terrain across the band and its bank ring for the roof and water levels, so every column of the
+cross-section keeps its cover and its seal. Classic fields are untouched (no classic stroke is sunk).
+
+### 13.6 Part 6 — the coast and the sea floor
+
+Every family here is sea-relative (`WorldGenerator.CoastGen3.cs`): it needs the calibrated sea level, so it
+runs as a sea-relative landmark row (last in precedence — a classic row always owns its column — and never
+inside the calibration sample) or as a band / column feature resolved after calibration. Geometry is
+trig-free throughout; a direction is one of eight unit vectors (the diagonal a compile-time constant) or a
+hash-drawn integer vector normalised by a square root.
+
+**The partition rule, final form.** Part 1 said a sea-relative row never changes the land/sea partition the
+calibration saw. Part 5 allowed a ria to drown coast land; part 6 adds three rows that exist to make land
+out of sea — a causeway islet, an atoll islet, an arch's stem — on an explicit allow-list
+(`SeaRowMakesLandForTest`), and cuts that deepen the sea floor. What still holds for every row: no new land
+outside the allow-list, a lifted sea column stops at one below the sea (a seamount at three), a lift only
+where the sea owned the column, and no cut below the lava-table safety line (`BaseHeight − 150`).
+
+**Sea arches** (Brandungstore): a cliff-top hotspot whose raw ground stands 6–22 above the sea with the sea
+within twelve blocks in the direction of steepest descent. The *bar* is a `Cap` band 3–5 thick at the cliff
+top running 9–14 blocks out over the water; the *stem* is a sea-relative row raising a 2.5-radius pillar from
+the sea floor to the bar's underside. The cell roll (anchor, direction, length) is memoised in the sea-cell
+memo like a seamount's.
+
+**Blowholes** are a `geyser_vent` block on a cliff top (raw ground 5–20 above the sea, the sea within eight)
+over a sealed water shaft — a second sub-surface fluid span (part 1's mechanism) from the sea line up to the
+cell under the vent, shielded from the cave carver. The client's geyser VFX plays there; a shaft that is dug
+into gushes, which is what a blowhole should do. `StampGeysers` places the vent by the hotspot, not the
+density roll.
+
+**Causeway islands** (Wattinseln — the honest name: a tidal island at permanent low tide) are a sea-relative
+row: a shallow-sea hotspot with land within sixty blocks in the direction of steepest ascent grows an islet
+12–30 across whose crown stands 2–4 above the sea, joined to the coast by a 2–3-wide sandbar at exactly one
+below the sea — wadable, never dry.
+
+**Lagoons and atolls** share `TryGetReefRing`: a ring 40–110 across on a warm `reef` world. In the shallows
+(centre raw 2–12 below the sea) it is a *lagoon*: the rim raised or cut to one below the sea and painted
+coral rock two deep, the interior a bowl deepening to 3–6 below, one or two passes (a 14° cone each) where
+the rim stays what the floor was. In deep water (centre raw ≥ 12 below) it is an *atoll*: the same rim with
+3–6 sand-dome islets 2–5 above the sea at hash-drawn bearings, the interior 8–15 below.
+
+**Reef fields** (Korallenriffe as relief): inside a broad region mask, under shallow sea (2–14 below), the
+floor rises in a ridged field by up to four but never above two below the sea, painted coral rock three
+deep — and the seabed flora grows four times as dense on a coral-rock floor.
+
+**Blue holes**: a shaft 8–18 across in the shallows, its floor 40–70 below the sea with near-vertical walls
+(a quartic profile) and a lip ring raised to one below the sea around the mouth. **Submarine canyons**: from a
+shelf hotspot down the steepest descent, 200–400 long, 40–80 wide, a V 30–60 deep, only ever under the sea.
+**Trenches**: one great gash on a very wet world — 400–900 long, 40–70 wide, 60–120 below the surrounding
+floor, only where the raw floor already lies twenty below the sea. All three respect the floor cap.
+
+**Two new blocks** this part and the last: `peat` (part 5) and `coral_rock` (part 6), both with generated
+textures (`tools/ai-assets`, bundled as raw RGBA) and names in all fourteen locales.
+
+### 13.7 Part 7 — ice as a volume
+
+Part 1 made the glacier tongue a paint six deep. Part 7 makes ice a VOLUME (`WorldGenerator.IceGen3.cs`).
+
+**Glaciers** are a hotspot of their own (a massif is a find on one world in five; a glacier should not wait
+for one): the tongue starts at the cell centre — its head — and runs down the steepest descent of the raw
+ground (eight probes forty out, memoised per cell) for 150–400 blocks, 30–70 wide, 12–30 thick at the
+crown in a lens across, ramped at the head and tapering to the snout. The offset row lifts the ground by
+the ice thickness and the paint fills ice from the surface down to the old ground (part 1's paint fill),
+so a cut face shows ice on rock. The tongue carries its own **crevasses** (the slits of a ridged field, a
+few blocks deep) and becomes an **icefall** where the ground under it drops fifteen or more over sixteen
+blocks: the ice breaks into three-block decks and the crevasses come three times as dense. **Moraines**
+are the same row's other answer — a scree ridge 4–10 high along both flanks and across the snout.
+
+**Glacier gates and ice caves** are two worm families riding the glacier's own hotspot cell: the gate is
+one horizontal worm 3–5 in radius from just inside the snout 30–60 back into the ice at the old ground's
+level; the caves are 3–5 segments along the tongue at half the ice thickness, radius 2–4. Their walls are
+ice because the fill is ice. **Sheet caves** are a third family on ice-surface worlds (ice, glacier):
+worms 4–6 segments long hanging 6–14 under the raw ground of their cell instead of off `BaseHeight`, so
+they run through the crust. (The plan's meltwater sheet on the gate's floor and the river stroke out of it
+are not implemented — the gate is dry.)
+
+**Ice sheets and nunataks**: on the coldest glacial worlds (≤ −20 °C) a broad region mask caps the ground
+with 10–25 of ice (an offset row plus the ice paint filling to the old ground). The massif and trough rows
+precede it in the table, so a massif inside the region keeps its bare rock — the nunatak — as a matter of
+row precedence alone. The cold ground patterns of parts 4 and 5 (frost polygons, thaw ponds) yield to any
+ice cover (`IceCoveredAt`): their one-block heave would otherwise fire first and leave a pit in the sheet.
+
+**Hanging valleys** ride the glacial trough's own hotspot cell and its rolled angle (the trough uses the
+libm angle, so the two must share it): a side trough 80–160 long, 30–50 wide, a U 15–25 deep entering the
+main trough at a right angle, shallower than the main trough's 25–45 so its floor hangs above the main
+floor and ends at the trough wall.
+
+**Icebergs** (part 1) now keep off a landing pad's footprint. The plan's `VoidBelow` probe for pads is
+already there: the pad fill plugs caves under a pad to `PadFoundationDepth`; structures still do not read
+the underground, which stays a known gap.
+
+### 13.8 Part 8 — the three planet types
+
+Every family above is gated on a tag or a temperature, never on a planet key, so a data-only type can opt
+into any of them. Three new types give the new families a home where they are dense instead of a rare roll,
+all with `minTerrainGeneration: 3` — the #1649 retype roll (`ApplyGenerationTypes`) already admits every
+gated type whose generation the galaxy reaches, so a generation-3 galaxy retypes a share of its bodies into
+them and a generation-1 galaxy never sees them (the galaxy layout stays byte-identical either way):
+
+- **`coral_sea`** — a warm (27 °C), breathable world that is almost all shallow sea (water 0.95, `wetland`
+  + `reef`, the archipelago style): reef fields, lagoons and atolls, blue holes, causeway islands, sea
+  arches, meanders on the islands.
+- **`icecap`** — a bitterly cold (−30 °C) glacial world (water 0.6, snow over ice, the glacial + mountains
+  styles): the ice sheet with nunataks, glaciers with icefalls and moraines, ice caves and glacier gates,
+  frost polygons and thaw ponds on the bare ground, icebergs off the frozen coast. Toxic air, exotic.
+- **`river_lowlands`** — a mild (15 °C), breathable lowland (water 0.7, `wetland`, flats + downs): meanders
+  and oxbows, deltas, floodplains, peat bogs, floating mats, rias on the coast.
+
+Each has a name and a description in all fourteen locales (EN/DE by hand, the rest through
+`tools/translate_locale.py`), a name flavour in `NameGenerator.PlanetFlavors`, and a golden group.
+
+**What the plan asked for that this package leaves out**, for the record: the blowhole's client-side
+VFX variant (the vent reuses the geyser effect as is), the meltwater sheet and river stroke out of a
+glacier gate (the gate is dry), the `VoidBelow` probe for structures (pads already have a foundation),
+and the `packed_ice` block (the glacier reads fine with the existing ice). The slot canyon, the arête,
+the tooth row and the glacial trough still use the libm angle (`Math.Cos/Sin`, like the classic rift):
+their goldens are Windows-pinned, as every trig-derived golden has been since #1503.
+
+---
+
+## 14. Generation 4 — the flora-roster wave, and the audit hygiene (#1715–#1724, 2026-09-09)
+
+A read-through of the three generators (terrain, flora, fauna) against the July audit found seven of its
+nine findings already fixed and left two, plus eight small ones of its own. All ten are in one package.
+
+**Generation 4 (#1715).** `WorldDescription.CurrentTerrainGeneration` is **4**; the terrain of a
+generation-4 world equals generation 3 — what changes is the flora roster's activation roll (§6): from
+`BiomeThemeRosterGeneration` the preferred tags are the union of the planet theme and its biome themes.
+`FloraGenerator.GenerateRoster` takes the generation; worldgen's `ResolveFlora` and the server's
+`InitFlora` pass theirs. An older world keeps the planet-only roll and every species it ever grew; the
+classic goldens do not move (they pin blocks, and a generation-0/1/3 roster is unchanged).
+
+**One flora colour file (#1716).** The world's base hue — the block shader's fallback for a flora face
+without a species tint, and the micro-fauna's tint — is `FloraTints.ForWorld(seed, locationId)` next to the
+per-species `FloraTints.For`; the server fills the environment message from it (same value as before, the
+hash is the historical one). The client mesher no longer puts a **farmed crop** into tint mode 1
+(`TraitCultivated`): a crop carries no species tint, and the black tint fell through to the world hue —
+violet berries on a violet world, the opposite of what the crop exclusion promised.
+
+**Fauna spawner hygiene.** #1717 the fill gate and cadence read the clamped cap; #1718 the water/lava
+probes read real blocks first (`TryGetFluidColumn`) and every herd member probes from its own spot;
+#1719 the cave-floor and shoreline probes use no-load reads; #1720 the spawn-target round robin counts
+the wild population.
+
+**One truth each.** #1721 `FloraCatalog.Species.Solid` — the mesher derives its tall and solid sets from
+the catalog (`TallKeys` / `SolidKeys`), and `FloraVarietyTests` holds `bake_leaf_alpha.py`'s `FOLIAGE`
+list to it; #1722 `WorldGenerator.RosterSeedFor` — the one roster-seed formula, with a test that the
+server's rosters equal the generators' output for it; #1723 `WonderFor`'s lock-free fast path holds key +
+profile in one immutable slot; #1724 the column memos key on the **wrapped** column, guarded by a test that
+every generation's landforms are identical across both seams (`SurfaceHeightAndChunks_AreTheSame_AcrossBothSeams`).
+
+## 15. Generation 5 — the school club wave (#1756–#1765, 2026-09-11)
+
+The third wave from the school club "Building Games with AI": the children's planets, creatures and plants.
+`WorldDescription.CurrentTerrainGeneration` is **5** (`AuthoredContentGeneration`); the terrain of every older
+type equals generation 4. Everything in the wave follows the four rules of the earlier waves — a new table row
+gated on the generation, a new type gated by `minTerrainGeneration: 5`, append-only catalogs and enums, and
+authored content as an overlay after the procedural roster — so every existing world is byte-identical (the
+generation-0/1/3 goldens did not move; five `*-gen5` groups pin the wave).
+
+**Four planet types** (`data/planets.json`, `minTerrainGeneration: 5`): `rainbow_sea` (Sophie: rainbow water,
+islands afloat on the sea with kelp hanging from their keels, kelp forests, a seabed of sand), `flower_fields`
+(Damian: flowers and nothing else, one authored creature), `scrapyard` (scrap, more ruins and factories, no
+life, toxic air) and `gamer_hills` (Ben: karst caves, PC props, mountain-sized gaming gear). New optional
+type fields, all no-ops by default: `seabedBlock` (every submerged sea column beyond the beach apron takes it,
+`ColumnContext.SeabedId`), `underwaterForests` (kelp/seagrass stalks 8–12 tall in patches, `StampWaterFlora`),
+`waterTint` (see below), `ruinsBias` / `factoriesBias` (multiply the per-body roll, caps unchanged),
+`authoredCreatures` + `creatureAbundance: "authored"`, `buoyantIslands` (below).
+
+**Islands afloat (#1757, Marcel's playtest 2026-09-11).** The first cut gave the rainbow planet SKY islands
+(`floatingIslands`) and 44 % water; the children meant islands *swimming* on the water, and little land. A
+`buoyantIslands` type floods 95–98 % of its terrain (`BuildCalibration`, its own quantile band — the land is
+the islands, not the relief) and `GetExtraBands` adds one `BandKind.Afloat` band per mask blob
+(`TryGetBuoyantIsland`): a deck 1–5 blocks above the sea level, a keel 2–9 below it, both a function of the
+SEA LEVEL so every island floats at the same height; where the sea is too shallow the keel stops one cell
+above the seabed (the island grounds on a shoal). The keel is written before the sea fill like the
+generation-3 material bands (the biome's own ground, not the seabed sand the submerged column carries), the
+deck in the above-water pass; `IslandTop`/`IslandBottom` see the band like a sky island, so the island flora
+pass and the hanging kelp (#1759, now allowed to root into WATER below the keel) work unchanged. Generation
+5 only: a generation-4 save of a buoyant type is byte-identical to before.
+
+**Water colour (#1758).** `FluidTints.ForWorld(seed, locationId, planet)` → (rgb, mode) is the water
+counterpart of `FloraTints.ForWorld`: empty `waterTint` = the classic blue (mode 0, every existing world),
+`"auto"` = a seeded blue-dominant palette pick (mode 1), `"rainbow"` = static bands by position (mode 2),
+`"#rrggbb"` = fixed. The server ships `EnvironmentState.WaterTint/WaterTintMode`, `Sky.cs` sets
+`_Sc_WaterTint/_Sc_WaterMode`, and the transparent shader's water branch (both subshaders) recolours by
+luminance. The block `water` stays the single fluid id — the automaton, the creatures and worldgen never
+learn about colour. Since Marcel's go on 2026-09-11 every type with a real water sea and an atmosphere
+(25 of them, from `rocky` to `gamer_hills`; not the dry, lava or airless bodies) carries `"auto"`, and
+`ForWorld` takes the SAVE's terrain generation: the colour is computed at runtime, not baked, so the gate is
+what keeps a pre-generation-5 save blue. The palette stays blue-dominant (55 % classic blue, then teal, green,
+yellow, violet, red). Rain follows the water (`WaterColours.cs`): the 3D drops of rain, drizzle and sleet, the
+visor's beads, streaks and wet wash, and the underwater wash blend toward the world's colour (a rainbow world's
+rain cycles through the hues); snow, hail, ash, sand, acid, meteors and spores keep their own look.
+
+**Hanging flora (#1759).** `FloraCatalog.Species.Hanging` — the plant roots in the block ABOVE. The roster
+activates `flora_hangkelp` on generation-5 worlds only (`MinGeneration`), worldgen places it at
+`ColumnProfile.IslandBottom − 1` in patches, the server's `IsValidFloraHost` and regrow read the host above
+for hanging ids, and the mesher's `AddCrossPlant` mirrors the rosette (root at the top, V flipped, skylight
+from below, `TraitHangingFlora`).
+
+**Species of a later wave (`MinGeneration`).** A catalog species appended for generation 5 draws its
+roll like every other (the rng stream is untouched) but stays inactive on an older world, and it is never
+the pick that covers a bare host there. The strict `floral` theme (`Theme.Strict`) activates only species
+carrying its preferred tag (`FloraTag.Floral`, added to the five flower species — no older theme prefers
+it, so no older roster moves) and covers only the surfaces the planet actually has.
+
+**Authored species (#1763).** `data/creatures.json` → `GameContent.AuthoredCreatures`; a type names them in
+`authoredCreatures`. `CreatureGenerator.GenerateRoster(planet, seed, generation, authored)` appends them after
+the procedural slots on a generation-5 world as `au_<key>` (sub-seed salted with the key, the name's second
+word coined per world: "Leni Tarak"). New `CreatureSpecies` traits: `BiomeSurfaces` + `BiomeExclusive` (a
+hard rule against the ground under the animal's feet, real blocks first, the generator's biome surface where
+no chunk is loaded — `OnExclusiveGround`), `Hide` (a named hide tile, `NetCreature.Hide`), `AngeredByMining`
+and `GiftsWhenCalm`. Leni rides on `glacier`, `icecap`, `frozen_ocean` and `boreal`; the flowerling is the
+flower fields' only species (`CreatureBodyPlan.Floral`: a petal ring around the head, a grin while calm, a
+toothed maw while hostile — the view rebuilds the body on the hostility flip).
+
+**The flowerling's rules (#1760, `GameServerFlowerling.cs`).** Every block break is reported to
+`CreaturesOnBlockBroken`: a mining-angered species within 16 blocks WITH line of sight takes a 60 s grudge
+(`ProvokeTimer`; the species is Territorial, so the provoked path hunts and bites with its own damage).
+`TickCalmGifts` (1 Hz): a calm individual with a player within 3 blocks whose last break on this world is
+older than 120 s spills berries ×1–2 (60 %) or a stone / log / iron / copper block, once per 45 s, and the
+player is told (`srv.flowerling.gift`).
+
+**Blocks and props.** 14 blocks (`scrap_pile`, `scrap_metal`, `broken_machine`, `rusted_panel` with a
+`randomDrops` table — `WeightedDrop.Draw` hashes the cell and the seed, so a re-placed block never yields
+twice; `gaming_pc/monitor/keyboard/mouse` placeable but never craftable; `paul_stem/leaf/petals` with fixed
+colours outside the flora tint; `flora_sunblossom`, `flora_tulip`, `flora_hangkelp`). Eight prop rows at the
+table's tail (`scrap-heap`, `wreck-hull`, `girder` on the scrap tag; the same three as `stray-*` on every
+other solid-ground world at a fortieth of the density; `desk-setup`, `pc-heap`, `pc-tower` on the gaming tag).
+The Paul flower is the `giant-paul` row of `GiantFloraKinds` (stem 6–10, four leaf slabs, a petal crown;
+generation 5). The gaming landmarks are four `LandmarkKinds` rows in `WorldGenerator.SchoolWaveGen5.cs`
+(`giant-monitor` slab 52–82 × 36–43, `giant-keyboard` plateau with key bumps, `giant-mouse` dome with a cable
+ridge, `giant-pc` box 20–26 × 14–18 × 44–59 with a glass side panel and a glowing RGB strip), painted with the
+gaming blocks down to the ground. Marcel's playtest (2026-09-11, "zu viel Natur … Gaming-PCs, und das oft")
+moved the hotspot cells from 2 400 blocks at 60 % to **720 blocks at 90 %** — several of each family per
+world — added the tower row and the house-sized `pc-tower` prop, and cut the type's flora to 0.03 / trees
+to 0.0015. The atlas is **32 × 32** tiles
+(`BlockTextureAtlas.Cols/Rows`, `GameContent.AtlasTileCapacity = 1024`).
+
+
+## 16. Generation 6 — the new kinds wave (#1778–#1783, 2026-09-11)
+
+Marcel's idea list after the fauna architecture analysis: rays under water and in the sky, fish that live in
+the air, multi-headed, multi-winged and multi-finned bodies, and giant trees. Shipped as **terrain generation
+6**; the terrain of every older type equals generation 5.
+
+**The discipline.** Every roll of the wave sits at the END of `CreatureGenerator.MakeSpecies`
+(`ApplyNewKinds`, after the body plans, the social roll, the voice seed, the fins derivation and the hover
+altitude) and runs only when the save's generation is ≥ `WorldDescription.NewKindsGeneration` (6). A
+generation-5 roster is therefore bit-for-bit the classic two-argument roster (`CreatureNewKindsTests`
+serialises both). The diversity re-draw (`EnsureHabitatDiversity`) passes the generation through, so a
+re-drawn niche slot rolls the wave too. Nothing is persisted: the roster is re-derived on every start, and a
+companion snapshot carries the three counts (`CloneSpecies`).
+
+**Generation 10 — the arachnid (#2009).** The same discipline once more: the arachnid roll is the very last
+draw of `MakeSpecies` (after `ApplyNewKinds`) and runs only when the save's generation is ≥
+`WorldDescription.ArachnidGeneration` (10). Because nothing reads the RNG after it, a generation-10 roster
+equals its generation-9 self field for field except in the slots that became arachnids
+(`CreatureArachnidTests.TheWaveGatesOnGenerationTen…` serialises both). The plan resets what generation 6 may
+already have rolled for the slot (a hydra's heads, a wing pair) and re-rolls the gait and the group size for
+the new body. There is no terrain change in this wave, so a seed still lands on the planet type it did
+before. The server's rules for the body — `CreatureBodyHeight` (Size × 0.8, three cells, instead of the upright
+Size × 1.8), the titan's despawn leash, the Sreekmakra's disguise list, the lurk (`ArachnidRules.LurkRange` 6:
+motionless until a player is that close, then provoked — a territorial one hunts like an aggressor for the
+provoke window, a hunter starts its chase) — read the pure statics in `ArachnidRules`, as do the client and
+the tests. `/arachnid` (admin) places the roster's arachnid near the player, rolling one into the roster first
+(`CreatureGenerator.GenerateArachnid`) on a world that did not draw the plan.
+
+**Roll order inside the wave.** Body first: a standard-plan Air or Water species becomes a **ray** with
+20 % (`ApplyRayPlan`); a standard-plan Air species that stayed an air animal becomes an **air fish** with 25 %
+(`ApplyAirFish`). Then the counts for whatever body came out: **heads** (standard ground bodies 92/6/2 for
+1/2/3, titans 80/15/5 — the hydra; never a medusa, a ray or the flowerling), **wing pairs** (winged Air
+72/20/8, winged ground gliders 90/10; never on a ray, whose wings are its body), then the fins are re-derived
+for the body (`CreatureMotion.FinsFor`) and **fin pairs** rolled for the legless finned ones (60/30/10).
+
+**The ray (#1778).** `CreatureBodyPlan.Ray`: legs 0, wings, no fins (the plan is excluded from `FinsFor`
+like the medusa), no tentacles or gas sac, 1–2 segments, a tail, size 1.2–3, passive / skittish /
+territorial (never a hunter), speed 1.2–2.6. In water: `LocoStyle` Drifter or Schooler, motion class
+Swimmer, and `CreatureMotion.IsBottomDweller` → `WaterColumnY(bottom: true)` keeps it in a low band just
+above the sea bed. In the air: `LocoStyle.Glider`, and the class **between hoverer and flier** —
+`CreatureMotion.IsSkyGlider` → `MotionClass.Hoverer` (it never lands, never runs the perch state machine,
+never folds anything up), but the hoverer branch eases at `SkyGliderEaseRate` (3.5 blocks/s instead of the
+gas sac's 2) and the Glider profile's vertical amplitude gives it real swoops. The client
+(`CreatureMotion.IsSkyGliderBody` from the wire fields) pitches a sky glider into its vertical motion and
+banks it into turns like a flier; a water ray is the only swimmer that banks. Rig: `CreatureBuilder.BuildRay`
+— a flat disc, each wing a chain of three panels along the span, a five-link whip tail, eyes on the top
+surface, the species' horns as cephalic lobes; `CreatureAnimator.PoseRayWings` runs a travelling wave along
+each side (root panel leads, each panel outboard lags 0.9 rad, 1.4 Hz in water / 1.8 Hz in the sky, wider on
+the move), and the body's fish-weave is damped to a quarter.
+
+**The air fish (#1779).** A fish that lives in the air like a bird — not a leaping fish: `ApplyAirFish`
+sets legs 0, no wings, a tail, `LocoStyle.Glider`, and `CreatureMotion.IsAirFish` (Air ∧ legless ∧ neither
+medusa nor ray) makes `FinsFor` true — safe for every older world because no older Air species is legless.
+It is a sky glider too (hoverer class, glider ease, pitch and banking); the client sculls its fins in the air
+(`PoseFins`: 2.2 Hz and three quarters of the water amplitude, never folded) and gives it the swimmer's body
+weave (`RigDescription.Aquatic`). It spawns wherever an Air species spawns.
+
+**Heads (#1780).** `CreatureSpecies.Heads` / `NetCreature.Heads` / `AuthoredCreature.Heads`. The standard
+builder places the heads side by side at the body front, each with its own eyes, jaw and horns; the titan
+builder grows one neck chain per head, fanned ±24° and offset across the shoulders (`_neckChain` collects
+every segment, so the graze gesture still bends every neck). `RigDescription.Heads[]` / `Jaws[]`; the animator
+breathes and gestures each head on its own phase (the others a beat behind the first), only the first head
+carries the gaze (the others follow a third of it and glance about on their own), and a vocalisation opens
+one jaw at a time — the heads take turns (`_jawOpenHead`).
+
+**Wing pairs (#1781).** `WingPairs`; `AddWings(pairs, zSpan)` spreads the pairs along the torso like the leg
+rows (each a little narrower and shorter toward the rear), `WingRig.Row/Rows`; `PoseWings` lags each row (two
+pairs π apart like a dragonfly's, three a rear-to-front wave) and beats 30 % faster per extra pair (the
+insect read). The perch fold already loops every wing.
+
+**Fin pairs (#1782).** `FinPairs`; the fins are a typed rig now (`FinRig { Pivot, Kind, Side, Row }` —
+Pectoral / Caudal / Dorsal) instead of an index-typed array. Pairs sit along the flanks between the head and
+the hips, shrinking toward the rear, sculling with a 0.8 rad lag per row; a three-paired body carries a second,
+smaller dorsal toward the tail.
+
+**Giant trees (#1783).** `WorldGenerator.GiantTrees.cs`, a pass of its own called after the giant flora in
+`Generate` on a generation-6 world with trees. NOT a `TreeKind`: `StampTrees` is bounded by its 4-cell margin
+and the 18-cell `MaxStampRise` every stacked chunk relies on for its skip test; the giant pass has its own
+`GiantTreeMargin = 16` and `GiantTreeRise = 64`. Per column: a `Noise.Value01` roll against
+`GiantTreeDensity = 0.0007` rejects 99.93 % of the margin columns before anything else runs (the #1527
+first-reject), then the forest mask must exceed 0.62 (landmarks of the deep woods only — about one tree per
+38×38 inside a wood), the biome must grow trees, the theme's palette decides the shape (`GiantShapeFor`:
+conifer → giant conifer, jungle → giant jungle tree, broadleaf → giant broadleaf; desert / ashen / fungal /
+crystal / floral grow none), then the tree line, the sea, ponds / rivers / beaches and the earthy-ground rule
+exactly as for ordinary trees. Size 3–5 (the sum of two noise reads, bell-shaped), the trunk rounds from it
+(3×3 to 5×5), and the footprint's surfaces may not step more than 4 — the trunk roots from the LOWEST of
+them, overwriting, so it grows out of the slope instead of floating. Shapes: broadleaf 21–35 high, 4–6
+radial branches at 55–76 % height each ending in a leaf ball, a domed hollow crown radius 8–13; conifer
+27–45 high, a hollow cone of tiers (every third layer full) radius 7–11 tapering to a spike, short branches in
+the lower tiers; jungle 30–50 high on buttress roots, 5–6 long high branches, a wide flat hollow canopy radius
+9–15. Branches and leaves only fill air; the crown is a shell (`GiantCrownShell`) so the grove floor keeps its
+light and the mesher does not carry thousands of hidden cubes. Own blocks `giant_log` (drops two `wood_log`)
+and `giant_leaves` (foliage: the mesher's leaf cutout, the per-world leaf hue, the flier canopy rule, the
+walk-through rule, the settlement vegetation clear, the leaf-alpha bake) and an own species
+`TreeGenerator.GenerateGiant` (`tr1`, own salt) the scanner reaches through `TreeSpeciesForBlock`, which is a
+per-block map now. Tests: `GiantTreeTests`.
+
+**Watch items.** Structures still never look at stamps (a settlement may sit under a giant crown — the same
+class as the open "structures never read caves" item); a felled giant is a few hundred logs.
+
+## 17. Generation 7 — the city world (#1793, 2026-09-12)
+
+Justus's idea from an F1 report: a rare lava desert with ONE gigantic city, cool inside its walls, guarded by
+friendly machines of the "G.D.S." — letters nobody in the game explains. Everything about the planet is data;
+the city is a new composer; the guardians are settlement NPCs with a look of their own.
+
+**The type.** `gds_desert` in `data/planets.json`: `minTerrainGeneration 7`, `exotic`, `spawnWeight 1` (about
+one planet in three or four galaxies; the exotic-worlds slider scales it), `terrainTags volcanic/buttes/wind`,
+sand over sandstone, `waterAbundance 0` + `lavaAbundance 0.35` (a lava sea and the volcanic lava rivers), no
+flora, no fauna, breathable but 55 °C. `ruinsBias`/`factoriesBias 0`. Two new fields: `cityWorld: "gds"`
+routes the settlement stamp to the composer; `npcOutfits` (RRGGBB list) dresses every civilian from the
+planet's wardrobe instead of the trade palette (`PlanetType.NpcOutfitRgb`, parsed at content load).
+`CurrentTerrainGeneration` is 7 (`CityWorldsGeneration`); older galaxies never roll the type.
+
+**The composer** (`WorldGeneration/CityGenerator.cs`). A 7×7 grid of 32×32 modules with 4-wide streets =
+256 blocks a side, returned as ONE `SettlementStructure` (tier `metropolis`) so the ordinary stamper does the
+carve, the shelf seat, the markers, the doors, the boards and the residents. Module roles by grid position
+(`RoleAt`): the centre is the landing plaza (steel paving, eight lamp posts, four guard posts around the pad),
+the inner ring holds two markets (vendors, the mission board, glass-canopied stalls), the hall (14-wide, a red
+crown) and gardens, every third outer module is a garden (grass, an 8×8 pool, six trees, ferns), the corners
+are 14-tall watch towers, the rest is housing (3×3 plots on the settlement generator's stride, one to three
+storeys, `StampBuilding` reused). Walls are `iron_wall` tinted per cell — purple (`0x3A1F5C`) or red
+(`0x8A1C24`) per house — the perimeter wall is purple with a red band and four gates on the axis streets, with
+guard posts inside and ON the footprint rim outside the gates. Open zones (the pad ring, the wreck crash site
+at pad 0 − 56/+56) are handed in as rectangles the composer leaves as paved ground; a module they intersect
+becomes an open square. Deterministic from the body seed.
+
+**The stamp** (`GameServerSettlements.StampCityWorld`). A city world skips the hospitality roll entirely:
+one settlement, centred on landing pad 0, `GroundY` = the pad's ground, seat `shelf`, pinned as settlement 0
+with template `city:gds`; `CommitSettlements` (phases B–D, shared with the roll) does the rest. The footprint
+is kept on `LoadedWorld.CityFootprint`.
+
+**Cool rooms** (`GameServerTemperature.InCityShelter`). Inside the footprint AND `RoofedAt` → the effective
+temperature is `CityComfortC` = 22 °C. Streets, gardens and the plaza stay desert-hot. No climate physics.
+
+**Lit rooms** (#1808). `StampBuilding` takes an optional `ceilingLight`: a light block set INTO the deck above
+every storey — the centre cell of a room up to nine wide, a quarter-point 2×2 grid over a wider one
+(`CeilingLightCells`). Set into the deck rather than hung under it, the roof stays a solid cover for
+`RoofedAt` and nothing pokes into the walkway. The city passes the warm strip light for every house, shop and
+the hall; the towers get a light in the roof over the shaft and one in each outer wall at both red bands.
+`CityGenerator.Set` drops the tint of a cell it overwrites with a non-tint block, so a light in a purple deck
+is not purple. Ordinary settlements pass nothing and are unchanged.
+
+**The G.D.S.** Marker `guard_post` → NPC role `guardian`: always a machine, chassis `0x3A1F5C`, plating
+`0x4B2A78`, legs `0x2C1746`, `NetNpc.Look = "gds_guard"` (additive), `GuardianLeash` 14 blocks so they walk a
+beat; the client draws a red stripe band on the chest and the abdomen and swaps the pupils for self-lit red
+(`PlayerAvatar.SetGuardianLook`). They never fight — there is no faction model, by design. `dialogs.json`
+gained `planetTypes`; the two G.D.S. dialogues are offered on `gds_desert` only and come first in the file so
+they win over the generic settler line. The LLM greeting persona for guardians is one fixed voice that never
+explains the letters. VEGA: `vega.hint.world.gds` on landing; name syllables share the desert flavour;
+ambience uses the desert track.
+
+**Tests.** `CityWorldTests`: the type is data-complete and gen-7-gated; the composer is deterministic, keeps
+the open zones clear, stands the wall and opens the gate, places every role and enough markers; a server on
+the type stamps exactly one metropolis around pad 0, spawns guardians in the look and civilians in the
+wardrobe, shelters a settler at home but not a guard on the plaza, and serves the G.D.S. lines — and a jungle
+world does none of it.
+
+**Watch items.** Hand-authored modules (`settlement_templates.json` with `planetTypes` + a role) are the
+intended next step and are not wired yet; bandit camps and monuments still place by their own rules and may
+seat near the walls; the wreck stamps into its open square as before.
+
+## 18. Modular structure kits (#1871–#1878, 2026-09-13)
+
+Stations, villages and cities can be composed from **kits** — sets of editor modules that dock (stations) or fill the
+plots and districts (settlements, cities); the contract, the composer and the pins are documented in
+[STATION_SETTLEMENT_EDITOR.md §3c](STATION_SETTLEMENT_EDITOR.md). What matters for world generation:
+
+- **Selection.** A fresh station or settlement draws from ONE joint random table of the tier's complete templates
+  (non-`pinOnly`) and kits, weighted (`StationTemplateUse` / `SettlementTemplateUse` = Off keeps the procedural
+  generator only). The draw uses a lane of its own (`RngFor(instSeed, "kitpick")`, `roll` for stations after the legacy
+  roll), so the per-instance stream that decides `ruined` and the island wish is the same at the stamp and on replay.
+- **Pins.** Stations: `WorldMetadata.StationTemplates[id] = "kit:<key>"` + `StationKits[id]` (module, origin, turns).
+  Settlements / the city: `StructurePlacementRecord.Kit`, `KitLayout` (the grid), `Composition` (module per slot),
+  `Modules = 2`. A replay never consults the kit or the pool order again; a pinned module that vanished falls back to
+  a procedural building with a warning (never remove a shipped module — the #1115 rule).
+- **Legacy.** Records with `Modules ≤ 1` and pre-record worlds replay exactly as before; a record with `Modules = 1`
+  and no composition freezes its current picks on the first load after #1872.
+- **Far tiles (#1871).** `LoadEditColumnTops` pins the SQLite join order (`CROSS JOIN`) and tile builds are paced by
+  `ServeFarTiles` (4 ms per tick) — a built-up world no longer stalls the tick after a join.
+
+### 18.1 Settlements and cities from modules (#1884–#1891, 2026-09-14)
+
+- **Selection = the template share (#1888).** A fresh settlement tosses a coin at `SettlementTemplateUse.Probability()`
+  on its `kitpick` lane: heads → a complete template of the tier by weight, tails → a kit by weight
+  (`GameServer.PickTemplateOrKit`; a tier without kits takes a template, one without templates a kit). Stations use the
+  legacy coin `legacyHit` the same way. Pin-only templates and kits never enter the tables.
+- **Modular kits (#1886).** `hamlet/village/town/city_modular_1/2`: plot stride 10, building 8, storeys 1 / 1 / 2 / 3,
+  modules only; market and notice house required, tavern (village and up) and workshop (town and up) required, houses
+  weighted. `city_gds_modular_1` fills every non-plaza district of the G.D.S. map. The `*_default_1` kits of #1876 are
+  pin-only.
+- **Materials (#1885).** Block cells may name `@wall @accent @roof @floor @path`; `SettlementGenerator.Generate` resolves
+  them with `ModuleMaterials.ForSettlement(tier, surface, alien)` — the same object its procedural buildings read their
+  wall, accent and path from — `FromTemplate` with the placement's surface, `CityGenerator` with `ForCity`.
+- **Inhabitants.** Kit assignment only takes modules whose `Style` matches the settlement's inhabitant roll; replays
+  read the pinned composition and never re-check.
+- **Revision 1 grids.** `SettlementLayoutSpec` serializes a seventh field `Revision` for fresh kit layouts: the central
+  plaza only stamps when its 3 × 3 is clear of buildings and the doorside garden patches never land inside a building
+  (both draws are consumed either way). Six-field layouts (#1876 records) replay unchanged.
+- **Furnishing.** `FurnishAuthoredRooms` treats the gap of an interior doorway (a door marker with floor on both sides) as
+  wall for the flood and reserves floor cells at the edge of a stairwell. Entrances at a template's edge are unaffected.
+
+## 19. Generation 8 — lava pads (2026-09)
+
+`WorldDescription.CurrentTerrainGeneration` is **8**. Worlds of an older generation keep their terrain and their landing
+pads bit for bit; generation 8 changes where and how pads meet lava and adds the Titas and Valuma planet types (sections
+below).
+
+**Lava pads (`LavaPadsGeneration = 8`, "landed in the lava", 2026-09-15).** Before, the pad dry test sampled five points
+(centre + four rim points) against `IsSurfaceWater || IsSurfaceLava`, and `IsSurfaceLava` only knew volcano craters and a
+lava *sea*; lava rivers, caldera / shield lakes and gen-3 flows counted as dry. A wet lava pad never got an islet
+(`SeaIsWater`), so `FlattenLandingPads` sheared a radius-8 air cylinder into the melt — dormant generated lava stands as
+walls until the first mined block wakes it. A probe over twelve `ashen_ocean` seeds found 1–10 of 12–16 pads per world in
+lava.
+
+- **Dry test (`LandingFootprintWetGen8`).** Thirteen samples (centre, 4 rim, 4 diagonal rim, 4 half-way) against water
+  (`IsSurfaceWater`, `SurfaceGen1WaterDepth`) and every lava body (`TryGetLavaSurface`).
+- **Decision (`DecidePad`).** A pad still over lava after the nudge (`FootprintLava`: any sample, highest melt top)
+  becomes a **lava islet** at `max(lavaTop + IsletRise, ground median)`, whatever the depth — never a shaft.
+- **Shape (`LandingPadFlatten.Molten`).** The plateau/slope islet of #1620, but basalt through and through (a granular
+  beach sinks into woken lava), filling lava cells as well as sea/water, and without flora tufts. The far-terrain pad
+  packing carries `2` in the islet slot for a lava islet (older peers read it as an islet).
+- **Older saves.** Pads are re-derived, never persisted, so their positions stay. A pad over lava is flagged
+  `LandingPad.Molten` (all generations): `PadRank` 3 (after seabed), an explicit `TryClaimPad` is refused with
+  `srv.land.pad_lava` while a non-lava pad is free, `RestoreLandingPad` releases it on load when a better pad is free —
+  `PlaceLandedShip` then parks the ship there and `LeaveMoltenPad` moves a player saved aboard or over the old footprint to
+  the new heal tank. `NetLandingPad.Lava` (appended) paints the chooser marker orange-red with a "lava!" caption; VEGA
+  has a `lava_pad` hint for the case where every other pad was taken.
+- Tests: `LandingPadTests.LavaWorld_NewWorlds_RaiseABasaltIsletOverLava_NeverAShaftInIt`,
+  `LavaWorld_AnOldSave_KeepsItsPads_ButRefusesAndLeavesTheLavaOnes`, `PadPreference_ALavaPadRanksBelowEveryOtherKind`.
+
+## 20. Generation 8 — Titas (2026-09, Justus' player report)
+
+A frozen planet that exists **at most once per galaxy**: ten blocks of snow over yellow sulfur stone, toxic yellow water
+under five blocks of ice, volcanic hot zones, leafless dead forests, abandoned SPS research stations and very many planet
+machines. The type (`titas`, `minTerrainGeneration` 8, exotic, spawn weight 1) is data; every behaviour sits behind a
+`PlanetType` field that defaults to its classic no-op and is read on generation-8 worlds only
+(`WorldDescription.ExtremePlanetsGeneration`), so every other type stays bit-identical (the goldens did not move).
+
+- **Once per galaxy + fixed name.** `PlanetType.OncePerGalaxy`: `UniverseGenerator.ApplyGenerationTypes` keeps the first
+  roll of such a type on a planet of the ORIGINAL systems (the retype pass already skips the start system); any other roll
+  — a second body, a moon, a system a growing galaxy appended — re-picks from the table without once-types, with the same
+  hash, so the draw stays deterministic. `PlanetType.FixedName`: `UniverseGenerator.ApplyFixedNames` (server, after the
+  per-save type pins) renames the body "Titas" with `RenameWithMoons`. `planet.titas.name` is "Titas" in all 14 locales.
+- **Snow blanket (`SnowCoverDepth` 10).** `ComputeColumn` replaces the altitude snow/ice pass: a dry column that is not a
+  beach and not hot takes the surface block (snow) for `ColumnProfile.CoverDepth` cells, then the biome's sub-surface
+  (sulfur stone — a generation-1 scree/soil paint under the blanket is reset to it); `EffSurfaceDepth` grows by the
+  blanket. The y-loop writes `depth < coverDepth ? surface : sub` (`coverDepth` 1 = the classic top cell). Submerged
+  beds show the rock. No ice ground.
+- **Fixed ice sheet (`IceSheetDepth` 5).** `WorldCalibration.FixedIceSheet`; `IceSheetThickness` returns
+  `min(5, depth)` (0 in a hot zone) — the one function the column fill and every water query share, so
+  `SurfaceIceThickness`, `TryGetWaterSurface` (liquid top = sea − 5) and `IsSurfaceWater` (a ≥ 3 sheet is land) agree.
+- **Hot zones (`HotZoneShare` 0.15, `Biome.HotZone`, `Biome.Temperature` 100).** Calibration step 7 samples a broad region
+  field (`HotZoneField`, FBM scale 150) on the height grid and keeps the `1 − share` quantile as `HotThreshold`; the
+  resolved hot biome index and the cool indices are stored. `BiomeIndex` returns the hot biome where the field is at or
+  above the threshold and spreads the classic altitude mix over the cool biomes elsewhere (`ClassicBiomeIndex`). A hot
+  column never snows or freezes; its upland ponds hold **lava** (`ComputeColumn`, and the fluid queries:
+  `TryGetRawWaterColumn`/`IsSurfaceWater` skip them, `TryGetLavaSurface` reports them). `IsHotZoneAt` is public — the
+  server's temperature reads +100 °C there.
+- **Dead forests (`DeadForests`).** `StampTrees` forces `TreeKind.Dead`, ignores the tree line and the ground rule (snow,
+  rock and beach carry snags) and skips hot zones. The `ashen` theme keeps the density low.
+- **Water life (`MaxAquaticSpecies` 1).** `CreatureGenerator.CapAquaticSpecies` re-draws every water/amphibian species
+  past the cap as a land species from a salted seed.
+- **Structure whitelist (`RestrictStructures`, `AllowedStructures` = `sps_labs`, `net_fragments`).** Worldgen props that
+  someone built (monolith, stone circle, wall fragment, buried pillar) are off; the server stamps no settlement, ruin,
+  bandit camp, monument, factory, wreck, vault, data cube, chest or unique site (`UniqueSiteBodyId` skips restricted
+  types), only net fragments and the SPS labs.
+- **SPS research stations (`SpsLabGenerator`, `GameServerSpsLabs`).** 3–6 per world, placed like bandit camps (placement
+  records `spslab`, voxels once, instances re-derived): a 33×33 compound — the lab (consoles, a `factory_terminal` with a
+  `data_terminal` marker → the lore site `sps_lab`, 3 texts), a store room, sometimes a generator shed; rusted walls with
+  holes, a concrete ship pad with red corner lamps and a helicopter pad with its "H". `sps_cache` loot: circuit boards,
+  energy cells, cables, rusted panels, data fragments, rarely an access code. Inside a roofed module (`InSpsLab`): no air
+  and −90 °C. A machine spawning for a player within 96 blocks of a lab appears 20–32 blocks around it.
+- **Machines (`EnemyDensity` 2.5).** `PlanetEnemyCap` × 2.5 (Normal: 5 per player).
+- **Survival (server).** `ExposureMinutesCold` 40 / `ExposureMinutesHot` 30 replace the suit-energy drain with an
+  exposure meter (`PlayerState.Exposure`, `PlayerStateUpdate.Exposure/ExposureActive/ExposureHot`, HUD row "Cold / Heat
+  protection"): fills outside (half speed under a roof or in a lab), drains in base air, near a campfire or deep
+  underground (60 s from full), resets aboard ship or station. Liners ×1.25/×1.5/×2, hazard tier Light ×1.5 / Hard ×0.75,
+  Off exempt. At full: rising damage (0.5 HP/s + 0.1 per second, ≤ 3) and no regeneration; death lines
+  `srv.death.froze` / `srv.death.burned`. VEGA warns at 50/75/90 % (`vega.sys.exposure_*`). **Toxic water**
+  (`WaterDamagePerSecond` 2): feet or head in water for more than 3 s hurts and stops regeneration
+  (`srv.death.toxic_water`, `vega.hint.toxic_water`); the ice on top is safe.
+- New block `sulfur_stone` (drops stone + a 1-in-5 sulfur ore, texture via the OpenAI script).
+- Tests: `TitasWorldTests` (data, once per galaxy + name, snow blanket, ice sheet, hot zones + lava ponds, dead trees +
+  water-life cap, generation gate), `TitasSurvivalTests` (meter pace, liners/tier, full-meter damage, toxic water, labs +
+  machine cap), golden `titas-gen8`.
+
+## 21. Generation 8 — Valuma and the Sreekmakra (2026-09, Justus' player report)
+
+A rare (spawn weight 1, not unique), peaceful-looking world of wide flat grass plains with one shapeshifter hidden among
+its animals. Justus' text was cut at 1500 characters; this is the known part (the rest is to be asked).
+
+- **Terrain (`CalmTerrain`).** `WorldGenerator.CalmTerrain(planet)` (generation 8 only) switches off volcanoes
+  (`HasVolcanoes`), massifs and rifts (`HasMassifs`), the escarpment (`HasEscarpment`) and every regime
+  (`RegimeGround` → no tilt, steps or equator ridge). The row itself is `flats`/`downs`, amplitude 6, scale 72, very few
+  trees (0.004), flowers and grass.
+- **Fauna (`PeacefulFauna`).** `CreatureGenerator.MakePeaceful` turns every ROLLED species passive or skittish with no
+  bite (roster `many`); authored species are appended after it, so the Sreekmakra keeps its own temper.
+- **Structures.** `RestrictStructures` with only `net_fragments`: no settlements, ruins, camps, wrecks, vaults, cubes,
+  chests, unique sites, and no built worldgen props (see §20).
+- **The Sreekmakra (`data/creatures.json` `sreekmakra`, `GameServerSreekmakra`).** One per world of a type that lists it
+  (`SreekmakraState` on the loaded world): it never spawns through `TrySpawnCreatureNear`; `TickSreekmakra` (1 Hz) places
+  it 40–60 blocks from a player on foot, disguised as a rolled land species (no titans), with 3× that animal's health and
+  its own drop (crystal ×4). Every 150–240 s while nobody is within 24 blocks it takes another shape (`TakeShape` resets
+  health, temper and locomotion). A player killing an animal of the shape it wears, or hitting it, becomes its target
+  (`OnCreatureKilled` — called from the player, sentry and fire kill paths — and `OnSreekmakraHit`): it hunts in that
+  shape (`MoveCreatures` aggressor, the shape's speed ×1.5, bite = the shape's or 4.5, ×1.5) until the player leaves or
+  it dies. At zero health the disguise breaks (`RevealSreekmakra`: true form, 90 HP, bite 7 ×1.5); defeating the true
+  form writes the Codex entry `creature:au_sreekmakra` for everyone within 64 blocks, counts `defeat:sreekmakra`
+  (achievement `sreekmakra`) and sets `WorldMetadata.SreekmakraBackAt` three in-game days ahead. With planet enemies off
+  it only reveals itself, flees for 25 s and vanishes for a day. It cannot be tamed; hostile-scan missions ignore it.
+  **Scanner:** a scan of its current species while it is the nearest such animal within 24 blocks reads
+  `ui.scan.threat.anomaly` (+ trait `ui.scan.disguise`). **Client:** `CreatureView` rebuilds body and voice when a
+  creature's `SpeciesId` changes, with a puff.
+- **Mood.** `TickValumaMood`: time on the world (aboard the landed ship too, reset on any other location) — at 20 minutes
+  `vega.sys.valuma_watching`, at 35 the player's environment is forced to fog (`SendEnvironment`) and
+  `PlayerStateUpdate.Uneasy` darkens and ducks the music (`ClientMusic.DuckFor`).
+- Tests: `ValumaWorldTests` (data, calm gates over 24 seeds + the generation gate, peaceful roster), `SreekmakraTests`
+  (disguise + one individual + shape change, grudge + anomaly, reveal + defeat + Codex + achievement + return time,
+  peaceful flight, mood), golden `valuma-gen8`.
+
+## 22. Pinned landing pads (#1989, 2026-09-23)
+
+Finding a body's landing pads is a search, not a formula: `ComputeLandingPadsUncached` walks rings of
+candidate columns around each planned pad (up to `PadSearchBudget` / `PadSearchBudgetOcean` blocks out,
+step 3) and asks two questions per candidate — `LandingFootprintWet` (13 samples) and `PadFootprintSpread`
+(9 columns). A planet plans 8–16 pads, so a body costs tens of thousands of terrain-column queries. Measured
+on the boot timings (§ `[boot]` lines, #1988): **2.7 s on a meadow world, 7.9 s on a dune world**, paid on
+*every* load, because the result only ever lived in `_padCache` (memory, cleared with the galaxy).
+
+`WorldMetadata.BodyLandingPads` now writes the answer down: `bodyId → "index,x,z,y,radius,depth,flags;…"`,
+filled the first time a body's pads are computed and read back on every later load (2–3 ms). The pads of a
+body are deterministic, so the pinned values are exactly what the search would find again — but pinning is
+also the safer half of the change, the same argument `BodyPlanetTypes` (#468) makes for planet types: the
+old code carried the comment *"pads are not persisted — the rule that re-derives them is the only thing
+holding them in place"*, so any later change to the pad rules could have moved the ground out from under a
+parked ship or a base built beside the pad. A save written before this pins on its next load; a malformed
+entry is ignored and re-searched.
+
+Note when reading boot timings on a **city** world: the pad search also warms the generator's column caches,
+so removing it moves some cost into the `structures` pass that stamps the city. The gain is real but smaller
+there than on an ordinary world (`PadTest` meadowlands: ready 12.7 s → 6.7 s).
+
+## 23. A structure is stamped once (#1990, 2026-09-24)
+
+A vault, a monument, a ruin and a bandit camp have always been written into the world exactly once, guarded by
+`FeatureStamped(...)` — "the same deterministic rolls re-derive the entrances, but no blocks are written, so a
+mined vault stays mined". **Settlements, cities and factories did not follow that rule**: `CommitSettlements`
+(and the factory commit) called `StampSettlementBlocks` on every server start, so every load re-wrote the whole
+structure — 405 332 cells for a 256×256 city — and a wall a player had mined stood there again afterwards.
+
+`StructureBlocksFeature(origin, groundY)` closes the gap with the same mechanism: the voxels are written on the
+first stamp and the instance's origin column is recorded in `WorldMetadata.StampedFeatures`
+(`<body>|structblocks:<x>:<y>:<z>`). Later loads skip the write and leave the buildings as the players left
+them. The mark is set **after** the transaction commits, so a crash mid-stamp re-stamps rather than half-marking.
+A save that has the structure but not the mark — every world made before this — stamps once more and is marked
+from then on, so nothing needs migrating.
+
+Marcel's decision (2026-09-24), asked because it changes the game and not just the clock: **no self-repair, for
+all structures.** What the players do to a building stays done.
+
+The structure is still *generated* on every load — the markers it carries are what the door registry, the NPC
+roster and the mission board are built from. That costs ~20 ms for a whole city; what the `settlements` boot
+pass really spends its seconds on is hanging the doors and populating the place, both of which read world
+blocks and pull the footprint's chunks into memory. Measured on a real city save (`Glutweite`, interleaved
+runs of the same copy): ready **7.1 s / 12.9 s** before, **4.2 s / 5.2 s** after.
+
+## 24. A structure measures its own doors (#1994, 2026-09-24)
+
+The sentence above — "what the `settlements` boot pass really spends its seconds on is hanging the doors" —
+turned out to be one line of the log:
+
+```
+[boot]   ·   npcs (18 ms)
+[boot]   ·   doors (4810 ms)
+[boot]   · settlements (4885 ms)
+```
+
+`RegisterDoors` called `MakeDoor` for each of a city's 232 doorways, and `MakeDoor` ran `DoorProbe.Measure`
+against the **world**: a handful of `GetBlock` calls per door, each one loading (and on a first visit
+generating) the chunk it lands in, until the city's whole 256×256 footprint was resident — at boot, before
+anybody had walked a step.
+
+The structure that was just generated already holds those blocks. `RecordAuthoredDoor` now runs the very same
+`DoorProbe.Measure` over the **layout**, while it is in hand, and stores the result per world cell
+(`LoadedWorld.SettlementDoorFits`: wall axis, gap width, gap centre). `RegisterDoors` builds the door straight
+from that record and reads no world block at all. The axis still comes from the generator where it recorded
+one (#1986); the layout only supplies what it did not say. Ship doors, station doors and player-built doors
+keep the world/structure probe they had, and a marker without a record (an older stamp) falls back to it.
+
+`CityWorldTests.EveryCityDoor_IsTheDoorTheStampedBlocksWouldGive` pins the equivalence: for every one of the
+city's doorways, the door that was hung is exactly the door the stamped blocks produce — same wall, same
+width, same centre to three decimals.
+
+Measured on the same city save as §23: `doors` **4810 ms → 20 ms**, the `settlements` pass **4885 ms → 104 ms**,
+the whole `structures` pass **4902 ms → 295 ms**, and the boot **5.3 s → 2.9 s**.
+
+## 25. Generation 9 — the sand sea and the giants (#2000, #1998–#2002, 2026-09-24)
+
+**The sand-sea planet class.** `sand_sea` (`minTerrainGeneration: 9`) carries two new `PlanetType` fields —
+`SandSeaShare` (0.5) and `SandSeaDepth` (24) — and one biome flag, `Biome.SandSea`. Every other type leaves them at
+their no-op, and nothing reads them below generation 9, so no older world moves.
+
+- **The region.** A torus FBM field (`SandSeaField`, ~260-block basins) whose top `SandSeaShare` quantile is sea. The
+  threshold is measured once per world from the field alone (`SandSeaThreshold`, kept on the wonder profile), so the
+  relief may read it before the calibration exists — the same mechanism as the Titas hot zone, without its circularity.
+- **The relief.** Inside the region `SandSeaBlend` eases the land's relief into broad dunes (`SandDunes`: long crests
+  plus a cross-ripple, 0–6 blocks) over a narrow band at the edge. Outside it the type's own styles — dunes, mountains,
+  canyons, mesas, flats, badlands — and its tags (buttes, inselbergs, volcanic) lay out the rock country as usual.
+- **Never flooded.** Once the sea level is known (never inside the calibration sample), `SandSeaRaise` lifts a sea
+  column that sits at or under the waterline onto a dune floor three blocks above it.
+- **The biome.** The calibration records the sea biome and the dry ones (`SandBiome`, `DryBiomes`, `SandCeiling`);
+  `BiomeIndex` gives the sea biome to a column inside the region whose surface is at most `SandCeiling` (the dune floor
+  plus ten) — a butte or an inselberg rising out of the sea is a **rock island**. `ResolveBiomes` always keeps the sea
+  biome on a sand-sea world, whichever others the per-world roll picked.
+- **The column.** A sea column's topsoil is `SandSeaDepth` blocks of sand, and its cave shield covers the same band
+  (plus three) — the classic caves and the tunnel carver skip it, and a mega-cavern reaching into it is dropped. So
+  nothing ever opens under the sea, and the sandworm's buried body is never seen through a hole.
+- `IsSandSeaAt(planet, x, z)` answers for the server: the worm's habitat, where a vibration carries, where a thumper
+  is heard.
+
+**The giants** live outside the procedural roster (`CreatureGenerator.GenerateColossus` / `GenerateSandworm`, species
+ids `gi_colossus` / `gi_sandworm`) and never touch world generation; `GiantRules` decides which worlds host them —
+the colossus on a very flat type with gravity ≤ 0.70 and a one-in-three roll, sandworms on every sand-sea world. See
+`GameServerGiants` and the TODO entry for the behaviour.
+
+## 26. Generation 11 — cave flora, the rainbow glow class, cold flora (#2013, 2026-09-25)
+
+Everything in this wave is gated on `WorldDescription.CaveFloraGeneration` (11); an older world keeps its plants.
+
+**The habitat class.** `FloraCatalog.Species` gained `Habitat` (`Surface` / `Cave` / `Both`), `CaveHosts` (the rock a
+species roots on underground — kept apart from `Hosts` so the surface pools and the surface coverage rule never see
+it), `Rainbow` (every plant its own colour) and `Light` (the fraction of its colour a plant casts as block light).
+The four new species (`flora_cavecap`, `flora_glowmoss`, `flora_glowthread` hanging, `flora_prismbloom` rainbow) are
+appended after `flora_hangkelp` with `MinGeneration` 11; the surface fungi became `Both`.
+
+**Rosters.** `FloraGenerator` keeps a plant world's caves planted (`EnsureCaveCoverage`: one cave-only species at
+least, the rainbow class always). A barren or airless world with caves rolls `BarrenCaveFloraChance` (0.5) from its
+own seed and then carries a cave-only roster from the same per-species streams. Cave-only species and the rainbow
+class never count as (or become) the species that keeps a SURFACE host planted (`SurfaceCover`).
+
+**The cave pass** (`WorldGenerator.CaveFloraGen11.cs`) runs per chunk after the column loop, reading the finished
+chunk — the y-loop (one of the largest methods, #1740) is untouched:
+
+- a **floor** is an air cell whose cell below is a cave host, at least `CaveFloraMinDepth` (6) under the column's
+  ground top; a **ceiling** is an air cell whose cell above is a cave host with open air below (hanging species);
+- two low-frequency fields per column: a patch field scaling the density (×2 / 1.2 / 0.6 / 0.15 — grottoes and bare
+  stretches, ~11 % of floor cells on average at `CaveFloorDensity` 0.12, ceilings at 0.05) and a pick field choosing
+  the species of a patch (weights: cave-only 3, surface fungi 2, rainbow 2); barren worlds grow at half density;
+- the chunk's bottom layer takes no floor plant and its top layer no hanging one (their host sits in the next chunk).
+
+**Rainbow clusters on the surface** use the same pass: dry columns whose cell above the ground is still air after the
+surface flora, on a rainbow host, not on frozen ground, inside a rare cluster field (> 0.74) at 35 % fill.
+
+**Cold flora.** `SurfaceFloraColdFactor`: a Cold-tagged species keeps `max(classic, 0.6 × adapted)`, the adapted fade
+running from −30 °C to −45 °C; everything else keeps the classic +4 … −8 °C fade. `FrozenFloraHost`: altitude snow /
+ice (and a snow blanket) host their own pool, so a snow cap grows frost flowers instead of fading grass plants.
+
+**Client.** The mesher colours a rainbow plant with `FloraTints.RainbowAt(x, y, z)` (canonical cell, vivid hue) and the
+light index registers the glowers with `Light` > 0 (`ClientWorld.SetCellLightResolver`) at this world's species colour
+or the cell's rainbow colour, scaled by `Light` — a dim start level is a short reach in the flood fill. The classic
+glowers keep their self-glow only.

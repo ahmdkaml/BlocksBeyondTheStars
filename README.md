@@ -49,7 +49,7 @@ Design your ship block by block, fly real system-scale routes, dock at space sta
 
 **Explore**
 
-*   **System-scale flight:** procedurally generated star systems — each with its own sun, planets, moons and mineable asteroid belts — and **21 planet types** (airless rocks, lava fields, jungles, oceans, skylands, fungal and crystal worlds, …) with their own terrain, flora, fauna and sky. Worlds wrap east–west, so you can walk around a planet. Jump between systems; the far **frontier** is richer, and a *Growing* galaxy grows a new system every time you push past its edge.
+*   **System-scale flight:** procedurally generated star systems — each with its own sun, planets, moons and mineable asteroid belts — and **29 planet types** (airless rocks, lava fields, jungles, oceans, skylands, fungal and crystal worlds, red deserts, archipelagos, glaciers, …) with their own terrain, flora, fauna and sky. Worlds wrap east–west, so you can walk around a planet. Jump between systems; the far **frontier** is richer, and a *Growing* galaxy grows a new system every time you push past its edge.
 *   **Living worlds:** per-position **weather and seasons** (storms that drift across the land, fog, blizzards, acid rain, ember fall, ion storms, meteor showers — with real consequences and opportunities), a true day/night terminator, creatures you can scan, hunt or **tame as companions**, binoculars with thermal vision and an in-game camera with a photo album.
 *   **Places to find:** settlements and space stations with NPCs, rare **factories**, fallen ruins, treasure chests, **monuments with glowing runes**, bandit camps and pirate space — and a handful of **one-of-a-kind mysteries** per galaxy.
 
@@ -194,9 +194,12 @@ and our short **[Code of Conduct](CODE_OF_CONDUCT.md)** (the gist: be kind to on
 
 ### School club "Building Games with AI"
 
-The after-school club (Schul-AG „Spiele entwickeln mit KI“) playtests the browser build, and its reports go straight into the game:
+The after-school club (Schul-AG „Spiele entwickeln mit KI“) plays, tests and designs with us. The children's
+bug reports from the browser build went straight into the game ([#1453](https://github.com/marceld23/BlocksBeyondTheStars/issues/1453)–[#1462](https://github.com/marceld23/BlocksBeyondTheStars/issues/1462), [#1708](https://github.com/marceld23/BlocksBeyondTheStars/issues/1708)–[#1713](https://github.com/marceld23/BlocksBeyondTheStars/issues/1713)),
+and their ideas became whole planets, animals and plants — the rainbow planet, the flower planet and its
+flowerling, the scrap planet, the gaming planet, Leni the ice creature and the Paul flower ([#1756](https://github.com/marceld23/BlocksBeyondTheStars/issues/1756)–[#1765](https://github.com/marceld23/BlocksBeyondTheStars/issues/1765)):
 
-- **Ben**, **Marie** and **Nikita** — the first club day's reports — a bed that looked unusable, a frozen body after the heal-tank retrieval, a landing on the sea floor with no way off the planet, and see-through block edges ([#1456](https://github.com/marceld23/BlocksBeyondTheStars/issues/1456), [#1462](https://github.com/marceld23/BlocksBeyondTheStars/issues/1462), [#1453](https://github.com/marceld23/BlocksBeyondTheStars/issues/1453)–[#1455](https://github.com/marceld23/BlocksBeyondTheStars/issues/1455), [#1459](https://github.com/marceld23/BlocksBeyondTheStars/issues/1459))
+- **Ben**, **Daimien**, **Lena**, **Marie**, **Nikita**, **Noah**, **Paul**, **Sophie** and **Theo** — the children of the club
 - **Christopher Korb** (K&K Multimedia) — IT support for the club
 
 ### Contributors
@@ -209,6 +212,8 @@ Community contributions we're grateful for:
 - **[@SpaleRuby](https://github.com/SpaleRuby)** — accessibility review of the portal website: field labels, announced status messages, real form submission and the password-reset disclosure ([#574](https://github.com/marceld23/BlocksBeyondTheStars/issues/574))
 - **Francesco Quirino** ([@alessandroquirino-lab](https://github.com/alessandroquirino-lab)) — Italian localization: the game's third language, translated from scratch group by group, starting with all 290 block names and descriptions ([#582](https://github.com/marceld23/BlocksBeyondTheStars/pull/582))
 - **Ahmed Mohamed Abdelhady Kamel** ([@ahmdkaml](https://github.com/ahmdkaml)) — server test coverage & hardening: an ongoing series of unit tests for core server types and contracts — from the world math primitives to the noise generators — plus protocol round-trip fuzzing and save-corruption hardening, so damaged player data is rejected with a clear message instead of being silently overwritten ([#571](https://github.com/marceld23/BlocksBeyondTheStars/issues/571), [#1048](https://github.com/marceld23/BlocksBeyondTheStars/issues/1048), PRs [#917](https://github.com/marceld23/BlocksBeyondTheStars/pull/917)–[#1196](https://github.com/marceld23/BlocksBeyondTheStars/pull/1196))
+- **[@Camembert1001](https://github.com/Camembert1001)** — Japanese localization check: ran the Japanese catalog through a browser-based UI preflight and caught raw `{count?100:100}` tokens in two item descriptions — the same bug turned out to hide in the Chinese texts too, and it exposed a blind spot in our own placeholder checks ([#1973](https://github.com/marceld23/BlocksBeyondTheStars/issues/1973))
+- **[@Jay-Hu911](https://github.com/Jay-Hu911)** — game balance review: worked through the refinery and factory recipes against their workshop and refinery chains, found the factory polymer that cost three to four times its chain, and turned the factory cost rule into a test that covers all 18 factory recipes ([#575](https://github.com/marceld23/BlocksBeyondTheStars/issues/575), [#1993](https://github.com/marceld23/BlocksBeyondTheStars/pull/1993))
 
 **Playtesters** — hands-on testers whose feedback shaped the game:
 
@@ -485,7 +490,7 @@ changes are needed to add content. Player-facing names use localization keys res
 A fully playable client + server game: **multiple star systems** (each with its own sun, planets,
 moons and **asteroid belts** you can mine from the ship or on an EVA), procedurally generated
 worlds that wrap east–west (walk around the planet, seam-free) with a real day/night terminator,
-21 planet types including exotic ones (skylands, fungal, corrupted, ocean, salt flats, …) with their
+29 planet types including exotic ones (skylands, fungal, corrupted, ocean, salt flats, ash seas, …) with their
 own flora and fauna, **per-position weather and seasons** (episodic fronts that drift across the
 world — rain, fog, blizzards, acid rain, ember fall, spore blooms, ion storms, meteor showers — with
 gameplay consequences and a weather scanner), swimming/diving, a survival **temperature/climate

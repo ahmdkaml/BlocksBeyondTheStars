@@ -11,17 +11,1289 @@ Versions are date-based (CalVer) `YYYY.MM.N` — year, month, release counter wi
 Each release below mirrors its [GitHub release notes](https://github.com/marceld23/BlocksBeyondTheStars/releases);
 the richer, screenshot-laden versions live there. `(#123)` references the pull request or issue.
 
-## [Unreleased]
+## [2026.9.15] — 2026-09-25
 
-### 👁️ A wider view (#1589 #1590 #1591)
+The glowing-flowers release. Meet the **prism bloom**: a new flower that **glows — and every single one shines in a
+colour of its own**. It lights up the ground around it, deep in caves and in bright little patches out in the open,
+on every world that has plants. Down in the caves it has company: **glow moss** carpets the floor and **glow threads**
+hang from the ceiling, and they light up the dark too — a cave is no longer bare, black rock. On the coldest worlds
+the **frost flower finally blooms in the wild**. And out there, something **as big as a speeder walks on eight
+legs** — the ones that sit perfectly still are waiting for you. Plus: the world picker **scrolls**, so if you have
+more than nine worlds, the older ones are no longer lost.
 
-- **The world no longer feels oversized.** The first-person camera now looks through an 80° field of view
-  instead of the narrow 60° it silently used before, so blocks take up about a third less of your screen and a wall
-  only fills the view when you are really standing at it (#1589).
-- **Field of view setting.** Settings → Controls has a new *Field of view* stepper, 50° to 100°. It applies
-  right away, even from the pause menu; wider shows more of the world and costs a little frame rate (#1590).
-- **A smaller tool in hand.** The drill, block or hand you hold is a fifth smaller and stays the same size on
-  screen whatever field of view you pick (#1591).
+ℹ️ **Compatibility:** the network protocol stays at version 6 and saves migrate unchanged. The new plants and the
+arachnid belong to **new worlds**; the worlds you already have keep their plants and their animals exactly as they
+are. An older game version should update before it joins a 2026.9.15 world — it does not know the new plants and
+would draw some blocks wrong. The desktop game updates itself on start, and the browser version is always current.
+
+### 🌈 The prism bloom — a flower in every colour (#2013)
+
+- **A new flower that glows, and no two are alike.** Every prism bloom shines in its own colour, so a patch of them
+  is a whole rainbow — and each one **lights up its surroundings**, casting its colour onto the ground and the rock
+  around it.
+- It grows **in caves** and, now and then, in **small bright clusters out on the surface** — on every world that has
+  plants. Pick one and you get a crystal along with the fibre.
+
+### ✨ Caves that glow (#2013)
+
+- **Glow moss** spreads in soft carpets over cave floors, and **glow threads** hang down from the ceilings like
+  curtains of light. **Both give off light** in the world's own colour — a cave full of them is no longer pitch black.
+- **Caves are no longer bare.** The dark **cave cap** mushroom stands on cave floors, and the mushrooms from the
+  surface grow down there too. Even a bare, airless moon has a good chance of green — and glow — in its caves.
+- Pick a cave plant and it grows back, just like the plants up on the surface.
+
+### ❄️ Frost flowers in the wild (#2013)
+
+- **Cold worlds grow plants.** Until now every plant froze away the moment it got properly cold, so tundras, ice
+  worlds and snowy mountain tops stayed completely bare. Hardy plants now hold on far into the frost, and snow and
+  ice grow their own — among them the **frost flower**, which until now never grew in the wild. Pick one and it
+  breaks into a crystal.
+
+### 🕷️ The arachnid (#2009)
+
+- **An eight-legged creature as big as a speeder**, with a body in two parts and eyes in twos, fours, sixes or
+  eights — most of them with fangs. Every world rolls its own: its colours, its hide, its legs and **its head**. Half
+  of them have a plain, boxy head; the others wear a **pyramid** — pointed, tall and thin, cut off flat or built in
+  steps like a temple.
+- **Some only wander. The others lie in wait.** An arachnid with a bad temper crouches flat, spreads its legs and
+  keeps perfectly still — until you come within a few steps. Then it rushes you. A scan tells you which kind you
+  have found, and VEGA warns you the first time you meet one.
+- **It is really there**: you bump into its body, and your hits land where you aim. It is tough, it hisses and
+  clicks in its own voice, and — with patience — you can tame one.
+- It is rare: only about one kind of land animal in twelve is an arachnid. Admins can call one in with **`/arachnid`**.
+
+### 📂 Every world in the list (#2010)
+
+- **The world picker only ever showed nine worlds.** From the tenth on, your **oldest** worlds were simply missing:
+  you could not play them or delete them, and "New world" claimed their names were already taken. The list now
+  scrolls — with the mouse wheel, the scrollbar or a gamepad — and after you delete a world it stays where you were.
+  With nine worlds or fewer it looks exactly as before. The same list is used for hosting a game.
+
+### 🏭 The factory makes twice the polymer (#1993)
+
+- The factory's polymer recipe now turns out **two polymer instead of one** for the same carbon and sulfur ore.
+  A new check makes sure every factory recipe stays fair against the workshop route. Thank you, **@Jay-Hu911** 🙏
+
+### 🙏 Credits (#2007 #2008)
+
+- **@Jay-Hu911** joins the community contributors — in the README and in the in-game credits, in all fourteen
+  languages.
+- **Theo** joins the school club's children in the credits.
+
+## [2026.9.14] — 2026-09-24
+
+The giants release. The school club dreamed up **creatures as tall as a high-rise**, and here they are. A **colossus**
+— a four-legged giant up to sixty blocks tall — roams the flattest, lightest moons. On a brand-new kind of planet, the
+**sand sea**, a **sandworm** hunts by the vibration of your steps and bursts out of the dunes. A **thumper** lures it
+away, or brings it in close enough to watch. The flowerling finally **shows its face** — and it means it now when you
+dig in front of it. Under the hood, worlds **load up to eight times faster**, and a wall you knock down in a village or
+the city **stays down**.
+
+ℹ️ **Compatibility:** the network protocol stays at version 6 and saves migrate unchanged. The sand sea and the giants
+belong to **new worlds** (terrain generation 9); the worlds you already have keep their planets and their animals.
+The first time you open an existing world it writes down its landing pads and its buildings once, and loads faster
+from then on. An older game version can still join a 2026.9.14 world, but it will not show the giants properly —
+update to see them.
+
+### 🏜️ A new kind of planet: the sand sea (#2000)
+
+- **Half of the world is a sea of deep sand** — wide, rolling dunes, twenty-four blocks of sand with no caves beneath
+  them, never flooded. Around the sea every world rolls its own coast: mountains, canyons, table mountains, lava
+  fields or open water. **Rock islands** rise out of the sand here and there — and on rock you are safe.
+
+### 🐛 The sandworm (#2001)
+
+- **It hears you through the sand.** Walking, mining, drilling, a blast, a hard landing or a speeder all carry
+  through the sand sea — **sneaking** barely does, and **rock, a landing pad or a floor you built are silent**.
+- **You get a warning.** The sand ripples and rumbles as it comes, and VEGA tells you to get onto rock. Then it
+  bursts out of the dunes in an arc — or rears up like a tower and strikes the spot it heard.
+- **Every world rolls its own worm** — its length, its colours, its armour plates, the mandibles of its mouth, how
+  keen its hearing is and how short its temper. It is very tough, and you can only hit it while it is out of the sand.
+- It never moves a single block: the part of it under the sand is simply hidden by the sand.
+
+### 🥁 The thumper (#2002)
+
+- **Build one at the workshop** and set it down on the sand sea: it pounds the ground every two seconds for a minute
+  and a half. The worm hears it from far away, comes for it and **swallows it whole**. Lure the worm away from you —
+  or bring it in where you can watch it. On rock nothing hears it; mine it back to switch it off.
+
+### 🦣 The colossus (#1999)
+
+- **A four-legged giant, forty to sixty blocks tall**, and every one is different: gentle ones migrate and graze on
+  treetops, shy ones walk away, some fight back when hit, and a few come looking for you. Backs of armour plates,
+  spikes, crystals — or a small forest.
+- **It only lives on the flattest, lightest moons** — and only on one in three of those. When you find one, you will
+  see it from far away.
+- **Before it stomps, a dark ring marks the spot.** Get out of it — or get under a roof or into a cave: a stomp never
+  reaches inside.
+
+### 🦶 Giants are really there (#1998)
+
+- **You bump into them**: the legs of a colossus and the body of a worm are solid. Your hits land where you aim —
+  on a leg, on the body — and you can scan them. Their footfalls throw up dust and shake the ground.
+- A defeated giant is gone for a few days, then another one comes. There is an achievement for each.
+- Admins can call one in for a look: **`/giant colossus`** or **`/giant sandworm`** (a worm needs a sand sea).
+
+### 🌸 The flowerling shows its face (#1997)
+
+- **Its face was hidden inside its head** — the friendly smile and the angry maw alike. Now you see the grin when it
+  is calm, and when you dig in front of it the petals flush red, the jaw drops open and the teeth show.
+- **And it means it now.** It used to get angry from sixteen blocks away but only came for you within eight — so from
+  further off it just wandered away. Now it comes the whole way, keeps up the chase for longer and is a little faster
+  (still slower than you walk). Digging right beside it wakes it at night, too.
+
+### ⏱️ Worlds load much faster (#1987 #1988 #1989 #1990 #1994)
+
+- **An ordinary world opens in about six seconds instead of fourteen**; the city world that took twenty-three
+  seconds is ready in **about three**. The landing pads are worked out once and remembered, the network set-up runs
+  alongside the world build instead of in front of it, and buildings are no longer rebuilt on every start.
+- **The loading bar tells the truth** — it follows what the world is actually doing instead of a guess.
+
+### 🧱 Buildings stay the way you left them (#1990)
+
+- **A wall you knock down in a village, the city or a factory stays down.** These places used to rebuild themselves
+  every time the world was opened. Now, like vaults and ruins, they are built once — what you do to them stays done.
+
+### 🚪 City doors hang straight (#1986)
+
+- **About one door in twelve in the city stood across its doorway**, twice as wide as the opening and reaching into
+  the room behind it. Every city door now hangs in the wall it was cut into, exactly as wide as its opening.
+
+### 🌐 Browser: no more white floor you fall through (#1991)
+
+- Next to a landing pad the browser version sometimes drew a flat white patch of far-away terrain right where you
+  stood — and you could walk through it. The distant-terrain patches now stay out of your immediate surroundings.
+
+### 🙏 Credits (#1985)
+
+- **Noah and Daimien** from the school club are now spelled correctly — in the credits and in the flower-fields
+  planet description, in all fourteen languages.
+
+## [2026.9.13] — 2026-09-21
+
+The doorway release. The ship, station and town editors finally **show you what you are about to build**. Until
+now every brush looked the same — one little green cube for a door, a bed, a campfire or a villager alike. Now the
+ghost is the real thing: **the door the game will hang there**, facing the right way and as wide as the gap, **both
+halves of a bed**, a campfire as a flat slab, a figure where a villager will stand. Out in the world, a door in your
+hand shows a **hologram** of where it goes before you place it. Four kinds of village had a **wall where their front
+door belonged** — they have real doors again. And the Japanese and Chinese descriptions of two oxygen tanks no longer
+show a garbled code, thanks to a sharp-eyed report by **Camembert1001** 🙏
+
+ℹ️ **Compatibility:** the network protocol stays at version 6 and saves migrate unchanged. Villages that already
+stand in your world keep the doorway they were built with; villages in a fresh world, or in a part of the map nobody
+has visited yet, get the working door. A template of your own with a door *block* in it is repaired into a real door
+the first time you open it in the editor.
+
+### 🚪 The editors show the real thing (#1975 #1976 #1977 #1978 #1980)
+
+- **Doors look like doors.** The ghost shows the door the game will hang: which way it faces, how wide it gets (one
+  to seven blocks — it fills the gap between two walls) and how tall it is. It turns **red, with a hint**, where a
+  door cannot work: no wall beside it, or no room above it.
+- **Beds come in two halves.** Placing a bed writes head and foot together, and removing one half takes the other
+  with it. Where the foot would not fit, the bed is refused — the same rule as in the game.
+- **Props get their proper form by themselves.** A campfire is a flat slab, a rug a thin sheet, a flower pot a pot,
+  a ladder leans against the wall you clicked, stairs are stairs. The editors used to save all of them as full cubes.
+- **Figures instead of cubes.** Villagers, traders and everyone else show as a standing figure; mission boards,
+  chests, terminals, floor plates, the ship's hatch frame and the decor of the cockpit and the other ship stations
+  show their outline — in the ghost and in the finished build. The port brush lights up the wall it paints.
+- **Placed doors are drawn in the build**, so you see the finished doorway while you are still working on the room.
+
+### 🧩 A form picker (#1979)
+
+- The −/+ stepper that only reached the first nine forms is gone. Both editors open a **picker with every form the
+  game knows** — table, chair, bench, fence, beam and the rest, with *Automatic* first — and it works with a gamepad.
+
+### ✋ In the world: see the door before it goes in (#1981)
+
+- **Holding a door shows a hologram** in the cell you aim at, already turned the way the door will stand — along
+  the wall beside it, or towards you if there is none. No more guessing which way it will face.
+
+### 🏘️ Villages have front doors again (#1982)
+
+- **The river hamlet, the stone roundhouse, the stilt hamlet and the walled market had a wall where their door
+  belonged.** The door had been saved as a door-coloured block instead of a real door, so it never opened. They are
+  real doors now, and the doorways are high enough to walk through.
+- **The editors' block list no longer offers door blocks**, because a door block is a wall — the door lives under
+  the markers. The **station editor** keeps them, labelled **hull airlock**: the airtight block a station's outer
+  hull really uses.
+- A new check keeps it that way: no door blocks in a village, every door with a wall beside it and room above it.
+
+### 🌐 Translations (#1973)
+
+- **Japanese and Chinese: two oxygen-tank descriptions showed a raw `{count?100:100}` code** instead of the number.
+  They show the number again. Reported by **Camembert1001**, who ran our Japanese texts through their own interface
+  checker — thank you! You are in the in-game credits now.
+- The translation checks now catch stray braces like these in every language, so this kind of mistake cannot slip
+  through again.
+- The new editor texts are in all fourteen languages, and the user manual explains how doors find their wall.
+
+## [2026.9.12] — 2026-09-20
+
+The paintbox release. This one hands you the brush. Three new editors in the main menu let you **paint every
+texture in the game**, **build forms that fill several blocks** and **give your tools a look of your own** — and
+whatever you make is yours straight away, on any installation, without waiting for an update (#1950). If you run a
+world, you can **publish your textures to everyone playing in it**. And if you paint something you are proud of,
+you can **send it in** — it may end up in the game for everybody. In the world itself nothing changes: the
+shaping tool, its little editor and dyeing work exactly as before.
+
+ℹ️ **Compatibility:** the network protocol stays at version 6 and saves migrate unchanged. An older client on a
+newer server simply sees no world textures and no tool looks — nothing breaks. Everything you paint lives in your
+own game folder, so an update never paints over it. The game can play animated tiles now, but the build still
+ships none — that is a painting job, not a programming one.
+
+### 🎨 The Texture Editor: repaint anything (#1952 #1955 #1956 #1957 #1962)
+
+- **Paint any texture in the game.** Every block, the furniture, plants, animals, the ground, avatars — and the
+  little icons your items have in the backpack. The editor lists what your game actually has; nothing has to be
+  downloaded and no developer files are needed. Pencil, fill, lines, mirror, frames, undo.
+- **See it before you keep it.** The preview puts your texture on a turning cube, on the real shape of the thing
+  (both halves of a bed, for instance) or on crossed plant cards.
+- **"Use it for me"** makes the texture yours on the spot — the world repaints itself while you watch, no reload.
+  One switch in the options turns your whole pack off again.
+- **Pass it on:** a share code for a single texture, or an export folder for the whole thing.
+- **Doors, factory machines and the station terminal can be painted too (#1956).** They were coloured shapes that
+  no texture could reach; now every part of them has a name the editor can open.
+- **Textures can move (#1957).** Up to eight frames at four speeds — water, fire, a blinking lamp. The game plays
+  them in the world, on every face that shows the block's own picture.
+- ⚠ **A block texture can never be see-through.** That rule holds in the editor, on the server and again when a
+  texture arrives from somebody else — nobody paints themselves an X-ray view of the ground.
+
+### 🧱 The Form Editor, and forms that fill several blocks (#1960 #1961 #1969)
+
+- **A real editor for your own forms**, in the menu: a big canvas per layer, undo, mirror, copy-the-layer-below,
+  fill, and a library that finally shows every form you own, with duplicate and delete. It writes the same library
+  the shaping tool in the world reads — forms you already made are all there.
+- **Forms can now fill several blocks** — up to 3×3×3, eight cells. A table, an archway, a statue: build it as one
+  piece, place it as one piece. It turns with you but never tips over, it costs one block of material per cell and
+  gives all of them back, and if anything takes a single cell away — mining beam, fire, water, sand, a bomb — the
+  whole form goes at once instead of leaving a stump. (On ships and stations a form is still a plain cube.)
+- **Pick the preview material from a list (#1969).** A search field and a scrolling list with a picture in front of
+  every name, sorted by the name you actually read, instead of clicking ◀ ▶ through thirty-one materials. The
+  editor opens on stone and remembers the material you used last time.
+
+### 🛠️ My Tools: your drill, your look (#1962 #1963)
+
+- **Give your tools a look of your own** — drill, pistol, blade, scanner and the rest. A small three-dimensional
+  canvas, fifteen colours, and any colour can glow.
+- **The look belongs to you, not to the tool.** Everyone in the world sees it in your hand; if you hand the tool
+  to someone else, they see their own look for it. Reach, damage and speed never change. Up to sixteen tools.
+- **Every tool's shape is data now (#1962)**, so a tool can get a new model without a new build — and the same
+  editor paints item icons.
+
+### 🌍 World textures: paint for the whole server (#1958 #1959)
+
+- **An admin can publish a texture into a world.** Everyone playing there gets it immediately and sees it again on
+  every visit — a themed server can finally look like its theme.
+- **In that world, the world wins** over your own pack. And **every player can switch world textures off** if they
+  do not like what they see.
+- **New world option — *World textures: Admins / Off*.** Off takes them away from everyone at once; nothing is
+  lost, the world keeps them.
+- **`/reporttexture <name>`** lets any player flag a texture they find unpleasant, and
+  **`/texturewipe <name | player | all>`** lets an admin remove one texture, everything one player published, or
+  the lot.
+
+### 📮 Send your texture in (#1964 #1965 #1966)
+
+- **"Submit to the developers"** sends a texture you painted to us, with three tick-boxes you confirm first: that
+  you painted it yourself, that we may put it in the game, and that we may credit you. It travels with a
+  **nickname you choose** — no name, no e-mail address, no location, nothing about your computer. What we do not
+  use is deleted after twelve months.
+- **If your texture goes into the game, you are credited** under exactly that nickname.
+- **Bug reports say which textures you replaced (#1964)** — their names only, never the pictures — so a report
+  about a strangely-looking block makes sense to us. The F1 hint no longer promises to save your position.
+
+### 🧰 Underneath (#1951 #1953 #1954 #1967)
+
+- **Room for new kinds of messages again (#1951)** — the space was genuinely full. Old clients ignore the new ones
+  instead of stumbling over them, which is why this release needs no protocol bump.
+- **The gamepad works in all three editors (#1954):** Start switches to the canvas, the stick walks a cursor,
+  A/X/Y draw, the d-pad steps through layers and frames, RB undoes.
+- **Our own texture tools can no longer paint over hand-made work (#1953)** — every tile records who made it.
+- **All of it is translated into fourteen languages (#1967)**, and the user manual, the parents' guide and the
+  privacy page have been brought up to date with it.
+
+### 💬 Fixes (#1970)
+
+- **An unlucky chat message can no longer take the word filter down with it.** The filter gives each of its
+  patterns a time budget and skips one that runs long — except the skip could never fire, so the error escaped
+  into the chat instead. It is caught where it happens now. (Old bug, found by the test machine.)
+
+## [2026.9.11] — 2026-09-17
+
+The quarters release. **Justus** played the shapeshifter update for an evening and sent four more reports, and all four
+of them are in here. In a **Sandbox** world you can now craft **anything, without materials** — the world dialog had
+promised that for a long time, the menu just never allowed it. The **sage's lectern became a computer terminal**, and
+three other profession posts stopped looking like pictures of furniture. Your ship's cabin has a **real bed** you can
+lie down in instead of a cube with a bed painted on it — and the small starter ship gets a **crew bunk** of its own.
+Furniture you build **into** a ship keeps its shape now. And if your ship is shot out from under you, you **land on
+solid ground** instead of hanging in the air. Thank you, Justus 🙏
+
+ℹ️ **Compatibility:** the network protocol stays at version 6, saves migrate unchanged. Ship cabins get their new bed
+the next time the ship is placed, so worlds you already have pick it up by themselves. Profession posts you have
+already built keep standing and simply look different. The crew bunk is a new item with a recipe at the workshop.
+
+### 🧰 Sandbox: craft anything, no materials (#1936 #1937)
+
+- **The Craft button works in Sandbox.** The server has handed out free crafting for a long time, but the menu still
+  checked your backpack first and greyed everything out with *"Materials missing"*. Now a Sandbox world crafts without
+  blueprints, without materials, without a workbench or a factory standing next to you — and it hands you a **full
+  stack** at once. The only thing that can still say no is a full backpack.
+- **And a full backpack really says no** instead of quietly throwing the result away (#1937).
+
+### 🖥️ The sage's terminal, and three posts that stopped being pictures (#1938 #1939 #1940)
+
+- **The sage's lectern is a computer terminal now** — Justus asked what that block was supposed to be, and Marcel
+  agreed it looked like nothing in particular. New look, new name (*Sage's terminal*) in all 14 languages. Posts you
+  have already built keep standing.
+- **The reporter's desk, the streamer's post and the quarry post** were little scenes with legs and a floor drawn on
+  them, repeated on all six sides. They are cabinets and crates now.
+- **Nobody stands on top of a profession post** any more — the residents used them as a step (#1940).
+
+### 🛏️ A bed in the ship, and furniture that keeps its shape (#1941 #1942 #1943)
+
+- **The bed in the ship cabin is a real bed** — two cells, head and foot, just like the bed you build in a house. It
+  picks a free spot next to the marker, never in a doorway and never on the square where you appear after a respawn.
+- **The starter ship gets a crew bunk (#1942).** The small box ship has no room for a two-cell bed, so it gets a bunk
+  of its own: one cell, your home spawn with **E**, and a place to rest anywhere a full bed does not fit. You can
+  craft it at the workshop.
+- **Furniture you build into your ship keeps its form (#1943).** A bed, a campfire, a rug or a staircase built aboard
+  used to turn into a plain cube the moment it was placed. Now it looks the way the placement ghost showed it — and
+  mining one half of a bed takes the other half with it.
+
+### 🚀 Losing your ship takes you home (#1945)
+
+- **Shot down, and standing on the ground again.** If your ship was destroyed while you were walking around inside it,
+  you were dropped onto the planet without the planet ever loading: no ground, no way back into the cockpit, hanging in
+  mid-air under the wrong sky. Losing a ship is now a proper world change — you land on the ship's body, the wreck is
+  parked where you can repair it, and you get the usual notice telling you what happened. (Justus hit this one live;
+  reloading the world rescued him at the time.)
+
+### 💬 Small fixes (#1934)
+
+- **The chat banner fits its text.** While the chat box is open, the line *"You are in chat — Enter sends · Esc
+  leaves"* ran out past both edges of its frame. It sizes itself to the sentence now, in every language.
+
+## [2026.9.10] — 2026-09-16
+
+The shapeshifter release. Almost everything in it began with **Justus**: in two days he sent more than twenty
+reports — a crash, a ship that landed in a lava lake, a chat that swallowed `/help`, a station that was gone after a
+restart — and a pile of ideas. Now the people of your worlds **have professions**: a doctor, a shopkeeper, an arms
+dealer, a sage, an animal tamer, a blockfarmer, a streamer who wants a photo with you and a reporter who interviews
+you. There are **two new planets**: **Titas**, a frozen world that exists only once per galaxy, and **Valuma**, calm
+grass plains where one of the animals is not an animal — and you can even tame it. **Space stations look like
+themselves** from the cockpit, block for block, and your ship docks in their hangar. Sandbox worlds get an **"All
+items" page**, the world mode can be switched **with a chat command**, and every drill, pistol, blade and scanner
+**looks different in your hand**. Thank you, Justus 🙏
+
+ℹ️ **Compatibility:** the network protocol stays at version 6, saves migrate unchanged. Titas, Valuma and the lava
+islands appear in **new worlds**; worlds you already have keep their landscape. New profession buildings appear in
+newly generated villages and stations — the profession posts for your own base and station work everywhere. Existing
+worlds get a station in their start system if it had none, and a station you already visited keeps its inside and
+only gains its outside detail.
+
+### 🧑‍⚕️ Eight new professions (#1910 #1911)
+
+Justus sent eight ideas for people to meet in your worlds — here they all are.
+
+- **Doctor:** medpacks, field medkits and an expensive detoxifier; a bed and a stretcher every other day.
+- **Shopkeeper:** food — as long as you stand inside the shop.
+- **Arms dealer:** cables, plates, energy cells and finished laser pistols or plasma blasters for diamonds and gold.
+- **Sage:** data fragments and AI memory fragments, at a very high price.
+- **Animal tamer:** baits and the creature translator, with a tame animal of the planet at their side.
+- **Blockfarmer:** quarries outside the settlement by day and sells stone, sand, dirt and basalt.
+- **Streamer:** a huge fan who comes by once a day and asks for a **photo together** — say "never" and they stop.
+- **Reporter:** **interviews you** about what you have been up to, and anyone can ask "What's in the news?".
+- **Where you meet them:** new villages and towns get a clinic, shop, armory, library, stable, quarry, studio or
+  newsroom; new stations get the ones that make sense in space; the G.D.S. city has a services quarter. Research
+  **Profession posts** and build them into your own base or station — a resident takes the job.
+- **Talking to a vendor works again:** **E** now asks *Trade or talk?* instead of always opening the market, and a
+  vendor's special goods only trade while that vendor stands next to you.
+
+### ❄️ Titas — a frozen planet, once per galaxy (#1912)
+
+Justus's planet, in two long reports.
+
+- **Ten blocks of snow** over yellow sulfur stone, **toxic yellow water** under a sheet of ice, leafless dead forests,
+  and **hot zones** with lava ponds in the middle of the cold.
+- Your suit is not enough there: an **exposure meter** shows your cold (or heat) protection. Your ship, a station, a
+  base, a campfire or digging deep fill it up again; VEGA warns you before it runs out.
+- Abandoned **SPS research stations** hold salvage and log entries — without air, at −90 °C, and watched by the
+  machines — Titas has far more of them than any other planet.
+
+### 🌾 Valuma and the Sreekmakra (#1913 #1926)
+
+- **Valuma** is a rare world of wide, flat grass plains where the animals never bite. But one of them is a
+  **Sreekmakra**: it wears the shape of a local animal and changes it when nobody is looking. Hunt the animal it
+  copies, or hit it, and it comes for you; beat it and it shows its true form. Stay too long and VEGA starts to feel
+  watched…
+- **Tame it** — Justus's follow-up idea: while it wears a disguise, tame it directly or tame any animal of the kind it
+  copies, and it comes to you as a companion in its true form. Your scanner now reads its real name under the
+  disguise. New achievement: *Shapeshifter's Friend*.
+
+### 🛰️ Stations you can recognise (#1917 #1918 #1919 #1920 #1921 #1924 #1925)
+
+- **What you see from the cockpit is the station you walk through** — its real hull at full size, with its module
+  halls, windows and the glowing force-field mouth of its hangar. A colossal station is more than a hundred blocks
+  across.
+- **Solar wings, antenna masts and domes** on the outside, set per kit in the Station editor.
+- **Docking at the hangar:** press **E** anywhere near the hull and the ship flies round and noses into the hangar;
+  the autopilot takes you there too. The hull is solid — you can fly between its modules.
+- **Your start system always has a station** — more than a third of new worlds started without one, and
+  VEGA's docking lesson led nowhere. Justus found it (#1924).
+- **Quit on a station, come back on the station** — instead of on the planet below. Also Justus (#1925).
+
+### 🧰 Sandbox, world mode and chat (#1922 #1923 #1927 #1930)
+
+- **Sandbox: All items** — a searchable page in the inventory with every item of the game: take one or a full stack,
+  nothing has to be crafted (#1930).
+- **`/gamemode explorer|creative|sandbox`** switches a running world's mode for everyone — world admins only, with
+  cheats off too (#1927).
+- **The chat scrolls back:** mouse wheel or PageUp/PageDown, so a long `/help` is no longer cut off, and the answer to
+  a command stays visible even while VEGA is talking. Refused admin commands say why again (#1922).
+- **`/tp city`** takes you to a city or town, and the German words `stadt`, `dorf` and `siedlung` work too (#1923).
+
+### 🔨 Looks right, feels right (#1900 #1901 #1902 #1903 #1904 #1931)
+
+From Justus's first reports of the week, plus a wish of Marcel's for the traders.
+
+- **Every tool looks like itself in your hand** — each drill, pistol and blaster, the machete, vibro knife, plasma
+  sword and the advanced scanner (#1931).
+- **One bed is one bed:** beds, flower pots, campfires, rugs and ladders show their picture once instead of a copy on
+  every side (#1900).
+- **No more chairs in the doorway** of station cabins and village houses — door lanes stay clear (#1901).
+- **No air pockets under water:** plants, ladders and shaped blocks in water are under water too — you swim through a
+  kelp forest and your air runs down (#1902).
+- **Shore foam follows the flood** instead of staying at the old coastline (#1903).
+- **Trader ships stay longer,** wait while you are near and show up as a gold marker on the planet map and compass
+  (#1904).
+
+### 🐛 Fixes and safety (#1898 #1906 #1907 #1908 #1909 #1914 #1915 #1928)
+
+The lava landing, the crash and the cut-off report were Justus's finds, too.
+
+- **Never in the lava:** a landing pad over lava now stands on a basalt island. In older worlds a lava pad is marked
+  orange-red, only used when every other pad is taken, and a ship saved on one is moved (#1908).
+- **The rare crash when a text field got focus is fixed** — the chat box was the one field without protection (#1906).
+- **Long F1 reports are no longer cut:** 4800 characters with a live counter — the old limit silently cut ideas off
+  in mid-sentence (#1907).
+- **No rude place names:** generated names are filtered, and names you give things refuse sexual terms (#1914).
+- **Hand weapons are part of every world** — a world option for them existed on paper but never did anything; it is
+  gone, and the parents' page says what a world *can* switch off: robots, bandits and other enemies (#1909).
+- **The loading screen's text stays centred** in the browser and on any screen shape (#1898).
+- **Every new text in all 14 languages** (#1915 #1928).
+
+## [2026.9.9] — 2026-09-15
+
+The neighbours release. Until now a settler stood next to your base core and that was all, a villager strolled
+around houses with nothing inside, and a space station was one big hall. Now the people of your worlds **live
+there**: every bed brings a resident, they **work by day, sit together in the evening and sleep in their own bed
+at night**, walk real routes and open doors on the way, and they take on **jobs that bring you something** — a
+gardener who harvests into your crates, a craftsman at the forge, a guard on the night shift. **Stations are docked
+together from modules**, from small to colossal, with a cabin for every crew member and a canteen to meet in, and
+**villages, towns and cities are built from furnished modules** in the material of their planet, with a bed for
+everyone who lives there. Next to that: **notes** under the Story tab, a **bench and a proper two-block bed**,
+**zero-g building** around your own station, a Codex that remembers **where you found** something, and the
+**wreck you could not reach** finally shows up at the right height. Most of this began with **Lyxette's** reports
+and questions — a morning of thirteen, her fortress and her wreck — and with ideas from **Justus**. Thank you
+both 🙏
+
+ℹ️ **Compatibility:** the network protocol stays at version 6, saves migrate unchanged. A village, city or station
+that already stands in your world keeps its buildings — the new modular ones appear wherever one is built for the
+first time. Residents, daily routines and jobs work in the worlds you already have.
+
+### 🏡 Your base comes alive (#1851 #1865 #1866 #1867 #1868 #1869 #1895)
+
+Lyxette asked where her settler should walk, whether a bigger base would draw more people, and what settlers
+should actually *do*. This is the answer.
+
+- **Every bed brings a resident.** Once your base has earned its first settler (three machines, as before), each
+  bed inside the base adds one more, up to five. A resident claims a bed and a seat and moves out when the bed
+  goes. *Inside* means the core zone, a walled yard, a sealed room or a closed hut with walls, a roof and a door.
+- **A daily routine.** By day at work, in the evening on a chair or bench, at night lying in their own bed with a
+  little "z z z" above them. Villagers and station crew do the same with the beds and seats in their houses and
+  cabins. Talk to a sleeper and you get a sleepy answer.
+- **They find their way.** Residents walk real routes around walls, up and down steps and through doors: sliding
+  doors open for them, and a wooden door they swing open closes behind them. They walk around tables and chairs
+  instead of climbing onto them, and across a rug instead of a block above it.
+- **Jobs that bring something**, depending on what you built:
+  - a **trading post** or **mission board** inside the base gets staffed — trade and base missions right at home
+    (a post nobody can staff tells you why);
+  - a **gardener** harvests ripe crops into a crate in the base and tends saplings so they grow faster;
+  - a **craftsman** at a workbench makes plant fibre, and with a forge smelts iron ore from a crate into ingots;
+  - a **guard** walks the inside of your wall on the night shift, radios you when scouts are watching, and sends
+    scouts and robbers on their way. Guards never fight.
+- **The sun is local.** Animals on the far side of a planet no longer sleep under a noon sun — creatures, residents
+  and VEGA's night hints follow the time where they are. Aboard a station the lights dim at station night; the
+  strip lights stay bright.
+- A **"Talk to …"** prompt appears next to a person, and the name plate says what they are doing.
+
+### 🛰️ Stations docked from modules (#1872 #1873 #1874 #1875 #1878)
+
+After Marcel's playtest the stations were simply too small, unfurnished and without rooms for their crew.
+
+- **Stations are assembled from modules** that dock at their ports — corridors, halls, hangars, cabins, a canteen,
+  a bar, a market, a medbay and more: 43 modules in five kits from small to colossal, turned and fitted so no two
+  stations need to look alike. Every joint gets a door, every vertical shaft a ladder.
+- **A cabin for every crew member.** The crew works at its post by day, meets in the canteen or the bar in the
+  evening and sleeps in its own cabin at night. Every room is furnished for what it is.
+- **Everything looks the same after a reload** — a world remembers which modules its stations, villages and cities
+  were built from.
+
+### 🏘️ Villages, towns and cities from furnished modules (#1876 #1884 #1885 #1886 #1887 #1888 #1889 #1891)
+
+- **New settlements are built from modules:** houses, a market, a notice house, a greenhouse, a **tavern** from
+  villages up and a **workshop** from towns up — each for human and for alien settlements — plus a three-storey city
+  flat and ten districts for the G.D.S. city. Houses with several storeys have real **staircases**, and every
+  building people live in has a room with a bed.
+- **Built from the planet.** Walls take the ground they stand on — sand, ice, grass — towns build in iron, and alien
+  settlements get crystal trim.
+- **A bed for every resident.** The beds of a settlement are its people: up to 6 in a hamlet, 10 in a village, 20 in
+  a town, 32 in a city and 80 in the G.D.S. city. The shopkeeper, innkeeper, gardener and craftsman sleep nearest to
+  their post, and in the evening the tavern fills up.
+- **Crowded places stay light:** you only receive the people near you, not every resident of a city at once.
+- The **Town templates** and **Station templates** world options now set how many places are complete hand-built
+  templates (5 to 75 %); the rest are built from modules, and Off keeps the classic generator. Four of the classic
+  templates now come with furnished rooms and beds.
+
+### ✏️ Editor: build your own kits (#1877 #1890)
+
+- In the Station and Town editors a template is either a **whole structure** or a **kit module**. The **Kits…** panel
+  lists the shipped kits and your own, with their entries and a module picker, and saves a kit to your content.
+- **Port brushes** paint doors, wide openings and ladders onto a wall, **Check seal** paints every leak red, and
+  **Assemble** builds a preview of a kit from a seed.
+- A **Planet materials** section in the palette (wall, accent, roof, floor and path follow the planet), a **Built for**
+  switch (human / alien), and tavern, workshop, lounge and guardian markers.
+
+### 📝 Notes, furniture, zero-g and the Codex (#1842 #1843 #1844 #1846 #1847)
+
+- **Notes** under the Story tab — Justus's idea: up to 20 notes with a title, kept on the server like your map
+  markers. §-codes colour a word or make it bold, and Preview shows how it will look.
+- **A bench and a two-block bed** — Lyxette's wish. The bench is a seat that joins its neighbours; the bed now takes
+  two cells, head and foot, and mines as one. Old one-block beds stay as they are. (Tables and chairs were already
+  there, under the **Shape** action.)
+- **Zero-g building** — Lyxette's wish: aboard your own station, **O** lets you float as long as you like to build on
+  the outside. It is just for you and switches off when you leave, and there is no fall damage in the first seconds
+  after gravity comes back.
+- **The Codex remembers where you found something** — Justus's idea: a new discovery shows the planet and solar
+  system of its first scan.
+- **Grass you can make:** dirt and plant fibre by hand, and grass drops grass now — for Lyxette's station arboretum.
+
+### 🐛 From Lyxette's reports (#1852 #1853 #1854 #1855 #1856 #1857 #1858 #1859 #1860 #1862 #1880 #1881 #1882)
+
+Thirteen reports in one morning, then her fortress and her wreck — thank you, Lyxette 🙏
+
+- **A large walled base is fenced in again.** Beyond a wall ring of about a hundred blocks animals spawned inside
+  once more, and the green elephants were back. The fenced area now grows with what you build, a moat at least two
+  blocks deep counts as a wall, floating land animals obey walls, and shut doors stop creatures (#1862).
+- **Bandit scouts no longer appear inside your fortress** and no longer climb its walls (#1855).
+- **Gas-sac animals no longer sink into the ground** again and again (#1854).
+- **Double doors open together** with one press, without the extra post in the middle (#1852).
+- **Waterfalls lost their diagonal glare stripes** (#1853).
+- **Your station has the right sky:** the planet it orbits instead of a decorative moon, the right star colour, the
+  system counts as visited and place names show up (#1856).
+- **Trees grown on a station are visible from outside** (#1857).
+- **Typing into the F1 report or any text field no longer triggers game keys** — no more moving, docking or
+  switching views while you write (#1858).
+- **The net-fragment objective names its planet,** the compass shows the distance, and the counter always fits
+  (#1859).
+- **Messages at the top go away after a few seconds** instead of staying up (#1860).
+- **The wreck you could not reach.** It floated far above the ship while the radar drew it right in the middle. The
+  radar now keeps height with ▲/▼ marks, a new **ALT** line shows your height, and VEGA explains the way: open the
+  map, click the wreck, let the autopilot fly (#1880 #1881 #1882).
+
+### 🎛️ Smaller things (#1840 #1845 #1871 #1892)
+
+- **Doors and hatches react on the first click** after joining a large built-up world — the far view kept the server
+  busy for about a minute on the G.D.S. city (#1871).
+- A **"You are in chat"** banner below the crosshair while you type — Justus's idea (#1845).
+- **Scan-drones stand out on asteroids** with red lit accents — Justus's report (#1840).
+- **Every language is complete again:** 140 lines from the newest features existed only in English and German; they
+  are now in all 14 languages, checked by hand (#1892).
+
+## [2026.9.8] — 2026-09-13
+
+The horizon release. Until now a planet ended where the loaded chunks ended: a wall of fog a few hundred
+blocks out, and nothing behind it. Now there is a **world behind the fog** — mountains, valleys, coasts and
+seas drawn all the way to the horizon, and on them the **cities, villages and your own builds**, exactly
+where they stand. The **view distance slider goes to 16**, worlds fill in faster and in the order you look
+and travel, the browser stops stuttering while it loads, and caves and interiors no longer cost you frames
+for what you cannot see. Next to that, **villages are built from modules now**: a building you draw in the
+Town editor can be a whole settlement or one house the generator places among its own — and **every room
+gets furniture**, in every village, town and city, including the ones you already have. A **round of twelve
+evening reports** from Justus and Lyxette closed out the day. Thank you both 🙏
+
+⚠️ **Compatibility:** the network **protocol moves to version 6**. Older game versions cannot join a 2026.9.8
+server (or host one for an older client) — the desktop game updates itself on start, the browser is always
+current. Saves migrate unchanged; the far view works in every world you already have, and your existing
+villages keep their layout under the new furniture.
+
+### 🌄 The world beyond the chunks (#1813 #1815 #1820 #1821 #1822)
+
+- **Terrain to the horizon.** Beyond the streamed chunks the planet continues as a low-resolution
+  landscape drawn from the same generator — column for column what the real chunks will be when you get
+  there, so nothing pops or shifts as you approach. A new **Far view** setting under Graphics: Off, 512 or
+  1024 blocks. Desktop starts at 1024, browser and tablet at 512; it applies live, in 14 languages.
+- **Your builds are out there too.** The far landscape shows what stands on the surface: a walled city,
+  a village roof, the tower you raised last week. Change a block and the distant tile updates.
+- **The haze reaches the far view.** With the far view on, the fog no longer closes in at the chunk edge;
+  it ends at the far range, thin on thin-air worlds, denser where the air is dense, and weather still pulls
+  it in. Airless worlds stay razor-sharp. Far view off keeps the fog exactly where it was.
+- **View distance up to 16 chunks** (was 8), in singleplayer and on servers. First-run default on desktop is
+  now 8; browser builds keep 4, phone and tablet 3. Players who set their own value keep it.
+- **The view is a disc, not a square.** The corners of the old square lay outside the fog and were never
+  visible, yet they were loaded, dropped and reloaded every ten seconds while you stood still. Gone.
+
+### ⚡ Worlds load faster and in the right order (#1816 #1817 #1818 #1819 #1823 #1824)
+
+- **Chunks are generated on worker threads** on servers and in singleplayer — two by default, and the next
+  chunks are prepared while the current batch goes out. A dedicated server can set the count.
+- **What is near you and where you are heading comes first.** Streaming and building both order the chunks
+  by distance from you and then by where you are looking and moving, so the ground ahead of a fast ship is
+  there when you arrive.
+- **The browser stops stuttering while it loads.** Chunk building and collision cooking take a fixed few
+  milliseconds per frame instead of whole frames; the ground under your feet always cooks first. The desktop
+  build caps its uploads per frame too.
+- **Caves and interiors cost you nothing you cannot see.** When you are underground or under a roof, only the
+  chunks that could be visible from where you stand are drawn; the rest still cast their shadows.
+- Two server fixes found on the way: the terrain cache that was wiped between every two chunks now survives,
+  and water and lava far outside every player's range wait instead of waking whole chunks for nobody.
+
+### 🏘️ Building modules and furnished rooms (#1826 #1827 #1828)
+
+- **A template is a whole settlement or a part of one.** In the Town editor a new **Use as** stepper marks
+  a template as a whole structure (as before) or a module: a house, market, notice board or greenhouse of
+  6 × 6 blocks for hamlets, villages and towns, or a 32 × 32 district of the G.D.S. city. The size line shows
+  the module envelope, and a template's pack and planet types filter it like before.
+- **The generator mixes your modules in.** Each plot decides by a hash of tier, seed and place — a village
+  on the same seed is the same village, and every plot that stays procedural is identical to before. Doors
+  come from the module's door markers; a missing vendor, board or inhabitant is added over the centre; ruins
+  decay a module like everything else. The **Town templates** world option sets how often
+  (Rare = about one plot in seven, Off disables modules). Two example modules ship: a timber cottage for
+  villages and a two-storey iron flat for towns.
+- **Every room has furniture.** Bed, table and chair, a crate, a plant, a light, a market counter or a
+  terminal, hugging the walls and leaving the resident's place, the door lane and the ladder corner free.
+  Villages get wood, stone and torches; towns steel, crates and lights; alien ruins iron and data caches.
+  A **room** marker in the editor furnishes an authored floor the same way.
+- **Existing worlds get the furniture too** — on the next start, in the empty air of their protected rooms
+  only. Layouts do not change under your blocks.
+
+### 🐛 From your reports (#1829 #1830 #1831 #1832 #1833 #1834 #1835 #1836 #1837 #1838 #1839)
+
+Justus sent eight reports from one evening, Lyxette four — thank you both 🙏
+
+- **The mining glow no longer vanishes far from the ship.** On the far side of a world's seam the block you
+  were digging showed no cracks and no light (#1829).
+- **The Guardian core cannot be mined away.** The heart of the core was a light block you could break by hand
+  and it never came back. The 3 × 3 core is protected now, with a message; the shell around it stays diggable
+  (#1830).
+- **Rejoining a save on the core body works like a fresh landing:** the breach hint, the shaft mark and the
+  finale objective show up even when you were not there for the reveal (#1831).
+- **No "Craft an item" inside the core chamber.** Once the Guardian system is revealed, the story objective
+  wins over the tutorial chip (#1832).
+- **Docking no longer puts you on the roof.** The spawn search now prefers a cell inside a sealed pocket of
+  the station; the open, airless roof is the last resort (#1833).
+- **Ruin pillars and glowing runes place as shapes again,** not as plain cubes, and the placement ghost
+  shows the shape you will get (#1834).
+- **Saplings grow on stations.** The check that made sure a sapling was not planted in the void looked at
+  the crown instead of the roots (#1835).
+- **No false "station is no longer airtight"** when you stand in a door cell or in the pond, and the banner
+  clears once the station is sealed again instead of staying up forever (#1836).
+- **Two-block openings, third time:** a lintel sitting in the next column could still wedge you on 2026.9.7.
+  The step check now looks half a metre ahead along your movement, centre and shoulders (#1837).
+- **No fall damage while flying** (#1838), and standing **on** lava now says lava, not "You take damage!"
+  (#1839).
+
+### 🎛️ World options (#1811)
+
+- The **Planet type frequencies** list scrolls instead of running under the footer buttons — the last rows
+  were unreachable — and the slider handles fit inside their rows instead of fusing into white columns.
+  "Reset overrides" now actually resets the sliders on screen.
+
+## [2026.9.7] — 2026-09-12
+
+The city release. New worlds can roll a **lava desert with one gigantic walled city** on it — the only cool,
+green place on a 55 °C planet, kept by the friendly machines of the **G.D.S.**, letters nobody in the game
+will explain to you. It is Justus's idea, and it is the seventh generation of worlds. Next to it, the
+**chat finally looks like it belongs on the HUD**: a holo window with outlined text, exactly as tall as the
+lines in it, and it steps aside when VEGA is talking. **Starting a singleplayer world** no longer gives up
+halfway or drops you behind a nameless dark curtain, the **ship menu and the menu screens boot** like the
+rest of the interface, and a **round of player reports** took care of a rescue that yanked you out of your
+own mine shaft, two-block doorways that still wedged you, and the crash that kept hitting the chat and
+photo-note fields. Thanks to **Justus** and **Lyxette** for the reports 🙏
+
+ℹ️ **Compatibility:** the network protocol stays at version 5, saves migrate unchanged. The city world reaches
+**new galaxies only** — a world you already built in keeps exactly what it has.
+
+### 🏙️ Generation 7: the city world (#1793 #1808)
+
+Justus's idea, and rare: about one planet in three or four galaxies.
+
+- **A lava desert.** Sand over sandstone, buttes carved by the wind, a lava sea and lava rivers, no water,
+  no plants, no animals, 55 °C. You can breathe, but you will not want to stay outside.
+- **One city, 256 blocks across.** A purple wall with a red band and four gates, streets in a grid, a
+  landing plaza around the pad with lamps and guard posts, two markets, a hall, gardens with pools and
+  trees, watch towers on the corners and houses of one to three storeys in between — every house tinted
+  purple or red on its own.
+- **Inside is cool.** Anywhere in the city under a roof it is 22 °C. The streets, the gardens and the plaza
+  stay desert-hot, so a walk across town is still a walk across a desert.
+- **The G.D.S.** Machines with a red stripe across the chest and self-lit red eyes walk their beat inside
+  the walls and around the gates. They never fight anybody. Nobody in the city knows what the letters stand
+  for, and they will tell you so.
+- **Every room has a light in its ceiling** — houses, market shops, the hall, and the tower shafts all the
+  way up the ladder. (Marcel's first walk through the city was in the dark; this is the fix. A city you
+  already generated keeps its dark rooms — the city is built once, when the world is made.)
+
+### 💬 The chat is a window now (#1795 #1799 #1806)
+
+- **A holo window like VEGA's speech panel** sits behind the chat: same glow, same frame, and the text has
+  the outlined look at 18 px instead of bare white letters over the world. It was unreadable on snow, sand,
+  water and sky before.
+- **It fits the lines.** The window grows upward with the text and no further, and it is simply **gone**
+  when there is nothing to show — it fades in when a line arrives and out when the last one ages away.
+  While you type, the input row is the bottom row of the window.
+- **It yields to VEGA.** When a story line or the objective chip is up, the chat ends above them instead of
+  drawing across them, and the input row stacks underneath. With VEGA quiet, nothing changes.
+- **Opening the chat over an empty screen works again.** For a few hours on the way here, pressing Enter
+  with no chat lines on screen gave you an input row that took no keys at all. Fixed before anybody outside
+  saw it.
+
+### ⏳ Starting a singleplayer world (#1797 #1800)
+
+- **The game no longer gives up on your own world.** Building a fresh world takes longer than dialling a
+  server across the internet — the client waited about fourteen seconds and then reported it could not
+  connect. Now it waits for the world to say it is ready, up to two minutes, and starts the moment it is.
+- **No more nameless dark curtain.** The progress bar used to race to 100 %, hand over to an anonymous
+  "Loading world…" screen for ten to twenty seconds, and only then name the system and the planet. The bar
+  covers the whole build now and creeps along while the world is made; the named screen takes over for the
+  landing.
+
+### 🎛️ The ship menu and the menu screens boot like the HUD (#1796)
+
+- The three panels of the TAB menu are holo frames now and **boot on open and on every tab change** —
+  header, then sidebar, list and detail wiping on one after another, with the content fading up behind.
+- The main menu, settings, credits, editors and the save list do the same on the way in: the screen fades
+  up, the elements rise in order, the frames wipe on. Instant if you have reduced motion switched on.
+
+### 🐛 From your reports (#1788 #1789 #1790 #1791 #1792 #1804)
+
+Justus sent five reports and a crash, Lyxette another crash — thank you both 🙏
+
+- **Digging a deep shaft no longer teleports you back to the ship.** The rescue that catches you when you
+  fall out of the world counted a fifty-block hole as "the void" and snapped you to the heal tank once a
+  second. Every column ends on bedrock these days, so a cave, a cavern or a shaft you dug yourself is
+  never the void any more (#1788).
+- **Two-block-high openings let you through.** A doorway with exactly two blocks of headroom could still
+  wedge you if you walked in off-centre or under a lintel sitting in the next column. The check now looks
+  at the whole width of your suit, not one pillar under your feet (#1790).
+- **The fourth caret crash is dealt with — properly this time.** Three earlier fixes cured the symptom
+  next to it; this one is the cause. A text field that still had the cursor in it when a screen was
+  switched off — the TAB menu closing for a hyperjump, for instance — kept blinking into nothing and threw
+  twice a second until the game fell over. Every input field in the game now hands the cursor back when its
+  screen goes away (#1791 #1804).
+- **The reply dialog no longer follows you into the main menu.** A feedback reply left open while you
+  returned to the menu stayed on screen and crashed when you pressed OK (#1789).
+- **The way to the Guardian core.** VEGA says once, when you land on the last world, that the core sits
+  under the one iron-ringed shaft marked on your map — not under the ship. The shaft has its own mark on
+  the map, its own legend row, and the compass shows the distance to it (#1792).
+
+## [2026.9.6] — 2026-09-12
+
+The new-planets release. The school club's third wave of ideas is in the game: **four new kinds of
+planet** — a Rainbow Planet of islands afloat on rainbow water, a Flower Planet guarded by one grinning
+flower, a Scrap Planet you can strip for parts, and a Gaming Planet with a monitor, a keyboard, a mouse and
+a PC tower the size of mountains — plus **Leni** the ice creature and the tree-sized **Paul flower**. Right
+behind it comes a **sixth generation of animals**: rays that glide under water and hover in the sky, air
+fish, hydras with up to three heads, creatures with two or three pairs of wings or fins, and **giant trees**
+with trunks you can walk into. Water rolls **its own colour** on every new world now, and the rain matches.
+Travel from a landed ship **takes off first** instead of teleporting, **saplings** grow into trees, the
+avatar editor got a real **undo** and **outfits you can put on in the game**, and the browser worlds no
+longer die on one oversized start-up. **Lyxette** sent another round of reports on 2026.9.5 and drove most
+of the fixes below — thank you! 🙏 And the take-off half of the transit was **contributed by ahmdkaml**.
+
+ℹ️ **Compatibility:** the network protocol stays at version 5, saves migrate unchanged. Every new planet,
+creature, giant tree and water colour reaches **new worlds only** — a world you already built in keeps
+exactly what it has, down to the block, and its water stays blue. One thing to know: the take-off transit
+needs a matching client, so update the desktop game before you join a hosted world with it (an old client
+gets a short free flight and is set down after six seconds).
+
+### 🌈 The school club's planets, creatures and plants (#1756 #1757 #1758 #1759 #1760 #1761 #1762 #1763 #1764 #1765)
+
+The third wave of ideas from the school club "Building Games with AI", built so that no existing world
+changes. Marcel's first playtests sent two of the planets back for a second pass — both are in here too.
+
+- **The Rainbow Planet** (Sophie's idea): almost all sea, rainbow water through and through, islands that
+  float **on** the surface with kelp forests hanging from their undersides, a seabed of diggable sand,
+  corals, algae and breathable air. The first version hung the islands in the sky and left the water blue;
+  now every island floats at the waterline, deck above and keel below, and the water is rainbow down to the
+  depths (#1757 #1758 #1759).
+- **The Flower Planet** (Damian's idea): rolling hills of nothing but flowers — sunflowers, tulips,
+  bluebells, orchids — and not a single tree. One creature lives here: the **flowerling**, a walking flower
+  with a bloom for a head. It smiles as long as you leave the planet alone and brings a patient visitor
+  berries and blocks; mine something in front of it and the smile becomes a mouth full of teeth (#1760).
+- **The Scrap Planet**: fields of mineable scrap that drop a random find — parts, metal, now and then
+  something better — plus more ruins and factories. A little stray scrap now turns up on every other solid
+  world too (#1761).
+- **The Gaming Planet** (Ben's idea): karst caves, PC desks, and a **monitor, a keyboard, a mouse and a PC
+  tower the size of mountains**. The gear can be mined and placed, never crafted. After the first look
+  ("too much meadow") it is gaming gear now: far fewer plants, a landmark every few hundred blocks, and
+  house-sized towers in between (#1762).
+- **Leni** (Lena's idea): an ice creature that lives only on snow and ice, always in pairs, hides, and gets
+  angry when you mine near it — the first hand-authored creature, and the mechanism that lets more follow
+  (#1763).
+- **The Paul flower** (Lena's idea): a rare, tree-sized flower with huge leaves and toxic petals (#1764).
+- The block atlas grew to 1024 tiles to make room for all of it (#1765).
+
+### 🐟 Generation 6: rays, air fish, hydras, more wings and fins, and giant trees (#1778 #1779 #1780 #1781 #1782 #1783)
+
+New worlds roll a sixth generation of body plans. Everything is procedural, so every world gets its own.
+
+- **Rays**: flat discs that glide on a wave running along their wing panels, with a whip tail and eyes on
+  top. A water ray hugs the sea bed; a sky ray hovers, swoops and banks, and never lands (#1778).
+- **Air fish**: fish-shaped animals sculling through the air on their fins (#1779).
+- **More than one head**: up to three heads side by side on a normal body — and on a titan, the **hydra**,
+  a fanned neck for each head, every head breathing and calling on its own (#1780).
+- **Two or three pairs of wings**, beating in dragonfly opposition or as a wave from back to front, and
+  **two or three pairs of fins** (#1781 #1782).
+- **Giant trees**: three to five times the size of a normal tree, with a trunk three to five blocks
+  thick, radial branches carrying balls of leaves and a hollow crown — shaped by the biome as a giant
+  broadleaf, conifer or jungle tree. They grow their own wood and leaves, **Giant tree trunk** and **Giant
+  tree leaves**, and show up as their own species on a scan (#1783).
+
+### 💧 Water in every colour, and rain to match (#1758)
+
+- Every world with a real sea and an atmosphere now rolls its own water colour: classic blue most of the
+  time, otherwise teal, green, yellow, violet or red, each a little different per world. **Old saves stay
+  blue.**
+- **The rain follows the water.** Rain, drizzle and sleet, the drops and streaks on your visor and the wash
+  when you dive all take the world's colour; on the Rainbow Planet the rain cycles through the hues. Snow,
+  hail, ash, sand, acid, meteors and spores keep their own look.
+
+### 🚀 Travel from a landed ship takes off first (#1614, server half — contributed by ahmdkaml)
+
+- Picking a destination on the map while your ship sat on a pad used to swap the world on the spot. Now
+  the checks run on the ground, the ship lifts off with the full take-off sequence, and the server sets you
+  down on the pad it reserved for you. A jump to another system from the surface takes off first, too.
+- Cross-system travel from the ground only goes to bodies you have already landed on — as it always did
+  from the map, but now it says so before the ship moves.
+- The landing half — a real descent instead of a cut — is the next step of #1614.
+
+### 🌱 Saplings that grow into trees, and leaves you can pick up (#1774)
+
+- A **sapling** is a hand recipe now (one log and two fibre make two), and leaves drop one now and then.
+  Plant it on dirt, grass or mud and after a couple of minutes it grows into a real tree — a four-to-five
+  block trunk with a leafy crown — as soon as the column above it is free.
+- **Tree, pine and palm leaves** drop themselves when mined and can be placed again.
+- The sapling got its own tile instead of the bush placeholder it shipped with (#1785).
+
+### 🎨 Avatar editor: an undo that keeps going, fill everything, and outfits in the game (#1737 #1738 #1739)
+
+Three things Marcel missed in the avatar editor. The main-menu designer, the in-game appearance screen and
+the block paint tool share one editor, so all three got them at once.
+
+- **A real undo.** The old undo took back one stroke and nothing before it. Now there are 32 steps with a
+  **Redo** beside them — `Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y`, or **RB** on the pad. The history remembers
+  which part you painted and switches the tab back for you, a slip of the colour wheel counts as one step
+  you can undo, and both buttons grey out when there is nothing left to take back (#1737).
+- **Fill everything.** One press paints the whole visible surface, whatever was on it before. An armed
+  tool now shows on its own label, and the hint line under the buttons says what the next click will do
+  (#1738).
+- **Outfits in the game.** Your eight saved looks are no longer a main-menu affair: the outfit shelf is in
+  the in-game appearance screen too. Click a row and you are wearing it — colours, face and all four
+  paintings; other players see the change a few seconds later (#1739).
+- **The helmet frame around your face can be painted** at last, the face plate covers the whole front of
+  the head, and no rim of skin shows around a drawn face any more — Justus's report (#1776).
+- Three colour bugs: other players' avatars now update when they change colours, in-game colours match
+  what you picked in the menu, and body paint keeps every palette entry (#1777).
+
+### 🛰️ Stations: air west of the origin, and crew that stays aboard (#1773 #1775)
+
+- **A room built west of the station's origin line had no air and no gravity.** Every wall placed there
+  landed on the far side of the station's wrapped grid, so the room never grew west and a door there never
+  sealed. Fixed; existing stations tidy up their phantom cells on the next start.
+- **Station crew walked over a low parapet into vacuum.** Crew now stays inside the sealed pocket of their
+  post, treats a closed door as a wall, steps up only one block, and anyone found outside is set back home.
+
+### 🔧 Lyxette's round on 2026.9.5 (#1745 #1746 #1747 #1748 #1749 #1750 #1752 #1753)
+
+- **A waterfall curtain is a curtain again.** Side-by-side waterfall columns along a wall drew only the
+  first cell; every column now renders, mist and all (#1745).
+- **A door you built can be mined again.** The aim passed straight through door entities, so the click did
+  nothing at all (#1746).
+- **Cave creatures no longer spawn inside rooms you dug.** A shaped cave far from the base core counted as
+  wild cave; any pocket carrying your block edits is off limits now (#1747).
+- **Glowing blocks show through the distance haze** instead of fading exactly like rock (#1748).
+- **Water surfaces no longer read as a mosaic of blocks.** Neighbouring cells used to pick different
+  ripple directions and brightness; the ripples blend now, and a reed or a pillar standing in a lake no
+  longer ends the lake (#1749).
+- **Power relays: up to 32 per base**, twice as many as before (#1750).
+- **Drop bundles follow the ground.** Mine the block under a bundle and it falls the next second; a bundle
+  left floating by an old save lands as soon as somebody comes near (#1752).
+- **Loot over lava or fire burns away** within a minute — nobody could reach it anyway (#1753).
+
+### ☁️ Browser worlds: one start-up no longer eats a whole world's memory (#1740 #1741)
+
+- A hosted world was killed a few seconds into every start, over four thousand times in two days, and the
+  portal simply showed it offline. Loading one kind of planet briefly needed more memory than the whole
+  world is allowed — a warm-up cost, not the world itself. Split up, the same world now starts with room to
+  spare. On desktop the same warm-up was a short hitch on arrival on those planets; that is gone too.
+- **The arcade no longer hands you a world it has given up on.** When the healthy world is full you get the
+  "arcade full" notice instead of a join into a dead instance; a world that comes back is offered again.
+
+### 🧪 For playtesters: a save that starts on the planet you name (#1767)
+
+- `scripts/make-test-world.ps1 -Planet gamer_hills` creates a ready-to-play singleplayer world that starts
+  on the planet you choose — the create-world panel never lets you pick that — so you can sit somebody in
+  front of the Gaming Planet without rerolling worlds. `-List` shows every planet type.
+
+### 🎓 Credits (#1770 #1771)
+
+- **Every child of the school club, in one list**: Ben, Damian, Lena, Marie, Nikita, Noa, Paul and Sophie —
+  in the README and the in-game Credits in all 14 languages, no more "first day" and "second wave". And the
+  Rainbow Planet's inventor is **Sophie**, not Sophia.
+
+### ✨ Under the hood (#1735 #1743)
+
+- The stopwatch test that took the last release run down on its first attempt measures the code now, not
+  the runner's load (#1735), and one slow server test was trimmed to stay under the fast-tier budget (#1743).
+
+## [2026.9.5] — 2026-09-10
+
+The big-build release. Almost everything below came from players who built **big** — a spaceport, a walled
+compound, a perimeter far past what the game had ever been asked to cover — and found the game's helpers
+stopping at the edge of a small base. So: a **power relay** that carries your base core's power out to the
+far corner, a **waterfall spout** that pours water down without flooding the floor, **double doors** whose
+two leaves finally swing apart instead of both the same way, and the wall check every base owner can now
+run on their own build. Nobody gets stuck any more either — sealed inside your own hull, frozen by a rescue
+that fired over and over, or unable to mine your own blocks under a parked ship. Hosted worlds in the
+browser stay up instead of dying seconds after they start. And plants and animals got a careful
+read-through: biome plants, calmer herds, crops that keep their own colour.
+
+ℹ️ **Compatibility:** the network protocol stays at version 5, saves migrate unchanged. The new plant
+rosters reach **new worlds only** — a world you already built in keeps exactly the plants it has.
+
+### 🔌 Power runs where you build it — the Power Relay (#1714)
+
+- A sentry post shoots 14 blocks, but it only worked within 8 blocks of your base core. On a compound of
+  80×80 that made it useless: the posts you actually need, out on the perimeter, were decoration.
+- The new **Power Relay** carries your core's power one zone further, and **relays chain** — core to relay
+  to relay to post — so you can run a line into the far corner of any build. Sixteen relays per base.
+- The sentry post's own description and VEGA's base-wall advice now say **"powered"** instead of "within 8
+  blocks of the core", because that is what the rule really is.
+
+### 💧 A waterfall that stays a waterfall — the Waterfall Spout (#1726)
+
+- A builder levelled an ~80×80 spaceport, placed water for a waterfall, and got a flood: on stepped ground
+  every step re-arms the spread, so the water crawled across the whole floor. That is exactly how water has
+  always worked, and changing it would change every lake and every sea in every save.
+- So there is a **new block** instead. The **Waterfall Spout** pours a column of water straight down from
+  its underside — **only** down. The fall never spreads sideways, and the cell it lands in does not spread
+  either, so you get a waterfall and not a puddle that eats your build. Hang it over an edge with open air
+  beneath it; mine the block under the fall or the spout itself and the column dries up. Placed flat on
+  solid ground it tells you so.
+- It survives a reload: the column comes back as a waterfall, not as a flood.
+
+### 🚪 Double doors that meet in the middle (#1729)
+
+- Two doors placed side by side both swung the same way, which looks wrong for what is obviously one wide
+  doorway. Now the game notices the pair by itself and hangs the right-hand leaf on the far post, so the
+  two halves swing **apart** — a proper double door.
+- It keeps up with your building: put a door next to an existing one and it becomes a pair on the spot,
+  take one away and the other goes back to a single door. Three in a row pair at the end, sliding doors
+  and mismatched pairs stay as they are, and doors on different floors or on opposite sides of a wall are
+  left alone.
+
+### 🧱 Checking your own walls, and lava that explains itself (#1727 #1728)
+
+- **`/basewalls` is open to base owners now.** It answers the one question a builder cannot answer by
+  walking the perimeter — *is there a gap somewhere, or is my compound simply bigger than the 48-block
+  reach?* — and it used to be admin-only. It names your core, its exact position, and where the ring is
+  open. It only ever reports bases **you** own.
+- **Water that reaches lava now says what happened.** Placing water on lava by hand always explained
+  itself, but a flood that found a lava trench on its own said nothing: the trench went dark, lava still
+  glowed under the new rock, and it looked like the game had stacked a block on top of your lava. It had
+  not — only the cells the water actually touched turn to rock. Now the game says so.
+
+### 🆘 Nobody stays stuck (#1708 #1709 #1710)
+
+- **Sealed inside your own ship?** There is a rescue for that now. Building yourself into your own hull
+  used to leave you with no way out at all — the block rescue cannot see ship hulls, and the ship rescue
+  needed two of them around you.
+- **The rescue no longer freezes you in place.** Being dug out could leave the player hovering, frozen and
+  unable to move: the rescue fired again every second and re-armed the short settle pause faster than it
+  could ever run out. It fires once now, and lets go.
+- **Your own blocks under a parked ship stay yours.** The guard that stops you mining the ground out from
+  under a landed ship protected *every* block beneath it, including the floor you laid yourself — and told
+  you a wooden door was ship hull while it did it.
+
+### ☁️ Hosted worlds in the browser stay up (#1704 #1705 #1706 #1707)
+
+- One hosted world died within seconds of every single start and was restarted over two thousand times in
+  eighteen hours. The save itself was fine — loading it just needed briefly more room than the world was
+  given, and the world was killed for space it was about to hand back. It now loads with room to spare.
+- **A world that cannot start no longer restarts forever.** The keep-awake pass hammered every dead world
+  every 30 seconds with no back-off and no giving up; now it waits longer between attempts and stops.
+- **A world no longer dies on a busy port.** Claiming its network port got exactly one attempt, so losing
+  a momentary race with a world that had just shut down killed it outright. It retries now.
+
+### 🌿 Plants and animals: a read-through (#1715 #1716 #1717 #1718 #1719 #1720 #1721 #1722 #1723 #1724)
+
+We measured the plant and animal generators against a full audit. Most of what it found had already been
+fixed over the summer; here is the rest.
+
+- **Biomes grow their own plants.** A world's plant roster only ever looked at the planet type, so a desert
+  strip on a forest world drew from a thinned-down pool. Every biome now contributes its own plants.
+  **New worlds only.**
+- **Crops keep their own colour.** Plants you farm yourself were taking the world's plant tint, so your
+  field came out the wrong colour for what you planted.
+- **Calmer, better-placed animals.** A herd used to check only one spot for water and lava before it
+  settled, so members could appear in places nothing should stand in. Spawn checks now look at the real
+  world, herds check where each animal is actually going, and the game counts wild animals rather than your
+  tame companions when it decides what to spawn next.
+- Plus internal tidying with no visible effect: one shared list of tall plants, one shared world-seed
+  formula, and a caching fix at the world seam.
+
+### ✨ Smaller things (#1711 #1712)
+
+- Cave creatures rest on the cave floor, not inside the rock above them (#1711).
+- The scan panel no longer cuts off its fourth line (#1712).
+
+### 🎓 Credits
+
+- **Paul and Noa join the school-club block** in the README and the in-game Credits, in all 14 languages —
+  Paul for the club's second wave of browser reports (#1708, #1709, #1713), Noa for testing one computer-room
+  PC after another so the club knew which machines run the game.
+
+## [2026.9.4] — 2026-09-08
+
+The living-world release. Animals finally **walk** instead of sliding along the ground: every creature has
+jointed legs now, with knees, ankles and feet that stay planted where they were set down, a stride that
+matches how fast the body is actually moving, wings that fold at a wrist, tails and necks that ripple, fins
+for the swimmers, and a jaw that opens when they call. They lie down to sleep, they blink, and they watch
+you. And the landscape is finished: **terrain generation 3** rolls the last forty-odd landforms the world
+builder never had — seamounts and icebergs, glaciers as real bodies of ice with crevasses and ice caves,
+coral atolls and blue holes, meandering rivers with oxbow lakes, dripstone caves, slot canyons, nunataks —
+plus **two new blocks** and **three new kinds of planet**. Water you dig and fill yourself now counts as
+real water for everyone, lava burns whatever steps into it, and the sentry post finally defends you against
+animals as well. **Lyxette** sent two more rounds of reports and drove most of the fixes below — thank you! 🙏
+
+ℹ️ **Compatibility:** the network protocol stays at version 5, saves migrate unchanged. Every new landform,
+block and planet type reaches **new worlds only** — a world you already built in keeps exactly the terrain
+it has, down to the block.
+
+### 🐾 Animals that really walk (#1674)
+
+- **No more sliding.** A leg used to be a single box swinging at a speed that had nothing to do with the
+  distance the body covered, so every animal in the game skated across the ground. The stride is now tied
+  to the walking speed, which means a planted foot stays where it was put down while the body travels over
+  it — the way a real animal moves.
+- **Legs with knees and feet.** Hip, thigh, knee, shin and foot, with front legs folding back and hind legs
+  forward (a four-legged animal whose knees all bend the same way reads as a table), and the sole staying
+  flat on the ground. Legs sit at the body's real width instead of the middle of the belly, and they spread
+  across the whole torso, so a long or a broad species is built the way it looks.
+- **Six ways of walking**, picked from leg count, size and speed — a walk, a trot, a bound, the insect
+  tripod, the wave a many-legged creature runs down its side, and a paddle — and the change from one to the
+  next fades instead of popping. A giant's slow, heavy stride now simply falls out of how big it is.
+- **Feet find the ground.** Each foot targets a real block, so legs follow slopes, steps and ledges instead
+  of standing on one invisible plane, and the body leans with the ground it stands on.
+- **Wings, tails, necks, trunks and tentacles move.** A wing folds at the wrist, back along the flank
+  instead of flipping over the back; tails, necks, trunks and tentacles are chains now, so the motion
+  travels outward as a wave — and a grazed titan bends its whole neck instead of nodding a head on a pole.
+- **A face.** The jaw opens on every call and snaps on a bite (the voices have been coming out of sealed
+  heads since they were added), animals blink, follow you with their eyes, lie down to sleep, and flick
+  ears, swat tails and shift their weight when they have been standing around a while.
+- **Fins.** Legless swimmers grow pectoral, tail and dorsal fins that beat as they swim and fold flat when
+  they are washed ashore. Existing worlds keep exactly the species they had.
+- **Distant animals cost less.** Nearby creatures animate in full, far ones less often, and the ones you
+  cannot see at all stop animating entirely while still moving about their business.
+
+### 🏔️ Terrain generation 3 — the landform package (#1688 #1689 #1690 #1691 #1692 #1693 #1694 #1695)
+
+A landform audit measured the world builder against 84 real-world landforms and found 26 missing and 15
+half-done. New worlds now roll them all.
+
+- **Rock and desert:** slot canyons, arêtes and tooth rows, rock gates and mountain halls, desert pavement,
+  petrified dunes, rainbow strata, labyrinths, stone forests, barchan dunes, frost polygons, obsidian
+  fields and lava flows with glowing pockets (#1689 #1691).
+- **Underground:** dripstone caves with stalactites and stalagmites, karst cathedrals, and rivers that run
+  underground on karst worlds (#1688 #1690).
+- **Rivers and wetlands:** rivers that meander, with oxbow lakes left behind, deltas and floodplains at the
+  mouth, drowned river valleys, floating mats of plants, peat bogs and thaw ponds (#1692).
+- **Coast and sea floor:** sea arches and blowholes, tidal islands you can walk to at low water, lagoons
+  and atolls of coral rock, reef fields, blue holes, submarine canyons and deep trenches, and seamounts
+  rising out of the deep (#1693 #1688).
+- **Ice:** glaciers are real volumes of ice now, with crevasses, icefalls, moraines, ice caves and glacier
+  gates; ice sheets carry nunataks — bare peaks poking through — and there are hanging valleys and
+  icebergs adrift (#1694 #1688).
+- **Two new blocks** to mine and build with, **peat** and **coral rock**, and **three new kinds of planet**:
+  a coral sea, an ice cap and river lowlands (#1695).
+- All of it is tied to the world's terrain generation number, so **existing worlds are untouched** — every
+  old world still generates block for block the way it always did (#1688).
+
+### 💧 Built water is real water — and fire burns everybody (#1697 #1698 #1700 #1701)
+
+- **Animals no longer walk across a moat you dug yourself.** A player built a wide water trench around a
+  spaceport and watched the attacking creatures stroll over the surface of it. Water the world was born
+  with counted as water; water you place did not — so the animals were still walking on the ground that
+  used to be there before you dug. Now they stop at the bank of any water, wade through the shallow kind,
+  and a flying animal settles above the surface of a pool instead of falling asleep under it (#1697).
+- **Lava and fire burn everybody now, not just you.** Animals, robbers and Guardian machines burn exactly
+  as you do — a fire moat is a real defence, not only a wall. Tame companions never burn, creatures that
+  live in lava are at home in it, and on a peaceful world nothing burns at all (#1700).
+- **You can fight in the water.** Shooting at anything while swimming — or at anything swimming — always
+  answered "no clear line of fire", because water blocked sight completely. Water now dims the view instead
+  of ending it: a few blocks of it are see-through, a whole lake still hides what is behind it (#1698).
+- **A wide water surface looks like one surface.** Big flat water read as a grid of blocks with hard edges,
+  and a trench that changed width could ripple in one spot and lie still in the next. Both are smoothed
+  out (#1701).
+
+### 🛡️ Your sentry post defends you against animals too (#1699)
+
+- It used to shoot only machines and robbers, while the game's own advice said to keep one for the fliers
+  and cave animals that walls do not stop. Now it answers those as well, and never a tame animal. Put one
+  down outside your base zone and it says so straight away; scanning a post shows how far it shoots and how
+  close to a base core it has to stand.
+
+### ⛏️ A tool that will not break a block says which one would (#1686)
+
+- Aiming the starter drill at a machine block used to produce "Your current tool cannot mine this block."
+  and nothing else — never which tool would work, never before the swing. Fifteen blocks gate this way, so
+  the first wall a new player meets had no visible way through. Now the refusal names the tool
+  ("Needs: Titanium Drill"), **every scan of a gated block carries a "Needs:" line** whether or not the
+  tool in hand already clears it, and VEGA explains the whole idea once, the first time you are turned
+  away. None of the rules changed — only what the game tells you about them.
+
+### 🚀 Hyperjumps, landing pads and the compass (#1677 #1678 #1679 #1680 #1681 #1682 #1683 #1684)
+
+- **A hyperjump from the cockpit really takes you to the new system.** Jumping between stars while flying
+  left the old system's planets in the flight view: the landing list still offered the planets you had come
+  from, and picking one jumped you straight back. The flight view rebuilds itself on arrival now, and the
+  star chart reaches you before the flight does (#1677).
+- **Two ships can no longer be parked on the same landing spot.** A player landed at position 1 and found a
+  trader's ship standing inside their own, with no way out. Parking a ship now checks the ground itself
+  instead of trusting the booking: an arriving ship takes the next free spot, a trader that finds the spot
+  taken keeps flying, and a pilot who jumps between stars no longer carries the landing spot of the world
+  they left (#1678 #1679).
+- **A visiting trader takes its ship with it when it leaves.** Its parked hull could be left standing on a
+  spot already reported as free, and a trader that never touched down could take an unrelated character out
+  of the world with it (#1680).
+- **Anyone caught inside a parked hull is set down beside it.** The rescue only knew about blocks, not about
+  ships, so a player wedged between two hulls was teleported back into the same spot every second (#1681).
+- **The compass points at your ship again.** The ship is marked by an arrow on the rim of the dial that
+  points the way to it and stays readable however far away it is — the small square inside the dial keeps
+  showing how close you are getting (#1682).
+- Closing the feedback window no longer risks an error while a text field still has the cursor (#1683), and
+  a planet's crashed wreck is pinned to where it was built, like every other structure, so its repair plan
+  can never drift away from the hull lying in the world (#1684).
+## [2026.9.3] — 2026-09-06
+
+The landscape release. Every new world you create from now on rolls its own landscape — dune seas next to
+badlands, fjord coasts under mountain country, glacier valleys, impact basins full of water, rock bridges,
+hidden geodes, oases in the desert — and there are **eight new kinds of planet**, six new ancient relics
+and dozens of small things to stumble over. **Existing worlds keep exactly the terrain they have.** Space
+grew too: a new galaxy starts with twelve star systems, the flight chart shows every star, wrecks really
+drift out there, and distances are in kilometres. The HUD has a new look, the view is wider, shade no
+longer looks like a cave, and the speeder stays on land and comes back when you call it. **Lyxette** sent
+his eighth and ninth rounds of reports and **ahmdkaml** contributed a first code fix — thank you both! 🙏
+
+ℹ️ **Compatibility:** the network protocol stays at version 5, saves migrate unchanged. New landscapes,
+volcanoes and ocean-landing rules reach **new worlds only** — nothing moves under a base you already built.
+
+### 🏔️ New worlds: the landscape package (#1644 #1645 #1646 #1647 #1648 #1649 #1631 #1657)
+
+- **Every new world rolls its own relief.** A planet type used to have one landscape; now a new world
+  mixes one to three landscape styles as regions, with its own hill spacing, biomes that shape the ground,
+  and rare whole-planet shapes (tilted, stepped, an equatorial ridge). Seven new styles join in, from
+  island archipelagos and fjordlands to chalk downs and shattered rift country (#1645).
+- **New kinds of mountains, holes and hidden places:** shield volcanoes, water-filled impact basins,
+  U-valleys, yardang ridges, drumlins, granite domes, star dunes, mud volcanoes, sinkhole chains, maars,
+  mushroom rocks, glacier tongues; rock bridges, wave-cut ledges and snow cornices; crystal geodes,
+  underground lakes and layered strata beneath the surface (#1646).
+- **Water where it was missing, and the ground tells its story:** marshes with reeds, oases with palms,
+  hot springs, caldera lakes, maars, salt playas and glacial tarns; scree on steep slopes, ash around
+  volcanoes, dry riverbeds, banded sandstone, moss on warm wet rock. **Five new blocks** to mine and build
+  with: moss stone, tar, bone, sandstone and scree (#1647).
+- **Things you meet every hundred blocks:** fallen logs, termite mounds, cairns, bone piles, ice boulders,
+  coral, crystal clusters, meteorites, tar pools, and small ruins with the odd data cache; **seven new tree
+  kinds** (baobab, mangrove, bamboo, saguaro, willow, mushroom and crystal trees) and giant ferns, crystals
+  and cacti (#1648).
+- **Eight new planet types** — red deserts, boreal forests, archipelagos, glacier worlds, meadows, ash seas
+  with basalt continents, dust bowls and frozen seas — and **six new ancient relics**: a stone bridge, a
+  watchtower, a tomb, a ziggurat, a fallen colossus and an aqueduct (#1649). The world-options page fits
+  all 29 planet types again (#1657).
+- **Volcanoes on every world with a lava core**, and volcanoes under the sea rise as smoking islands (#1631).
+- Every new world carries a *terrain generation* number in its save, so all of this reaches new worlds
+  only; existing worlds are byte-identical (#1644).
+
+### 🏝️ Landing on ocean worlds (#1618 #1619 #1620 #1621 #1622 #1665)
+
+- Landing pads now search in every direction for real land, and further on ocean worlds. Where only deep
+  water remains, the pad raises a proper island — a level top, a gentle beach, a natural outline, some
+  grass. Only shallow water still parks the ship on the seabed, and those pads are blue on the approach
+  map with the depth written next to them. Your first landing prefers dry ground. **New worlds only**;
+  older saves keep their pads exactly where they are.
+
+### 🌌 Space: a bigger galaxy, a chart of every star, wrecks to salvage (#1615 #1616 #1617 #1603 #1604 #1605 #1599 #1600 #1601 #1664 #1663 #1638 #1584 #1582)
+
+- **More stars.** A Normal galaxy starts with 12 star systems instead of 8 (Small 6, Large 20, Huge 32);
+  Growing worlds start at 12 too, and dedicated servers default to 12. Existing saves keep their galaxy
+  (#1615 #1616 #1617).
+- **The flight chart has a Hyperspace tab** (M while flying, LB/RB on a pad): the whole galaxy as stars in
+  their true colours, visited systems named, unvisited ones a **?**, the relay lanes drawn between them.
+  Click a star to read about it and hyperjump straight from the chart. The finale system sits out past
+  the frontier (#1603 #1604 #1605).
+- **Kilometres and roomier systems.** Radar and chart say "830 km" instead of "83 m"; planets, moons and
+  asteroids sit half as far apart again, so a system reads as a family rather than a huddle. The hop to
+  the next planet takes a little longer (#1599 #1600 #1601).
+- **Wrecks in space are real now.** Every wreck the travel screen has listed drifts in its system as a
+  hull you can fly to, read on approach and cut apart with the mining laser for plating, cable, metal and
+  data fragments (#1664). **Distant asteroids stay findable**: never smaller than a dot, named on the radar
+  rim, and VEGA explains chart waypoints once (#1663).
+- **Three space fixes from Lyxette:** a system you jumped into but never landed in can be jumped to again
+  (#1638); a ship you switched into launches into the orbit it is really on, not your home system's
+  (#1584); and the starfield is no longer painted over far-side moons (#1582).
+
+### 🖥️ HUD and view: a new look, a wider view, shade you can see in (#1623 #1624 #1625 #1626 #1627 #1628 #1636 #1589 #1590 #1591 #1594 #1597 #1585 #1608 #1609 #1610 #1611 #1612)
+
+- **The HUD's new look:** crisp text at any size, holographic panels, rings and bars with a soft glow,
+  icons on the vitals rows, a hologram glow that glitches when you take damage (Medium graphics and up),
+  and motion — ghost-trail bars, rolling numbers, toasts that slide in, a boot-up when you enter a world.
+  Nothing moved on screen; the reduced-motion setting is honoured; the browser keeps its flat overlay and
+  the glow runs on older tablets too (#1623–#1628 #1636).
+- **A wider view.** First person now looks through 80° instead of the narrow 60° it silently used, with a
+  50–100° *Field of view* setting under Controls and a held tool that keeps its size (#1589 #1590 #1591).
+- **The compass explains itself:** "Ship 114 m" and "Waypoint 138 m" instead of bare numbers, a rotating
+  **N** that marks north (the old ▲ only meant "ahead"), a VEGA tip when you wander far from your ship, and
+  a Codex paragraph on finding your way (#1594 #1597). Hull and shield rows show value and maximum, so a
+  fresh shield generator no longer looks dead while landed (#1585).
+- **Shade is shade, not a cave.** The ground under trees and overhangs was lit like a cave; it now stays
+  daylight with sun spots through the leaves, corners are less crushed, orange and red suns light the
+  ground as well as a yellow one, and shadows fade out instead of ending in a hard line (#1608–#1612).
+
+### 🛵 Speeder and boat (#1660 #1661 #1662 #1668 #1669 #1670 #1671)
+
+- **The speeder stays on land**: it hovers reliably again, stops at the shore, hops free when stuck, and a
+  wet driver is set back on dry ground (#1660).
+- **A vehicle is never lost.** X at your landed ship's cockpit or console packs every speeder and boat left
+  on this world back into your inventory; with no free slot it is parked beside the ship with a marker and
+  the distance. The seat frees on respawn, and the HUD tells you where the vehicle is (#1661 #1668).
+- **Parked vehicles are solid from every side** and you can stand on them; getting off puts you on firm
+  ground beside the hull, or in the water if you leave a boat mid-lake (#1662 #1669 #1671).
+- **"Board (E) · Pack up (X)" on screen** next to your own vehicle, with the right buttons on pad and touch (#1670).
+
+### 🏘️ Ship, settlements and small fixes (#1586 #1658 #1659 #1583 #1634)
+
+- **The shield is topped up after a repair** — once the hull is whole, the shield fills at once instead of
+  waiting for the next flight. Contributed by **ahmdkaml** (#1586, PR #1606). 🙏
+- **Settlers never make their home in water**, and trees are cleared out of village and station footprints
+  (#1658 #1659).
+- **The ground is solid when you drop fast** — collision is prepared ahead of a fast descent (#1583).
+- **N continues a VEGA line right after the chat closes**, no click into the world needed (#1634).
+
+### 🔩 Under the hood (#1642 #1640 #1641 #1652)
+
+- The report inbox shows one conversation per report again — the two halves of a report no longer open
+  separate threads (#1642). Two streaming tests wrap at the world's longitude seam so main stays green
+  (#1640 #1641 #1652), and the world-generation golden test compares block names instead of ids.
 
 ## [2026.9.2] — 2026-09-05
 
@@ -4606,7 +5878,20 @@ A graphics-quality pass and a licensing/foundation cleanup.
 
 - Initial public release.
 
-[Unreleased]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.2...HEAD
+[Unreleased]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.15...HEAD
+[2026.9.15]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.14...v2026.9.15
+[2026.9.14]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.13...v2026.9.14
+[2026.9.13]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.12...v2026.9.13
+[2026.9.12]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.11...v2026.9.12
+[2026.9.11]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.10...v2026.9.11
+[2026.9.10]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.9...v2026.9.10
+[2026.9.9]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.8...v2026.9.9
+[2026.9.8]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.7...v2026.9.8
+[2026.9.7]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.6...v2026.9.7
+[2026.9.6]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.5...v2026.9.6
+[2026.9.5]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.4...v2026.9.5
+[2026.9.4]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.3...v2026.9.4
+[2026.9.3]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.2...v2026.9.3
 [2026.9.2]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.9.1...v2026.9.2
 [2026.9.1]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.8.26...v2026.9.1
 [2026.8.26]: https://github.com/marceld23/BlocksBeyondTheStars/compare/v2026.8.25...v2026.8.26

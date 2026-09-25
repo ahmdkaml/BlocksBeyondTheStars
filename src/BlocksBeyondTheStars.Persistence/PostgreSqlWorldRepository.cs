@@ -133,7 +133,10 @@ public sealed class PostgreSqlWorldRepository : IWorldRepository
                 created_unix BIGINT NOT NULL, kind TEXT NOT NULL DEFAULT 'paint');
             CREATE TABLE IF NOT EXISTS custom_shape (
                 id INTEGER PRIMARY KEY, owner TEXT NOT NULL, owner_name TEXT NOT NULL,
-                name TEXT NOT NULL, voxels TEXT NOT NULL);");
+                name TEXT NOT NULL, voxels TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS world_texture (
+                key TEXT PRIMARY KEY, frames INTEGER NOT NULL, fps INTEGER NOT NULL, data TEXT NOT NULL,
+                owner TEXT NOT NULL, owner_name TEXT NOT NULL, created_unix BIGINT NOT NULL);");
             // (Landing pads are deterministic + live-occupancy now — no per-player landing_zone table; item 38.)
 
             // Migrate older saves to carry per-voxel colour modifiers (dyed blocks / coloured lights). The
@@ -144,6 +147,9 @@ public sealed class PostgreSqlWorldRepository : IWorldRepository
             // Migrate older saves to carry the per-voxel shape descriptor (non-cube building forms). Same pattern:
             // harmlessly ignored on a fresh DB where the CREATE already added the column.
             TryExecute("ALTER TABLE block_edit ADD COLUMN IF NOT EXISTS shape INTEGER NOT NULL DEFAULT 0;");
+
+            // #1943: furniture built into a ship keeps its form — older saves default to the cube they stored.
+            TryExecute("ALTER TABLE structure_edit ADD COLUMN IF NOT EXISTS shape INTEGER NOT NULL DEFAULT 0;");
             // Block attribution (issue #490) — mirrors the SQLite side: interned owner + edit time, 0 = unknown for
             // every row written before this shipped (no back-fill is possible).
             TryExecute("ALTER TABLE block_edit ADD COLUMN IF NOT EXISTS owner_id INTEGER NOT NULL DEFAULT 0;");
@@ -472,6 +478,72 @@ public sealed class PostgreSqlWorldRepository : IWorldRepository
         }
     }
 
+    public bool TryGetPlayerBlockEditBounds(string planet, Vector3i min, Vector3i max, out Vector3i lo, out Vector3i hi)
+    {
+        lock (_gate)
+        {
+            using var cmd = Connection.CreateCommand();
+            cmd.CommandText = "SELECT MIN(x), MAX(x), MIN(y), MAX(y), MIN(z), MAX(z) FROM block_edit " +
+                              "WHERE planet = @p AND owner_id <> 0 " +
+                              "AND x BETWEEN @minx AND @maxx AND y BETWEEN @miny AND @maxy AND z BETWEEN @minz AND @maxz;";
+            cmd.Parameters.AddWithValue("@p", planet);
+            cmd.Parameters.AddWithValue("@minx", min.X);
+            cmd.Parameters.AddWithValue("@maxx", max.X);
+            cmd.Parameters.AddWithValue("@miny", min.Y);
+            cmd.Parameters.AddWithValue("@maxy", max.Y);
+            cmd.Parameters.AddWithValue("@minz", min.Z);
+            cmd.Parameters.AddWithValue("@maxz", max.Z);
+            using var reader = cmd.ExecuteReader();
+            if (!reader.Read() || reader.IsDBNull(0))
+            {
+                lo = hi = default;
+                return false; // the aggregates come back NULL when no row matches
+            }
+
+            lo = new Vector3i(reader.GetInt32(0), reader.GetInt32(2), reader.GetInt32(4));
+            hi = new Vector3i(reader.GetInt32(1), reader.GetInt32(3), reader.GetInt32(5));
+            return true;
+        }
+    }
+
+    public IReadOnlyList<BlockEdit> ListBlockEditsMatching(string planet, Vector3i min, Vector3i max,
+        IReadOnlyCollection<ushort> blocks, IReadOnlyCollection<int> shapeIndices, int limit)
+    {
+        var result = new List<BlockEdit>();
+        if ((blocks.Count == 0 && shapeIndices.Count == 0) || limit <= 0)
+        {
+            return result;
+        }
+
+        // The id lists are integers the server built itself (never player text), so they are inlined; the box and
+        // the planet stay parameters.
+        string blockList = blocks.Count == 0 ? "-1" : string.Join(",", blocks.Select(b => ((int)b).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        string shapeList = shapeIndices.Count == 0 ? "-1" : string.Join(",", shapeIndices.Select(s => s.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        lock (_gate)
+        {
+            using var cmd = Connection.CreateCommand();
+            cmd.CommandText = "SELECT x, y, z, block, tint, glow, shape FROM block_edit WHERE planet = @p AND block <> 0 " +
+                              "AND x BETWEEN @minx AND @maxx AND y BETWEEN @miny AND @maxy AND z BETWEEN @minz AND @maxz " +
+                              $"AND (block IN ({blockList}) OR ((shape >> 2) & 63) IN ({shapeList})) LIMIT @lim;";
+            cmd.Parameters.AddWithValue("@p", planet);
+            cmd.Parameters.AddWithValue("@minx", min.X);
+            cmd.Parameters.AddWithValue("@maxx", max.X);
+            cmd.Parameters.AddWithValue("@miny", min.Y);
+            cmd.Parameters.AddWithValue("@maxy", max.Y);
+            cmd.Parameters.AddWithValue("@minz", min.Z);
+            cmd.Parameters.AddWithValue("@maxz", max.Z);
+            cmd.Parameters.AddWithValue("@lim", limit);
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var pos = new Vector3i(reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2));
+                result.Add(new BlockEdit(pos, (ushort)reader.GetInt32(3), reader.GetInt32(4), reader.GetInt32(5), reader.GetInt32(6)));
+            }
+        }
+
+        return result;
+    }
+
     public bool HasAnyBlockEdits(string planet)
     {
         lock (_gate)
@@ -509,6 +581,35 @@ public sealed class PostgreSqlWorldRepository : IWorldRepository
             {
                 var pos = new Vector3i(reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2));
                 result.Add(new BlockEdit(pos, (ushort)reader.GetInt32(3), reader.GetInt32(4), reader.GetInt32(5), reader.GetInt32(6)));
+            }
+        }
+
+        return result;
+    }
+
+    public IReadOnlyList<EditColumnTop> LoadEditColumnTops(string planet, int minX, int minZ, int maxX, int maxZ)
+    {
+        var result = new List<EditColumnTop>();
+        lock (_gate)
+        {
+            using var cmd = Connection.CreateCommand();
+            // #1871: one range scan of the key, the top row per column chosen by the ORDER BY — the old
+            // self-join let the planner scan every edit of the planet per tile (see SqliteWorldRepository).
+            cmd.CommandText = "SELECT DISTINCT ON (x, z) x, y, z, block, tint FROM block_edit " +
+                              "WHERE planet = @p AND block <> 0 " +
+                              "AND x BETWEEN @minx AND @maxx AND z BETWEEN @minz AND @maxz " +
+                              "ORDER BY x, z, y DESC;";
+            cmd.Parameters.AddWithValue("@p", planet);
+            cmd.Parameters.AddWithValue("@minx", minX);
+            cmd.Parameters.AddWithValue("@maxx", maxX);
+            cmd.Parameters.AddWithValue("@minz", minZ);
+            cmd.Parameters.AddWithValue("@maxz", maxZ);
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(new EditColumnTop(reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2),
+                    (ushort)reader.GetInt32(3), reader.GetInt32(4)));
             }
         }
 
@@ -1021,18 +1122,19 @@ public sealed class PostgreSqlWorldRepository : IWorldRepository
 
     // --- In-space voxel structure edits (own-ship hull deltas, item 20) ---
 
-    public void SetStructureBlock(string structureId, Vector3i position, ushort block)
+    public void SetStructureBlock(string structureId, Vector3i position, ushort block, int shape = 0)
     {
         lock (_gate)
         {
             using var cmd = Connection.CreateCommand();
-            cmd.CommandText = "INSERT INTO structure_edit (structure, x, y, z, block) VALUES (@s, @x, @y, @z, @b) " +
-                              "ON CONFLICT(structure, x, y, z) DO UPDATE SET block = excluded.block;";
+            cmd.CommandText = "INSERT INTO structure_edit (structure, x, y, z, block, shape) VALUES (@s, @x, @y, @z, @b, @sh) " +
+                              "ON CONFLICT(structure, x, y, z) DO UPDATE SET block = excluded.block, shape = excluded.shape;";
             cmd.Parameters.AddWithValue("@s", structureId);
             cmd.Parameters.AddWithValue("@x", position.X);
             cmd.Parameters.AddWithValue("@y", position.Y);
             cmd.Parameters.AddWithValue("@z", position.Z);
             cmd.Parameters.AddWithValue("@b", (int)block);
+            cmd.Parameters.AddWithValue("@sh", shape);
             cmd.ExecuteNonQuery();
         }
     }
@@ -1043,13 +1145,13 @@ public sealed class PostgreSqlWorldRepository : IWorldRepository
         lock (_gate)
         {
             using var cmd = Connection.CreateCommand();
-            cmd.CommandText = "SELECT x, y, z, block FROM structure_edit WHERE structure = @s;";
+            cmd.CommandText = "SELECT x, y, z, block, shape FROM structure_edit WHERE structure = @s;";
             cmd.Parameters.AddWithValue("@s", structureId);
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
                 var pos = new Vector3i(reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2));
-                result.Add(new BlockEdit(pos, (ushort)reader.GetInt32(3)));
+                result.Add(new BlockEdit(pos, (ushort)reader.GetInt32(3), shape: reader.GetInt32(4)));
             }
         }
 
@@ -1327,6 +1429,65 @@ public sealed class PostgreSqlWorldRepository : IWorldRepository
             using var cmd = Connection.CreateCommand();
             cmd.CommandText = "DELETE FROM custom_shape WHERE id = @i;";
             cmd.Parameters.AddWithValue("@i", id);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    // --- World textures (#1958) ---
+
+    public void SaveWorldTexture(StoredWorldTexture texture)
+    {
+        lock (_gate)
+        {
+            using var cmd = Connection.CreateCommand();
+            cmd.CommandText = "INSERT INTO world_texture (key, frames, fps, data, owner, owner_name, created_unix) " +
+                              "VALUES (@k, @f, @s, @d, @o, @n, @c) " +
+                              "ON CONFLICT(key) DO UPDATE SET frames=excluded.frames, fps=excluded.fps, data=excluded.data, " +
+                              "owner=excluded.owner, owner_name=excluded.owner_name, created_unix=excluded.created_unix;";
+            cmd.Parameters.AddWithValue("@k", texture.Key);
+            cmd.Parameters.AddWithValue("@f", texture.Frames);
+            cmd.Parameters.AddWithValue("@s", texture.Fps);
+            cmd.Parameters.AddWithValue("@d", texture.Data);
+            cmd.Parameters.AddWithValue("@o", texture.OwnerId);
+            cmd.Parameters.AddWithValue("@n", texture.OwnerName);
+            cmd.Parameters.AddWithValue("@c", texture.CreatedUnix);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    public IReadOnlyList<StoredWorldTexture> ListWorldTextures()
+    {
+        var result = new List<StoredWorldTexture>();
+        lock (_gate)
+        {
+            using var cmd = Connection.CreateCommand();
+            cmd.CommandText = "SELECT key, frames, fps, data, owner, owner_name, created_unix FROM world_texture ORDER BY key;";
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                result.Add(new StoredWorldTexture
+                {
+                    Key = reader.GetString(0),
+                    Frames = reader.GetInt32(1),
+                    Fps = reader.GetInt32(2),
+                    Data = reader.GetString(3),
+                    OwnerId = reader.GetString(4),
+                    OwnerName = reader.GetString(5),
+                    CreatedUnix = reader.GetInt64(6),
+                });
+            }
+        }
+
+        return result;
+    }
+
+    public void DeleteWorldTexture(string key)
+    {
+        lock (_gate)
+        {
+            using var cmd = Connection.CreateCommand();
+            cmd.CommandText = "DELETE FROM world_texture WHERE key = @k;";
+            cmd.Parameters.AddWithValue("@k", key);
             cmd.ExecuteNonQuery();
         }
     }

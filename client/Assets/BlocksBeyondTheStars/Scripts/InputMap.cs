@@ -17,6 +17,7 @@ namespace BlocksBeyondTheStars.Client
         Interact,          // generic "use / board / open" — default E
         PrimaryFire,       // melee swing / fire the held weapon — default F
         StowVehicle,       // pack up a deployed speeder you're standing next to — default X
+        RecallVehicle,     // at the own cockpit/console: the ship brings a stranded speeder/boat back (#1661) — default X
         ToggleThirdPerson, // switch first/third-person camera — default V
         LootContainer,     // loot the nearest container — default G
         DepositToCrate,    // deposit into the nearest storage crate — default H
@@ -41,6 +42,7 @@ namespace BlocksBeyondTheStars.Client
         SpeederExit,          // dismount the speeder — default F
         SpeederRefuel,        // refuel the speeder — default R
         Disembark,            // leave a boarded station / undock — default U
+        ToggleStationZeroG,   // zero-g construction mode on a boarded player station, per player (#1842) — default O
         RequestTrade,         // request a trade with a nearby player — default T
         RequestDock,          // request to dock with a nearby player — default K
 
@@ -136,7 +138,7 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>On-foot actions exposed in the controls-rebinding UI, in display order.</summary>
         public static readonly InputAction[] Remappable =
         {
-            InputAction.Interact, InputAction.PrimaryFire, InputAction.StowVehicle,
+            InputAction.Interact, InputAction.PrimaryFire, InputAction.StowVehicle, InputAction.RecallVehicle,
             InputAction.ToggleThirdPerson, InputAction.LootContainer, InputAction.DepositToCrate,
             InputAction.RepairWreck, InputAction.ToggleLamp, InputAction.RotateShape,
             InputAction.ToggleThermal, InputAction.ToggleChat, InputAction.OpenChat, InputAction.HotbarAction,
@@ -155,7 +157,7 @@ namespace BlocksBeyondTheStars.Client
         public static readonly InputAction[] VehicleRemappable =
         {
             InputAction.SpeederBoost, InputAction.SpeederExit, InputAction.SpeederRefuel,
-            InputAction.Disembark, InputAction.RequestTrade, InputAction.RequestDock,
+            InputAction.Disembark, InputAction.ToggleStationZeroG, InputAction.RequestTrade, InputAction.RequestDock,
         };
 
         /// <summary>Menu verbs shown in the rebinding UI with their PAD column only (#1198). Their keyboard
@@ -185,6 +187,7 @@ namespace BlocksBeyondTheStars.Client
             InputAction.Interact => KeyCode.E,
             InputAction.PrimaryFire => KeyCode.F,
             InputAction.StowVehicle => KeyCode.X,
+            InputAction.RecallVehicle => KeyCode.X, // shares X with the pack-up: a parked vehicle beside you wins, the cockpit recall otherwise
             InputAction.ToggleThirdPerson => KeyCode.V,
             InputAction.LootContainer => KeyCode.G,
             InputAction.DepositToCrate => KeyCode.H,
@@ -204,6 +207,7 @@ namespace BlocksBeyondTheStars.Client
             InputAction.SpeederExit => KeyCode.F,
             InputAction.SpeederRefuel => KeyCode.R,
             InputAction.Disembark => KeyCode.U,
+            InputAction.ToggleStationZeroG => KeyCode.O, // the last free letter (#1842); only read while on a player station
             InputAction.RequestTrade => KeyCode.T,
             InputAction.RequestDock => KeyCode.K,
             InputAction.VegaContinue => KeyCode.N,  // the key VegaPanel always used; now rebindable + reachable from pad/touch (#1041)
@@ -305,11 +309,50 @@ namespace BlocksBeyondTheStars.Client
         public static bool ModalCaptures(InputAction action)
             => ModalCapture && (action == InputAction.UiCancel || action == InputAction.UiMenu);
 
+        // The text-entry gate (#1858), cached once per frame: TextFieldFocused walks the EventSystem selection
+        // and GetComponent<InputField>, and Down/Held/Up are polled dozens of times a frame. Frame-stable like
+        // Injected(): a field that loses focus mid-frame (Enter closing the chat box) keeps the rest of that
+        // frame's polls swallowed, so the closing keystroke never doubles as a gameplay verb.
+        private static int _textEntryFrame = -1;
+        private static bool _textEntryActive;
+
+        /// <summary>Test seam: pins <see cref="TextEntryActive"/> (an EditMode test has no EventSystem to focus a
+        /// field in). Null in normal play.</summary>
+        public static bool? TextEntryOverrideForTest;
+
+        /// <summary>True while the player is typing — a focused uGUI text field or the pad's on-screen keyboard
+        /// (<see cref="UiKit.TextFieldFocused"/>), sampled at most once per frame. While it is true every
+        /// gameplay action reads "not pressed" from <see cref="Down"/> / <see cref="Held"/> / <see cref="Up"/>;
+        /// only the two menu verbs pass (<see cref="InputGate.Allows"/>). Public so call sites that also read
+        /// the continuous axes can hold still on the same answer.</summary>
+        public static bool TextEntryActive
+        {
+            get
+            {
+                if (TextEntryOverrideForTest.HasValue)
+                {
+                    return TextEntryOverrideForTest.Value;
+                }
+
+                if (Time.frameCount != _textEntryFrame)
+                {
+                    _textEntryFrame = Time.frameCount;
+                    _textEntryActive = UiKit.TextFieldFocused();
+                }
+
+                return _textEntryActive;
+            }
+        }
+
+        /// <summary>The two gates every discrete poll passes: the pad modal capture and the text-entry gate.</summary>
+        private static bool Passes(InputAction action) => !ModalCaptures(action) && InputGate.Allows(action, TextEntryActive);
+
         // Discrete rebindable actions — combined across all backends so a pad button, the touch USE button, or
         // the bound key all fire the action. The keyboard resolution is unchanged (DesktopInputSource calls Key).
-        public static bool Down(InputAction action) => !ModalCaptures(action) && (_desktop.ActionDown(action) || _pad.ActionDown(action) || _touch.ActionDown(action) || Injected(action));
-        public static bool Held(InputAction action) => !ModalCaptures(action) && (_desktop.ActionHeld(action) || _pad.ActionHeld(action) || _touch.ActionHeld(action));
-        public static bool Up(InputAction action) => !ModalCaptures(action) && (_desktop.ActionUp(action) || _pad.ActionUp(action) || _touch.ActionUp(action));
+        // Typing into any text field (#1858) swallows them all except UiCancel / UiMenu — see Passes.
+        public static bool Down(InputAction action) => Passes(action) && (_desktop.ActionDown(action) || _pad.ActionDown(action) || _touch.ActionDown(action) || Injected(action));
+        public static bool Held(InputAction action) => Passes(action) && (_desktop.ActionHeld(action) || _pad.ActionHeld(action) || _touch.ActionHeld(action));
+        public static bool Up(InputAction action) => Passes(action) && (_desktop.ActionUp(action) || _pad.ActionUp(action) || _touch.ActionUp(action));
 
         // ---- Continuous locomotion / camera / interaction core -------------------------------------------
         // Each merges the backends. Movement + look are additive (mouse delta + stick delta + touch); the
@@ -411,6 +454,7 @@ namespace BlocksBeyondTheStars.Client
             InputAction.Interact => "ui.key.interact",
             InputAction.PrimaryFire => "ui.key.primary_fire",
             InputAction.StowVehicle => "ui.key.stow_vehicle",
+            InputAction.RecallVehicle => "ui.key.recall_vehicle",
             InputAction.ToggleThirdPerson => "ui.key.toggle_third_person",
             InputAction.LootContainer => "ui.key.loot_container",
             InputAction.DepositToCrate => "ui.key.deposit_to_crate",
@@ -430,6 +474,7 @@ namespace BlocksBeyondTheStars.Client
             InputAction.SpeederExit => "ui.key.speeder_exit",
             InputAction.SpeederRefuel => "ui.key.speeder_refuel",
             InputAction.Disembark => "ui.key.disembark",
+            InputAction.ToggleStationZeroG => "ui.key.toggle_station_zero_g",
             InputAction.RequestTrade => "ui.key.request_trade",
             InputAction.RequestDock => "ui.key.request_dock",
             InputAction.VegaContinue => "ui.key.vega_continue",

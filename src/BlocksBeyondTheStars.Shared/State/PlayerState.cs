@@ -109,6 +109,12 @@ public sealed class PlayerState
     /// existed simply have none, and the client falls back to the raw key. Persisted.</summary>
     public Dictionary<string, string> ScannedNames { get; set; } = new();
 
+    /// <summary>Where each <see cref="Scanned"/> entry was found (#1843): ledger key → body + system, captured
+    /// at scan time like <see cref="ScannedNames"/>. Entries scanned before this existed (or that the galaxy
+    /// could not place — a ship interior) simply have none; the join backfill derives a site for keys that
+    /// embed a body id (<c>place:</c>, <c>monument:</c>). Written on the FIRST scan only. Persisted.</summary>
+    public Dictionary<string, ScanSite> ScannedWhere { get; set; } = new();
+
     /// <summary>Suit ration dispenser: food loaded here is auto-eaten when hunger runs low. Small capacity.</summary>
     public Inventory RationStore { get; set; } = new(RationStoreSlots);
 
@@ -132,6 +138,10 @@ public sealed class PlayerState
     /// i.e. the temperature hazard is actively draining suit energy (or, once it's empty, health).
     /// Runtime-only HUD signal (mirrored in the player-state update); not persisted.</summary>
     public bool SuitClimateActive { get; set; }
+
+    /// <summary>The exposure meter 0..1 (2026-09, Titas): on a type with timed cold/heat, time spent outside fills it;
+    /// ship, station, base air and warmth drain it again; at 1 the cold or heat starts to hurt. 0 on every other world.</summary>
+    public float Exposure { get; set; }
 
     /// <summary>Which life support keeps this player breathing right now (#794): 0 none (own suit tank /
     /// the world's own air), 1 ship cabin, 2 station, 3 base (zone cube or sealed room). Runtime-only HUD
@@ -242,6 +252,9 @@ public sealed class PlayerState
     /// Shared ones are shown to allies + crew on the same body while this player is online. Persisted.</summary>
     public List<PlayerMarker> Markers { get; set; } = new();
 
+    /// <summary>Titled free-text notes this player wrote (#1844) — private, capped server-side at 20. Persisted.</summary>
+    public List<PlayerNote> Notes { get; set; } = new();
+
     /// <summary>The ids of every ship in this player's fleet, in order — the index over the per-ship save rows
     /// (#848). Before this, only the ACTIVE ship was saved and the fleet was rebuilt from scratch on every join,
     /// so a crafted ship or a claimed wreck was silently deleted by the next load. Empty in pre-#848 saves,
@@ -266,6 +279,11 @@ public sealed class PlayerState
     public string ArmPixels { get; set; } = string.Empty;
     public string LegPixels { get; set; } = string.Empty;
     public string HelmetPixels { get; set; } = string.Empty;
+
+    /// <summary>The player's own looks for tools (#1963): base item key → <see cref="ToolLook"/> payload. Like the
+    /// face and the body paint it belongs to the player (not to the item), is server-validated, persisted and
+    /// relayed via <c>PlayerToolLook</c>. At most <see cref="ToolLook.MaxLooksPerPlayer"/>.</summary>
+    public Dictionary<string, string> ToolLooks { get; set; } = new(System.StringComparer.Ordinal);
 
     /// <summary>The body-paint painting for a <see cref="BodyPaint"/> part index (empty for unknown parts).</summary>
     public string GetBodyPaint(int part) => part switch

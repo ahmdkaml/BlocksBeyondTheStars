@@ -135,6 +135,11 @@ Footprint depends on the random walk (e.g. small ≈ 13–19 wide; huge sprawls 
   variety in the game's structures today.
 - But **every module is the same hollow 7×6×7 shell** with one glass viewport band; the module *type*
   (hub/hangar/market/medbay/quarters/corridor) only changes the **marker**, never the interior or shape.
+- **Profession markers (2026-09):** both palettes offer `doctor`, `grocer`, `arms_dealer`, `sage`, `tamer`, `blockfarmer`,
+  `streamer` and `reporter` (`NpcProfessions`); a settlement template's room around one is furnished to fit, and the
+  "use as" stepper offers the matching building functions (`clinic` … `newsroom`). The station editor's function list has
+  `clinic, shop, armory, library, studio, newsroom` too (`StructureRoles.StationFunctions`, labels `ui.function.*`); a
+  station module with a `cabin` marker docks on the hall deck only. See NPC_ROUTINES.md §11.
   Interiors are **empty** (no counters, tanks, bunks, consoles, props). The exterior has no antennae,
   solar panels, docking arms, or tubes — just stacked boxes.
 
@@ -253,6 +258,144 @@ procedural"** even before the editors exist (author a couple of templates by han
 style export). The editors (P2/P3) then make authoring them in-game easy.
 
 ---
+
+## 3b. Building modules + procedural interiors (#1826 / #1827 / #1828, 2026-09-13)
+
+A settlement template has two uses, selected by `StructureTemplate.Role` (`role` in the JSON, the editor's
+**Use as** stepper, carried by `tools/merge_structure.py`):
+
+| role | used by | envelope | markers it should carry |
+|---|---|---|---|
+| `""` (whole, default) | `PickSettlementTemplate` — the whole settlement, pinned per world (#1115) | — | as before |
+| `house` / `market` / `board` / `greenhouse` | `SettlementGenerator.Generate(..., modules, chance)` — one plot of that role | `PlotModuleEnvelope(tier)`: 6 × (storeys·4 + 3) × 6 | `npc` / `vendor` / `mission_board` (+ `greenhouse`), `door_*`, `room` |
+| `city_housing` / `city_market` / `city_hall` / `city_garden` / `city_tower` | `CityGenerator.Generate(..., modules, chance)` — one district | 32 × 19 × 32, tier `metropolis` | what the district needs |
+
+- Style match: a plot module's tier picks the settlements it may enter (`hamlet`/`village` → village-style,
+  `town`/`city` → town-style, `StructureRoles.IsTownStyleTier`). Pack + `planetTypes` filter like whole
+  templates (`GameContent.SettlementModulesFor`). Modules are excluded from the whole-template pools
+  (`GroupByTier` skips them), so a module never becomes a settlement on its own.
+- The pick is a **hash** (`SettlementGenerator.PickModule`: `module:{tier}:{seed}:{plot}` → chance, then a
+  weighted pick), never an rng draw — every plot / district that stays procedural is byte-identical with or
+  without modules (`SettlementModuleTests.Plots_ThatStayProcedural_AreByteIdentical…`). The module is stamped
+  centred in its plot (`StampModule`); a missing role marker is added in the first free cell over the centre
+  column (`FreeCellAbove`), doors come only from the module's door markers.
+- The per-plot chance is `WorldDescription.SettlementTemplateUse.Probability()` (Rare 15 % by default; Off
+  disables whole templates and modules). `StructurePlacementRecord.Modules` gates it per instance: a fresh stamp
+  writes 1, records from older saves and legacy re-derives stay 0 — an existing world's layout never changes.
+- **Interiors** (`RoomFurnisher`): every storey of a procedural building (`StampBuilding` with a palette + cell
+  sink) and every authored floor under a `room` marker (`FurnishAuthoredRooms`: flood fill capped at 256
+  cells, every other marker cell and the lane in front of each door reserved, role from the marker found
+  inside) gets wall-hugging pieces — bed, table + chair (#805 shapes on the style's material), storage,
+  plant, light, market counter, terminal — from a hash-seeded `Random` of its own; nothing is written into a
+  deck row, the resident's cell, the door lane or the ladder corner. Palettes: village (wood/stone/torch),
+  town (steel/crate/light), alien (iron/data cache). The G.D.S. houses light from the deck, so `CeilingLit`
+  skips the floor lamp there.
+- Shipped examples (`tools/gen_settlement_modules.py` → `data/settlement_templates.json`): `timber_cottage`
+  (house, village, 6 × 7 × 6) and `iron_flat` (house, town, 6 × 9 × 6, two storeys, deck lights).
+
+## 3c. Structure kits — modules that dock, kits that compose (#1873–#1876, 2026-09-13)
+
+A template is either **complete** (rolled as one piece, as before) or a **module** of a **kit**:
+
+| field | on | meaning |
+|---|---|---|
+| `kit` | template | the kit key every segment that fits together shares (`station_small_1`); a kit may also borrow a module of another kit by key |
+| `function` | template | what the module is for — stations: `hub corridor cabins canteen bar market mission medbay hydro storage hangar room` (`StructureRoles.StationFunctions`); settlements: the plot roles; cities: `city_*`. Empty falls back to `role` |
+| `pinOnly` | template | never rolled for a new structure; stays for the worlds that pinned it (the four original station templates) |
+| `port` | block cell | `tag[:door]` — `door` (2 × 3 standard), `wide`, `ladder` (floor / ceiling) or any word; door option `slide` (default), `energy`, `hinge`, `open`. The wall block stays: it is the seal while nothing docks, and it is cut when a module docks |
+
+**Kits** live in `data/structure_kits.json` and `usercontent/structure_kits/<key>.json` (`StructureKit`): `key`, `name`,
+`kind` (`station` | `settlement` | `city`), `tier`, `pack`, `weight`, `planetTypes`, `modulesMin/Max`, `start`
+(stations), `maxExtent`, `solarWings` / `antennas` / `domes` (stations, #1918; 0 = none),
+`entries[] = { module, min, max, required, weight, rotate }`, and the grid: settlements
+`colsMin/Max`, `rowsMin/Max`, `plotStride`, `building`, `storeys`, `modulesOnly`; cities `grid`, `districtSize`,
+`street`, `height`, `roleMap` (one string per row, letters `P O M H G T R`). `GameContent.SetStructureKits` validates
+(unknown module keys are dropped with a warning; a station kit needs an entry) and `KitsFor(kind, tier, packs, planet)`
+returns them in pool order.
+
+**Ports** (`StructurePorts`): the tagged cells of one outer face, grouped into filled rectangles; the cell behind every
+port cell must be air; a port on a corner or on a marker is an error. Two ports dock when tag and rectangle are equal
+and the faces are opposite. **Seal** (`StructureSeal.FindLeaks`): a flood fill through air from every marker and every
+port's inner cell must never reach the bounding box — the leak cells are returned for the editor. **Rotation**
+(`TemplateTransform.RotateY`): cells, shape yaw + up-face, markers and ports turn together.
+
+**Station composer** (`StationKitComposer`): the start module at the origin, then the required entries' minimum copies
+(kit order), then weighted draws up to the target count; every module tries every open port × its ports × 4 rotations
+(unless `rotate: false`) in a hash-shuffled order and takes the first fit (compatible ports, adjacent walls, no
+bounding-box overlap, inside `maxExtent`); a required module that never fits restarts with the next hash lane (8
+attempts), then the composer fails and the server uses the procedural generator. Baking opens both port walls of a
+joint (a two-deep doorway with a `door_<option>` marker, a ladder column for vertical joints), joins ports that happen
+to coincide, furnishes `room` / `cabin` markers by function (`RoomFurnisher.Style.Station`) and emits `lounge`
+markers in canteens and bars. The composition (module, origin, turns) is pinned in `WorldMetadata.StationKits` and
+`StationTemplates[id] = "kit:<key>"`; `Replay` bakes it without the kit. Selection for a FRESH station: one joint table
+of complete templates (non-pinOnly) and kits of the tier, drawn by weight; `StationTemplateUse = Off` keeps the
+procedural generator.
+
+**Exterior detail (#1918)** (`StationKitExterior`): a kit's `solarWings`, `antennas` and `domes` are copied into the
+composition and pinned in `StationKitRecord.Exterior`. A composition with detail bakes with a free margin of
+`MarginXZ = 3` blocks around the modules and `MarginTop = 3` above them (the composer places the modules inside
+`maxExtent − 6`, so the whole station stays within the extent). After furnishing, candidates are drawn from an rng seeded
+by `kitexterior:<kit>:<seed>`: **solar wings** — a flat 3-deep wing (carbon strut row, glass cells tinted
+`SolarTint`, a carbon frame every third cell) on a module's side wall, at the highest row that is solid all along (no
+window, no doorway) with free space in front; **domes** — three stepped rings on a free roof (5 × 5 at least), the start
+module first as a solid hull cupola, the others glass; **antennas** — a two-carbon-plus-light mast on a free roof corner
+(roofs with a dome excluded). Nothing is placed inside a module's box or in the corridor in front of a force-field wall
+(the hangar mouth) out to the structure's edge. The pieces depend only on the pinned composition, so `Replay` bakes the
+same station. A kit station pinned before #1918 (`Exterior` null) gets its kit's current counts on its first replay; its
+modules then bake `MarginXZ` further in, `StationStructure.ModuleShift` reports that shift, and the server stamps the
+structure that much further out (`BoardableStation.Origin`), so every module, marker, door and crate keeps its world cell.
+
+**Door lanes (#1901)** — one rule for every composer (`RoomFurnisher.DoorLaneAt`): a door marker (set at the doorway's
+floor or up to two cells above it) is probed like the server hangs the door — the jamb beside it gives the wall axis, the
+air run along the wall (≤ 3 each way) the gap, and the doorway extends across while its jambs continue (a kit joint is two
+deep). `Gap` = the doorway cells (a flood fill reads them as the closed door, so the cabins off one corridor are separate
+rooms); `Clear` = the doorway plus two rows on each side across the full gap width, a side ending at the grid edge or at a
+three-high wall; `Keep` = `Clear` plus the first row's two corners. No furniture goes on `Keep` (`StationKitComposer.Bake`,
+`FurnishAuthoredRooms` for settlements, cities and the editor preview; the station's fallback vendor / mission board
+markers skip it too), and `Clear` must be air at foot and head height — at foot height a stair, ramp or floor plate still
+passes (`RoomFurnisher.BlockedDoorLanes`: tested for every shipped template, every station kit, the modular settlement
+kits and the G.D.S. city). A settlement's perimeter fence, garden flora and lamp posts step out of the lanes afterwards
+(`ClearDecorationFromDoorLanes`), and a module's lamp post stands one step past its real door gap (`LampBesideDoor`). The
+legacy procedural houses (template use Off) keep their own one-row door reservation. Existing kit stations: the stamp only
+writes non-air cells, so `StationKitRecord.Revision` (0 in older saves) makes the next stamp remove — once — every station
+furnishing piece (`RoomFurnisher.IsFurnishingPiece`: never a bed, light, wall, door or ladder) standing where the current
+bake leaves air, skipping cells a player edited last and crates that hold a container.
+
+**Settlement and city kits**: `SettlementLayoutSpec.FromKit` / `CityLayoutSpec.FromKit` shape the grid (pinned in
+`StructurePlacementRecord.KitLayout`), `SettlementGenerator.AssignKitModules` fills the plots / districts — required
+entries first onto the first free slot of the matching role, then weighted draws until `max` — and the per-slot picks are
+pinned in `Composition` (`Modules = 2`, `Kit`). Replays read the record only, so a changed or deleted kit never morphs a
+stamped settlement. Selection mirrors the stations (joint table via `RngFor(instSeed, "kitpick")`; the legacy roll on the
+per-instance stream is still drawn so `ruined` / `island` never shift). Shipped: `tools/gen_station_modules.py`
+(43 station modules, 5 station kits) and `tools/gen_settlement_modules.py` (the default settlement kits + the G.D.S.
+city kit).
+
+**Settlement modules (#1885–#1890).** Fields `style` (`""` | `alien`) and the plot functions `tavern` / `workshop`
+(house slots; markers `tavern` / `workshop` name the room's furniture and the keeper's post). Block cells may carry a
+material token (`@wall @accent @roof @floor @path`, `MaterialTokens`) instead of a block key — resolved at stamp time
+(`ModuleMaterials`). Shipped modules follow the conventions in `tools/settlement_module_shapes.py`: entrance on −Z,
+2-wide × 3-tall doorways with a door marker, storeys of four joined by a staircase along the west wall, a `room` marker in
+every room and a bed in every building people live in; interior doorways carry door markers (they separate rooms for the
+furnisher). The editor's town palette has the token section, the *Built for* stepper replaces the port-door stepper in
+the town editor, *Kits…* sits on the *Use as* row and the kit panel's module rows have a picker (`OpenPicker`, fed with
+the editor's module pool).
+
+**Editor (#1877)** (`StructureEditor.cs`, `KitEditorPanel.cs`): *Use as* toggles whole structure / kit module in both
+editors; module mode shows the kit field (+ **Kits…**), the function stepper (`StructureRoles.StationFunctions`, or the
+plot / district roles — a known role is mirrored into `role` so the legacy per-plot composer still finds the module),
+the port-door stepper (`StructurePorts.DoorOptions`), **Check seal** and **Assemble**. Port brushes are palette entries of
+kind `port` (`door`, `wide`, `ladder`): left-click writes `tag[:door]` into `CellData.Port` of the hit block,
+middle-click clears it; ports render cyan-tinted. Export builds a `StructureTemplate` from the room and refuses port
+errors (`StructurePorts.Validate`), — station modules only — leaks (`StructureSeal.FindLeaks`, painted red) and, in both
+editors, a block in a door lane (`RoomFurnisher.BlockedDoorLanes`, painted red; **Check seal** reports it too); cells
+carry `port`, meta and template JSON carry `kit` / `function`. The kit panel lists shipped kits of the editor's kinds
+(`station`, or `settlement` + `city`) overlaid by `usercontent/structure_kits/*.json`, edits every `StructureKit` field
+(station kits: *Solar wings*, *Antennas*, *Domes* — #1920) and the entries table, and saves the user file plus
+`<kind>_exports/<key>/kit.json`. **Assemble** (keeping a station's tints and shapes, so the solar cells show blue) composes the named
+kit with the current seed (`StationKitComposer.Compose`, `SettlementGenerator.Generate` with `SettlementLayoutSpec.FromKit`,
+`CityGenerator.Generate` with `CityLayoutSpec.FromKit`) over the shipped pool plus the user's template files and loads
+the result as a whole structure. `tools/merge_structure.py` merges `kit.json` into `data/structure_kits.json` (defaults
+stripped) and keeps `kit`, `function` and non-empty `port` fields.
 
 ## 4. Open questions
 1. **Marker parity:** confirm the full marker vocabulary each editor must expose (vendor, mission board,

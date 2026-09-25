@@ -97,6 +97,8 @@ public sealed class ChatScreen
         "bastard", "cunt", "pussy", "whore", "slut", "dumbass", "wtf", "stfu",
         "arschloch", "arsch", "wichser", "wixer", "scheisse", "scheiss", "fick", "ficken", "fickt", "gefickt",
         "schlampe", "hure", "huren", "penner", "missgeburt", "verpiss", "verpisst", "spast", "spasti",
+        // 2026-09 (a station called "Port Sex"): sexual terms have no place in a kids' game's chat or names either.
+        "sex", "sexy", "porn", "porno", "penis", "vagina", "dildo", "blowjob", "tits", "titten", "boobs", "pimmel", "nudes",
     };
 
     /// <summary>Ambiguous extremist codes — relayed, operator notified. Token-only; deliberately tiny, because a
@@ -283,30 +285,15 @@ public sealed class ChatScreen
         string piiKind = string.Empty;
         foreach (var (pattern, kind) in new[] { (PhonePattern, "phone"), (EmailPattern, "email"), (LinkPattern, "link"), (HandlePattern, "handle") })
         {
-            MatchCollection matches;
-            try
+            foreach (var span in MatchSpans(pattern, line))
             {
-                matches = pattern.Matches(line);
-            }
-            catch (RegexMatchTimeoutException)
-            {
-                continue; // a pathological line is not worth stalling the tick; the word lists still applied
-            }
-
-            foreach (Match m in matches)
-            {
-                if (m.Length == 0)
-                {
-                    continue;
-                }
-
                 pii = true;
                 if (piiKind.Length == 0)
                 {
                     piiKind = kind;
                 }
 
-                maskSpans.Add((m.Index, m.Index + m.Length));
+                maskSpans.Add(span);
             }
         }
 
@@ -321,6 +308,34 @@ public sealed class ChatScreen
         }
 
         return new ChatScreenResult(ChatVerdict.Mask, ApplyMask(line, maskSpans), pii ? piiKind : watchTerm, watch, pii);
+    }
+
+    /// <summary>
+    /// The non-empty matches of a time-bounded pattern, as spans. A pattern that runs out of time yields what it
+    /// found until then and nothing more: a pathological line is not worth stalling the tick, and the word lists
+    /// applied before. The matches are walked INSIDE the try on purpose — <see cref="Regex.Matches(string)"/> is
+    /// lazy and runs the engine only while its collection is enumerated, so a try around the call alone never
+    /// catches the timeout (#1970: it escaped into the caller and failed a test on a busy build machine).
+    /// </summary>
+    public static List<(int Start, int End)> MatchSpans(Regex pattern, string line)
+    {
+        var spans = new List<(int Start, int End)>();
+        try
+        {
+            foreach (Match m in pattern.Matches(line))
+            {
+                if (m.Length > 0)
+                {
+                    spans.Add((m.Index, m.Index + m.Length));
+                }
+            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // keep the spans found so far
+        }
+
+        return spans;
     }
 
     private bool IsAllowed(IReadOnlyList<string> forms)

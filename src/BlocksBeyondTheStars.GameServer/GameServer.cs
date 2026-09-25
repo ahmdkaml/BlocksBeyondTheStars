@@ -234,25 +234,16 @@ public sealed partial class GameServer
 
     public void Start()
     {
-        try
-        {
-            _repo.Initialize();
-        }
-        catch (InvalidDataException ex)
-        {
-            _log.Error($"Failed to initialize persistence: database is corrupted. " +
-                       $"The database was left untouched. Error: {ex.Message}");
-
-            throw;
-        }
-        // Record the current block-id palette and remap any save written under a different block set BEFORE
-        // world load. Block ids are assigned by key sort order, so adding a block shifts them; without this a
-        // content update would silently decode every stored edit to the wrong block.
-        _repo.EnsureBlockPalette(_content.BlockPalette());
+        // #1988: from here to "started on port" every pass reports itself, so a slow boot can be read off the
+        // log and the loading screen can show the real step instead of a timed animation.
+        _boot = new BootProgress(_log, BootProgress.PlanetStages);
+        BootStage("persistence", InitializePersistence);
 
         // #1510: build every message formatter now, not one by one during the first player's join burst.
-        int warmed = NetCodec.WarmUp();
-        _log.Info($"NetCodec warm-up: {warmed} message formatters compiled.");
+        // #1987: …but alongside the galaxy/world build instead of in front of it. Compiling the formatters is
+        // 7–8 s of pure Reflection.Emit that depends on nothing, and its result is needed only once
+        // _transport.Start opens the port — the last step of this method. Joined below.
+        var warmUp = StartFormatterWarmUp();
 
         var launchRules = _config.Rules.Clone();
         _meta = _repo.LoadMetadata() ?? CreateInitialMetadata();
@@ -317,20 +308,31 @@ public sealed partial class GameServer
             _meta.Description.FloraDensity.FloraFactor(),
             _meta.Description.RareResources.OreFactor());
         _generator.SetContinentsEnabled(_meta.Description.TerrainContinents);
+        _generator.SetLavaCoreVolcanoes(_meta.Description.LavaCoreVolcanoes); // #1631: new worlds only, like continents
+        _generator.SetTerrainGeneration(_meta.Description.TerrainGeneration); // #1644: the wave this save was created with
         _worlds = new WorldManager(_content, _generator, _repo);
-        BuildGalaxy(); // resolves _meta.ActiveLocationId to a concrete celestial body id
-        LoadPlayerStations(); // item 20 S4: restore persisted player stations onto the star map + registry
-        RecomputeRelayLanes(); // #1125: jump lanes re-derive from the completed relays (never persisted)
-        RegisterUniqueDerelict(); // #1129: "The Long Quiet" — the galaxy's one boardable derelict (derived)
-        LoadAllBases();       // restore player-founded planet bases (Grundstein) server-wide for the travel screen
-        LoadPaintDesigns();   // restore the save-global paint-design registry (painted blocks reference it by id)
-        LoadCustomShapes();   // …and the player-designed form registry (shaped blocks/items reference it by index)
-        LoadAllAlliances();   // restore the player alliance graph server-wide (shared station/base access)
-        LoadAllCrews();       // restore the crews (#1216) — membership implies alliance while it lasts
-        LoadStoryState();     // restore the per-save story progress + active story pack (server-wide, P0)
+        if (_content.GetPlanet(_meta.DefaultPlanetType) is { Void: true })
+        {
+            _boot?.Replan(BootProgress.VoidStages); // a station start runs fewer passes than a planet
+        }
 
-        // Ships are per-player now: each player loads/creates their own on join (no global ship at start).
-        BuildMissions();
+        BootStage("galaxy", BuildGalaxy); // resolves _meta.ActiveLocationId to a concrete celestial body id
+        BootStage("registries", () =>
+        {
+            LoadPlayerStations(); // item 20 S4: restore persisted player stations onto the star map + registry
+            RecomputeRelayLanes(); // #1125: jump lanes re-derive from the completed relays (never persisted)
+            RegisterUniqueDerelict(); // #1129: "The Long Quiet" — the galaxy's one boardable derelict (derived)
+            LoadAllBases();       // restore player-founded planet bases (Grundstein) server-wide for the travel screen
+            LoadPaintDesigns();   // restore the save-global paint-design registry (painted blocks reference it by id)
+            LoadCustomShapes();   // …and the player-designed form registry (shaped blocks/items reference it by index)
+            LoadWorldTextures();  // …and the textures its admins published for everyone (#1958)
+            LoadAllAlliances();   // restore the player alliance graph server-wide (shared station/base access)
+            LoadAllCrews();       // restore the crews (#1216) — membership implies alliance while it lasts
+            LoadStoryState();     // restore the per-save story progress + active story pack (server-wide, P0)
+
+            // Ships are per-player now: each player loads/creates their own on join (no global ship at start).
+            BuildMissions();
+        });
 
         // Builds the active world for the start body plus all its per-world state (weather, fauna,
         // flora, fluids, landing zones, containers, stamped ship/settlement/wreck). Reused by travel.
@@ -339,12 +341,121 @@ public sealed partial class GameServer
         // Persist any newly generated structure-loot guard keys so caches don't respawn on reload.
         _repo.SaveMetadata(_meta);
 
+        FinishFormatterWarmUp(warmUp); // #1987: the formatters must be ready before the port opens
+        _boot?.Finish();
+        _boot = null; // only the initial boot is reported — a travel-time LoadWorld runs unreported
+
         _transport.ClientConnected += OnClientConnected;
         _transport.ClientDisconnected += OnClientDisconnected;
         _transport.PayloadReceived += OnPayload;
         _transport.Start(_config.GameplayPort);
 
         _log.Info($"Server '{_config.ServerName}' started on port {_config.GameplayPort}, world '{_meta.WorldName}' (seed {_meta.Seed}, planet {_meta.DefaultPlanetType}).");
+    }
+
+    /// <summary>#1988: the boot's pass reporter while <see cref="Start"/> runs; null at every other time, so a
+    /// travel-time world load runs unreported.</summary>
+    private BootProgress? _boot;
+
+    /// <summary>Runs a boot pass, reported with its duration while the server is starting (#1988).</summary>
+    private void BootStage(string name, Action step)
+    {
+        if (_boot is null)
+        {
+            step();
+            return;
+        }
+
+        _boot.Run(name, step);
+    }
+
+    /// <summary>Runs one step inside a boot pass, reported indented beneath it (#1990).</summary>
+    private void BootDetail(string name, Action step)
+    {
+        if (_boot is null)
+        {
+            step();
+            return;
+        }
+
+        _boot.Detail(name, step);
+    }
+
+    /// <summary>Opens the save and brings its block-id palette up to date — the first boot pass.</summary>
+    private void InitializePersistence()
+    {
+        try
+        {
+            _repo.Initialize();
+        }
+        catch (InvalidDataException ex)
+        {
+            _log.Error($"Failed to initialize persistence: database is corrupted. " +
+                       $"The database was left untouched. Error: {ex.Message}");
+
+            throw;
+        }
+
+        // Record the current block-id palette and remap any save written under a different block set BEFORE
+        // world load. Block ids are assigned by key sort order, so adding a block shifts them; without this a
+        // content update would silently decode every stored edit to the wrong block.
+        _repo.EnsureBlockPalette(_content.BlockPalette());
+    }
+
+    /// <summary>The background message-formatter warm-up (#1987) and what it measured.</summary>
+    private sealed class FormatterWarmUp
+    {
+        public System.Threading.Thread? Thread;
+        public int Count;
+        public double ElapsedMs;
+
+        public void Run()
+        {
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            Count = NetCodec.WarmUp();
+            ElapsedMs = watch.Elapsed.TotalMilliseconds;
+        }
+    }
+
+    /// <summary>
+    /// Starts the formatter warm-up (#1510) on a background thread so its 7–8 s of Reflection.Emit overlap the
+    /// galaxy + world build instead of preceding it (#1987). Encoding from that thread while the boot's own
+    /// broadcasts encode on this one is safe: MessagePack serialization is thread-safe and NetCodec's encode
+    /// scratch buffer is <c>[ThreadStatic]</c>.
+    /// <para>A platform that cannot start a thread — the in-browser build runs this very server in-process —
+    /// warms up inline instead, exactly as before; the same fallback <see cref="ChunkGenerationPool.TryStart"/>
+    /// uses (#1817). There the warm-up is cheap anyway, because IL2CPP cannot build the dynamic formatters at
+    /// all and the codec falls back to JSON on the first encode.</para>
+    /// </summary>
+    private FormatterWarmUp StartFormatterWarmUp()
+    {
+        var warmUp = new FormatterWarmUp();
+        try
+        {
+            var thread = new System.Threading.Thread(warmUp.Run)
+            {
+                IsBackground = true,
+                Name = "netcodec-warmup",
+                Priority = System.Threading.ThreadPriority.BelowNormal, // the world build is what the player waits for
+            };
+            thread.Start();
+            warmUp.Thread = thread;
+        }
+        catch (Exception)
+        {
+            warmUp.Run(); // no threads on this platform — inline, like before
+        }
+
+        return warmUp;
+    }
+
+    /// <summary>Waits for the warm-up (if it ran on a thread) and logs its result — one log site for both paths,
+    /// so the line always says what was compiled and how long it took.</summary>
+    private void FinishFormatterWarmUp(FormatterWarmUp warmUp)
+    {
+        warmUp.Thread?.Join();
+        string how = warmUp.Thread is null ? "inline" : "in parallel with the world build";
+        _log.Info($"NetCodec warm-up: {warmUp.Count} message formatters compiled ({warmUp.ElapsedMs:F0} ms, {how}).");
     }
 
     private WorldMetadata CreateInitialMetadata()
@@ -379,6 +490,7 @@ public sealed partial class GameServer
         // of (seed, N), so the grown systems come back byte-identical, in the same pass as the fixed ones.
         int systemCount = _meta.Description.StarSystemCount + Math.Max(0, _meta.GalaxyGrownSystems);
         _galaxy = new UniverseGenerator(_meta.Seed, _meta.Description, _content).Generate(systemCount);
+        _padCache.Clear(); // pads are a function of the galaxy (#1618)
 
         var stored = _repo.LoadLocationStatuses();
         foreach (var body in _galaxy.AllBodies())
@@ -488,6 +600,21 @@ public sealed partial class GameServer
             _repo.SaveMetadata(_meta);
         }
 
+        // 2026-09: a type with a fixed name (Titas) names its body — after the pins, so the name follows the final type.
+        UniverseGenerator.ApplyFixedNames(_galaxy, _content);
+
+        // #1924: the start system always has a real station (after the names, so it is called after the final start
+        // name). A pre-variance save already has a fallback station in every system; an older save starting in sys0 keeps
+        // its synthesized one (it may have been boarded) — everywhere else nothing guaranteed a station before.
+        if (_meta.Description.SpaceStations != Frequency.Off && _meta.Description.SystemVariance
+            && _galaxy.FindBody(_meta.ActiveLocationId) is { } startBody
+            && (startBody.SystemId != "sys0" || _meta.Description.TerrainGeneration >= WorldDescription.StartStationGeneration)
+            && _galaxy.Systems.FirstOrDefault(s => s.Id == startBody.SystemId) is { } homeSystem
+            && UniverseGenerator.EnsureStartSystemStation(homeSystem, startBody) is { } homeStation)
+        {
+            _log.Info($"Start system '{homeSystem.Name}' rolled no station — added '{homeStation.Name}' ({homeStation.Id}).");
+        }
+
         // Finale (P6): the galaxy is regenerated from seed each start, so re-append the Guardian system for an
         // already-revealed save (after start-body selection, so it never affects the spawn world). A fresh
         // reveal adds it live via RevealGuardianSystemIfReady.
@@ -562,7 +689,7 @@ public sealed partial class GameServer
         // Fresh world: GetOrCreate set it active. Build its per-world state + structures. The player's own
         // ship is stamped per-player on join/travel (not here), so each player gets their ship in their world.
         ResetWorldRuntimeState();
-        InitWeather();
+        BootStage("weather", InitWeather);
 
         // #586: decide the placement mode BEFORE anything writes blocks. No persisted edits at all ⇒ the
         // world was never materialised ⇒ the guaranteed (escalating) placement search may run; otherwise the
@@ -576,92 +703,121 @@ public sealed partial class GameServer
         // aboard. What keeps plants out of open space is the enclosure test in the regrow/plant paths, not
         // this registry. On a void world the species roster comes out empty, which is exactly right: crops
         // are cultivated, so they carry no world identity anyway.
-        InitFlora();
-        LoadFloraRegrow(); // restore persisted harvest regrowths so a restart doesn't strand bare cells
-        LoadWeatherDeposits(); // #900: restore settled snow so a restart doesn't strand cells that can never melt
+        BootStage("flora", () =>
+        {
+            InitFlora();
+            LoadFloraRegrow(); // restore persisted harvest regrowths so a restart doesn't strand bare cells
+            LoadWeatherDeposits(); // #900: restore settled snow so a restart doesn't strand cells that can never melt
+        });
         var resident = world.World;
         resident.BlockSet += cell => MarkBaseWallsDirty(resident, cell); // #1367: a build inside a base's box refreshes its wall fill
-        LoadContainers(); // every world, void ones included: a station's placed crates persist like a planet's (#1562)
+        resident.PlayerBlockSet += cell => GrowBaseWallReach(resident, cell); // #1862: what a player builds sizes the base's fill box
+        resident.BlockSet += cell => MarkBaseIndexDirty(resident, cell); // #1865: a bed, a post or a crop changed near a base
+        var npcWorld = world;
+        resident.BlockSet += cell => MarkNpcPathsDirty(npcWorld, cell); // #1866: a wall built across a walking NPC's route
+        var farWorld = world;
+        resident.BlockSet += cell => MarkFarTileDirty(farWorld, cell); // #1821: a far view sees builds change
+        resident.ShapedBlockReplaced += (cell, was, wasShape) => OnShapedBlockReplaced(resident, cell, was, wasShape); // #1961: a form over several blocks falls as one piece
+        BootStage("containers", LoadContainers); // every world, void ones included: a station's placed crates persist like a planet's (#1562)
 
         // A void world (an orbital station) has no terrain, so it gets none of the OTHER planet-surface
         // content — no fauna/fluids, no settlements/wrecks/landing zones. Only its stamped structure lives
         // there (the caller stamps it). Weather is initialised above so the env reads its space-sky settings.
         if (!planet.Void)
         {
-            BuildLandingPads(); // FIRST: the pads must reach worldgen before any pad-area chunk generates
-            InitFluids();
-            LoadFluidState(); // #657: restore flowing cells so a restart doesn't promote them to sources
-            InitFire();
-            LoadFireState(); // #784: restore burn timers so a restart doesn't strand permanent, inert flames
-            InitCreatures();
-
-            if (locationId == GuardianCoreBodyId)
+            BootStage("landing pads", BuildLandingPads); // FIRST: the pads must reach worldgen before any pad-area chunk generates
+            BootStage("fluids", () =>
             {
-                // The finale body is special: ONLY the Guardian-core chamber + its aperture are placed here.
-                // No random settlements / wrecks / vaults / data cubes / net fragments — the procedural
-                // structure generator never touches the finale area (by design), so nothing collides with it.
-                StampGuardianCoreChamber();
-            }
-            else
+                InitFluids();
+                LoadFluidState(); // #657: restore flowing cells so a restart doesn't promote them to sources
+            });
+            BootStage("fire", () =>
             {
-                if (_config.PlaceSettlements)
+                InitFire();
+                LoadFireState(); // #784: restore burn timers so a restart doesn't strand permanent, inert flames
+            });
+            BootStage("creatures", InitCreatures);
+
+            BootStage("structures", () =>
+            {
+                if (locationId == GuardianCoreBodyId)
                 {
-                    StampSettlement();
+                    // The finale body is special: ONLY the Guardian-core chamber + its aperture are placed here.
+                    // No random settlements / wrecks / vaults / data cubes / net fragments — the procedural
+                    // structure generator never touches the finale area (by design), so nothing collides with it.
+                    StampGuardianCoreChamber();
                 }
-
-                if (_config.PlaceRuins)
+                else
                 {
-                    StampRuins(); // standalone fallen-city ruins (unprotected) — after settlements so they avoid them
+                    // 2026-09 (generation 8): a type with a structure whitelist (Titas, Valuma) stamps only what it names.
+                    bool restricted = planet.RestrictStructures && _generator.TerrainGeneration >= WorldDescription.ExtremePlanetsGeneration;
+                    bool Allowed(string kind) => !restricted || planet.AllowedStructures.Contains(kind);
+
+                    if (_config.PlaceSettlements && !restricted)
+                    {
+                        BootDetail("settlements", StampSettlement);
+                    }
+
+                    if (_config.PlaceRuins && !restricted)
+                    {
+                        BootDetail("ruins", StampRuins); // standalone fallen-city ruins (unprotected) — after settlements so they avoid them
+                    }
+
+                    if (!restricted)
+                    {
+                        BootDetail("bandit camps", StampBanditCamps); // small hostile outposts (unprotected; self-skips per config + Bandits rule)
+                    }
+
+                    BootDetail("sps labs", StampSpsLabs); // 2026-09: abandoned SPS research stations — only on a type that allows them (Titas)
+
+                    if (_config.PlaceMonuments && !restricted)
+                    {
+                        BootDetail("monuments", StampMonuments); // eroded rune relics (unprotected) — the only surface feature airless bodies get
+                    }
+
+                    if (_config.PlaceFactories && !restricted)
+                    {
+                        BootDetail("factories", StampFactories); // rare industrial factories (protected until claimed) — avoid settlements
+                    }
+
+                    if (_config.PlaceWrecks && !restricted)
+                    {
+                        BootDetail("wreck", StampWreck);
+                    }
+
+                    if (_config.PlaceVaults && !restricted)
+                    {
+                        BootDetail("vaults", StampVaults); // buried vault ruins ("Welten reicher" W-R3) — 0-2 per world, loot via containers
+                    }
+
+                    if (_config.PlaceDataCubes && !restricted)
+                    {
+                        BootDetail("data cubes", StampDataCubes); // minigame download cubes — 0-N per world (many bodies get none)
+                    }
+
+                    if (Allowed("net_fragments"))
+                    {
+                        BootDetail("net fragments", StampNetFragments); // story net fragments scattered on the surface (P2; self-skips when story off / Void)
+                    }
+
+                    if (_config.PlaceChests && !restricted)
+                    {
+                        BootDetail("chests", StampChests); // rare standalone treasure caches (0-N per body)
+                    }
+
+                    if (!restricted)
+                    {
+                        BootDetail("unique sites", StampUniqueSites); // #1129: this body may carry one of the galaxy's one-of-a-kind places
+                    }
                 }
-
-                StampBanditCamps(); // small hostile outposts (unprotected; self-skips per config + Bandits rule)
-
-                if (_config.PlaceMonuments)
-                {
-                    StampMonuments(); // eroded rune relics (unprotected) — the only surface feature airless bodies get
-                }
-
-                if (_config.PlaceFactories)
-                {
-                    StampFactories(); // rare industrial factories (protected until claimed) — avoid settlements
-                }
-
-                if (_config.PlaceWrecks)
-                {
-                    StampWreck();
-                }
-
-                if (_config.PlaceVaults)
-                {
-                    StampVaults(); // buried vault ruins ("Welten reicher" W-R3) — 0-2 per world, loot via containers
-                }
-
-                if (_config.PlaceDataCubes)
-                {
-                    StampDataCubes(); // minigame download cubes — 0-N per world (many bodies get none)
-                }
-
-                StampNetFragments(); // story net fragments scattered on the surface (P2; self-skips when story off / Void)
-
-                if (_config.PlaceChests)
-                {
-                    StampChests(); // rare standalone treasure caches (0-N per body)
-                }
-
-                StampUniqueSites(); // #1129: this body may carry one of the galaxy's one-of-a-kind places
-            }
+            });
         }
 
         LoadPlayerDoors(); // persisted player-built doors load on every world (void or not, settlement or not)
         LoadBeacons();     // placed radio beacons restore their label/owner entities (the blocks come back via edits)
         LoadBeams();       // placed beam blocks restore their name/owner entities (the blocks come back via edits)
 
-        var body = _galaxy?.FindBody(locationId);
-        if (body is not null && body.Status != GenerationStatus.Visited)
-        {
-            body.Status = GenerationStatus.Visited;
-            _repo.SetLocationStatus(body.Id, body.Status.ToString());
-        }
+        MarkBodyVisited(locationId); // #1856: resolves a station world's `station:` id to its body, so stations chart too
 
         // P3: if a peaceful trader landed on this body while its world was unloaded, re-create its parked ship
         // + pilot now that the world is resident again (the registry is the source of truth, not world state).
@@ -682,10 +838,12 @@ public sealed partial class GameServer
         _banditCamps.Clear();
         _monuments.Clear();
         _npcs.Clear();
+        _worlds.Active.NpcPathQueue.Clear(); // #1866
         _doors.Clear();
         _dataCubes.Clear();
         _settlements.Clear();
         _settlementMarkers.Clear();
+        _baseMarkers.Clear(); // #1865: rebuilt with the residents by the next base-life scan
         _wreckMarkers.Clear();
         _floraRegrow.Clear();
         _fluidLevel.Clear();
@@ -731,25 +889,21 @@ public sealed partial class GameServer
         return session.CurrentLocationId == destinationBodyId;
     }
 
-    /// <summary>Travels (instantly) to a body. <paramref name="quickTravel"/> = true is the travel-screen
-    /// shortcut: it is gated by the Instant Travel world rule — when that rule is off you may only quick-travel
-    /// to bodies you've already landed on. <paramref name="quickTravel"/> = false is a manual flight landing
-    /// (you flew there and chose to set down), which is always allowed.</summary>
-    private void HandleTravel(PlayerSession session, TravelIntent intent, bool quickTravel = true, bool adminBypass = false, bool allowCurrentBody = false)
+    private bool AllowNormalTravel(PlayerSession session, TravelIntent intent, bool quickTravel, bool adminBypass = false, bool allowCurrentBody = false)
     {
         Serve(session); // act on the traveller's own world + ship (the jump-drive check below needs it)
 
         if (!Rules.FreeSpaceFlight)
         {
             Reject(session, "travel", "@srv.travel.flight_disabled");
-            return;
+            return false;
         }
 
         var body = _galaxy?.FindBody(intent.DestinationBodyId);
         if (body is null)
         {
             Reject(session, "travel", "@srv.travel.no_destination");
-            return;
+            return false;
         }
 
         // A space station is BOARDED straight from the travel screen (Q1: "board directly"), gated by having
@@ -757,7 +911,7 @@ public sealed partial class GameServer
         if (body.Kind == CelestialKind.SpaceStation)
         {
             TravelToStation(session, body.Id, quickTravel);
-            return;
+            return false; // the station boarding path handles the travel, so the caller must not continue to land on it
         }
 
         if ((body.Kind != CelestialKind.Planet && body.Kind != CelestialKind.Moon && body.Kind != CelestialKind.AsteroidField)
@@ -766,13 +920,13 @@ public sealed partial class GameServer
             // Planets, moons AND landable asteroids are surfaces you land on (B45); belts/wrecks are not
             // "travel" destinations (you visit those differently).
             Reject(session, "travel", "@srv.travel.surface_only");
-            return;
+            return false;
         }
 
         if (body.Id == session.CurrentLocationId && !allowCurrentBody)
         {
             Reject(session, "travel", "@srv.travel.already_there"); // allowCurrentBody: the body was never loaded (a hyperjump anchor, #1566)
-            return;
+            return false;
         }
 
         // Instant Travel gate (world option, default off): the travel-screen shortcut may only reach bodies
@@ -781,7 +935,7 @@ public sealed partial class GameServer
         if (quickTravel && !Rules.InstantTravel && !session.State.LandedBodies.Contains(body.Id))
         {
             Reject(session, "travel", "@srv.travel.not_visited");
-            return;
+            return false;
         }
 
         // A jump to a different star system is a hyperspace jump — it needs a jump generator fitted,
@@ -792,23 +946,41 @@ public sealed partial class GameServer
             && !HasJumpLane(origin?.SystemId, body.SystemId))
         {
             Reject(session, "travel", "@srv.travel.no_jump_generator");
-            return;
+            return false;
         }
-
         // Fixed landing pads (item 38): claim the player's chosen (or first free) pad before tearing down the
         // flight state. A full body (every pad occupied) refuses the landing here, leaving the player in flight.
         // An observer takes no pad (issue #487): pads are finite and communal, and being refused entry to a busy
         // world — the world most likely to need an operator's eyes — would be exactly backwards.
         if (!session.Spectating && !ClaimPadOrReject(session, body.Id, intent.PadIndex))
         {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>Travels (instantly) to a body. <paramref name="quickTravel"/> = true is the travel-screen
+    /// shortcut: it is gated by the Instant Travel world rule — when that rule is off you may only quick-travel
+    /// to bodies you've already landed on. <paramref name="quickTravel"/> = false is a manual flight landing
+    /// (you flew there and chose to set down), which is always allowed.</summary>
+    private void HandleTravel(PlayerSession session, TravelIntent intent, bool quickTravel = true, bool adminBypass = false, bool allowCurrentBody = false)
+    {
+
+        if (!AllowNormalTravel(session, intent, quickTravel, adminBypass, allowCurrentBody))
+        {
             return;
         }
+
+        var body = _galaxy.FindBody(intent.DestinationBodyId)!;
+        var origin = _galaxy?.FindBody(session.CurrentLocationId);
+        bool hyperjump = origin is null || origin.SystemId != body.SystemId;
 
         // Per-player travel: only THIS player moves. Other players stay on their own worlds.
         string oldLoc = session.CurrentLocationId;
         LeaveSpace(session.State.PlayerId);
 
-        LoadWorld(body.PlanetType, body.Id); // loads/initialises the destination + sets the Active cursor
+        LoadWorld(body.PlanetType!, body.Id); // loads/initialises the destination + sets the Active cursor
         session.CurrentLocationId = body.Id;
         OnMarkerOwnerLeftWorld(session, oldLoc, disconnected: false); // the players left behind lose this player's pings (#1293)
         if (hyperjump && !session.Spectating)
@@ -852,7 +1024,7 @@ public sealed partial class GameServer
             BroadcastShipTransit(session, body.Id, pad.CenterX + 0.5f, surfaceY, pad.CenterZ + 0.5f, landing: true); // others see the descent (item 38)
         }
 
-        Send(session, new WorldReset { PlanetType = body.PlanetType, PlanetName = planetName, SystemName = systemName, Hyperjump = hyperjump });
+        Send(session, new WorldReset { PlanetType = body.PlanetType!, PlanetName = planetName, SystemName = systemName, Hyperjump = hyperjump });
         // The parked ship objects and the ground go out BEFORE the position (#1450): the client settles the
         // moment it knows where it is, and the deck it is meant to stand on has to exist by then — with the
         // ship arriving after the snap, the terrain under the pad answered the ground check and the player
@@ -907,6 +1079,54 @@ public sealed partial class GameServer
         }
     }
 
+    private void HandleTravelIntent(PlayerSession session, TravelIntent intent, bool quickTravel = true)
+    {
+        // Landed ship: turn map travel into an automatic space transit.
+        if (!InSpace(session.State.PlayerId) && !session.Spectating)
+        {
+            var body = _galaxy?.FindBody(intent.DestinationBodyId)!;
+            var origin = _galaxy?.FindBody(session.CurrentLocationId);
+            bool hyperjump = origin is null || origin.SystemId != body.SystemId;
+
+            if (hyperjump && !session.State.LandedBodies.Contains(body.Id))
+            {
+                Reject(session, "travel", "@srv.travel.not_visited");
+                return;
+            }
+
+            if (!AllowNormalTravel(session, intent, quickTravel))
+            {
+                return;
+            }
+
+            session.PendingTransitBodyId = intent.DestinationBodyId;
+            session.AutomaticTransit = true;
+            session.TransitLaunchTimer = 0;
+            session.PendingTransitPadIndex = intent.PadIndex;
+
+            EnterSpace(session.State.PlayerId, skipLaunch: false, hyperjump: hyperjump);
+
+            return; // the transit path handles the travel, so the caller must not continue to land on it
+        }
+
+        // Existing behavior for callers that are already in space / other contexts.
+        HandleTravel(session, intent, quickTravel);
+    }
+
+    private void HandleTransitLaunchDone(PlayerSession session, TransitLaunchDoneIntent intent)
+    {
+        var destinationBodyId = session.PendingTransitBodyId;
+
+        session.PendingTransitBodyId = null;
+        session.AutomaticTransit = false;
+
+        if (!string.IsNullOrEmpty(destinationBodyId))
+        {
+            LandOnBody(session.State.PlayerId, destinationBodyId, session.PendingTransitPadIndex);
+            session.PendingTransitPadIndex = -1;
+        }
+    }
+
     /// <summary>Persistence key for a player's ACTIVE ship. Kept as the legacy single-ship key (#848): every
     /// save still mirrors the active ship here, so a save written by this build stays loadable by an older one
     /// and the pre-fleet write sites need no change. The other ships use <see cref="FleetShipSaveKey"/>.</summary>
@@ -929,12 +1149,14 @@ public sealed partial class GameServer
         MarkArrivedOnBody(session, session.CurrentLocationId); // the home body is a quick-travel target from the start
         RestoreFleet(session);
         MigrateBaseSettlerMemory(session); // pre-#1262 saves: settler keyed by base NAME → duplicates per rename
+        int restoredPad = session.AssignedPadIndex;
         RestoreLandingPad(session);
         RecomputeShipCombatStats();
         if (_config.PlaceStarterShip)
         {
             PlaceLandedShip(); // park this player's ship object on their world
             session.State.RespawnPoint = _healTank;
+            LeaveMoltenPad(session, restoredPad);
         }
 
         PersistFleet(session);
@@ -1013,6 +1235,45 @@ public sealed partial class GameServer
         if (idx >= _landingPads.Count || PadOccupiedByOther(session.CurrentLocationId, idx, session.State.PlayerId))
         {
             session.AssignedPadIndex = -1;
+            return;
+        }
+
+        // A save whose ship stands in a lava shaft (terrain generation 7 and older keep their pads): release the pad
+        // when a better one is free, so PlaceLandedShip parks the ship there ("landed in the lava", 2026-09-15).
+        if (_landingPads[idx].Molten)
+        {
+            int better = PreferredFreePadIndex(session.CurrentLocationId, _landingPads, session.State.PlayerId);
+            if (better >= 0 && !_landingPads[better].Molten)
+            {
+                session.AssignedPadIndex = -1;
+            }
+        }
+    }
+
+    /// <summary>After a ship moved off a lava pad on load: a player saved aboard, or standing over that pad's footprint,
+    /// wakes aboard the re-parked ship instead of between walls of lava.</summary>
+    private void LeaveMoltenPad(PlayerSession session, int previousPad)
+    {
+        if (previousPad < 0 || previousPad >= _landingPads.Count || session.AssignedPadIndex == previousPad || !_shipPlaced)
+        {
+            return;
+        }
+
+        var old = _landingPads[previousPad];
+        if (!old.Molten || InSpace(session.State.PlayerId))
+        {
+            return;
+        }
+
+        var pos = session.State.Position;
+        int margin = old.Radius + 4;
+        bool overOldPad = System.Math.Abs(WorldConstants.WrapDeltaX((int)System.Math.Floor(pos.X) - old.CenterX, _world.Circumference)) <= margin
+            && System.Math.Abs((int)System.Math.Floor(pos.Z) - old.CenterZ) <= margin;
+        if (overOldPad || session.State.AboardShip)
+        {
+            session.State.Position = _healTank;
+            session.State.AboardShip = true;
+            _log.Info($"'{session.State.Name}': ship moved off lava pad {previousPad + 1} to pad {session.AssignedPadIndex + 1}.");
         }
     }
 
@@ -1180,6 +1441,7 @@ public sealed partial class GameServer
     {
         SaveAll();
         _repo.Flush();
+        _chunkGenPool?.Dispose(); // #1817: release the worker threads
         _transport.Stop();
         _log.Info("Server stopped and world saved.");
     }
@@ -1434,6 +1696,8 @@ public sealed partial class GameServer
             _sinceChunkSweep = 0;
         }
 
+        bool farTilesDue = FarTileRefreshDue(deltaSeconds); // #1821: re-send far-terrain tiles an edit changed
+
         foreach (var locId in ticking)
         {
             if (!SetActiveWorld(locId))
@@ -1456,7 +1720,12 @@ public sealed partial class GameServer
             Guard("TickWeather", deltaSeconds, TickWeather);
             Guard("TickFlora", deltaSeconds, TickFlora);
             Guard("TickCreatures", deltaSeconds, TickCreatures);
+            Guard("TickSreekmakra", deltaSeconds, TickSreekmakra); // 2026-09: Valuma's shapeshifter and mood (1 Hz)
+            Guard("TickGiants", deltaSeconds, TickGiants); // #1998: the colossus, the sandworms and the thumpers
+            Guard("TickNpcRoutine", deltaSeconds, TickNpcRoutine); // #1867/#1868: work by day, sit in the evening, sleep at night; jobs
+            Guard("TickNpcPaths", deltaSeconds, TickNpcPaths); // #1866: at most one NPC path search per tick
             Guard("TickNpcs", deltaSeconds, TickNpcs);
+            Guard("TickProfessions", deltaSeconds, TickProfessions); // the streamer asks for photos, the tamer's pet follows (2026-09)
             Guard("TickStationStaffing", deltaSeconds, TickStationStaffing); // #1487: crew only staffs posts in sealed rooms
             Guard("TickLandedTraders", deltaSeconds, TickLandedTraders); // P3: materialize/lift-off a peaceful trader parked on this surface
             Guard("TickDoors", deltaSeconds, TickDoors);
@@ -1464,15 +1733,23 @@ public sealed partial class GameServer
             Guard("TickCompanionPayoff", TickCompanionPayoff); // #1210: companions growl at hostiles, stall robbers, drop produce (1 Hz)
             Guard("TickCompanionScouting", TickCompanionScouting); // #1225: a deeply bonded companion shares a landmark now and then
             Guard("TickSentries", TickSentries); // #1214: base sentry posts fire at hostiles near a home base (2 Hz)
+            Guard("TickBurning", TickBurning); // #1700: lava and fire hurt animals, robbers and machines too (2 Hz)
             Guard("TickHealTanks", deltaSeconds, TickHealTanks); // base/station regen field: heal + feed + suit recharge
             Guard("TickStationsInReach", deltaSeconds, TickStationsInReach); // #1070: Tab-menu station gates follow the player
             Guard("TickVoidRescue", deltaSeconds, TickVoidRescue);
             Guard("TickShipAi", deltaSeconds, TickShipAi); // VEGA advisor hints + memory-fragment redemption
             Guard("StreamChunks", StreamChunks);
+            Guard("StreamWorldTextures", StreamWorldTextures); // #1958: one page of the texture list per client per tick
+            Guard("ServeFarTiles", ServeFarTiles); // #1871: far-terrain tile builds under a per-tick budget
             Guard("FlushEntityLists", FlushEntityLists); // #1530: one list per type + one player state per session per tick
             if (sweepDue)
             {
                 Guard("SweepFarChunks", SweepFarChunks);
+            }
+
+            if (farTilesDue)
+            {
+                Guard("RefreshFarTiles", RefreshFarTiles);
             }
         }
 
@@ -1581,6 +1858,24 @@ public sealed partial class GameServer
 
             var p = session.State;
 
+            // Server-side fallback in case the client never reports launch completion.
+            if (!string.IsNullOrEmpty(session.PendingTransitBodyId))
+            {
+                session.TransitLaunchTimer += dt;
+
+                if (session.TransitLaunchTimer >= _config.TransitLaunchTimeoutSeconds)
+                {
+                    var destinationBodyId = session.PendingTransitBodyId;
+                    session.PendingTransitBodyId = null;
+                    session.AutomaticTransit = false;
+                    session.TransitLaunchTimer = 0;
+
+                    LandOnBody(session.State.PlayerId, destinationBodyId, session.PendingTransitPadIndex);
+                    session.PendingTransitPadIndex = -1;
+                    continue;
+                }
+            }
+
             // Walk out of the ship's hatch while it floats in space → step straight onto an EVA spacewalk
             // (rather than falling into the void around the interior). The door you already have IS the airlock.
             if (InShipInterior(p.PlayerId) && SteppedOutOfShipHull(p.Position))
@@ -1655,14 +1950,14 @@ public sealed partial class GameServer
             // Above the atmosphere (built a tower up into space) the air runs out too, even on a breathable
             // world — the suit tank drains until the player descends back below the line. Life support wins
             // over the altitude line as well, so a base founded on a peak above it still breathes.
-            if (!submerged && (lifeSupport || (!p.AboveAtmosphere && !p.InEva && AtmosphereBreathable)))
+            if (!submerged && (lifeSupport || (!p.AboveAtmosphere && !p.InEva && AtmosphereBreathable && !InSpsLab(p.Position)))) // 2026-09: a lab module holds no air
             {
                 // Aboard the ship (life support), boarded on a station (its life support), oxygen disabled
                 // by rules, or a breathable atmosphere: regenerate, no drain (up to the tank capacity).
                 // Health regen never revives a dead player (0 HP) — that would outrun the death check
                 // below and quietly skip the respawn on breathable worlds.
                 p.Oxygen = System.Math.Min(maxOxygen, p.Oxygen + (float)(dt * 25));
-                if (p.Health > 0f)
+                if (p.Health > 0f && session.ToxicWaterSeconds <= ToxicWaterGraceSeconds && p.Exposure < 1f) // 2026-09: toxic water and a full exposure meter stop the regen
                 {
                     p.Health = System.Math.Min(100f, p.Health + (float)(dt * 2));
                 }
@@ -1692,6 +1987,8 @@ public sealed partial class GameServer
                 }
             }
 
+            session.HazardDeathReason = null; // set below by a hazard with its own death line (2026-09)
+
             // Lava burns (reduced by armor).
             if (InLava(p.Position))
             {
@@ -1703,6 +2000,9 @@ public sealed partial class GameServer
             {
                 p.Health = System.Math.Max(0f, p.Health - Mitigate(p, (float)(dt * 10)));
             }
+
+            // Toxic water (2026-09, Titas): after a short grace the water itself burns — standing on its ice is safe.
+            TickToxicWater(session, dt);
 
             // Extreme heat / cold / vacuum stress the suit (#666): climate control drains suit energy
             // first (insulation gear slows it), an empty suit means slow exposure damage.
@@ -1730,7 +2030,7 @@ public sealed partial class GameServer
 
             if (p.Health <= 0f)
             {
-                RespawnPlayer(session, "@srv.death.critical");
+                RespawnPlayer(session, session.HazardDeathReason ?? "@srv.death.critical");
                 continue;
             }
 
@@ -1744,9 +2044,11 @@ public sealed partial class GameServer
                 bool changed = System.Math.Abs(p.Health - session.LastSentHealth) > 0.4f
                     || System.Math.Abs(p.Oxygen - session.LastSentOxygen) > 0.4f
                     || System.Math.Abs(p.SuitEnergy - session.LastSentEnergy) > 0.4f
-                    || System.Math.Abs(p.Hunger - session.LastSentHunger) > 0.4f;
+                    || System.Math.Abs(p.Hunger - session.LastSentHunger) > 0.4f
+                    || System.Math.Abs(p.Exposure - session.LastSentExposure) > 0.004f;
                 if (changed)
                 {
+                    session.LastSentExposure = p.Exposure;
                     session.LastSentHealth = p.Health;
                     session.LastSentOxygen = p.Oxygen;
                     session.LastSentEnergy = p.SuitEnergy;
@@ -1793,7 +2095,8 @@ public sealed partial class GameServer
         }
     }
 
-    /// <summary>True when the player's head is inside a water block — diving spends the suit's oxygen tank.</summary>
+    /// <summary>True when the player's head is under water — diving spends the suit's oxygen tank. A plant, ladder or
+    /// building form the water surrounds counts as water too (#1902: a kelp stalk used to be a breathable air shaft).</summary>
     private bool HeadUnderwater(Shared.State.PlayerState p)
     {
         if (_waterId == 0)
@@ -1801,10 +2104,60 @@ public sealed partial class GameServer
             return false;
         }
 
-        var head = new BlocksBeyondTheStars.Shared.Geometry.Vector3i(
+        _wetBlockAt ??= (x, y, z) => _world.GetBlock(new BlocksBeyondTheStars.Shared.Geometry.Vector3i(x, y, z)).Value;
+        _wetNonFull ??= IsNonFullCell;
+        return WetCell.IsWet(_wetBlockAt, _waterId, _wetNonFull,
             (int)System.Math.Floor(p.Position.X), (int)System.Math.Floor(p.Position.Y + 1.5f), (int)System.Math.Floor(p.Position.Z));
-        return _world.GetBlock(head).Value == _waterId;
     }
+
+    private System.Func<int, int, int, ushort>? _wetBlockAt;
+    private System.Func<int, int, int, bool>? _wetNonFull;
+
+    /// <summary>#1902: a block that fills only part of its cell — a plant, a slim prop or any non-cube building form.</summary>
+    private bool IsNonFullCell(int x, int y, int z)
+    {
+        var pos = new BlocksBeyondTheStars.Shared.Geometry.Vector3i(x, y, z);
+        return WetCell.IsNonFullKey(_content.BlockById(_world.GetBlock(pos))?.Key) || !ShapeCode.IsCube(_world.GetShape(pos));
+    }
+
+    /// <summary>Seconds in a toxic type's water before it starts to hurt (2026-09, Titas).</summary>
+    private const double ToxicWaterGraceSeconds = 3.0;
+
+    /// <summary>The water of a type with <see cref="Shared.Definitions.PlanetType.WaterDamagePerSecond"/> hurts anyone in it
+    /// (feet or head in a water cell) after <see cref="ToxicWaterGraceSeconds"/>; a speeder or the ice on top keeps you dry.</summary>
+    private void TickToxicWater(PlayerSession session, double dt)
+    {
+        var p = session.State;
+        double dps = _world.Planet?.WaterDamagePerSecond ?? 0.0;
+        bool wet = dps > 0.0 && _waterId != 0 && !p.InEva && p.InSpeeder.Length == 0 && !p.AboardShip
+            && _generator.TerrainGeneration >= Shared.World.WorldDescription.ExtremePlanetsGeneration
+            && (FeetInWater(p) || HeadUnderwater(p));
+        if (!wet)
+        {
+            session.ToxicWaterSeconds = 0;
+            return;
+        }
+
+        session.ToxicWaterSeconds += dt;
+        ShipAiHintOnce(session, "toxic_water");
+        if (session.ToxicWaterSeconds > ToxicWaterGraceSeconds)
+        {
+            p.Health = System.Math.Max(0f, p.Health - (float)(dt * dps));
+            session.HazardDeathReason = "@srv.death.toxic_water";
+        }
+    }
+
+    /// <summary>True when the player's feet stand in a water cell (2026-09: the toxic-water check — wading counts).</summary>
+    private bool FeetInWater(Shared.State.PlayerState p)
+    {
+        _wetBlockAt ??= (x, y, z) => _world.GetBlock(new BlocksBeyondTheStars.Shared.Geometry.Vector3i(x, y, z)).Value;
+        _wetNonFull ??= IsNonFullCell;
+        return WetCell.IsWet(_wetBlockAt, _waterId, _wetNonFull,
+            (int)System.Math.Floor(p.Position.X), (int)System.Math.Floor(p.Position.Y + 0.2f), (int)System.Math.Floor(p.Position.Z));
+    }
+
+    /// <summary>Test seam (2026-09): the toxic-water clock.</summary>
+    public double ToxicWaterSecondsForTest(string playerId) => FindSessionByPlayerId(playerId)?.ToxicWaterSeconds ?? 0;
 
     /// <summary>Hunger level at or below which the suit auto-consumes a stored emergency ration.</summary>
     private const float EmergencyRationThreshold = 15f;
@@ -1986,6 +2339,7 @@ public sealed partial class GameServer
         p.InEva = false; // a death ends any spacewalk
         _inShipInterior.Remove(p.PlayerId); // and any in-ship walkabout
         _dockedFromEva.Remove(p.PlayerId);  // and any "ship floating while docked" memory
+        ReleaseDrivenVehicle(p);            // and the seat of a speeder/boat — the bond used to survive (#1661)
 
         if (useCustomSpawn && TryCustomRespawn(session, reason, salvaged, sameWorld))
         {
@@ -2005,6 +2359,7 @@ public sealed partial class GameServer
         // recovery to the ship — permanent free life support). Always drop it here: every non-station respawn
         // target below leaves the station, and the station home spawn re-registers it itself.
         _boardedStation.Remove(p.PlayerId);
+        ClearStationZeroG(session); // #1842: the chosen float dies with the boarding
 
         if (sameWorld)
         {
@@ -2050,9 +2405,14 @@ public sealed partial class GameServer
             session.PendingRespawnSameWorld, choice.UseCustomSpawn);
     }
 
-    /// <summary>Death recovery with a world transition: lands the player at their ship's heal-tank on the
-    /// ship's planet, leaving any space instance first so the client drops out of the flight view.</summary>
-    private void RecoverToShip(PlayerSession session, string reason, bool salvaged)
+    /// <summary>Recovery with a world transition: lands the player at their ship's heal-tank on the ship's
+    /// planet, leaving any space instance first so the client drops out of the flight view. Used by the death
+    /// flow and — with <paramref name="died"/> false — by the loss of the ship under a living pilot (#1945),
+    /// which is a world change just the same: without it the client keeps the world it was last told about
+    /// (the ship interior, say), drops every chunk of the world it now stands on and hangs in the air.
+    /// <paramref name="parkShip"/> places the hull even in a world that does not place ships at all: a wreck has to
+    /// stand on the pad to be repairable, which is what the ship-loss path always did.</summary>
+    private void RecoverToShip(PlayerSession session, string reason, bool salvaged, bool died = true, bool parkShip = false)
     {
         var p = session.State;
         // Pin the ship cursor BEFORE the first _ship read: this runs from death paths where the cursor may
@@ -2074,10 +2434,11 @@ public sealed partial class GameServer
         string homeType = !string.IsNullOrEmpty(homeBody?.PlanetType) ? homeBody.PlanetType : _meta.DefaultPlanetType;
 
         LeaveSpace(p.PlayerId); // exit any flight view (sends SpaceClosed if in one)
+        _inShipInterior.Remove(p.PlayerId); // a walkabout inside the hull ends here too
 
         LoadWorld(homeType, homeLoc);
         SetCurrent(session);
-        if (_config.PlaceStarterShip)
+        if (_config.PlaceStarterShip || parkShip)
         {
             PlaceLandedShip();
         }
@@ -2100,7 +2461,7 @@ public sealed partial class GameServer
             Z = p.Position.Z,
             Reason = reason,
             SalvageCapsuleDropped = salvaged,
-            Died = true,
+            Died = died,
         });
         SendPlayerState(session);
         SendEnvironment(session);
@@ -2133,8 +2494,10 @@ public sealed partial class GameServer
     }
 
     /// <summary>Upper bound on a client-requested render distance (matches the in-game slider's max), so a
-    /// spoofed JoinRequest can't make the server stream/generate an enormous column (memory/CPU DoS).</summary>
-    private const int MaxClientViewDistanceChunks = 8;
+    /// spoofed JoinRequest can't make the server stream/generate an enormous column (memory/CPU DoS). Raised from 8
+    /// to 16 with the slider: the view streams as a disc (<see cref="IsColumnInStreamDisc"/>), so 16 plus the
+    /// load-ahead ring still stays inside the sweep's 20-chunk sent-set prune and the client's 24-chunk unload.</summary>
+    private const int MaxClientViewDistanceChunks = 16;
 
     /// <summary>Horizontal radius (chunks, Chebyshev) within which the FULL vertical span streams — so caves,
     /// overhangs and digging straight down near the player are always covered. Beyond it, only the surface band
@@ -2174,6 +2537,138 @@ public sealed partial class GameServer
     /// (#388). The extra ring is always past <see cref="NearFullColumnRadius"/>, so it streams only the cheap far
     /// surface band, and stays within the sweep's keepRadius (maxViewRadius + 4) so it is not immediately evicted.</summary>
     private const int LoadAheadRings = 1;
+
+    /// <summary>Whether the column (dx, dz) chunks from the player's chunk belongs to a view of
+    /// <paramref name="streamRadius"/> chunks (view radius + load-ahead). The fog edge is a CIRCLE, so the square's
+    /// corners were never visible — yet they sat farther out (radius × √2) than the sweep's keep/prune radius
+    /// (view + 4), so the sweep evicted them and the streamer regenerated them every 10 s (already at view distance
+    /// 8, far worse at 16). Measured to the column's NEAREST edge (the player can stand anywhere in their own chunk),
+    /// so every column the fog circle reaches still streams, load-ahead ring included; every column within
+    /// <see cref="NearFullColumnRadius"/> the loop visits is kept for any radius.</summary>
+    internal static bool IsColumnInStreamDisc(int dx, int dz, int streamRadius)
+    {
+        int ax = System.Math.Max(System.Math.Abs(dx) - 1, 0);
+        int az = System.Math.Max(System.Math.Abs(dz) - 1, 0);
+        return ax * ax + az * az <= streamRadius * streamRadius;
+    }
+
+    /// <summary>#1818: how far ahead (seconds of the player's current horizontal velocity) the streaming order looks.
+    /// A speeder or jetpack flight gets the terrain it is flying into before the terrain it leaves behind.</summary>
+    private const float StreamLookAheadSeconds = 1.25f;
+
+    /// <summary>#1818: the streaming order of one candidate chunk (lower = sooner), from its offset to the player's
+    /// chunk, the horizontal look direction (unit vector, or zero) and the look-ahead shift (chunks). The near ring
+    /// (Chebyshev ≤ 1 horizontally) always comes first, by plain distance — the footing never waits for scenery.
+    /// Beyond it the distance is measured from the look-ahead anchor and weighted by the direction: ×1 straight
+    /// ahead, ×1.5 to the side, ×2 behind. With no look direction and no motion the order is the old nearest-first.</summary>
+    internal static int StreamPriorityKey(int dx, int dy, int dz, float forwardX, float forwardZ, float aheadDx, float aheadDz)
+    {
+        int plainSq = dx * dx + dy * dy + dz * dz;
+        if (System.Math.Max(System.Math.Abs(dx), System.Math.Abs(dz)) <= 1)
+        {
+            return plainSq; // 0..11 for the near column span (dy −3..+2): always ahead of every far key (≥ 16)
+        }
+
+        float ax = dx - aheadDx;
+        float az = dz - aheadDz;
+        float distSq = ax * ax + dy * dy + az * az;
+        float len = (float)System.Math.Sqrt(dx * dx + dz * dz);
+        float facing = (dx * forwardX + dz * forwardZ) / len; // −1 behind … +1 ahead; 0 without a look direction
+        float factor = 1f + 0.5f * (1f - facing);
+        double key = 16.0 + distSq * factor * 8.0;
+        return key >= int.MaxValue ? int.MaxValue : (int)key;
+    }
+
+    /// <summary>#1818: updates the session's smoothed horizontal velocity from its position (wrap-aware). A gap of
+    /// more than two seconds or a jump longer than a speeder can cover resets it (teleport, travel, respawn).</summary>
+    private void SampleStreamVelocity(PlayerSession session)
+    {
+        var pos = session.State.Position;
+        double since = _uptime - session.StreamSampleAt;
+        if (session.StreamSampleAt < 0 || since > 2.0 || since < 0)
+        {
+            session.StreamSampleX = pos.X;
+            session.StreamSampleZ = pos.Z;
+            session.StreamSampleAt = _uptime;
+            session.StreamVelX = 0f;
+            session.StreamVelZ = 0f;
+            return;
+        }
+
+        if (since < 0.2)
+        {
+            return; // sample over a few ticks so the per-tick position jitter averages out
+        }
+
+        int circumference = _world.Circumference;
+        float ddx = WrapDelta(pos.X - session.StreamSampleX, circumference);
+        float ddz = WrapDelta(pos.Z - session.StreamSampleZ, WorldConstants.LatitudePeriodFor(circumference));
+        float vx = 0f, vz = 0f;
+        if (ddx * ddx + ddz * ddz <= 96f * 96f)
+        {
+            vx = (float)(ddx / since);
+            vz = (float)(ddz / since);
+            float speed = (float)System.Math.Sqrt(vx * vx + vz * vz);
+            const float MaxSpeed = 120f; // blocks/s — well above any speeder
+            if (speed > MaxSpeed)
+            {
+                vx *= MaxSpeed / speed;
+                vz *= MaxSpeed / speed;
+            }
+        }
+
+        session.StreamVelX = 0.5f * (session.StreamVelX + vx);
+        session.StreamVelZ = 0.5f * (session.StreamVelZ + vz);
+        session.StreamSampleX = pos.X;
+        session.StreamSampleZ = pos.Z;
+        session.StreamSampleAt = _uptime;
+
+        static float WrapDelta(float d, int period)
+        {
+            if (period <= 0)
+            {
+                return d;
+            }
+
+            float half = period * 0.5f;
+            while (d > half)
+            {
+                d -= period;
+            }
+
+            while (d < -half)
+            {
+                d += period;
+            }
+
+            return d;
+        }
+    }
+
+    /// <summary>#1817: the background chunk generator, started on the first streaming pass that needs it (null when
+    /// <see cref="ServerConfig.ChunkGenWorkers"/> is 0 or the platform cannot start threads).</summary>
+    private ChunkGenerationPool? _chunkGenPool;
+    private bool _chunkGenPoolTried;
+    private readonly List<ChunkCoord> _streamBatch = new();
+    private readonly List<ChunkCoord> _streamSpeculate = new();
+
+    private ChunkGenerationPool? ChunkGenPool()
+    {
+        if (!_chunkGenPoolTried)
+        {
+            _chunkGenPoolTried = true;
+            _chunkGenPool = ChunkGenerationPool.TryStart(_generator, _config.ChunkGenWorkers);
+            if (_chunkGenPool != null)
+            {
+                _log.Info($"Chunk generation runs on {_chunkGenPool.Workers} worker thread(s).");
+            }
+        }
+
+        return _chunkGenPool;
+    }
+
+    /// <summary>Diagnostics (#1817): chunks the streamer adopted from a worker vs generated on the tick thread.</summary>
+    public long ChunksFromWorkersForTest => _chunkGenPool?.AdoptedFromWorkers ?? 0;
 
     /// <summary>#1507: a settled view is re-enumerated at least this often (ticks) even when nothing observable
     /// changed — a cheap safety net against any sent-set change the count-based check could miss.</summary>
@@ -2230,11 +2725,29 @@ public sealed partial class GameServer
         int minChunkY = WorldConstants.WorldToChunk(MinBuildY);
         int maxChunkY = WorldConstants.WorldToChunk(MaxBuildY);
 
+        // #1817: finished background generations become resident first, so this pass sends them for free.
+        var pool = ChunkGenPool();
+        if (pool != null)
+        {
+            pool.BeginPass();
+            pool.AdoptReady(_world, 64);
+        }
+
+        _streamSpeculate.Clear();
+        bool anyEnumerated = false;
+
         foreach (var session in JoinedInActiveWorld())
         {
             if (spectatorsOnly && !session.Spectating)
             {
                 continue; // paused-world streaming (#996) serves only the observers
+            }
+
+            SampleStreamVelocity(session); // #1818: every pass, so the look-ahead is current when the view unsettles
+            if (session.FarInfoDue)
+            {
+                session.FarInfoDue = false;
+                SendFarTerrainWorldInfo(session); // #1820: after the JoinAccepted / WorldReset that introduced the world
             }
 
             int radius = EffectiveViewRadius(session); // per-player: honour the client's View Distance slider
@@ -2259,6 +2772,15 @@ public sealed partial class GameServer
 
             session.StreamSettled = false;
             StreamEnumerationsForTest++;
+            anyEnumerated = true;
+
+            // #1818: look direction (yaw 0 = +Z, 90 = +X) and a look-ahead shift along the current velocity, in chunks.
+            double yawRad = session.State.Yaw * System.Math.PI / 180.0;
+            float forwardX = (float)System.Math.Sin(yawRad);
+            float forwardZ = (float)System.Math.Cos(yawRad);
+            float aheadMax = streamRadius * 0.5f;
+            float aheadDx = System.Math.Clamp(session.StreamVelX * StreamLookAheadSeconds / WorldConstants.ChunkSize, -aheadMax, aheadMax);
+            float aheadDz = System.Math.Clamp(session.StreamVelZ * StreamLookAheadSeconds / WorldConstants.ChunkSize, -aheadMax, aheadMax);
 
             // Collect the not-yet-sent chunks in the view column and stream them NEAREST-FIRST. The player's
             // own chunk (its floor) then loads before everything else, so a freshly spawned/teleported player
@@ -2274,10 +2796,15 @@ public sealed partial class GameServer
             // player's own altitude still streams its visible shell.
             var planet = _world.Planet;
             int seaLevel = _generator.SeaLevel(planet); // int.MinValue on a dry world; cached per world
-            var pending = new List<(ChunkCoord Coord, int DistSq)>();
+            var pending = new List<(ChunkCoord Coord, int Key)>();
             for (int dx = -streamRadius; dx <= streamRadius; dx++)
                 for (int dz = -streamRadius; dz <= streamRadius; dz++)
                 {
+                    if (!IsColumnInStreamDisc(dx, dz, streamRadius))
+                    {
+                        continue; // a square corner past the round fog edge — never visible, and outside the sweep's keep radius
+                    }
+
                     int loDy, hiDy;
                     if (System.Math.Max(System.Math.Abs(dx), System.Math.Abs(dz)) <= NearFullColumnRadius)
                     {
@@ -2330,7 +2857,7 @@ public sealed partial class GameServer
                             continue;
                         }
 
-                        pending.Add((coord, dx * dx + dy * dy + dz * dz));
+                        pending.Add((coord, StreamPriorityKey(dx, dy, dz, forwardX, forwardZ, aheadDx, aheadDz)));
                     }
                 }
 
@@ -2345,30 +2872,65 @@ public sealed partial class GameServer
                 continue;
             }
 
-            pending.Sort((a, b) => a.DistSq.CompareTo(b.DistSq));
+            pending.Sort((a, b) => a.Key.CompareTo(b.Key));
 
+            // Send in batches. Without a generation pool a batch is one chunk (the historical loop). With one, a batch
+            // is generated in parallel on the workers AND this thread before it goes out in order (#1817) — the pass
+            // sends exactly what it always sent, the generation just stops being serial.
             int sent = 0;
-            foreach (var (coord, _) in pending)
+            int idx = 0;
+            int batchSize = pool == null ? 1 : pool.Workers + 1;
+            var batch = _streamBatch;
+            while (idx < pending.Count && sent < perTickBudget)
             {
-                if (sent >= perTickBudget)
-                {
-                    break;
-                }
-
                 // Time budget spent (see above) — but only after at least one send, so progress is guaranteed.
                 if (streamTimer != null && sent > 0 && streamTimer.Elapsed.TotalMilliseconds >= _config.ChunkStreamBudgetMs)
                 {
                     break;
                 }
 
-                if (session.SentChunks.Contains(coord))
+                batch.Clear();
+                while (idx < pending.Count && batch.Count < batchSize && sent + batch.Count < perTickBudget)
                 {
-                    continue; // two view offsets can map to the same wrapped chunk — send it once
+                    var candidate = pending[idx++].Coord;
+                    if (session.SentChunks.Contains(candidate) || batch.Contains(candidate))
+                    {
+                        continue; // two view offsets can map to the same wrapped chunk — send it once
+                    }
+
+                    batch.Add(candidate);
                 }
 
-                StreamChunkNow(session, coord);
-                sent++;
+                if (batch.Count == 0)
+                {
+                    break;
+                }
+
+                pool?.EnsureGenerated(_world, batch);
+                foreach (var coord in batch)
+                {
+                    StreamChunkNow(session, coord);
+                    sent++;
+                }
             }
+
+            // #1817: the chunks right behind this pass's budget are the next pass's work — start them now.
+            if (pool != null)
+            {
+                for (int i = idx; i < pending.Count && _streamSpeculate.Count < pool.Workers * 6; i++)
+                {
+                    var next = pending[i].Coord;
+                    if (!session.SentChunks.Contains(next) && !_world.IsChunkLoaded(next))
+                    {
+                        _streamSpeculate.Add(next);
+                    }
+                }
+            }
+        }
+
+        if (pool != null && anyEnumerated)
+        {
+            pool.Speculate(_world, _streamSpeculate);
         }
     }
 
@@ -2506,8 +3068,8 @@ public sealed partial class GameServer
     /// regenerate on demand (with persisted edits re-applied) if the player returns. The client unloads its own
     /// far chunks too (~384 blocks, #966), so each session's sent-set is also pruned by that session's OWN
     /// distance below — the cache eviction alone only forgets chunks far from EVERY player, which left a
-    /// returning player's sent-set stale wherever another player kept the area alive (#1030). Honours <see cref="ServerConfig.MaxLoadedChunksPerPlayer"/>
-    /// in spirit by keeping the resident set proportional to the view, not the distance travelled.</summary>
+    /// returning player's sent-set stale wherever another player kept the area alive (#1030). The resident set stays
+    /// proportional to the view, not the distance travelled (the never-read MaxLoadedChunksPerPlayer knob is gone, #1824).</summary>
     private void SweepFarChunks()
     {
         var anchors = new List<ChunkCoord>();
@@ -2744,7 +3306,9 @@ public sealed partial class GameServer
         {
             ClearDocking(session.State.PlayerId);
             LeaveSpace(session.State.PlayerId);
-            LeaveStation(session.State.PlayerId);
+            // #1925: NOT LeaveStation — that undocks to the planet (which then got saved) and relaunches the leaver
+            // into a space instance LeaveSpace had just cleared. The save keeps them aboard; the rejoin re-boards.
+            ForgetStationBoarding(session);
             CancelTradesFor(session.State.PlayerId);
             SetCurrent(session);
             SaveFleet(session); // the whole fleet + the fleet index on the state, before it is written below
@@ -2965,7 +3529,7 @@ public sealed partial class GameServer
         PauseIntent or ChatIntent or VoiceFrame or BumpReport or SaveGameIntent
             or SelectHotbarIntent or AdminCommandIntent => true,
         RequestStarMap or RequestMissions or RequestCompanionsIntent
-            or RequestAllianceListIntent or RequestLandingPadsIntent => true,
+            or RequestAllianceListIntent or RequestLandingPadsIntent or FarTerrainTileRequest => true, // reads (#1821: the far view keeps filling in)
         // The crew/marker envelopes (#1216/#1217) carry reads AND writes — only the read passes a pause.
         CrewActionIntent c => c.Kind == "list",
         MarkerActionIntent m => m.Kind == "list",
@@ -2995,6 +3559,7 @@ public sealed partial class GameServer
         switch (message)
         {
             case MoveIntent move: HandleMove(session, move); break;
+            case FarTerrainTileRequest farTiles: HandleFarTerrainTileRequest(session, farTiles); break; // #1821
             case SelectHotbarIntent hotbar: session.State.SelectedHotbarSlot = System.Math.Clamp(hotbar.Slot, 0, HotbarSlots - 1); break;
             case MoveItemIntent moveItem: HandleMoveItem(session, moveItem); break;
             case DiscardItemIntent discard: HandleDiscardItem(session, discard); break;
@@ -3043,9 +3608,12 @@ public sealed partial class GameServer
             case SetAppearanceIntent appearance: HandleSetAppearance(session, appearance); break;
             case SetFaceIntent face: HandleSetFace(session, face); break;
             case SetBodyPaintIntent bodyPaint: HandleSetBodyPaint(session, bodyPaint); break;
+            case SetToolLookIntent toolLook: HandleSetToolLook(session, toolLook); break;
             case PaintBlockIntent paint: HandlePaintBlock(session, paint); break;
             case PaintCraftIntent paintCraft: HandlePaintCraft(session, paintCraft); break;
             case CustomShapeCraftIntent form: HandleCustomShapeCraft(session, form); break;
+            case PublishWorldTextureIntent publishTexture: HandlePublishWorldTexture(session, publishTexture); break;
+            case RemoveWorldTextureIntent removeTexture: HandleRemoveWorldTexture(session, removeTexture); break;
             case CraftShipIntent craftShip: HandleCraftShip(session, craftShip); break;
             case SwitchShipIntent switchShip: HandleSwitchShip(session, switchShip); break;
             case ConsumeItemIntent consume: HandleConsume(session, consume); break;
@@ -3061,6 +3629,7 @@ public sealed partial class GameServer
             case StowSpeederIntent stowSpeeder: HandleStowSpeeder(session, stowSpeeder); break;
             case RefuelSpeederIntent refuelSpeeder: HandleRefuelSpeeder(session, refuelSpeeder); break;
             case SpeederImpactIntent speederImpact: HandleSpeederImpact(session, speederImpact); break;
+            case RecallVehicleIntent recallVehicle: HandleRecallVehicle(session, recallVehicle); break;
             case SetBeaconLabelIntent beacon: HandleSetBeaconLabel(session, beacon); break;
             case SetBeamNameIntent beamName: HandleSetBeamName(session, beamName); break;
             case BeamTeleportIntent beamJump: HandleBeamTeleport(session, beamJump); break;
@@ -3098,10 +3667,12 @@ public sealed partial class GameServer
             case DeployStationCoreIntent: HandleDeployStationCore(session); break;
             case BoardStationIntent boardStation: HandleBoardStation(session, boardStation); break;
             case LeaveStationIntent: HandleLeaveStation(session); break;
+            case SetStationZeroGIntent stationZeroG: HandleSetStationZeroG(session, stationZeroG); break; // #1842: zero-g construction mode
             case RepairWreckIntent repairWreck: HandleRepairWreck(session, repairWreck); break;
             case ClaimWreckIntent: HandleClaimWreck(session); break;
             case RepairShipIntent repairShip: HandleRepairShip(session, repairShip); break;
-            case TravelIntent travel: HandleTravel(session, travel); break;
+            case TravelIntent travel: HandleTravelIntent(session, travel); break;
+            case TransitLaunchDoneIntent transitLaunchDone: HandleTransitLaunchDone(session, transitLaunchDone); break;
             case NpcGreetIntent greet: HandleNpcGreet(session, greet); break;
             case SkipOnboardingIntent skipOnboarding: HandleSkipOnboarding(session, skipOnboarding); break;
             case SetWorldRulesIntent worldRules: HandleSetWorldRules(session, worldRules); break;
@@ -3111,6 +3682,9 @@ public sealed partial class GameServer
             case DissolveAllianceIntent allianceDis: HandleDissolveAlliance(session, allianceDis); break;
             case CrewActionIntent crewAction: HandleCrewAction(session, crewAction); break;
             case MarkerActionIntent markerAction: HandleMarkerAction(session, markerAction); break;
+            case NoteActionIntent noteAction: HandleNoteAction(session, noteAction); break; // player notes (#1844)
+            case InterviewAnswerIntent interview: HandleInterviewAnswer(session, interview); break; // reporter news (2026-09)
+            case CreativeTakeItemIntent take: HandleCreativeTakeItem(session, take); break; // the Sandbox catalog (#1930)
             case StorySelectIntent storySelect: HandleStorySelect(session, storySelect); break;
             case NetFragmentFoundIntent netFrag: HandleNetFragmentFound(session, netFrag); break;
             case CoreHackIntent coreHack: HandleCoreHack(session, coreHack); break;
@@ -3120,8 +3694,9 @@ public sealed partial class GameServer
     }
 
     /// <summary>The body to place a (re)joining player on: the one they were last on (persisted per-player)
-    /// if it is a real landable body, otherwise the home/default body — for a first join, or a transient
-    /// save location like a station / in space.</summary>
+    /// if it is a real landable body; for a player saved aboard a station the planet that station undocks to
+    /// (#1925 — the station itself is re-boarded once the join is through, <see cref="RestoreStationOnJoin"/>);
+    /// otherwise the home/default body — for a first join, or a transient save location like space.</summary>
     private (string Body, string Type) RestoreJoinBody(Shared.State.PlayerState state)
     {
         if (_galaxy?.FindBody(state.CurrentLocationId) is { } b
@@ -3129,6 +3704,11 @@ public sealed partial class GameServer
             && !string.IsNullOrEmpty(b.PlanetType))
         {
             return (b.Id, b.PlanetType);
+        }
+
+        if (SavedStationBody(state.CurrentLocationId) is { } station)
+        {
+            return StationReturnLocation(station.Id, station);
         }
 
         return (_meta.ActiveLocationId, _meta.DefaultPlanetType);
@@ -3306,6 +3886,8 @@ public sealed partial class GameServer
 
         // Return the player to the body they were last on (persisted per-player), not always the home world.
         // Ensure that body's world is resident + the active cursor before placing them + sending world data.
+        string savedLocation = state.CurrentLocationId; // #1925: a station is re-boarded after the join burst
+        var savedPosition = state.Position;
         var (joinBody, joinBodyType) = RestoreJoinBody(state);
         LoadWorld(joinBodyType, joinBody);
 
@@ -3340,6 +3922,7 @@ public sealed partial class GameServer
             WorldId = WorldIdOf(state.CurrentLocationId), // #1534
             CumulativePlaytimeSeconds = _meta.CumulativePlaytimeSeconds,
             TerrainContinents = _meta.Description.TerrainContinents,
+            TerrainGeneration = _meta.Description.TerrainGeneration, // #1644
         });
         SendInventory(session);
         SendPlayerState(session);
@@ -3379,6 +3962,7 @@ public sealed partial class GameServer
         SendFactories(session);   // factories on the join world (animated machines + production terminals)
         SendGameUnlocks(session); // the player's downloaded-games collection (per-player, persisted)
         BackfillPlaceDiscoveries(session); // pre-#1113 saves: mirror already-landed bodies into "Places" first
+        BackfillScanSites(session); // pre-#1843 saves: derive WHERE for place/monument keys from the body id
         SendDiscoveryLog(session); // the first-scan ledger, for the Codex "Discoveries" chapter (#484)
 
         // Achievements: settle anything that came due while a reward had nowhere to go, retro-award entries that
@@ -3391,6 +3975,7 @@ public sealed partial class GameServer
         SendCrewList(session);     // crew roster + open invites (#1216)
         OnMarkerOwnerJoined(session); // the loaded state is the truth for this player's shared markers (#1293)
         SendMarkers(session);      // own + shared map markers on the join world (#1217)
+        SendNotes(session);        // the player's own notes (#1844)
         SendStoryStateOnJoin(session); // story meter + per-player beat catch-up (P0)
         SendRelayNetwork(session); // SPS relay meters + jump lanes (#1125)
         ArmNpcRadioOnJoin(session); // NPC calls (#1119): quiet period first; the join scan then catches up
@@ -3400,7 +3985,9 @@ public sealed partial class GameServer
         SyncAppearance(session);        // custom faces + body paintings, BOTH ways (#982)
         SendPaintDesigns(session);      // paint-design registry — before any chunk with painted blocks can arrive
         SendCustomShapes(session);      // …and the form registry, for the same reason (#843)
+        QueueWorldTextures(session);    // #1958: the world's textures follow in pages, one per tick
         ShipAiOnJoin(session); // boot VEGA: onboarding intro / veteran skip / resume objective
+        RestoreStationOnJoin(session, savedLocation, savedPosition); // #1925: quit on a station → back on it
 
         // Hosted worlds: one-time welcome (community rules + beta notice) on the player's FIRST join of
         // this world — the acceptance screen lives on the portal; this is the friendly in-game reminder.
@@ -3450,7 +4037,7 @@ public sealed partial class GameServer
             // First spawn: drop the new player on the first free landing pad of the home body (item 38). The pad
             // is NOT claimed here — occupancy is live, and a pad is only held once the player's ship is parked
             // on it (PlayerPad), which is also where the claim starts being persisted (#848).
-            int idx = FirstFreePadIndex(_world.LocationId, _landingPads.Count, name);
+            int idx = PreferredFreePadIndex(_world.LocationId, _landingPads, name); // dry > islet > seabed (#1621)
             var pad = _landingPads[idx >= 0 ? idx : 0];
             spawnX = pad.CenterX;
             spawnZ = pad.CenterZ;
@@ -3632,6 +4219,8 @@ public sealed partial class GameServer
         int connectionId = _nextLocalConnectionId--;
 
         // Return the player to the body they were last on (persisted); home/default for a fresh player.
+        string savedLocation = state.CurrentLocationId;
+        var savedPosition = state.Position;
         var (joinBody, joinBodyType) = RestoreJoinBody(state);
         LoadWorld(joinBodyType, joinBody);
 
@@ -3652,6 +4241,7 @@ public sealed partial class GameServer
         ApplyCreativeGrants(session); // singleplayer "Creative" world: unlock-all / all-ships / starter kit
         GrantStarterTeleporter(session); // StarterTeleporter world rule (#1056): hand out the device on join
         OnMarkerOwnerJoined(session); // the loaded state is the truth for this player's shared markers (#1293)
+        RestoreStationOnJoin(session, savedLocation, savedPosition); // #1925: saved aboard a station → back on it
         return session;
     }
 
@@ -3696,6 +4286,15 @@ public sealed partial class GameServer
         if (FindSessionByPlayerId(playerId) is { } session)
         {
             OnClientDisconnected(session.ConnectionId);
+        }
+    }
+
+    /// <summary>Test seam (#1838): the client reported a hard landing at <paramref name="impactSpeed"/>.</summary>
+    public void FallDamageForTest(string playerId, float impactSpeed)
+    {
+        if (FindSessionByPlayerId(playerId) is { } session)
+        {
+            HandleFallDamage(session, new FallDamageIntent { ImpactSpeed = impactSpeed });
         }
     }
 
@@ -3762,6 +4361,16 @@ public sealed partial class GameServer
         {
             Serve(session);
             HandleShapeCraft(session, new ShapeCraftIntent { SourceItemKey = sourceItemKey, Shape = shape, Count = count });
+        }
+    }
+
+    /// <summary>Runs the player-designed form craft for a player (test/util entrypoint, like <see cref="ShapeCraft"/>).</summary>
+    public void CustomShapeCraft(string playerId, string sourceItemKey, string voxels, string name = "", int count = 1)
+    {
+        if (FindSessionByPlayerId(playerId) is { } session)
+        {
+            Serve(session);
+            HandleCustomShapeCraft(session, new CustomShapeCraftIntent { SourceItemKey = sourceItemKey, Voxels = voxels, Name = name, Count = count });
         }
     }
 
@@ -3847,10 +4456,15 @@ public sealed partial class GameServer
                 session.AwaitingSpawnAdopt = false;
             }
 
+            var before = session.State.Position;
             session.State.Position = reported;
             session.State.Yaw = move.Yaw;
             session.State.Pitch = move.Pitch;
             UpdateDrivingSpeeder(session); // if driving a speeder, slave it to this pose + drain its energy cell
+            if (onSurface)
+            {
+                GiantsOnPlayerMoved(session, before, reported); // #2001: footsteps on the sand sea are heard
+            }
         }
     }
 
@@ -3874,12 +4488,26 @@ public sealed partial class GameServer
             return; // piloting in space — there is no on-foot fall to take
         }
 
+        if (session.StationZeroG || InStationZeroGFallGrace(session))
+        {
+            return; // #1842: hovering in zero-g construction mode, or dropped to the deck because it was just switched off
+        }
+
+        if (Rules.CreativeFlightFor(p.ModeOverride) || p.Fly)
+        {
+            // #1838: a suit that can fly never takes a fall. The client's own guard only knows the ACTIVE flight
+            // mode (cleared by the double-tap toggle, water and ladders), so a flyer who dropped down a shaft with
+            // the mode off reported a real impact — and died of it ("Den Sturz hast du nicht überlebt").
+            return;
+        }
+
         float over = intent.ImpactSpeed - FallSafeImpactSpeed;
         if (over <= 0f)
         {
             return;
         }
 
+        EmitVibration(p.Position, VibrationSource.HardLanding, p.PlayerId); // #2001: a hard landing shakes the sand
         float damage = Mitigate(p, System.Math.Min(120f, over * FallDamagePerSpeed));
         if (damage <= 0f)
         {
@@ -3918,6 +4546,14 @@ public sealed partial class GameServer
             return;
         }
 
+        // #1746: the client can aim at doors now, so a stamped station / settlement door arrives here as well.
+        // It is protected like the wall it sits in — say so, rather than healing a "ghost block" at its air cell.
+        if (StampedDoorAt(pos))
+        {
+            Reject(session, "mine", IsStationBlock(pos) ? "@srv.protect.station" : "@srv.protect.settlement");
+            return;
+        }
+
         var current = _world.GetBlock(pos);
         if (current.IsAir)
         {
@@ -3945,7 +4581,10 @@ public sealed partial class GameServer
 
         if (IsShipBlock(pos))
         {
-            Reject(session, "mine", "@srv.mine.ship_hull");
+            // #1710: this guard is about the pad ground the hull stands on, never about the hull — which has
+            // not been world blocks since ship-as-object. Saying "ship hull" here sent a builder off writing a
+            // feature request for removable doors, because the door she was aiming at answered as a hull.
+            Reject(session, "mine", "@srv.mine.ship_pad");
             return;
         }
 
@@ -3956,7 +4595,8 @@ public sealed partial class GameServer
         // of — glass, beds, frame — stays protected.
         bool harvestingPlant = IsFlora(current.Value);
 
-        if (!harvestingPlant && IsSettlementBlock(pos))
+        // A natural tree inside the box is not the settlement's either (#1659) — see IsSettlementProtected.
+        if (!harvestingPlant && IsSettlementProtected(pos, current))
         {
             Reject(session, "mine", "@srv.protect.settlement");
             return;
@@ -3965,6 +4605,14 @@ public sealed partial class GameServer
         if (!harvestingPlant && IsStationBlock(pos))
         {
             Reject(session, "mine", "@srv.protect.station");
+            return;
+        }
+
+        // #1830: the Guardian core is breached, not dug out — its column was a bare-hand light block and the
+        // one-shot stamp never brought it back once a player had mined it.
+        if (IsGuardianCoreProtected(pos))
+        {
+            Reject(session, "mine", "@srv.protect.core");
             return;
         }
 
@@ -3996,7 +4644,8 @@ public sealed partial class GameServer
         var tool = ActiveTool(session.State);
         if (!ToolCanMine(tool, def))
         {
-            Reject(session, "mine", "@srv.mine.wrong_tool");
+            NoteTierGate(session, def);
+            Reject(session, "mine", WrongToolReason(session, def));
             return;
         }
 
@@ -4095,6 +4744,15 @@ public sealed partial class GameServer
             yield.Add(new ItemAmount(item, drop.Count));
         }
 
+        // #1761: a scrap block hands over ONE draw from its weighted table on top of its fixed drops — a hash of
+        // the cell and the seed, so placing and breaking the same block on the same cell never yields twice.
+        int fixedDrops = yield.Count;
+        if (def.RandomDrops is { Count: > 0 } && WeightedDrop.Draw(def.RandomDrops, _meta.Seed, pos.X, pos.Y, pos.Z) is { } lucky)
+        {
+            yield.Add(lucky);
+            fixedDrops++;
+        }
+
         if (IsContainerBlock(def.Key))
         {
             yield.AddRange(CrateContentsAt(pos)); // a mined crate/wood box hands its stored stacks back too
@@ -4121,20 +4779,39 @@ public sealed partial class GameServer
         {
             RemoveBeamAt(pos); // mining a beam block forgets its name/owner + map marker (teleporter pad)
         }
+        else if (def.Key == ThumperBlockKey)
+        {
+            StopThumper(pos); // #2002: a thumper mined back stops thumping
+        }
+        else if (def.Key is "station_vendor" or "mission_board" || NpcProfessions.ByPostBlock(def.Key) != null)
+        {
+            OnBasePostChanged(null, pos, placed: false); // #1865: the post's keeper goes back to being a settler
+        }
 
         // Bank the yield computed above. The crate case already handed its own stacks over in
         // RemoveCrateContainer, so only the block's own drops are added here.
         bool floraHarvest = IsFlora(current.Value);
         // #900: a spore bloom fattens the harvest — the reason to head out INTO the strange weather.
         int bloomBonus = floraHarvest ? WeatherHarvestBonus() : 0;
-        foreach (var drop in yield.Take(def.Drops.Count))
+        foreach (var drop in yield.Take(fixedDrops))
         {
             pool.Add(drop.Item, drop.Count + bloomBonus);
         }
 
         BroadcastToWorld(new BlockChanged { X = pos.X, Y = pos.Y, Z = pos.Z, Block = BlockId.AirValue });
-        WriteBackStationCell(pos, BlockId.Air); // #1481: an interior edit is part of the station's build from now on
-        if (floraHarvest)
+        // #1481: an interior edit is part of the station's build from now on. A harvested plant leaves Air in the grid
+        // as in the world (the grid mirrors what stands there); its regrowth writes it back (#1857, StepFlora).
+        WriteBackStationCell(pos, BlockId.Air);
+        if (def.Key == BedBlock)
+        {
+            ClearBedPartner(session, pos, current, dropDescriptor); // #1846: a two-cell bed falls as one piece
+        }
+
+        if (IsSapling(current.Value))
+        {
+            ForgetSaplingGrowth(pos); // #1774: a picked sapling is in the pocket, not regrowing
+        }
+        else if (floraHarvest)
         {
             ScheduleFloraRegrow(pos, current.Value); // regrows if the host stays intact
         }
@@ -4151,6 +4828,7 @@ public sealed partial class GameServer
         OnBlockMined(session, def.Key);
         ShipAiOnMine(session); // VEGA onboarding: the "mine a few blocks" stage counts every break
         ShipAiOnBlockBroken(session, def.Key); // VEGA context tips (#1077): digging score, by-hand streak, rare-ore learned
+        CreaturesOnBlockBroken(session, pos); // #1760: a flowerling that SEES this turns on the miner
     }
 
     /// <summary>Area mining for powerful drills: breaks the mineable, unprotected blocks around a centre.
@@ -4169,7 +4847,8 @@ public sealed partial class GameServer
 
                     var p = new Vector3i(center.X + dx, center.Y + dy, center.Z + dz);
                     var b = _world.GetBlock(p);
-                    if (b.IsAir || IsShipBlock(p) || IsSettlementBlock(p) || IsStationBlock(p)
+                    if (b.IsAir || IsShipBlock(p) || IsSettlementProtected(p, b) || IsStationBlock(p)
+                        || IsGuardianCoreProtected(p) // #1830
                         || IsBaseProtected(p, session.State.PlayerId, session.State.IsAdmin))
                     {
                         continue;
@@ -4274,6 +4953,14 @@ public sealed partial class GameServer
         }
 
         // Furniture turns but never tips: a bed/campfire on a wall would break its sit/heal/warmth checks.
+        // A bed placed without an explicit turn (#1846) must put its foot in the cell the player FACES: the
+        // raw heading index is mirrored against the geometry yaw for ±X, so it is converted here — the client
+        // ghost does the same, an explicit rotate-key yaw is honoured as sent (foot = geometry direction).
+        if (blockKey == BedBlock && !(place.Yaw >= 0 && place.Yaw <= 3))
+        {
+            facing = ShapeCode.YawFacingForward(facing);
+        }
+
         return ShapeCode.Pack(PropShapes.DefaultPlaceShape(blockKey), facing, ShapeCode.UpPlusY);
     }
 
@@ -4282,6 +4969,64 @@ public sealed partial class GameServer
     /// neighbour, in <see cref="ShapeCode.WallFaces"/> order), so those placements keep landing where they
     /// always did. The client normally decides this itself and sends the answer, because it can also honour
     /// the wall the player actually aimed at.</summary>
+    /// <summary>
+    /// The cell a bed's foot half takes for a head placed at <paramref name="head"/> with the stamped
+    /// <paramref name="headDescriptor"/> (#1846), when it can take it: free (air, or a fluid the bed displaces
+    /// like the head does), inside reach, not the player's own head cell, and on none of the protected ground
+    /// the head itself is refused on. Same Y as the head, so the build band needs no second look. The seam
+    /// wrap is applied, so a bed across the world seam works like any other two-cell edit.
+    /// </summary>
+    private bool TryBedFootCell(PlayerSession session, Vector3i head, int headDescriptor, out Vector3i foot)
+    {
+        foot = head;
+        if (!FurnitureShapes.TryBedPartnerOffset(headDescriptor, out int dx, out int dz))
+        {
+            return false;
+        }
+
+        foot = WorldConstants.CanonicalBlock(new Vector3i(head.X + dx, head.Y, head.Z + dz), _world.Circumference);
+        return IsFreePartnerCell(session, foot); // the same checks a multi-cell form's sibling cells get (#1961)
+    }
+
+    /// <summary>
+    /// Takes the other half of a two-cell bed down with the half that was just mined (#1846), when the partner
+    /// cell really holds it (same block, the complementary form, the same yaw — a stray bed half left by a
+    /// world edit is not somebody else's bed). The partner yields nothing: the mined half already dropped the
+    /// whole bed. Cleared, mirrored and broadcast like any broken block; a legacy one-cell bed has no partner.
+    /// </summary>
+    private void ClearBedPartner(PlayerSession session, Vector3i pos, BlockId bed, int minedDescriptor)
+    {
+        if (!FurnitureShapes.TryBedPartnerOffset(minedDescriptor, out int dx, out int dz))
+        {
+            return;
+        }
+
+        var partner = WorldConstants.CanonicalBlock(new Vector3i(pos.X + dx, pos.Y, pos.Z + dz), _world.Circumference);
+        if (_world.GetBlock(partner).Value != bed.Value)
+        {
+            return;
+        }
+
+        int partnerDescriptor = _world.GetShape(partner);
+        int expected = FurnitureShapes.BedPartnerDescriptor(minedDescriptor);
+        if (ShapeCode.ShapeOf(partnerDescriptor) != ShapeCode.ShapeOf(expected)
+            || ShapeCode.OrientationOf(partnerDescriptor) != ShapeCode.OrientationOf(expected))
+        {
+            return;
+        }
+
+        _world.SetBlock(partner, BlockId.Air, owner: session.State.PlayerId);
+        _miningProgress.Remove(partner);
+        BroadcastToWorld(new BlockChanged { X = partner.X, Y = partner.Y, Z = partner.Z, Block = BlockId.AirValue });
+        WriteBackStationCell(partner, BlockId.Air);
+        if (HasFluidNeighbor(partner))
+        {
+            OnFluidRemoved(partner);
+        }
+
+        OnSupportRemoved(partner);
+    }
+
     private int DeriveLadderMount(Vector3i pos) => PropShapes.DeriveLadderMount(
         face =>
         {
@@ -4365,7 +5110,7 @@ public sealed partial class GameServer
             // consumed: a door is an ENTITY living in an air cell (the fluid would just flow back around it,
             // leaving a door that holds nothing back), and a torch is an open flame — a submerged one would be
             // the same mysterious dud the airless-body check above exists to prevent.
-            if (IsDoorBlock(blockDef.Key))
+            if (DoorBlocks.IsDoorBlock(blockDef.Key))
             {
                 Reject(session, "place", "@srv.place.not_empty");
                 return;
@@ -4473,6 +5218,42 @@ public sealed partial class GameServer
             }
         }
 
+        // A bed is two cells long (#1846): the foot half lands on the cell the head's yaw points to. The foot
+        // cell is put through the same checks the head cell just passed — free, in reach, not the player's own
+        // head, no protected ground — BEFORE the item is consumed, so a bed jammed against a wall is refused
+        // with a reason instead of leaving a lone head half (or writing into someone else's base).
+        Vector3i? bedFoot = null;
+        if (blockDef.Key == BedBlock)
+        {
+            if (!TryBedFootCell(session, pos, StampPropShape(session, place, blockDef.Key, pos), out var foot))
+            {
+                Reject(session, "place", "@srv.place.bed_room");
+                return;
+            }
+
+            bedFoot = foot;
+        }
+
+        // A player form over several blocks (#1961): like the bed, every further cell must be free and allowed
+        // BEFORE the item is consumed — a wardrobe under a low ceiling is refused with a reason, not cut in half.
+        // Such a form turns but never tips, so its descriptor is settled here already (yaw from the rotate key
+        // or the player's facing, up-face +Y).
+        List<(Vector3i Pos, int Cell)>? formSiblings = null;
+        int multiCellDescriptor = 0;
+        if (blockDef.Shapeable && ShapeCode.IsCustomShape(ItemKey.Shape(place.ItemKey))
+            && MaterialUnitsOfShape(ItemKey.Shape(place.ItemKey)) > 1)
+        {
+            int formYaw = place.Yaw >= 0 && place.Yaw <= 3
+                ? place.Yaw
+                : ((int)System.MathF.Round(session.State.Yaw / 90f)) & 3;
+            multiCellDescriptor = ShapeCode.Pack(ItemKey.Shape(place.ItemKey), formYaw, ShapeCode.UpPlusY);
+            if (!TryMultiCellSiblings(session, pos, multiCellDescriptor, out formSiblings))
+            {
+                Reject(session, "place", "@srv.place.form_room");
+                return;
+            }
+        }
+
         // Creative mode and admin instant-build place without consuming materials.
         bool free = !Rules.CraftingCostsMaterialsFor(session.State.ModeOverride) || session.State.InstantBuild;
         var pool = new MaterialPool(_content, session.State, _ship);
@@ -4488,9 +5269,9 @@ public sealed partial class GameServer
         }
 
         // A door isn't a voxel block — it fills the (air) cell as a server door entity (Task 5 Stage 3c).
-        if (IsDoorBlock(blockDef.Key))
+        if (DoorBlocks.IsDoorBlock(blockDef.Key))
         {
-            PlaceDoor(session, pos, DoorKindForBlock(blockDef.Key));
+            PlaceDoor(session, pos, DoorBlocks.KindForBlock(blockDef.Key));
             SendInventory(session);
             return;
         }
@@ -4526,7 +5307,9 @@ public sealed partial class GameServer
                 // shape auto-orients so its base rests on the surface it was built against (floor → +Y, i.e.
                 // unchanged; walls/ceiling tilt it). up-face × yaw give the full 24 orientations.
                 int upFace = ShapeCode.IsValidUpFace(place.UpFace) ? place.UpFace : DeriveShapeUpFace(pos);
-                placeShape = ShapeCode.Pack(shapeIndex, facing, upFace);
+                placeShape = multiCellDescriptor != 0
+                    ? multiCellDescriptor // the footprint was checked for exactly this yaw, upright
+                    : ShapeCode.Pack(shapeIndex, facing, upFace);
             }
         }
 
@@ -4557,6 +5340,33 @@ public sealed partial class GameServer
 
         _world.SetBlock(pos, blockDef.NumericId, placeTint, placeGlow, placeShape, session.State.PlayerId);
         WriteBackStationCell(pos, blockDef.NumericId, placeTint, placeGlow, placeShape); // #1481: an interior edit is part of the station's build from now on
+        if (formSiblings is { Count: > 0 })
+        {
+            StampMultiCellSiblings(session, blockDef.NumericId, placeTint, placeGlow, placeShape, formSiblings); // #1961
+        }
+
+        if (bedFoot is { } footCell)
+        {
+            // The foot half (#1846): the same block with the partner form and the head's yaw, written, mirrored
+            // and broadcast exactly like the head — the save, the wire, the station grid and the block-id based
+            // home-spawn/heal scans all see two bed cells. A fluid it displaces is dropped like the head's.
+            int footShape = FurnitureShapes.BedPartnerDescriptor(placeShape);
+            bool footIntoFluid = IsFluid(_world.GetBlock(footCell).Value);
+            _world.SetBlock(footCell, blockDef.NumericId, placeTint, placeGlow, footShape, session.State.PlayerId);
+            WriteBackStationCell(footCell, blockDef.NumericId, placeTint, placeGlow, footShape);
+            BroadcastToWorld(new BlockChanged { X = footCell.X, Y = footCell.Y, Z = footCell.Z, Block = blockDef.NumericId.Value, Tint = placeTint, Glow = placeGlow, Shape = footShape });
+            NudgeCreatureBodyChecks(footCell);
+            if (footIntoFluid)
+            {
+                UntrackFluid(footCell);
+                OnFluidRemoved(footCell);
+            }
+        }
+
+        if (IsSapling(blockDef.NumericId.Value))
+        {
+            ScheduleSaplingGrowth(pos); // #1774: a planted sapling starts its clock
+        }
 
         if (IsContainerBlock(blockDef.Key))
         {
@@ -4574,6 +5384,14 @@ public sealed partial class GameServer
         {
             PlaceBeam(session, pos, place.Label); // a placed beam block becomes a named teleporter pad
         }
+        else if (blockDef.Key == SentryBlockKey)
+        {
+            WarnIfSentryOutsideBase(session, pos); // #1699: a post outside a base zone never fires — say so
+        }
+        else if (blockDef.Key is "station_vendor" or "mission_board" || NpcProfessions.ByPostBlock(blockDef.Key) != null)
+        {
+            OnBasePostChanged(session, pos, placed: true); // #1865: a post at home is staffed by a resident
+        }
 
         BroadcastToWorld(new BlockChanged { X = pos.X, Y = pos.Y, Z = pos.Z, Block = blockDef.NumericId.Value, Tint = placeTint, Glow = placeGlow, Shape = placeShape });
         NudgeCreatureBodyChecks(pos); // #1357: an animal the block landed in steps aside on its next tick
@@ -4589,6 +5407,15 @@ public sealed partial class GameServer
             // stream cut off here recedes (and the body around a new underwater wall settles again).
             UntrackFluid(pos);
             OnFluidRemoved(pos);
+        }
+
+        if (blockDef.Key == WaterSpoutBlockKey)
+        {
+            StartSpout(session, pos); // #1726: a waterfall block starts pouring the moment it is placed
+        }
+        else if (blockDef.Key == ThumperBlockKey)
+        {
+            StartThumper(session, pos); // #2002: a placed thumper starts thumping
         }
 
         ActivateGranular(pos); // #1319: placed sand with nothing under it drops; over lava it sinks
@@ -4614,9 +5441,19 @@ public sealed partial class GameServer
         if (!Rules.CraftingCostsMaterialsFor(session.State.ModeOverride))
         {
             var freePool = new MaterialPool(_content, session.State, _ship);
-            foreach (var output in recipe.Outputs)
+            var freeOutputs = recipe.Outputs.Select(o => new ItemAmount(o.Item, o.Count * count)).ToList();
+
+            // Room for the result FIRST, exactly like the paid path below: a free craft that does not fit used
+            // to report success and drop the surplus on the floor of a full inventory (#1937).
+            if (!freePool.CanFit(freeOutputs))
             {
-                freePool.Add(output.Item, output.Count * count);
+                CraftFail(session, recipe.Key, "@inventory_full");
+                return;
+            }
+
+            foreach (var output in freeOutputs)
+            {
+                freePool.Add(output.Item, output.Count);
             }
 
             Send(session, new CraftResult { Success = true, RecipeKey = recipe.Key });
@@ -4664,6 +5501,21 @@ public sealed partial class GameServer
                 CraftFail(session, recipe.Key, "@srv.craft.wrong_vendor");
                 return;
             }
+
+            // The grocer (2026-09) only sells inside the shop: the customer must stand in the keeper's closed room.
+            if (TradingVendorAt(session.State) is { } keeper && NpcProfessions.ByJob(keeper.Job) is { ShopOnly: true }
+                && !InSameClosedRoom(session.State.Position, keeper.Pos))
+            {
+                CraftFail(session, recipe.Key, "@srv.craft.shop_only");
+                return;
+            }
+        }
+
+        // "Sometimes a bed and a stretcher" (2026-09): a rotating offer is only in stock on its days.
+        if (recipe.Station == CraftingStation.Market && !recipe.OfferedOnDay(MarketDay))
+        {
+            CraftFail(session, recipe.Key, "@srv.craft.not_today");
+            return;
         }
 
         var pool = new MaterialPool(_content, session.State, _ship);
@@ -4889,6 +5741,18 @@ public sealed partial class GameServer
         string output = ItemKey.Compose(baseKey, ItemKey.Tint(sourceItemKey), ItemKey.Glow(sourceItemKey),
             shape, ItemKey.Design(sourceItemKey));
 
+        // A form over several blocks (#1961) is made from as many blocks as it has cells — and gives them back.
+        // `count` is how many SOURCE items the player offers: 10 planks make five two-cell wardrobes; one
+        // wardrobe turned back into cubes makes two planks. Going from one big form straight to another would
+        // leave remainders nobody asked for, so that takes the detour over plain blocks.
+        int unitsIn = MaterialUnitsOfShape(ItemKey.Shape(sourceItemKey));
+        int unitsOut = MaterialUnitsOfShape(shape);
+        if ((unitsIn > 1 || unitsOut > 1) && baseKey != "shape_stencil") // a stencil carries the design, not the material
+        {
+            ApplyMultiCellExchange(session, sourceItemKey, output, count, unitsIn, unitsOut, shape, tag, slot);
+            return;
+        }
+
         // Creative mode: no material cost — just produce the shaped material.
         if (!Rules.CraftingCostsMaterialsFor(session.State.ModeOverride))
         {
@@ -4925,6 +5789,74 @@ public sealed partial class GameServer
         WarnIfPoolOverflowed(session, pool); // #600: same partial-stack trap as dyeing
         ShipAiOnCraft(session);
         if (shape != 0) RevealShapeAnomalyMemory(session); // forming a non-cube → VEGA's "why we built blocky" memory
+    }
+
+    /// <summary>The N:1 / 1:N branch of <see cref="ApplyShapeExchange"/> for forms over several blocks (#1961).
+    /// Same guards as the 1:1 path: nothing is consumed unless the result fits.</summary>
+    private void ApplyMultiCellExchange(PlayerSession session, string sourceItemKey, string output, int offered,
+        int unitsIn, int unitsOut, int shape, string tag, int slot)
+    {
+        if (unitsIn > 1 && unitsOut > 1)
+        {
+            CraftFail(session, tag, "@srv.shape.multi_to_multi");
+            return;
+        }
+
+        int consumed, produced;
+        if (unitsOut > 1)
+        {
+            // "Make one" from the crafting menu arrives as an offer of ONE item — for a form over N blocks that
+            // means N of them. A whole stack offered from the hotbar becomes as many forms as it holds.
+            offered = System.Math.Max(offered, unitsOut);
+            produced = offered / unitsOut;
+            consumed = produced * unitsOut;
+        }
+        else
+        {
+            consumed = offered;
+            produced = offered * unitsIn;
+        }
+
+        var pool = new MaterialPool(_content, session.State, _ship);
+        var outputs = new[] { new ItemAmount(output, produced) };
+        if (!Rules.CraftingCostsMaterialsFor(session.State.ModeOverride))
+        {
+            // Creative / Sandbox: free, but the result still has to fit (#1937).
+            if (!pool.CanFit(outputs))
+            {
+                CraftFail(session, tag, "@inventory_full");
+                return;
+            }
+
+            AddCraftOutput(session, pool, output, produced, slot);
+        }
+        else
+        {
+            var inputs = new List<ItemAmount> { new ItemAmount(sourceItemKey, consumed) };
+            if (!pool.Has(inputs))
+            {
+                CraftFail(session, tag, unitsOut > 1 ? "@srv.shape.needs_blocks" : "@srv.craft.missing_material");
+                return;
+            }
+
+            if (!pool.CanFitAfterRemoving(inputs, outputs))
+            {
+                CraftFail(session, tag, "@inventory_full");
+                return;
+            }
+
+            pool.Remove(inputs);
+            AddCraftOutput(session, pool, output, produced, slot);
+            ShipAiOnCraft(session);
+        }
+
+        Send(session, new CraftResult { Success = true, RecipeKey = tag });
+        SendInventory(session);
+        WarnIfPoolOverflowed(session, pool);
+        if (shape != 0)
+        {
+            RevealShapeAnomalyMemory(session);
+        }
     }
 
     /// <summary>Fraction of a crafted item's recipe inputs recovered when it is disassembled.</summary>
@@ -5090,10 +6022,18 @@ public sealed partial class GameServer
     {
         var p = session.State;
 
+        // #1728: /basewalls is a read-only report about the caller's OWN walls, and the one question a builder
+        // cannot otherwise answer. A player whose ring keeps letting animals in has exactly two possible
+        // reasons — a gap somewhere, or a compound larger than the fill's 48-block reach — and no way to tell
+        // them apart. She had to guess, and guessed at both. The owner of a base on this body may ask about it.
+        bool ownsABaseHere = _bases.Any(b => b.Planet == _world.LocationId && b.OwnerId == p.PlayerId);
+        bool basewallsForOwner = ownsABaseHere
+            && string.Equals(cmd.Command, "basewalls", StringComparison.OrdinalIgnoreCase);
+
         // A fleet admin is an admin everywhere by definition — they are the operator of the installation, not
         // a guest on someone's world. Checked as a session flag rather than by writing PlayerRole.Admin into
         // the save, so the elevation never travels with an exported world (see ServerConfig.FleetAdminPlayers).
-        if (!p.IsAdmin && !session.IsFleetAdmin)
+        if (!p.IsAdmin && !session.IsFleetAdmin && !basewallsForOwner)
         {
             Reject(session, "admin", "@srv.admin.not_admin");
             return;
@@ -5222,6 +6162,10 @@ public sealed partial class GameServer
                 AdminPaintWipe(session, cmd.StringArg);
                 return;
 
+            case "texturewipe": // #1958: world texture moderation — the role is the gate, like the two above
+                AdminWorldTextureWipe(session, cmd.StringArg);
+                return;
+
             case "where":
                 AdminWhere(session, cmd.StringArg ?? cmd.TargetPlayer);
                 return;
@@ -5230,6 +6174,11 @@ public sealed partial class GameServer
             // AdminCheats off, and exactly there a parent needs to hand the kid Creative. The role is the gate.
             case "set_mode":
                 AdminSetPlayerMode(session, cmd.TargetPlayer, cmd.StringArg);
+                return;
+
+            // The whole world's mode (#1927) — the same kind of world management as set_mode above.
+            case "set_world_mode":
+                AdminSetWorldMode(session, cmd.StringArg);
                 return;
 
             // Observer mode + its jump command are fleet-admin only: they reach into worlds other people own,
@@ -5355,6 +6304,14 @@ public sealed partial class GameServer
                 p.GodMode = !p.GodMode;
                 Send(session, new ServerMessage { Text = p.GodMode ? "@srv.admin.god_on" : "@srv.admin.god_off" });
                 CheatLog(p, $"toggled god mode to {p.GodMode}");
+                break;
+
+            case "summon_giant":
+                AdminSummonGiant(session, cmd.StringArg); // #1998: /giant colossus|sandworm — for testing
+                break;
+
+            case "summon_arachnid":
+                AdminSummonArachnid(session); // #2009: /arachnid — for testing
                 break;
 
             case "instant_build":
@@ -5586,14 +6543,24 @@ public sealed partial class GameServer
         return new ToolProperties { Kind = ToolKind.None, Tier = 0 };
     }
 
+    /// <summary>Delegates to the shared rule (#1686) so the server, the client fluid cursor and the client's
+    /// "this block wants a better drill" hint can never disagree about what a tool may break.</summary>
     private static bool ToolCanMine(ToolProperties tool, BlockDefinition block)
-    {
-        if (block.RequiredTool != ToolKind.None && tool.Kind != block.RequiredTool)
-        {
-            return false;
-        }
+        => MiningRules.ToolCanMine(tool, block);
 
-        return tool.Tier >= block.MinToolTier;
+    /// <summary>
+    /// The reject token for a swing the held tool cannot land (#1686). The bare "your tool cannot mine this"
+    /// left a new player with no move to make — a Machine Housing in the open world simply refused to break
+    /// and never said what would work. When the content set has a tool that WOULD break it, the token carries
+    /// that tool's name (localized for this session) so the message can name it. Falls back to the old
+    /// wording when nothing in the game can break the block at all.
+    /// </summary>
+    private string WrongToolReason(PlayerSession session, BlockDefinition block)
+    {
+        var wanted = MiningRules.CheapestToolFor(_content, block);
+        return wanted is null
+            ? "@srv.mine.wrong_tool"
+            : "@srv.mine.wrong_tool_named:" + LocalizedName(session.Locale, wanted.NameKey, wanted.Key);
     }
 
     private bool StationAvailable(PlayerState player, CraftingStation station) => StationAvailable(player, _ship, station);
@@ -5681,7 +6648,8 @@ public sealed partial class GameServer
     /// </summary>
     private bool MarketAvailable(PlayerState player)
         => player.AboardShip || NearSettlementVendor(player) || NearSpaceStationVendor(player)
-           || NearLandedTraderPilot(player); // P3: barter with a peaceful trader landed on a planet surface
+           || NearLandedTraderPilot(player) // P3: barter with a peaceful trader landed on a planet surface
+           || NearBaseVendor(player); // #1865: the trading post at home, staffed by a resident
 
     private void SaveAll()
     {
@@ -5751,6 +6719,21 @@ public sealed partial class GameServer
 
             session.LastChatTick = reportNow;
             HandlePaintReport(session);
+            return;
+        }
+
+        // World textures (#1958): "/reporttexture <key>" — any player may flag one.
+        if (text.StartsWith("/reporttexture", System.StringComparison.OrdinalIgnoreCase)
+            && (text.Length == 14 || text[14] == ' '))
+        {
+            int reportNow = System.Environment.TickCount;
+            if (reportNow - session.LastChatTick < 700)
+            {
+                return; // rate limit
+            }
+
+            session.LastChatTick = reportNow;
+            HandleWorldTextureReport(session, text.Length > 14 ? text.Substring(15) : string.Empty);
             return;
         }
 
@@ -5949,6 +6932,10 @@ public sealed partial class GameServer
             InEva = p.InEva,
             AboveAtmosphere = p.AboveAtmosphere,
             SuitClimateActive = p.SuitClimateActive,
+            Exposure = p.Exposure,
+            ExposureActive = session.ExposureActive,
+            ExposureHot = session.ExposureHot,
+            Uneasy = session.MoodUneasy,
             LifeSupportSource = p.LifeSupportSource,
             StationName = CurrentStationName(p.PlayerId),
             AiCoreTier = VegaCoreTier(session),
@@ -5957,6 +6944,7 @@ public sealed partial class GameServer
             // A creative world lets everybody fly; a per-player Creative override (#1121) grants it too;
             // /fly keeps working as the per-player admin cheat.
             CanFly = Rules.CreativeFlightFor(p.ModeOverride) || p.Fly,
+            StationZeroG = session.StationZeroG, // #1842: chosen float on a player station (session-only)
         });
     }
 
@@ -5966,19 +6954,18 @@ public sealed partial class GameServer
         => LocationNamesFor(_worlds.Active?.LocationId ?? _meta.ActiveLocationId);
 
     /// <summary>Resolves the friendly (system, planet) names for any body id — resident or not (#1567: a bump
-    /// filed in flight right after a hyperjump describes a body that has never been loaded). Falls back to the
-    /// active world's planet type for non-galaxy locations (stations, ship interiors).</summary>
+    /// filed in flight right after a hyperjump describes a body that has never been loaded). A boarded station's
+    /// <c>station:&lt;id&gt;</c> world resolves to its station body (#1856): the station's system, the station's
+    /// name. Falls back to the active world's planet type for locations the galaxy does not carry (ship interiors).</summary>
     private (string System, string Planet) LocationNamesFor(string locationId)
     {
-        foreach (var sys in _galaxy.Systems)
+        if (ResolveLocationBody(locationId) is { } body)
         {
-            foreach (var body in sys.Bodies)
-            {
-                if (body.Id == locationId)
-                {
-                    return (sys.Name, body.Name);
-                }
-            }
+            // A player station's system is its HOST body's (like RelaySystemOf): the star-map entry can sit under
+            // the save's default system on multi-world servers.
+            string systemId = ResolveLocationHostBody(locationId)?.SystemId ?? body.SystemId;
+            var sys = _galaxy.Systems.FirstOrDefault(s => s.Id == systemId);
+            return (sys?.Name ?? string.Empty, body.Name);
         }
 
         return (string.Empty, _worlds.Active?.PlanetType ?? _meta.DefaultPlanetType);
@@ -5994,6 +6981,7 @@ public sealed partial class GameServer
             MapY = sys.MapY,
             Bodies = sys.Bodies.Select(b => ToNetBody(b, session)).ToArray(),
             Tier = FrontierTierOf(sys.Id), // #1122: the star map tags frontier systems
+            StarColor = StarColor(sys.Name), // #1604: the sky keys the sun colour by system NAME — same key here
         }).ToArray();
 
         var players = _sessions.Values
@@ -6005,7 +6993,10 @@ public sealed partial class GameServer
         // currently on always counts (covers legacy saves + the very first spawn before anything was marked).
         var landed = new HashSet<string>(session.State.LandedBodies);
         var known = new HashSet<string>(session.State.KnownSystems);
-        if (_galaxy?.FindBody(session.CurrentLocationId) is { } hereBody)
+        // #1856: aboard a station the location id is the station's WORLD (`station:<id>`); the map speaks body ids,
+        // so resolve it — "you are here" then lands on the station body and the client can find its system.
+        var hereBody = ResolveLocationBody(session.CurrentLocationId);
+        if (hereBody is not null)
         {
             landed.Add(hereBody.Id);
             if (!string.IsNullOrEmpty(hereBody.SystemId))
@@ -6017,7 +7008,7 @@ public sealed partial class GameServer
         Send(session, new StarMapData
         {
             Systems = systems,
-            ActiveLocationId = session.CurrentLocationId,
+            ActiveLocationId = hereBody?.Id ?? session.CurrentLocationId,
             Players = players,
             LandedBodyIds = landed.ToArray(),
             KnownSystemIds = known.ToArray(),
@@ -6122,7 +7113,6 @@ public sealed partial class GameServer
         {
             GameMode = r.ModeFor(over).ToString(),
             Pvp = r.Pvp.ToString(),
-            WeaponMode = r.WeaponMode.ToString(),
             AggressiveAliens = r.AggressiveAliens.ToString(),
             EnvironmentalHazards = r.EnvironmentalHazards.ToString(),
             DeathPenalty = r.DeathPenalty.ToString(),
@@ -6138,6 +7128,7 @@ public sealed partial class GameServer
             InstantTravel = r.InstantTravel,
             AutoAim = r.AutoAim,
             StarterTeleporter = r.StarterTeleporter,
+            WorldTextures = r.WorldTextures ? "Admins" : "Off",
             FrontierDanger = r.FrontierDanger,
             BaseVisitors = r.BaseVisitors,
             VoiceChatEnabled = _config.VoiceChatEnabled,
@@ -6209,6 +7200,12 @@ public sealed partial class GameServer
             Rules.FrontierDanger = intent.FrontierDanger.Equals("On", System.StringComparison.OrdinalIgnoreCase);
         }
 
+        bool worldTexturesBefore = Rules.WorldTextures;
+        if (!string.IsNullOrEmpty(intent.WorldTextures))
+        {
+            Rules.WorldTextures = intent.WorldTextures.Equals("On", System.StringComparison.OrdinalIgnoreCase);
+        }
+
         if (!string.IsNullOrEmpty(intent.BaseVisitors))
         {
             Rules.BaseVisitors = intent.BaseVisitors.Equals("On", System.StringComparison.OrdinalIgnoreCase);
@@ -6224,6 +7221,11 @@ public sealed partial class GameServer
                 SendRules(s);
                 if (GrantStarterTeleporter(s)) { SendInventory(s); } // #1056: flipping the rule on hands the device to everyone online now
             }
+        }
+
+        if (worldTexturesBefore != Rules.WorldTextures)
+        {
+            ResendWorldTexturesToAll(); // #1958: switched off → every client drops them; on → they come back
         }
 
         _log.Info($"World rules updated by '{session.State.Name}': creatures={Rules.CreatureAbundance}, " +
@@ -6398,10 +7400,14 @@ public sealed partial class GameServer
         {
             case WorldReset reset:
                 reset.WorldId = WorldIdOf(session.CurrentLocationId); // the stream that follows is this world's
+                session.FarInfoDue = true; // #1820: the far view needs the new world's generator settings
                 break;
             case BlockChanged change:
                 change.WorldId = WorldIdOf(session.CurrentLocationId);
                 mode = DeliveryMode.ReliableOrderedBulk;
+                break;
+            case FarTerrainTile:
+                mode = DeliveryMode.ReliableOrderedBulk; // #1821: terrain data rides the world-stream channel
                 break;
         }
 

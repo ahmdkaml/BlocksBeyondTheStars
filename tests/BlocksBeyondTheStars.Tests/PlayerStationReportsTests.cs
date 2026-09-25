@@ -249,6 +249,106 @@ public sealed class PlayerStationReportsTests : IDisposable
         }
     }
 
+    [Fact]
+    public void TheCrew_KeepsTheStationClock_RestsAtStationNight_AndStaysInTheRoom()
+    {
+        // #1867: a station has no sun, but its crew keeps the station clock (no longitude on a deck) — without a bunk
+        // in the room they rest where they stand at station night, and back on duty by day. Nobody leaves the air.
+        var server = NewServer("crewnight", out var repo);
+        using (repo)
+        {
+            var pilot = server.AddLocalPlayer("Owner");
+            string id = BuildSealedBox(server, pilot, vendorItem: "station_vendor");
+            BoardOwnStation(server, "Owner", id);
+            var inside = new Vector3f(10.5f, 65.03f, 10.5f);
+            Assert.Equal(server.LocalDayFractionForTest(0f), server.LocalDayFractionForTest(5000f), 6); // one clock aboard
+
+            for (int i = 0; i < 20; i++)
+            {
+                server.SetLocalDayFractionForTest(0.9, 0f);
+                pilot.State.Position = inside;
+                server.TickForTest(0.5);
+            }
+
+            var vendor = server.NpcSnapshots.First(n => n.Role == "vendor");
+            Assert.Equal("npc.activity.resting", server.NpcRoutineForTest(vendor.Id).Activity);
+            foreach (var npc in server.NpcSnapshots)
+            {
+                Assert.True(server.StationCellSealedForTest(id, Feet(npc.Pos)), $"{npc.Role} #{npc.Id} left the room at night: {npc.Pos}");
+            }
+
+            for (int i = 0; i < 20; i++)
+            {
+                server.SetLocalDayFractionForTest(0.45, 0f);
+                pilot.State.Position = inside;
+                server.TickForTest(0.5);
+            }
+
+            Assert.Equal(string.Empty, server.NpcRoutineForTest(vendor.Id).Activity);
+        }
+    }
+
+    // ---------------- #1775: the crew stays inside the hull ----------------
+
+    private static Vector3i Feet(Vector3f pos)
+        => new((int)Math.Floor(pos.X), (int)Math.Floor(pos.Y), (int)Math.Floor(pos.Z));
+
+    [Fact]
+    public void Crew_StandsOnTheFloor_InsideTheSealedRoom()
+    {
+        // Lyxette (v2026.9.5): "Hier läuft einer außerhalb der Eisenmauer herum" — the filler crew was homed at
+        // the post ± 2 blocks with no standable and no air check, so a post beside the hull put a settler inside
+        // the wall or beyond it, and the post keeper's feet sat inside the vendor block itself (#1775).
+        var server = NewServer("crewfloor", out var repo);
+        using (repo)
+        {
+            var pilot = server.AddLocalPlayer("Owner");
+            string id = BuildSealedBox(server, pilot, vendorItem: "station_vendor");
+            BoardOwnStation(server, "Owner", id);
+
+            var crew = server.NpcSnapshots;
+            Assert.Equal(3, crew.Count); // the vendor + the small tier's two civilians
+            foreach (var npc in crew)
+            {
+                var feet = Feet(npc.Pos);
+                Assert.True(server.StationCellSealedForTest(id, feet), $"{npc.Role} #{npc.Id} stands at {feet}, outside the sealed room");
+                Assert.True(server.World.GetBlock(feet).IsAir, $"{npc.Role} #{npc.Id} stands inside a block at {feet}");
+                Assert.False(server.World.GetBlock(new Vector3i(feet.X, feet.Y - 1, feet.Z)).IsAir, $"{npc.Role} #{npc.Id} floats at {feet}");
+                Assert.Equal(feet, Feet(npc.Home));
+            }
+
+            Assert.Equal(3, crew.Select(n => Feet(n.Pos)).Distinct().Count()); // nobody shares a cell
+        }
+    }
+
+    [Fact]
+    public void Crew_NeverWalksOutOfTheRoom_AndIsSetBackHome_WhenOutside()
+    {
+        var server = NewServer("crewwalk", out var repo);
+        using (repo)
+        {
+            var pilot = server.AddLocalPlayer("Owner");
+            string id = BuildSealedBox(server, pilot, vendorItem: "station_vendor");
+            BoardOwnStation(server, "Owner", id);
+            var inside = new Vector3f(10.5f, 65.03f, 10.5f);
+
+            // A minute of strolling in a 3×3 room with a door in its east wall: everyone is still in the pocket.
+            TickAt(server, pilot, inside, halfSeconds: 120);
+            foreach (var npc in server.NpcSnapshots)
+            {
+                Assert.True(server.StationCellSealedForTest(id, Feet(npc.Pos)), $"{npc.Role} #{npc.Id} left the room: {npc.Pos}");
+            }
+
+            // A crew member that somehow ends up beyond the hull (a legacy spawn, a wall built around it) is back
+            // home on the next tick instead of strolling in the vacuum.
+            var vendor = server.NpcSnapshots.First(n => n.Role == "vendor");
+            server.MoveNpcForTest(vendor.Id, new Vector3f(10.5f + 2 + 6, 65f, 10.5f));
+            TickAt(server, pilot, inside, halfSeconds: 2);
+            var back = server.NpcSnapshots.First(n => n.Id == vendor.Id);
+            Assert.Equal(Feet(vendor.Home), Feet(back.Pos));
+        }
+    }
+
     // ---------------- #1487: nobody staffs a post that is open to space ----------------
 
     [Fact]
@@ -327,6 +427,132 @@ public sealed class PlayerStationReportsTests : IDisposable
             float plugged = pilot.State.Oxygen = 50f;
             TickAt(server, pilot, spawn, halfSeconds: 8);
             Assert.True(pilot.State.Oxygen > plugged, $"Oxygen should refill once the hole is plugged (was {pilot.State.Oxygen}).");
+        }
+    }
+
+    // ---------------- #1773: the build west of the origin ----------------
+
+    /// <summary>Builds a second sealed 5×5×5 iron shell ON FOOT (the write-back path) west of the origin: x −6…−2,
+    /// y 64…68, z 8…12, with a 3-tall doorway at x −6 / z 10 that <paramref name="doorItem"/> fills (left open when
+    /// null). Interior x −5…−3, y 65…67, z 9…11 — nothing connects it to the seed hull.</summary>
+    private static void BuildWestRoomOnFoot(SvGameServer server, PlayerSession pilot, string? doorItem = "door_energy")
+    {
+        var p = pilot.State;
+        p.Inventory.Add("iron_wall", 200, 999);
+        p.Inventory.Add("door_energy", 2, 16);
+        p.Position = new Vector3f(-3.5f, 65.03f, 10.5f); // inside the future room, every shell cell within reach
+        for (int x = -6; x <= -2; x++)
+            for (int y = 64; y <= 68; y++)
+                for (int z = 8; z <= 12; z++)
+                {
+                    bool shell = x == -6 || x == -2 || y == 64 || y == 68 || z == 8 || z == 12;
+                    bool doorway = x == -6 && z == 10 && y >= 65 && y <= 67;
+                    if (shell && !doorway)
+                    {
+                        server.PlaceBlock("Owner", x, y, z, "iron_wall");
+                    }
+                }
+
+        if (doorItem != null)
+        {
+            server.PlaceBlock("Owner", -6, 65, 10, doorItem);
+        }
+    }
+
+    [Fact]
+    public void Room_WestOfTheOrigin_Breathes_AndItsDoorSeals()
+    {
+        // Lyxette (v2026.9.5): "immer noch angeblich undichte Räume" — oxygen full at x 2.75, draining at x −0.8
+        // inside one closed iron/glass room with energy doors. Every block WRITE canonicalises x into [0, circ), so
+        // a wall built at x −5 reached the cell grid at x ≈ 5947: the box never grew west, the pocket fill read
+        // x < 0 as the void, and the door there never matched its own column (#1773).
+        var transport = new RecordingTransport();
+        var server = NewServer("westroom", out var repo, transport);
+        using (repo)
+        {
+            var pilot = server.AddLocalPlayer("Owner");
+            string id = BuildSealedBox(server, pilot);
+            BoardOwnStation(server, "Owner", id);
+            BuildWestRoomOnFoot(server, pilot);
+
+            // The grid holds the room where it was built — west of the origin, not a lap east of it.
+            var cells = server.StationCellsForTest(id);
+            Assert.True(cells.ContainsKey(new Vector3i(-6 - 8 - 2, 64 - 64 - 2, 8 - 8 - 2)), "the west wall must be a cell west of the seed hull");
+            Assert.DoesNotContain(cells.Keys, c => c.X > 100);
+
+            var inside = new Vector3f(-3.5f, 65.03f, 10.5f);
+            Assert.True(server.StationCellSealedForTest(id, new Vector3i(-4, 65, 10)), "the west room is a sealed pocket");
+            float o2 = pilot.State.Oxygen = 50f;
+            TickAt(server, pilot, inside);
+            Assert.True(pilot.State.Oxygen > o2, $"Oxygen should refill in the sealed west room (was {pilot.State.Oxygen}).");
+            Assert.DoesNotContain(transport.Sent, m => m is ServerMessage sm && sm.Text == "@station_air_lost");
+            Assert.False(server.FloatingOutsideStationForTest("Owner"), "the west room lies inside the gravity volume");
+
+            // The fill really sees the west walls: a hole in the roof leaks.
+            server.World.SetBlock(new Vector3i(-4, 68, 10), BlockId.Air);
+            float holed = pilot.State.Oxygen = 80f;
+            TickAt(server, pilot, inside, halfSeconds: 8);
+            Assert.True(pilot.State.Oxygen < holed, $"Oxygen should drain once the west roof has a hole (was {pilot.State.Oxygen}).");
+            Assert.Single(transport.Sent.Where(m => m is ServerMessage sm && sm.Text == "@station_air_lost"));
+        }
+    }
+
+    [Fact]
+    public void Room_WestOfTheOrigin_WithoutItsDoor_Leaks()
+    {
+        // The counter-check for the door column: the same room with the doorway left open is a hull leak.
+        var server = NewServer("westroom-open", out var repo, new RecordingTransport());
+        using (repo)
+        {
+            var pilot = server.AddLocalPlayer("Owner");
+            string id = BuildSealedBox(server, pilot);
+            BoardOwnStation(server, "Owner", id);
+            BuildWestRoomOnFoot(server, pilot, doorItem: null);
+            Assert.False(server.StationCellSealedForTest(id, new Vector3i(-4, 65, 10)), "an open doorway west of the origin is a hole");
+        }
+    }
+
+    [Fact]
+    public void PhantomEastCells_MoveBackWest_OnTheNextServerStart()
+    {
+        // A save written between #1558 and #1773 holds a west wing as cells a whole lap east (x ≈ 5947+). The next
+        // server start re-stamps the station and moves them back to where they were built, so the box and the air follow.
+        var iron = _content.GetBlock("iron_wall")!.NumericId;
+        var home = new Vector3i(-6 - 8 - 2, 65 - 64 - 2, 10 - 8 - 2); // where a wall at world x −6 belongs (cell = world − origin + stamp min)
+        Vector3i phantom;                                             // where it used to land: a lap east
+        string id;
+        {
+            var s1 = NewServer("phantom", out var repo1, new RecordingTransport());
+            using (repo1)
+            {
+                var pilot = s1.AddLocalPlayer("Owner");
+                id = BuildSealedBox(s1, pilot);
+                BoardOwnStation(s1, "Owner", id);
+                int circ = s1.World.Circumference; // the void world's lap the legacy cells sit on
+                Assert.True(circ > 0);
+                phantom = new Vector3i(home.X + circ, home.Y, home.Z);
+
+                // Inject the legacy shape into the live grid, then let a real on-foot edit persist the whole build.
+                ((Dictionary<Vector3i, BlockId>)s1.StationCellsForTest(id))[phantom] = iron;
+                pilot.State.Inventory.Add("iron_wall", 4, 99);
+                pilot.State.Position = new Vector3f(10.5f, 65.03f, 10.5f);
+                s1.PlaceBlock("Owner", 11, 67, 11, "iron_wall");
+                Assert.True(s1.StationCellsForTest(id).ContainsKey(phantom));
+                repo1.Flush();
+            }
+        }
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+        var s2 = NewServer("phantom", out var repo2, new RecordingTransport());
+        using (repo2)
+        {
+            var pilot = s2.AddLocalPlayer("Owner");
+            pilot.State.AboardShip = true;
+            BoardOwnStation(s2, "Owner", id);
+            var cells = s2.StationCellsForTest(id);
+            Assert.False(cells.ContainsKey(phantom), "the phantom east cell must be gone");
+            Assert.Equal(iron, cells[home]);
         }
     }
 
@@ -413,6 +639,7 @@ public sealed class PlayerStationReportsTests : IDisposable
         using (repo2)
         {
             var pilot = s2.AddLocalPlayer("Owner");
+            Assert.True(s2.InStation("Owner"), "#1925: a player saved aboard their own station rejoins on it");
             pilot.State.AboardShip = true; // the save left him boarded on the station; launch from the ship again
             s2.EnterSpace("Owner");
             Assert.True(s2.SpaceEntitiesFor("Owner").Any(e => e.Id == id),
@@ -524,6 +751,144 @@ public sealed class PlayerStationReportsTests : IDisposable
         var beam = _content.GetShipModule("tractor_beam");
         Assert.NotNull(beam);
         Assert.Equal(16.0, beam!.Stats["tractor_range"]);
+    }
+
+    // ---------------- Player reports 2026-09-12 (Lyxette): the roof spawn, the doorway "leak", the sapling ----------------
+
+    /// <summary>A sealed 25×5×5 hall (cells x −2…22, y/z −2…2) with its floor row plated over AND a 1-high crawl gap
+    /// up to x = 19, so the only standable cells INSIDE sit at the far +X end — while the roof's outer face above
+    /// the box centre is standable too (support below, vacuum above) and NEARER. Before #1833 the spawn search
+    /// took the roof.</summary>
+    private static string BuildLongHallWithABlockedCentre(SvGameServer server, PlayerSession pilot)
+    {
+        string playerId = pilot.State.PlayerId;
+        server.EnterSpace(playerId);
+        pilot.State.InEva = true;
+        pilot.State.InstantBuild = true;
+        server.DeployStationCoreForTest(playerId);
+        string id = server.OwnedStationIdForTest(playerId)!;
+        for (int x = -2; x <= 22; x++)
+            for (int y = -2; y <= 2; y++)
+                for (int z = -2; z <= 2; z++)
+                {
+                    if (x == 0 && y == 0 && z == 0)
+                    {
+                        continue; // the core
+                    }
+
+                    bool shell = x == -2 || x == 22 || Math.Abs(y) == 2 || Math.Abs(z) == 2;
+                    bool doorway = x == 22 && y == -1 && z == 0;
+                    bool packed = (y == -1 || y == 1) && x <= 19; // floor and ceiling rows built over → 1-high gap only
+                    if ((shell && !doorway) || packed)
+                    {
+                        Edit(server, playerId, id, x, y, z, "iron_wall");
+                    }
+                }
+
+        Edit(server, playerId, id, 22, -1, 0, "door_slide");
+        Assert.True(server.StationIsBoardableForTest(id));
+        return id;
+    }
+
+    [Fact]
+    public void Docking_NeverSpawnsOnTheRoof_WhenTheHullHoldsAir()
+    {
+        string id;
+        {
+            var s1 = NewServer("roofspawn", out var repo1);
+            using (repo1)
+            {
+                var pilot = s1.AddLocalPlayer("Owner");
+                id = BuildLongHallWithABlockedCentre(s1, pilot);
+                BoardOwnStation(s1, "Owner", id); // the first stamp cuts its pad through the packed centre column
+                repo1.Flush();
+            }
+        }
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+        var s2 = NewServer("roofspawn", out var repo2);
+        using (repo2)
+        {
+            var pilot = s2.AddLocalPlayer("Owner");
+            pilot.State.AboardShip = true;
+            BoardOwnStation(s2, "Owner", id); // the top-up restores the packed centre → the spawn has to move
+
+            var feet = new Vector3i((int)Math.Floor(pilot.State.Position.X), (int)Math.Floor(pilot.State.Position.Y), (int)Math.Floor(pilot.State.Position.Z));
+            Assert.Equal(BoxWorld(0, -1, 0).Y, feet.Y); // on the deck (world y 65) — not on the roof (y 69)
+            Assert.True(feet.X >= BoxWorld(20, 0, 0).X, $"the spawn moved to the free end of the hall, not up: {feet}");
+            Assert.True(s2.StationPocketSizeForTest(id, feet) > 0, "…and it holds air");
+        }
+    }
+
+    [Fact]
+    public void StandingInTheDoorway_OrInThePond_KeepsTheRoomSealed()
+    {
+        var s = NewServer("doorair", out var repo);
+        using (repo)
+        {
+            var pilot = s.AddLocalPlayer("Owner");
+            string id = BuildSealedBox(s, pilot);
+            BoardOwnStation(s, "Owner", id);
+
+            var inside = BoxWorld(1, -1, 0);
+            var door = BoxWorld(2, -1, 0); // the slide door in the +X wall
+            Assert.True(s.StationPocketSizeForTest(id, inside) > 0, "the box holds air");
+            Assert.True(s.StationPocketSizeForTest(id, door) > 0, "the doorway is part of that pocket, not a hole in the hull (#1836)");
+
+            var water = _content.GetBlock("water")!.NumericId;
+            s.World.SetBlock(inside, water);
+            Assert.True(s.StationPocketSizeForTest(id, inside) > 0, "a pond cell is breathed from its head cell, not a wall (#1836)");
+        }
+    }
+
+    /// <summary>A sealed 5×5×11 shaft of a hall (cells −2…2 in x/z, y −2…8): room for a trunk of five and its crown.</summary>
+    private static string BuildTallSealedBox(SvGameServer server, PlayerSession pilot)
+    {
+        string playerId = pilot.State.PlayerId;
+        server.EnterSpace(playerId);
+        pilot.State.InEva = true;
+        pilot.State.InstantBuild = true;
+        server.DeployStationCoreForTest(playerId);
+        string id = server.OwnedStationIdForTest(playerId)!;
+        for (int x = -2; x <= 2; x++)
+            for (int y = -2; y <= 8; y++)
+                for (int z = -2; z <= 2; z++)
+                {
+                    bool shell = Math.Abs(x) == 2 || Math.Abs(z) == 2 || y == -2 || y == 8;
+                    bool doorway = x == 2 && y == -1 && z == 0;
+                    if (shell && !doorway)
+                    {
+                        Edit(server, playerId, id, x, y, z, "iron_wall");
+                    }
+                }
+
+        Edit(server, playerId, id, 2, -1, 0, "door_slide");
+        Assert.True(server.StationIsBoardableForTest(id));
+        return id;
+    }
+
+    [Fact]
+    public void ASapling_GrowsIntoATree_InsideASealedStationHall()
+    {
+        var s = NewServer("sapling", out var repo);
+        using (repo)
+        {
+            var pilot = s.AddLocalPlayer("Owner");
+            string id = BuildTallSealedBox(s, pilot);
+            BoardOwnStation(s, "Owner", id);
+
+            var soil = BoxWorld(1, -1, 1);
+            var cell = BoxWorld(1, 0, 1);
+            pilot.State.Inventory.Add("dirt", 1, 99);
+            pilot.State.Inventory.Add("sapling", 1, 99);
+            s.PlaceBlock("Owner", soil.X, soil.Y, soil.Z, "dirt");
+            s.PlaceBlock("Owner", cell.X, cell.Y, cell.Z, "sapling");
+            Assert.Equal(_content.GetBlock("flora_sapling")!.NumericId.Value, s.World.GetBlock(cell).Value);
+
+            s.Tick(200.0); // > SaplingGrowSeconds — before #1835 the crown probe failed forever on a void world
+            Assert.Equal(_content.GetBlock("wood_log")!.NumericId.Value, s.World.GetBlock(cell).Value);
+        }
     }
 
     public void Dispose()

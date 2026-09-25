@@ -105,6 +105,20 @@ public sealed partial class GameServer
             return;
         }
 
+        if (IsSreekmakra(creature) && (!SreekmakraTameable(creature) || OwnsASreekmakra(session)))
+        {
+            // 2026-09 (Valuma): in its true shape the shapeshifter slips out of every hand (#1926: only a disguise can be
+            // tamed), and it bonds with nobody who already has one.
+            _tameAttempts.Remove(p.PlayerId);
+            Send(session, new TameResult
+            {
+                CreatureId = intent.CreatureId,
+                Success = false,
+                MessageKey = OwnsASreekmakra(session) ? "creature.tame.msg.sreekmakra_have" : "creature.tame.msg.sreekmakra",
+            });
+            return;
+        }
+
         string need = NeedForStep(sp, creature.Id, attempt.Step);
         if (intent.Response == need)
         {
@@ -189,6 +203,31 @@ public sealed partial class GameServer
             return;
         }
 
+        if (IsSreekmakra(creature))
+        {
+            // #1926: taming the disguise tames the shapeshifter itself — it drops the shape and stays in its true form.
+            _tameAttempts.Remove(p.PlayerId);
+            var bonded = BondSreekmakra(session, creature, beside: creature.Position);
+            OnAchievementTame(session);
+            RecordStoryMilestone("tame:first");
+            SendPlayerState(session);
+            Send(session, new TameResult
+            {
+                CreatureId = creature.Id,
+                Success = bonded is not null,
+                CompanionId = bonded?.Id ?? string.Empty,
+                CompanionName = bonded?.Name ?? string.Empty,
+                MessageKey = "creature.tame.msg.success",
+                KnowledgeTotal = p.KnowledgePoints,
+            });
+            if (bonded is not null)
+            {
+                SendVegaLine(session, "vega.sys.sreekmakra_tamed", 3);
+            }
+
+            return;
+        }
+
         var tc = new TamedCreature
         {
             Id = NextEntityId(),
@@ -229,6 +268,7 @@ public sealed partial class GameServer
             KnowledgeTotal = p.KnowledgePoints,
         });
         SendCompanions(session);
+        SreekmakraFollowsATame(session, creature.SpeciesId); // #1926: the shapeshifter wearing this kind comes along
     }
 
     private void SendTameStep(PlayerSession session, CombatEntity creature, CreatureSpecies sp, TameAttempt attempt, string messageKey)
@@ -458,9 +498,9 @@ public sealed partial class GameServer
         for (int i = _creatures.Count - 1; i >= 0; i--)
         {
             var c = _creatures[i];
-            if (c.IsCompanion && !valid.Contains(c.CompanionId))
+            if (c.IsCompanion && !valid.Contains(c.CompanionId) && !c.OwnerId.StartsWith(NpcPetOwnerPrefix, System.StringComparison.Ordinal))
             {
-                _creatures.RemoveAt(i);
+                _creatures.RemoveAt(i); // an NPC's pet (the tamer's, 2026-09) is kept by the professions tick instead
             }
         }
 
@@ -578,6 +618,24 @@ public sealed partial class GameServer
             return;
         }
 
+        if (NpcPetOwner(c) is { } tamer)
+        {
+            // The tamer's pet (2026-09) trots after its NPC like a player's companion after its owner.
+            if (WrapDistSq(c.Position, tamer.Pos) > CompanionLeashRange * CompanionLeashRange)
+            {
+                c.Position = CompanionSpotNear(sp, c.Id, tamer.Pos);
+                return;
+            }
+
+            var petProfile = ProfileFor(c.SpeciesId);
+            var petStep = LocomotionController.FollowStep(
+                c.Loco, petProfile, c.Position, tamer.Pos, CompanionFollowDistance, moveDt, Hash(c.Id, "wander"));
+            c.Loco = petStep.State;
+            ApplyCreatureStep(c, sp, EffectiveMotion(c, sp), petStep.Position, petStep.VertWave, petProfile, moveDt,
+                petStep.State.Mode == MoveMode.Seek ? MoveMode.Seek : MoveMode.Roam, petStep.Moving, terrainGates: false);
+            return;
+        }
+
         var owner = FindSessionByPlayerId(c.OwnerId);
         if (owner is null || InSpace(c.OwnerId))
         {
@@ -688,9 +746,14 @@ public sealed partial class GameServer
                 Tentacles = sp.Tentacles,
                 EyeStalks = sp.EyeStalks,
                 HasGasSac = sp.HasGasSac,
+                HasFins = CreatureMotion.HasFins(sp), // lifts a snapshot saved before the trait existed
                 BodyPlan = sp.BodyPlan.ToString(),
                 NeckLength = sp.NeckLength,
                 HasTrunk = sp.HasTrunk,
+                HeadShape = sp.HeadShape.ToString(), // #2009
+                Heads = System.Math.Max(1, sp.Heads),
+                WingPairs = System.Math.Max(1, sp.WingPairs),
+                FinPairs = System.Math.Max(1, sp.FinPairs),
             };
         }).ToArray();
 
@@ -707,9 +770,9 @@ public sealed partial class GameServer
         double bestSq = range * range;
         foreach (var c in _creatures)
         {
-            if (c.IsCompanion)
+            if (c.IsCompanion || c.IsGiant)
             {
-                continue;
+                continue; // #1998: a giant cannot be tamed
             }
 
             double d = WrapDistSq(at, c.Position);
@@ -786,6 +849,7 @@ public sealed partial class GameServer
         Tentacles = s.Tentacles,
         EyeStalks = s.EyeStalks,
         HasGasSac = s.HasGasSac,
+        HasFins = CreatureMotion.HasFins(s), // derive rather than copy, so an old roster entry is lifted too
         BellyRgb = s.BellyRgb,
         Glows = s.Glows,
         BiomeAffinity = s.BiomeAffinity,
@@ -796,9 +860,28 @@ public sealed partial class GameServer
         BodyPlan = s.BodyPlan,
         NeckLength = s.NeckLength,
         HasTrunk = s.HasTrunk,
+        HeadShape = s.HeadShape, // #2009: a tamed arachnid keeps its pyramid
+        Heads = System.Math.Max(1, s.Heads),         // #1780-#1782: a hydra companion keeps its heads (0 = a pre-wave snapshot)
+        WingPairs = System.Math.Max(1, s.WingPairs),
+        FinPairs = System.Math.Max(1, s.FinPairs),
         HoverAltitude = s.HoverAltitude,
         SocialGroupSize = s.SocialGroupSize,
         VoiceSeed = s.VoiceSeed, // without this a tamed companion loses its voice and re-derives a stranger's
+        // School club wave 3 (#1763): the authored traits — a tamed Leni keeps its fur, a tamed flowerling its face;
+        // the behaviour flags are inert on a companion (it never harms, never gifts) but travel with the snapshot.
+        BiomeSurfaces = (string[])s.BiomeSurfaces.Clone(),
+        BiomeExclusive = s.BiomeExclusive,
+        Hide = s.Hide,
+        AngeredByMining = s.AngeredByMining,
+        GiftsWhenCalm = s.GiftsWhenCalm,
+        // Giants (#1998) are never tamed, but the snapshot copies every trait so no future path loses one.
+        GiantHeight = s.GiantHeight,
+        BackFeature = s.BackFeature,
+        LegRatio = s.LegRatio,
+        Mandibles = s.Mandibles,
+        WormLength = s.WormLength,
+        WormGirth = s.WormGirth,
+        Hearing = s.Hearing,
     };
 
     // ---------------------------------------------------------------------------------------------

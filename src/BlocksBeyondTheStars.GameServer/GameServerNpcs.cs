@@ -7,6 +7,7 @@ using BlocksBeyondTheStars.Networking.Messages;
 using BlocksBeyondTheStars.Shared.Definitions;
 using BlocksBeyondTheStars.Shared.Geometry;
 using BlocksBeyondTheStars.Shared.Primitives;
+using BlocksBeyondTheStars.Shared.World;
 
 namespace BlocksBeyondTheStars.GameServer;
 
@@ -22,6 +23,11 @@ public sealed partial class GameServer
 {
     private const double NpcBroadcastInterval = 0.2;  // position-sync cadence (client interpolates between)
     private const float NpcWanderLeash = 1.6f;        // how far an NPC drifts from its home marker
+    private const float GuardianLeash = 14f;          // #1793: a G.D.S. guardian walks a beat, inside the walls and around them
+
+    /// <summary>The client-side look key of a G.D.S. guardian (#1793): glowing red eyes and the red stripe band.</summary>
+    internal const string GuardianLook = "gds_guard";
+    private const int NpcStepUp = 1;                  // blocks a stroller steps up in one tick (#1775: a parapet is not a step)
     private const float NpcFaceRange = 6f;            // turn to face a player within this range
     private const double NpcMoveDtCap = 0.25;         // cap per-step movement so big ticks can't jump
 
@@ -64,9 +70,57 @@ public sealed partial class GameServer
         public uint OutfitRgb;
         public uint LegsRgb;
         public bool IsRobot;
+        public string Look = string.Empty; // #1793: additive client look key ("" = the plain avatar)
         public double WanderPhase;
         public LocomotionState Loco; // stop-and-go loiter/stroll state
+
+        // --- #1865: base residents ---
+        public int BaseSlot; // 0 = the base's founding settler; 1..4 = the residents its beds brought
+
+        /// <summary>How far this NPC strolls around <see cref="Home"/> while idle (was one constant for everyone).</summary>
+        public float Leash = NpcWanderLeash;
+
+        // --- #1866: pathfinding ---
+        public Vector3f? Goal;            // where the NPC is walking to (null = idle around Home)
+        public NpcArrival Arrival;        // what to do on reaching the goal
+        public float GoalLeash = NpcWanderLeash; // the leash around the goal once reached
+        public List<Vector3f>? Path;      // waypoints (feet positions) toward the goal
+        public int PathIndex;
+        public bool PathQueued;
+        public int PathFailures;
+        public double PathRetryAt;
+        public Vector3f LastProgressPos;
+        public double LastProgressAt;
+
+        // --- #1867: the daily routine ---
+        public bool RoutineEnabled;       // base residents, villagers and station crew; never guardians or visiting traders
+        public NpcPhase Phase = NpcPhase.Unset;
+        public double PhaseCheckedAt = double.NegativeInfinity;
+        public Vector3f Work;             // the day anchor (defaults to the spawn home)
+        public bool HasWork;
+        public Vector3f Rest;             // where the NPC idles when not at work (its spawn home)
+        public Vector3i? Bed;             // head cell of the bed this NPC sleeps in
+        public Vector3i? Seat;            // chair / bench cell for the evening
+        public bool FurnitureScanned;     // villagers / crew look for a bed and a seat once, lazily
+        public byte Pose;                 // 0 stand, 1 sit, 2 lie (NetNpc.Pose)
+        public string ActivityKey = string.Empty;
+        public string Held = string.Empty;
+
+        // --- #1868: jobs ---
+        public string Job = string.Empty; // "", "vendor", "quartermaster", "guard", "gardener", "craftsman"
+        public int SiteCursor;
+        public double SiteUntil;
+        public double NextYieldAt;
+        public List<Vector3f>? Patrol;
+        public int PatrolIndex;
+        public double NextSightAt;
     }
+
+    /// <summary>What an NPC does when it reaches its walk goal (#1867).</summary>
+    internal enum NpcArrival : byte { None, LieInBed, SitOnSeat }
+
+    /// <summary>The routine phase an NPC is in (#1867).</summary>
+    internal enum NpcPhase : byte { Unset, Day, Evening, Night }
 
     private List<ServerNpc> _npcs => _worlds.Active.Npcs;
     private double _npcBroadcastTimer { get => _worlds.Active.NpcBroadcastTimer; set => _worlds.Active.NpcBroadcastTimer = value; }
@@ -80,10 +134,14 @@ public sealed partial class GameServer
     /// <summary>Number of NPCs currently populating the world's settlement.</summary>
     public int NpcCount => _npcs.Count;
 
+    /// <summary>Test seam (#1793): the palette + look the client will render for every NPC.</summary>
+    public IReadOnlyList<(int Id, string Role, bool IsRobot, uint SkinRgb, uint OutfitRgb, uint LegsRgb, string Look)> NpcLooksForTest
+        => _npcs.Select(n => (n.Id, n.Role, n.IsRobot, n.SkinRgb, n.OutfitRgb, n.LegsRgb, n.Look)).ToList();
+
     /// <summary>
-    /// Populates an inhabited settlement with NPCs from its markers: a vendor at the market, a
-    /// quartermaster at the mission board, and a settler at each npc spawn marker. Deterministic from
-    /// the settlement's seeded RNG so the same world always has the same residents. No-op for ruins.
+    /// Populates every inhabited settlement (#1887): one resident per bed of its stamped layout, capped per size, the
+    /// posts (vendor, quartermaster, gardener, craftsman, innkeeper) staffed by them, the G.D.S. guardians extra — see
+    /// <see cref="SpawnSettlementResidents"/>. Deterministic from the world's seeded RNG. No-op for ruins.
     /// </summary>
     private void SpawnSettlementNpcs(System.Random rng)
     {
@@ -99,49 +157,8 @@ public sealed partial class GameServer
                 continue;
             }
 
-            // Each settlement has a deterministic trade profession (miners/traders/researchers/settlers) — it
-            // drives the residents' outfits + work gestures AND which goods the vendor posts, so different
-            // settlements offer different trades (the old per-NPC theme was the human/alien look).
-            string settlementTheme = SettlementTradeFor(settlement.Name);
-            int vendorIndex = 0;
-            BeginAuthoredCasting(settlement.Name); // #1150: at most one authored face per place
-
-            foreach (var (type, pos) in settlement.Markers)
-            {
-                string? role = type switch
-                {
-                    "vendor" => "vendor",
-                    "mission_board" => "quartermaster",
-                    "npc" => "settler",
-                    _ => null,
-                };
-
-                if (role is null)
-                {
-                    continue; // loot markers etc. don't get an NPC
-                }
-
-                // Vendors each get their own profession (B55) so multiple vendors at one settlement sell different
-                // goods; settlers/the quartermaster keep the settlement's own theme (its identity).
-                string npcTheme = role == "vendor" ? VendorThemeFor(settlement.Name, vendorIndex++, settlementTheme) : settlementTheme;
-                bool robotic = npcTheme == "researchers" && rng.Next(100) < 60; // most research staff are service androids — but not all (#711)
-
-                // NPCs have no physics, so place their feet on top of the floor block. Markers sit centred
-                // in the air cell above the floor (+0.5 from the cell-centre conversion), so Floor() drops
-                // the feet onto the floor surface — same fix as station crews. The Max keeps an authored
-                // TEMPLATE marker's own storey (#480, was ST-8): an upper-floor vendor is not teleported to
-                // the ground floor, but no NPC hovers half a block over it either (#711).
-                var standing = new Vector3f(pos.X, (float)System.Math.Floor(System.Math.Max(settlement.Min.Y + 1f, pos.Y)), pos.Z);
-                var npc = MakeNpc(role, npcTheme, robotic, standing, rng);
-                npc.Settlement = settlement.Name;
-                if (role == "quartermaster")
-                {
-                    npc.Name = CoinGiverName(settlement.Name); // the mission-giver's name matches its missions (item 13)
-                }
-
-                ApplyAuthoredCharacter(npc, "settlement", settlement.Name); // #1128: a pack face may claim this slot
-                _npcs.Add(npc);
-            }
+            // #1887: the beds are the residents (capped per size), the posts are staffed by them, guardians stay extra.
+            SpawnSettlementResidents(settlement, rng);
         }
 
         if (_npcs.Count > 0)
@@ -172,16 +189,30 @@ public sealed partial class GameServer
             "miners" => new uint[] { 0xD97B29, 0xA8ADB5, 0x8A6A45, 0xE0B23C, 0x6E7B8A, 0xB5651D },
             "traders" => new uint[] { 0x3D7EBF, 0x8A63BF, 0xD9AE33, 0x2FA48E, 0xC24B5A, 0x2E5E8C },
             "researchers" => new uint[] { 0xECECEC, 0x5FB6E0, 0xBFD7EA, 0x9AD9C0, 0xC9C2E8, 0xE8D9A0 },
+            "medics" => new uint[] { 0xF2F4F5, 0x9AD9C0, 0xE6F0F7, 0x7FC8A9 },
+            "grocer" => new uint[] { 0xC24B5A, 0xE0B23C, 0x5C9950, 0xF2E3C6 },
+            "arms" => new uint[] { 0x3E4A3D, 0x5C5346, 0x2F3640, 0x7A5C3A },
+            "sage" => new uint[] { 0x5E3391, 0x2E5E8C, 0x8A63BF, 0xB5A36B },
+            "tamer" => new uint[] { 0x8A6A45, 0x6E8F3A, 0xA37B4F, 0x5C7A4A },
+            "blocks" => new uint[] { 0xD97B29, 0x8A8F96, 0x6B5C4A, 0xE0B23C },
             _ => new uint[] { 0x5C9950, 0xA37B4F, 0x7C9950, 0xB3A05C, 0x6B8FA3, 0x9C6B3C }, // settlers (default)
         };
 
         // Trousers are picked independently of the top, so two NPCs sharing a jacket colour still differ.
         uint[] legsTones = { 0x4A4E57, 0x5C5346, 0x3E4A5C, 0x6B5C4A, 0x777C85, 0x4E3D30 };
 
+        // #1793: a planet type may dictate its inhabitants' wardrobe — the G.D.S. city dresses in purple and red.
+        var wardrobe = _world.Planet?.NpcOutfitRgb;
+        if (wardrobe is { Length: > 0 })
+        {
+            outfitByTheme = wardrobe;
+        }
+
         string nameKey = role switch
         {
             "vendor" => "npc.role.vendor",
             "quartermaster" => "npc.role.quartermaster",
+            "guardian" => "npc.role.guardian",
             _ => $"npc.theme.{theme}",
         };
 
@@ -197,6 +228,7 @@ public sealed partial class GameServer
             Name = name,
             Home = home,
             Pos = home,
+            Rest = home, // #1867: where it idles when not at work (a base resident's is re-assigned by the base scan)
             Facing = (float)(rng.NextDouble() * System.Math.PI * 2),
             Size = 0.92f + (float)rng.NextDouble() * 0.16f, // people vary a little (±8 %), not like fauna (#711)
             SkinRgb = robotic ? chassisTones[rng.Next(chassisTones.Length)] : skinTones[rng.Next(skinTones.Length)],
@@ -248,8 +280,18 @@ public sealed partial class GameServer
         // column scan + O(n²) separation + wall sweep it would pay are the whole cost of a far settlement.
         float aoi = MaxStreamRadiusBlocks(targets) + 2 * BlocksBeyondTheStars.Shared.World.WorldConstants.ChunkSize;
         float aoiSq = aoi * aoi;
+        var crewStation = ActivePlayerStation(); // #1775: on a player station the crew is kept to its sealed pocket
         foreach (var npc in _npcs)
         {
+            // #1775: the net — a crew member outside the pocket its post breathes in (a legacy spawn inside the hull,
+            // a wall built around it, a door it slipped through) is set back home rather than left in the vacuum.
+            if (crewStation != null && OutsideCrewPocket(crewStation, npc.Home, npc.Pos))
+            {
+                npc.Pos = npc.Home;
+                npc.Loco.ModeTimer = 0f;
+                continue;
+            }
+
             bool inReach = false;
             foreach (var t in targets)
             {
@@ -265,12 +307,47 @@ public sealed partial class GameServer
                 continue;
             }
 
-            // Loiter ↔ stroll around home: stand a while, then potter to a new spot within the leash, then stand
-            // again (instead of forever tracing one closed drift loop). Stray past the leash → head straight home.
-            float hx = npc.Pos.X - npc.Home.X, hz = npc.Pos.Z - npc.Home.Z;
-            bool beyondLeash = hx * hx + hz * hz > NpcWanderLeash * NpcWanderLeash;
-            var intent = beyondLeash ? MoveMode.Seek : MoveMode.Roam;
-            Vector3f? target = beyondLeash ? npc.Home : (Vector3f?)null;
+            // #1867: someone sitting on a chair or lying in bed stays put (a seated one still looks at a visitor).
+            if (npc.Pose != 0)
+            {
+                if (npc.Pose == 1 && NearestPlayerPosition(targets, npc.Pos) is { } visitor
+                    && WrapDistSq(visitor, npc.Pos) <= NpcFaceRange * NpcFaceRange)
+                {
+                    npc.Facing = (float)System.Math.Atan2(visitor.X - npc.Pos.X, visitor.Z - npc.Pos.Z);
+                }
+
+                continue;
+            }
+
+            MoveMode intent;
+            Vector3f? target;
+            bool following = false;
+            if (npc.Goal is { } goal)
+            {
+                // #1866: walking somewhere — along a route, through doors.
+                if (GoalStep(npc, goal, targets) is not { } step)
+                {
+                    continue; // waiting for a route, or just arrived
+                }
+
+                intent = step.Intent;
+                target = step.Target;
+                following = true;
+            }
+            else
+            {
+                // Loiter ↔ stroll around home: stand a while, then potter to a new spot within the leash, then stand
+                // again (instead of forever tracing one closed drift loop). Stray past the leash → head straight home.
+                float hx = (float)WorldConstants.WrapDeltaX((double)npc.Pos.X - npc.Home.X, _world.Circumference), hz = npc.Pos.Z - npc.Home.Z;
+                float leash = npc.Role == "guardian" ? GuardianLeash : npc.Leash; // #1793: guardians patrol; #1865: residents stroll wider
+                bool beyondLeash = hx * hx + hz * hz > leash * leash;
+                intent = beyondLeash ? MoveMode.Seek : leash <= 0.05f ? MoveMode.Pause : MoveMode.Roam;
+                target = beyondLeash ? Unwrapped(npc.Pos, npc.Home) : (Vector3f?)null;
+                if (intent == MoveMode.Pause)
+                {
+                    continue; // a zero leash: stand exactly here (the vendor behind the counter)
+                }
+            }
 
             var res = LocomotionController.Step(npc.Loco, NpcProfile, npc.Pos, intent, target, moveDt, (uint)npc.Id);
             npc.Loco = res.State;
@@ -280,17 +357,37 @@ public sealed partial class GameServer
             // floor drops them instead of leaving them hanging in mid-air. Capped at ±2 blocks per step (a
             // strolling settler doesn't climb cliffs). When the column has no answer (chunk unloaded
             // server-side, someone walled the cell in, or only a far-off cell) fall back to the home marker's
-            // floor Y — never the noise surface, which inside a stamped settlement can be metres off.
+            // floor Y — never the noise surface, which inside a stamped settlement can be metres off. Up is
+            // one block at most (#1775): the upward probe used to lift a stroller onto any wall whose top sat two
+            // above its feet — a station's one-block parapet — from where the next step dropped it outside. The top of
+            // furniture is no floor (#1895): the probe does not find it, so the table stays a wall at the feet.
             int gx = (int)System.Math.Floor(res.Position.X), gz = (int)System.Math.Floor(res.Position.Z);
             int refY = (int)System.Math.Floor(npc.Pos.Y);
-            float nextY = TryGroundFeetYAt(gx, gz, refY, out int feet) && System.Math.Abs(feet - refY) <= 2
-                ? feet : npc.Home.Y;
-            var next = SeparateFromNpcs(npc, new Vector3f(res.Position.X, nextY, res.Position.Z), moveDt);
+            float nextY = TryNpcGroundFeetYAt(gx, gz, refY, out int feet) && feet - refY <= NpcStepUp && refY - feet <= 2
+                ? feet : following ? npc.Pos.Y : npc.Home.Y;
+            var raw = new Vector3f(res.Position.X, nextY, res.Position.Z);
+
+            // #1866: a walker on its route passes other people instead of shoving them back into a doorway (two
+            // settlers meeting in a one-wide corridor used to push each other to a standstill).
+            var next = following ? raw : SeparateFromNpcs(npc, raw, moveDt);
 
             // NPCs don't wander into the player's ship — or through their building's walls/doors. The world
             // check sweeps the whole step (not just the endpoint) so an NPC can't tunnel through a one-block
-            // wall or station glass pane when its wander arc clears it on the far side.
-            if (!EntityBlockedByShip(next) && !PathBlockedByWorld(npc.Pos, next))
+            // wall or station glass pane when its wander arc clears it on the far side. On a player station a
+            // step that would leave the sealed pocket of the NPC's post is a wall too (#1775): the crew walks
+            // from room to room through the station's doors, never out into the vacuum.
+            bool blocked = EntityBlockedByShip(next) || PathBlockedByTerrain(npc.Pos, next)
+                || (crewStation != null && OutsideCrewPocket(crewStation, npc.Home, next));
+            if (!blocked && ClosedDoorOnStep(npc.Pos, next) is { } door)
+            {
+                blocked = true;
+                if (following)
+                {
+                    OpenDoorForNpc(door); // #1866: a hinge/wooden door swings open; a slide door opens by itself next tick
+                }
+            }
+
+            if (!blocked)
             {
                 npc.Pos = next;
             }
@@ -301,7 +398,8 @@ public sealed partial class GameServer
 
             // Face the nearest player if one is close; else face the way it's walking (and keep the last facing
             // while standing still, so a paused NPC doesn't snap back to a default heading).
-            var nearest = NearestPlayerPosition(targets, npc.Pos);
+            // Someone walking somewhere (#1866) looks where they are going, not over the shoulder at a passer-by.
+            var nearest = following ? null : NearestPlayerPosition(targets, npc.Pos);
             if (nearest is { } np && WrapDistSq(np, npc.Pos) <= NpcFaceRange * NpcFaceRange)
             {
                 npc.Facing = (float)System.Math.Atan2(np.X - npc.Pos.X, np.Z - npc.Pos.Z);
@@ -381,6 +479,11 @@ public sealed partial class GameServer
     /// inside) a solid block. Samples the segment every ~quarter block so an NPC can't tunnel through a one-block
     /// wall or glass pane in a single wander step (the endpoint alone could land in open air on the far side).</summary>
     private bool PathBlockedByWorld(Vector3f from, Vector3f to)
+        => PathBlockedByTerrain(from, to) || ClosedDoorOnStep(from, to) is not null;
+
+    /// <summary>The wall half of <see cref="PathBlockedByWorld"/> (#1866): blocks only, no doors — the mover asks about
+    /// doors separately, because a walking NPC opens a door where a wall stops it.</summary>
+    private bool PathBlockedByTerrain(Vector3f from, Vector3f to)
     {
         float dx = to.X - from.X, dz = to.Z - from.Z;
         float dist = (float)System.Math.Sqrt(dx * dx + dz * dz);
@@ -388,7 +491,37 @@ public sealed partial class GameServer
         for (int s = 1; s <= steps; s++)
         {
             float f = s / (float)steps;
-            if (BlockedByWorld(new Vector3f(from.X + dx * f, to.Y, from.Z + dz * f)))
+            var at = new Vector3f(from.X + dx * f, to.Y, from.Z + dz * f);
+            if (BlockedByWorld(at))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>A closed door entity is a wall to a walking NPC (#1775): a doorway is air in the block grid — the
+    /// door fills it as an entity — so the crew used to stroll through a shut airlock into the vacuum outside.
+    /// Covers the door's gap (its width along the wall axis, one cell across it, three cells high). Creatures ask
+    /// the same question since #1862; a companion asks with <paramref name="handOperatedOnly"/>, so a slide or
+    /// energy door — which opens for its owner but never for the pet — can never strand it outside.</summary>
+    private bool ClosedDoorBlocks(Vector3f pos, bool handOperatedOnly = false)
+    {
+        int y = (int)System.Math.Floor(pos.Y);
+        int circ = _world.Circumference;
+        foreach (var d in _doors)
+        {
+            int floor = (int)System.Math.Floor(d.Pos.Y);
+            if (d.Open || y < floor || y > floor + 2 || (handOperatedOnly && !DoorBlocks.IsHandOperated(d.Kind)))
+            {
+                continue;
+            }
+
+            float cx = (float)(circ > 0 ? WorldConstants.WrapDeltaX((double)pos.X - d.Pos.X, circ) : pos.X - d.Pos.X);
+            float cz = pos.Z - d.Pos.Z;
+            float along = d.AxisX ? cx : cz, across = d.AxisX ? cz : cx;
+            if (System.Math.Abs(across) < 0.5f && System.Math.Abs(along) < d.Width / 2f)
             {
                 return true;
             }
@@ -412,6 +545,7 @@ public sealed partial class GameServer
         float dist = (float)System.Math.Sqrt(dx * dx + dy * dy + dz * dz);
         int steps = System.Math.Max(1, (int)System.Math.Ceiling(dist / 0.25f));
         int px = int.MinValue, py = int.MinValue, pz = int.MinValue;
+        int fluidCells = 0;
         for (int s = 1; s < steps; s++) // skip both endpoints — the bodies themselves aren't occluders
         {
             float f = s / (float)steps;
@@ -426,7 +560,17 @@ public sealed partial class GameServer
             px = x;
             py = y;
             pz = z;
-            if (IsSightBlockingCell(x, y, z)) // fluids occlude like before water lost its Solid flag
+            var id = _world.GetBlock(new Vector3i(x, y, z)); // #1530: one read for both tests below
+            if (IsSolidBlock(id))
+            {
+                return false; // a wall stops sight on the very first cell, as it always did
+            }
+
+            // #1698: a fluid does not wall sight off, it EATS it. Water blocking outright was right for
+            // "no aggro across a lake" and wrong for everything at swimming distance: a player diving in her
+            // own moat could not hit an animal three blocks away, because every cell between the two of them
+            // was water. Now murk accumulates — a few cells of water are see-through, a lake still is not.
+            if (IsFluid(id.Value) && ++fluidCells > FluidSightRange)
             {
                 return false;
             }
@@ -435,6 +579,12 @@ public sealed partial class GameServer
         return true;
     }
 
+    /// <summary>How many fluid cells a sightline may cross before the murk closes it (#1698). Big enough for a
+    /// fight in a moat, a pool or the shallows — small enough that a lake or an ocean still hides what is on
+    /// the far side of it, which is what the original hard block was protecting. Shared with the client's
+    /// render-side sight mirror so a tracer is never drawn for a shot the server refused (and vice versa).</summary>
+    private const int FluidSightRange = WorldConstants.FluidSightRange;
+
     /// <summary>Test/util: expose the sightline check so the line-of-sight gating can be verified directly,
     /// without fighting the enemy/creature ground-snapping that would move a hand-placed combatant.</summary>
     public bool HasLineOfSightForTest(Vector3f from, Vector3f to) => HasLineOfSight(from, to);
@@ -442,24 +592,14 @@ public sealed partial class GameServer
     /// <summary>True if an NPC's body (feet + head) would sit inside a colliding block at this position — a wall,
     /// so it can't stroll there. A doorway opening stays air, so NPCs pass through doorways but not walls.
     /// Fluids block too (<c>fluidsPass: false</c>): settlement NPCs have no swim logic, so a pond must stay a
-    /// wall to them even though a player swims straight in.</summary>
+    /// wall to them even though a player swims straight in. A rug or a floor panel is walked through (#1895).</summary>
     private bool BlockedByWorld(Vector3f pos)
     {
         int x = (int)System.Math.Floor(pos.X);
         int y = (int)System.Math.Floor(pos.Y);
         int z = (int)System.Math.Floor(pos.Z);
-        return IsCollidingCell(x, y, z)       // feet
-            || IsCollidingCell(x, y + 1, z);  // head
-    }
-
-    /// <summary>A cell that blocks an NPC's SIGHT: solid (the plain flag — hiding in tall grass works, a
-    /// meadow occludes), or a fluid. Water/lava lost their <c>Solid</c> flag (a submerged player must not
-    /// count as entombed — see GameServerSpawnSafety), but a body of water must keep breaking the sightline
-    /// exactly as before: no aggro through a lake.</summary>
-    private bool IsSightBlockingCell(int x, int y, int z)
-    {
-        var id = _world.GetBlock(new Vector3i(x, y, z)); // #1530: one read — the clear-air sample used to read the cell twice
-        return IsSolidBlock(id) || IsFluid(id.Value);
+        return NpcBodyBlockedAt(x, y, z)       // feet
+            || NpcBodyBlockedAt(x, y + 1, z);  // head
     }
 
     /// <summary>Whether a cell is a movement-blocking solid block. Keyed on the block's <c>Solid</c> flag, not
@@ -478,22 +618,19 @@ public sealed partial class GameServer
         return def == null || def.Solid; // unknown id → treat as solid (safe default)
     }
 
-    /// <summary>Whether a cell actually <b>collides</b> with a walking body. <see cref="IsSolidCell"/> keys on
-    /// the <c>Solid</c> flag alone, which defaults to <c>true</c> — so every cross-billboard prop (small flora,
-    /// the torch/lantern, the walk-through ladder) counts as solid there even though the mesher gives it no
-    /// collider and the player strolls straight through it. Movement must use this predicate instead, or a
-    /// meadow would be an impassable wall for anything that isn't a player. Sight (<see cref="HasLineOfSight"/>)
-    /// keeps the plain solid test.</summary>
-    private bool IsCollidingCell(int x, int y, int z)
-        => IsCollidingBlock(_world.GetBlock(new Vector3i(x, y, z)), fluidsPass: false, foliagePasses: false);
-
-    /// <summary>The no-load sibling of <see cref="IsCollidingCell"/> used by the creature gates: an unloaded chunk
+    /// <summary>The no-load cell form of <see cref="IsCollidingBlock"/> used by the creature gates: an unloaded chunk
     /// reads as air (permissive, matching <c>StandableAt</c>), so a per-tick movement check never generates chunks
     /// as a side effect. Fluids never block an animal — swimmers live in them — and flying species additionally
     /// pass through tree canopies (their hover altitude sits right inside the crown on forest worlds).</summary>
     private bool IsCollidingCellIfLoaded(int x, int y, int z, bool foliagePasses)
         => IsCollidingBlock(_world.GetBlockIfLoaded(new Vector3i(x, y, z)), fluidsPass: true, foliagePasses);
 
+    /// <summary>Whether a block actually <b>collides</b> with a walking body. <see cref="IsSolidCell"/> keys on
+    /// the <c>Solid</c> flag alone, which defaults to <c>true</c> — so every cross-billboard prop (small flora,
+    /// the torch/lantern, the walk-through ladder) counts as solid there even though the mesher gives it no
+    /// collider and the player strolls straight through it. Movement must use this predicate instead, or a
+    /// meadow would be an impassable wall for anything that isn't a player. Sight (<see cref="HasLineOfSight"/>)
+    /// keeps the plain solid test. The block id alone: an NPC also asks the cell's form (<see cref="NpcBodyBlocked"/>).</summary>
     private bool IsCollidingBlock(BlockId id, bool fluidsPass, bool foliagePasses)
     {
         // Fluids are decided EXPLICITLY, not via the Solid flag: water is Solid=false in the content DB
@@ -519,19 +656,51 @@ public sealed partial class GameServer
     private static bool IsWalkThroughProp(string key, bool foliagePasses)
         => key.StartsWith("flora_", System.StringComparison.Ordinal)
             || key is "torch" or "lantern" or "ladder"
-            || (foliagePasses && key == "tree_leaves");
+            || (foliagePasses && (key == "tree_leaves" || key == BlocksBeyondTheStars.WorldGeneration.WorldGenerator.GiantLeavesKey));
 
     // NOTE: BroadcastNpcs runs on the 0.2 s position-sync cadence — per-receiver standings (#1118) must
     // NOT ride on it; they go out via SendNpcs (world entry) and explicitly when a relationship changes.
     private void BroadcastNpcs() => _worlds.Active.NpcListDirty = true; // #1530: flushed once per tick
 
-    private void SendNpcList() => BroadcastToWorld(new NpcList { Npcs = _npcs.Select(ToNetNpc).ToArray() });
+    /// <summary>
+    /// #1884: the list goes to every player of the world, but each receives only the NPCs within their streaming radius
+    /// plus a two-chunk margin — the radius <see cref="MoveNpcs"/> simulates in. It used to carry every NPC of the
+    /// world five times a second (324 on the G.D.S. city alone), and the client built an avatar for each. An NPC that
+    /// leaves the radius drops out of the next list (the client removes what a list no longer names).
+    /// </summary>
+    private void SendNpcList()
+    {
+        foreach (var session in JoinedInActiveWorld())
+        {
+            Send(session, new NpcList { Npcs = NpcsInReachOf(session) });
+        }
+    }
 
     private void SendNpcs(PlayerSession session)
     {
-        Send(session, new NpcList { Npcs = _npcs.Select(ToNetNpc).ToArray() });
+        Send(session, new NpcList { Npcs = NpcsInReachOf(session) });
         SendNpcStandings(session); // #1118: the receiver's relationship stages for these NPCs
     }
+
+    /// <summary>The NPCs a player's client is sent (#1884): those within the player's streaming radius + two chunks.</summary>
+    private NetNpc[] NpcsInReachOf(PlayerSession session)
+    {
+        double reach = (EffectiveViewRadius(session) + 1) * WorldConstants.ChunkSize + 2 * WorldConstants.ChunkSize;
+        double reachSq = reach * reach;
+        var list = new List<NetNpc>();
+        foreach (var npc in _npcs)
+        {
+            if (WrapDistSq(session.State.Position, npc.Pos) <= reachSq)
+            {
+                list.Add(ToNetNpc(npc));
+            }
+        }
+
+        return list.ToArray();
+    }
+
+    /// <summary>Test seam (#1884): the ids of the NPCs this player's client is sent.</summary>
+    public IReadOnlyList<int> NpcIdsSentToForTest(PlayerSession session) => NpcsInReachOf(session).Select(n => n.Id).ToList();
 
     private static NetNpc ToNetNpc(ServerNpc n) => new()
     {
@@ -550,5 +719,22 @@ public sealed partial class GameServer
         LegsRgb = n.LegsRgb,
         IsRobot = n.IsRobot,
         FaceVariant = CharacterFaceVariant(n), // #1128: an authored character keeps one face everywhere
+        Look = n.Look,
+        Pose = n.Pose,               // #1867
+        ActivityKey = n.ActivityKey, // #1867/#1868
+        Held = n.Held,               // #1868
     };
+
+    /// <summary>The G.D.S. guardian (#1793): a friendly machine in the city's colours — dark purple chassis and
+    /// plating, the red stripe band and glowing eyes drawn by the client from <see cref="GuardianLook"/>. A head
+    /// taller than the people it guards.</summary>
+    private static void DressGuardian(ServerNpc npc)
+    {
+        npc.IsRobot = true;
+        npc.SkinRgb = 0x3A1F5C;
+        npc.OutfitRgb = 0x4B2A78;
+        npc.LegsRgb = 0x2C1746;
+        npc.Look = GuardianLook;
+        npc.Size = 1.08f;
+    }
 }

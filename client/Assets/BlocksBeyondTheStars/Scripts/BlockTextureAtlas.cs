@@ -8,11 +8,16 @@ using UnityEngine;
 namespace BlocksBeyondTheStars.Client
 {
     /// <summary>
-    /// A block texture atlas generated **procedurally in code** (M27) — no bundled image assets.
-    /// Each block gets a 32×32 tile painted from its base colour plus per-block detail (grain,
-    /// ore speckles, metal panel + rivets, ice/glass streaks, a circuit grid, grass/flora blades,
-    /// crystal facets, water wave crests, glowing lava veins), with a darker edge so blocks read
-    /// as tiled. The chunk mesher UV-maps faces into this atlas.
+    /// The block texture atlas: 32×32 slots of 64×64 px (2048²), assembled at runtime. A block's tile sits in the
+    /// slot of its numeric id and comes from <see cref="GameTextures"/> (the bundled tile, the player's local
+    /// pack or the world's textures); a block without any tile is painted in code from its base colour plus
+    /// per-block detail. Variant tiles, log end grain and the normal/cavity atlas are derived from the result.
+    /// The slot bands are described in <see cref="AtlasBands"/>. The chunk mesher UV-maps faces into this atlas.
+    /// <para>
+    /// The atlas is not frozen after the build (#1952): when a texture layer changes, the affected tiles are
+    /// repainted in ONE batch — derived tiles follow, the normal atlas is rebuilt and <see cref="Changed"/> tells
+    /// the owners to re-bind it. Slots and UVs stay, so no chunk mesh has to be rebuilt for an override.
+    /// </para>
     /// </summary>
     public sealed class BlockTextureAtlas
     {
@@ -20,8 +25,10 @@ namespace BlocksBeyondTheStars.Client
         // 16x16 = 256 tile slots (1024x1024 atlas). data/blocks.json already has 80 blocks; the old 8x8 = 64
         // slots silently left every block with id >= 64 (the newer flora + doors) untextured — a grey, alpha-
         // less tile, which also broke their cutout leaves. Keep this comfortably above the block count.
-        public const int Cols = 16;
-        public const int Rows = 16;
+        // School club wave 3 (#1765): 32x32 = 1024 slots (2048x2048 atlas) — the wave adds ~15 blocks to 173 and the
+        // variants fill 33 slots from the top; GameContent.AtlasTileCapacity mirrors this number.
+        public const int Cols = AtlasBands.Cols;
+        public const int Rows = AtlasBands.Rows;
 
         public Texture2D Texture { get; }
 
@@ -37,6 +44,7 @@ namespace BlocksBeyondTheStars.Client
         /// otherwise every menu↔world cycle permanently leaks both full atlases (#423).</summary>
         public void Destroy()
         {
+            GameTextures.Changed -= OnTexturesChanged;
             if (Texture != null)
             {
                 UnityEngine.Object.Destroy(Texture);
@@ -87,8 +95,16 @@ namespace BlocksBeyondTheStars.Client
             }
         }
 
+        private readonly GameContent _content;
+
+        /// <summary>Raised after tiles were repaired in place (a texture layer changed). The normal atlas is a
+        /// NEW texture object afterwards, so every owner must re-bind <see cref="NormalTexture"/> on its
+        /// materials and drop what it derived from tile colours (far terrain, minimap, icons).</summary>
+        public event System.Action Changed;
+
         public BlockTextureAtlas(GameContent content)
         {
+            _content = content;
             Texture = new Texture2D(Cols * Tile, Rows * Tile, TextureFormat.RGBA32, mipChain: true)
             {
                 filterMode = FilterMode.Point,
@@ -98,7 +114,7 @@ namespace BlocksBeyondTheStars.Client
             foreach (var b in content.Blocks.Values)
             {
                 int id = b.NumericId.Value;
-                if (id > 0 && id < Cols * Rows)
+                if (id > 0 && id < AtlasBands.BlockEnd)
                 {
                     PaintTile(id, b);
                 }
@@ -106,8 +122,277 @@ namespace BlocksBeyondTheStars.Client
 
             BuildVariants(content);
             BuildCapTiles(content);
+            foreach (var b in content.Blocks.Values)
+            {
+                UpdateStrip(b.NumericId.Value, b); // animated tiles (#1957): their frames as a strip in the dynamic band
+            }
+
+            PublishAnimation();
             Texture.Apply(updateMipmaps: true);
             BuildNormalAtlas(); // derives from the final atlas, so variants get normals automatically
+            GameTextures.Changed += OnTexturesChanged;
+        }
+
+        // ---------------------------------------------------------------- animated tiles (#1957)
+        //
+        // A block whose texture has several frames keeps frame 0 in its OWN slot (icons, the held block, the far
+        // terrain and every UI read that one) and gets all its frames as a row-contiguous STRIP in the dynamic
+        // band. Mesh UVs stay on the own slot; the mesher adds "frames, speed, strip start" to the tint-mode
+        // float of the face (AnimationCode), and the block shaders move the UV onto the strip cell of the current
+        // frame. So a texture that becomes animated — a world texture arrives, the player switches a pack —
+        // needs a re-mesh of the chunks (AnimationVersion tells the owner), but never new UVs.
+
+        private readonly AtlasSlotAllocator _strips = new AtlasSlotAllocator(AtlasBands.DynamicStart, AtlasBands.DynamicEnd);
+        private readonly System.Collections.Generic.Dictionary<int, (int Start, int Frames, int Fps)> _strip
+            = new System.Collections.Generic.Dictionary<int, (int, int, int)>();
+        private volatile int[] _animationCodes = new int[AtlasBands.BlockEnd]; // immutable snapshot: the mesher reads it off the main thread
+
+        /// <summary>Bumps whenever a block gained, lost or moved its strip — loaded chunks must re-mesh then.</summary>
+        public int AnimationVersion { get; private set; }
+
+        /// <summary>What the mesher adds to a face's tint-mode float for block <paramref name="id"/>:
+        /// <c>16·frames + 256·speedIndex + 1024·stripStart</c>, or 0 for a still tile. The tint mode itself stays in
+        /// the low four bits; every term is an exact float (the sum stays far below 2²⁴).</summary>
+        public float AnimationCode(ushort id)
+        {
+            var codes = _animationCodes;
+            return id < codes.Length ? codes[id] : 0f;
+        }
+
+        private void UpdateStrip(int id, BlockDefinition def)
+        {
+            if (id <= 0 || id >= AtlasBands.BlockEnd || _officialOnly)
+            {
+                return;
+            }
+
+            var frames = GameTextures.Resolve(def.Key);
+            int count = frames != null && frames.Animated ? Mathf.Min(frames.Frames.Length, BlocksBeyondTheStars.Shared.Textures.TextureTiles.MaxFrames) : 1;
+            int speed = count > 1 ? System.Array.IndexOf(SpeedSteps, frames.Fps) : -1;
+            bool had = _strip.TryGetValue(id, out var old);
+            if (count <= 1 || speed < 0)
+            {
+                if (had)
+                {
+                    _strips.Release(old.Start, old.Frames);
+                    _strip.Remove(id);
+                    _animationDirty = true;
+                }
+
+                return;
+            }
+
+            int start = had && old.Frames == count ? old.Start : -1;
+            if (start < 0)
+            {
+                if (had)
+                {
+                    _strips.Release(old.Start, old.Frames);
+                }
+
+                start = _strips.Allocate(count);
+                if (start < 0)
+                {
+                    // The band is full (hundreds of animated tiles): this block stays still rather than breaking.
+                    _strip.Remove(id);
+                    _animationDirty |= had;
+                    return;
+                }
+            }
+
+            for (int f = 0; f < count; f++)
+            {
+                int slot = start + f;
+                BlitRaw(frames.Frames[f], (slot % Cols) * Tile, (slot / Cols) * Tile);
+                if (def.Key == "water")
+                {
+                    FadeTileAlpha((slot % Cols) * Tile, (slot / Cols) * Tile, 0.28f); // like its own slot
+                }
+            }
+
+            if (!had || old.Start != start || old.Frames != count || old.Fps != speed)
+            {
+                _animationDirty = true;
+            }
+
+            _strip[id] = (start, count, speed);
+        }
+
+        private static readonly int[] SpeedSteps = { 2, 4, 8, 12 }; // TextureTiles.AllowedFps, as the shader's index
+        private bool _animationDirty;
+
+        private void PublishAnimation()
+        {
+            var codes = new int[AtlasBands.BlockEnd];
+            foreach (var kv in _strip)
+            {
+                codes[kv.Key] = (16 * kv.Value.Frames) + (256 * kv.Value.Fps) + (1024 * kv.Value.Start);
+            }
+
+            _animationCodes = codes;
+            if (_animationDirty)
+            {
+                _animationDirty = false;
+                AnimationVersion++;
+            }
+        }
+
+        /// <summary>A texture layer changed: repaint the affected block tiles (an empty set = all of them), let the
+        /// derived tiles follow, and rebuild the normal atlas once for the whole batch.</summary>
+        private void OnTexturesChanged(System.Collections.Generic.IReadOnlyCollection<string> keys)
+        {
+            if (Texture == null || _content == null)
+            {
+                return;
+            }
+
+            bool any = false;
+            if (keys == null || keys.Count == 0)
+            {
+                foreach (var b in _content.Blocks.Values)
+                {
+                    any |= RepaintBlock(b);
+                }
+            }
+            else
+            {
+                foreach (string key in keys)
+                {
+                    var def = _content.GetBlock(key);
+                    if (def != null)
+                    {
+                        any |= RepaintBlock(def);
+                    }
+                }
+            }
+
+            if (!any)
+            {
+                return; // a creature hide or an icon changed — nothing in this atlas
+            }
+
+            PublishAnimation();
+            Texture.Apply(updateMipmaps: true);
+            var oldNormals = NormalTexture;
+            BuildNormalAtlas();
+            _avgColor.Clear();
+            RebindNormals();
+            Changed?.Invoke();
+            if (oldNormals != null)
+            {
+                UnityEngine.Object.Destroy(oldNormals); // after the owners re-bound the new one
+            }
+        }
+
+        /// <summary>The pixels in a block's slot right now (whatever layer won), as a raw RGBA32 frame with rows
+        /// bottom-up — the texture editor opens a block that has no bundled tile from here.</summary>
+        public byte[] ReadTile(ushort id) => ReadSlot(id % Cols * Tile, id / Cols * Tile);
+
+        /// <summary>The block's tile as SHIPPED, ignoring the local pack and world textures: the bundled tile, or —
+        /// for the blocks that have none — the tile painted in code. "Reset" and "before / after" in the texture
+        /// editor show this. The code-painted ones are drawn into slot 0 (air, never rendered) and read back, so
+        /// the live slot and the GPU copy stay untouched.</summary>
+        public byte[] OfficialTile(BlockDefinition def)
+        {
+            var bundled = GameTextures.Official(def.Key);
+            if (bundled != null)
+            {
+                return bundled.Frames[0];
+            }
+
+            _officialOnly = true;
+            try
+            {
+                PaintTile(0, def);
+            }
+            finally
+            {
+                _officialOnly = false;
+            }
+
+            return ReadSlot(0, 0);
+        }
+
+        private bool _officialOnly;
+
+        private byte[] ReadSlot(int ox, int oy)
+        {
+            var px = Texture.GetPixels(ox, oy, Tile, Tile); // one tile, not the 16 MB the whole atlas would be
+            var raw = new byte[Tile * Tile * 4];
+            for (int i = 0, o = 0; i < px.Length; i++)
+            {
+                Color32 c = px[i];
+                raw[o++] = c.r;
+                raw[o++] = c.g;
+                raw[o++] = c.b;
+                raw[o++] = c.a;
+            }
+
+            return raw;
+        }
+
+        private static readonly int NormalTexId = Shader.PropertyToID("_NormalTex");
+        private readonly System.Collections.Generic.List<Material> _normalUsers = new System.Collections.Generic.List<Material>();
+
+        /// <summary>Binds <see cref="NormalTexture"/> to a block material and keeps it bound: a repaint replaces the
+        /// normal atlas with a new texture object, and a material left on the old one would light every block
+        /// flat. Owners call this instead of setting <c>_NormalTex</c> themselves.</summary>
+        public void BindNormals(Material material)
+        {
+            if (material == null)
+            {
+                return;
+            }
+
+            material.SetTexture(NormalTexId, NormalTexture);
+            _normalUsers.RemoveAll(m => m == null); // destroyed materials compare equal to null in Unity
+            if (!_normalUsers.Contains(material))
+            {
+                _normalUsers.Add(material);
+            }
+        }
+
+        private void RebindNormals()
+        {
+            _normalUsers.RemoveAll(m => m == null);
+            foreach (var m in _normalUsers)
+            {
+                m.SetTexture(NormalTexId, NormalTexture);
+            }
+        }
+
+        private bool RepaintBlock(BlockDefinition def)
+        {
+            int id = def.NumericId.Value;
+            if (id <= 0 || id >= AtlasBands.BlockEnd)
+            {
+                return false;
+            }
+
+            PaintTile(id, def);
+            UpdateStrip(id, def);
+            if (_variants.TryGetValue((ushort)id, out var slots))
+            {
+                bool flora = System.Array.IndexOf(FloraVariantKeys, def.Key) >= 0;
+                for (int v = 0; v < slots.Length; v++)
+                {
+                    if (flora)
+                    {
+                        PaintFloraVariant((ushort)id, slots[v], v);
+                    }
+                    else
+                    {
+                        PaintVariant((ushort)id, slots[v], v);
+                    }
+                }
+            }
+
+            if (_capTiles.TryGetValue((ushort)id, out ushort cap))
+            {
+                PaintEndGrain((ushort)id, cap);
+            }
+
+            return true;
         }
 
         /// <summary>Natural blocks whose visible tiling is broken with procedural variant tiles
@@ -147,9 +432,9 @@ namespace BlocksBeyondTheStars.Client
                     continue;
                 }
 
-                if (next - 2 <= maxId)
+                if (next - 2 <= maxId || next - 1 < AtlasBands.DerivedStart)
                 {
-                    break; // atlas nearly full — skip remaining variants rather than overwrite real tiles
+                    break; // the derived band is full — skip remaining variants rather than overwrite other tiles
                 }
 
                 ushort baseId = def.NumericId.Value;
@@ -173,9 +458,9 @@ namespace BlocksBeyondTheStars.Client
                     continue;
                 }
 
-                if (next - 2 <= maxId)
+                if (next - 2 <= maxId || next - 1 < AtlasBands.DerivedStart)
                 {
-                    break; // atlas nearly full — skip remaining variants rather than overwrite real tiles
+                    break; // the derived band is full — skip remaining variants rather than overwrite other tiles
                 }
 
                 ushort baseId = def.NumericId.Value;
@@ -199,7 +484,7 @@ namespace BlocksBeyondTheStars.Client
         /// mechanism is what grass-on-top, crate lids and machine fronts will want next.
         /// </para>
         /// </summary>
-        private static readonly string[] CapTileKeys = { "wood_log" };
+        private static readonly string[] CapTileKeys = { "wood_log", "giant_log" };
 
         private readonly System.Collections.Generic.Dictionary<ushort, ushort> _capTiles = new();
 
@@ -232,9 +517,9 @@ namespace BlocksBeyondTheStars.Client
                     continue;
                 }
 
-                if (next <= maxId)
+                if (next <= maxId || next < AtlasBands.DerivedStart)
                 {
-                    break; // atlas full — the block keeps its single all-faces tile rather than eating a real id
+                    break; // band full — the block keeps its single all-faces tile rather than eating another slot
                 }
 
                 ushort slot = (ushort)next--;
@@ -561,25 +846,32 @@ namespace BlocksBeyondTheStars.Client
         }
 
         /// <summary>
-        /// Blits a generated block texture (bundled as a <c>Resources/textures/&lt;key&gt;.bytes</c> raw
-        /// RGBA32 tile, decoded via <see cref="Texture2D.LoadRawTextureData(byte[])"/> from the core
-        /// module — avoids LoadImage, which lives in the non-auto-referenced ImageConversionModule and
-        /// won't compile from the client asmdef). Returns false if absent or the wrong size.
+        /// Blits the block's tile from <see cref="GameTextures"/> — the world's texture, else the player's local
+        /// pack, else the tile bundled as <c>Resources/textures/&lt;key&gt;.bytes</c> (raw RGBA32, rows bottom-up).
+        /// Returns false when no layer has one; the caller then paints the tile in code.
         /// </summary>
         private bool TryPaintFromAsset(string key, int ox, int oy)
         {
-            var asset = Resources.Load<TextAsset>("textures/" + key);
-            if (asset == null || asset.bytes.Length != Tile * Tile * 4)
+            byte[] raw = _officialOnly ? GameTextures.Official(key)?.Frames[0] : GameTextures.TileBytes(key);
+            if (raw == null || raw.Length != Tile * Tile * 4)
             {
                 return false;
             }
 
-            var src = new Texture2D(Tile, Tile, TextureFormat.RGBA32, false);
-            src.LoadRawTextureData(asset.bytes);
-            src.Apply();
-            Texture.SetPixels(ox, oy, Tile, Tile, src.GetPixels());
-            Object.Destroy(src);
+            BlitRaw(raw, ox, oy);
             return true;
+        }
+
+        /// <summary>Writes one raw RGBA32 frame (rows bottom-up) into the atlas at a pixel origin.</summary>
+        private void BlitRaw(byte[] raw, int ox, int oy)
+        {
+            var px = new Color32[Tile * Tile];
+            for (int i = 0, o = 0; i < px.Length; i++, o += 4)
+            {
+                px[i] = new Color32(raw[o], raw[o + 1], raw[o + 2], raw[o + 3]);
+            }
+
+            Texture.SetPixels32(ox, oy, Tile, Tile, px);
         }
 
         private void Decorate(int id, string key, int ox, int oy, System.Random rng)
@@ -932,6 +1224,37 @@ namespace BlocksBeyondTheStars.Client
                     Speckle(ox, oy, rng, new Color(0.55f, 0.95f, 1f), 12);
                     break;
 
+                // Generation 11, cave flora — code-painted fallbacks behind the bundled AI tiles (used when a texture pack or
+                // the official-only mode leaves a key without one). Every wild plant
+                // is re-coloured by the world's (or, for the prism bloom, the plant's own) hue in the shader, so these
+                // tiles only carry the light/dark pattern: the dome of a cap, a moss carpet, hanging threads, petals.
+                case "flora_cavecap":
+                    // The dark cave mushroom: a mottled cap surface (the dome form wears it) with pale gill spots.
+                    FillTile(ox, oy, rng, new Color(0.30f, 0.26f, 0.28f));
+                    Speckle(ox, oy, rng, new Color(0.52f, 0.46f, 0.48f), 26);
+                    Speckle(ox, oy, rng, new Color(0.74f, 0.70f, 0.66f), 8);
+                    break;
+
+                case "flora_glowmoss":
+                    // A low glowing carpet (cutout billboard): short pale tufts with bright tips.
+                    ClearTile(ox, oy);
+                    PaintBlades(ox, oy, rng, 18, Tile / 3 + 4, new Color(0.62f, 0.78f, 0.66f), new Color(0.95f, 1f, 0.95f));
+                    break;
+
+                case "flora_glowthread":
+                    // Threads hanging from a cave ceiling (cutout billboard, drawn root-at-top like the hanging kelp):
+                    // thin strands of varied length, each ending in a bright bead.
+                    ClearTile(ox, oy);
+                    PaintHangingThreads(ox, oy, rng, 9, new Color(0.70f, 0.80f, 0.84f), new Color(1f, 1f, 1f));
+                    break;
+
+                case "flora_prismbloom":
+                    // The rainbow class: near-white petals around a bright core (the sphere form wears it), so the
+                    // plant's own colour comes through at full strength.
+                    FillTile(ox, oy, rng, new Color(0.86f, 0.86f, 0.88f));
+                    PaintPetalRays(ox, oy, new Color(0.98f, 0.98f, 1f), new Color(0.66f, 0.66f, 0.70f));
+                    break;
+
                 case "flora_frostflower":
                     // Pale icy crystal bloom.
                     PaintCrystals(ox, oy, rng, new Color(0.82f, 0.94f, 1f), new Color(0.46f, 0.62f, 0.82f));
@@ -1007,6 +1330,65 @@ namespace BlocksBeyondTheStars.Client
                 {
                     float d = Mathf.Sqrt((x - c) * (x - c) + (y - c) * (y - c)) / c;
                     Color px = d > 0.9f ? rim : Color.Lerp(Color.Lerp(Color.white, color, 0.5f), color, Mathf.Clamp01(d * 1.4f));
+                    Texture.SetPixel(ox + x, oy + y, px);
+                }
+            }
+        }
+
+        /// <summary>Makes a whole tile transparent — the cutout background a code-painted leafy plant is drawn onto.</summary>
+        private void ClearTile(int ox, int oy)
+        {
+            var clear = new Color(0f, 0f, 0f, 0f);
+            for (int x = 0; x < Tile; x++)
+            {
+                for (int y = 0; y < Tile; y++)
+                {
+                    Texture.SetPixel(ox + x, oy + y, clear);
+                }
+            }
+        }
+
+        /// <summary>Fills a tile with a colour and a light per-pixel grain (no tiled edge — for plant surfaces).</summary>
+        private void FillTile(int ox, int oy, System.Random rng, Color color)
+        {
+            for (int x = 0; x < Tile; x++)
+            {
+                for (int y = 0; y < Tile; y++)
+                {
+                    float n = 0.88f + 0.24f * (float)rng.NextDouble();
+                    Texture.SetPixel(ox + x, oy + y, new Color(color.r * n, color.g * n, color.b * n, 1f));
+                }
+            }
+        }
+
+        /// <summary>Strands hanging down from the tile's top row, each of its own length, ending in a bright bead.</summary>
+        private void PaintHangingThreads(int ox, int oy, System.Random rng, int count, Color strand, Color bead)
+        {
+            for (int s = 0; s < count; s++)
+            {
+                int tx = 2 + rng.Next(Tile - 4);
+                int end = Tile / 5 + rng.Next(Tile / 2);
+                for (int y = Tile - 1; y > end; y--)
+                {
+                    Texture.SetPixel(ox + tx, oy + y, strand);
+                }
+
+                PutDot(ox + System.Math.Min(tx, Tile - 2), oy + end, bead);
+            }
+        }
+
+        /// <summary>Radial petal rays around a bright centre, darker gaps between them.</summary>
+        private void PaintPetalRays(int ox, int oy, Color petal, Color gap)
+        {
+            float c = (Tile - 1) * 0.5f;
+            for (int x = 0; x < Tile; x++)
+            {
+                for (int y = 0; y < Tile; y++)
+                {
+                    float dx = x - c, dy = y - c;
+                    float d = Mathf.Sqrt(dx * dx + dy * dy) / c;
+                    float ray = Mathf.Abs(Mathf.Sin(Mathf.Atan2(dy, dx) * 4f)); // eight petals
+                    Color px = d < 0.22f ? petal : Color.Lerp(gap, petal, Mathf.Clamp01(ray * 1.3f - d * 0.35f));
                     Texture.SetPixel(ox + x, oy + y, px);
                 }
             }
@@ -1176,6 +1558,8 @@ namespace BlocksBeyondTheStars.Client
             "grass" => new Color(0.32f, 0.62f, 0.28f),
             "wood_log" => new Color(0.42f, 0.29f, 0.16f),   // brown bark
             "tree_leaves" => new Color(0.22f, 0.50f, 0.20f), // forest-green canopy
+            "giant_log" => new Color(0.34f, 0.21f, 0.12f),   // #1783: darker, older bark
+            "giant_leaves" => new Color(0.16f, 0.42f, 0.18f), // #1783: a deeper canopy green
             "crystal" => new Color(0.55f, 0.75f, 0.95f),
             "ancient_brick" => new Color(0.60f, 0.56f, 0.47f), // weathered sandy masonry
             "rune_stone" => new Color(0.48f, 0.50f, 0.55f),    // cold grey slate, carved (glyphs in Decorate)

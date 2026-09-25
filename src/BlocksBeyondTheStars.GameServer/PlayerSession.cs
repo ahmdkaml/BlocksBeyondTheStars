@@ -25,6 +25,11 @@ public sealed class PlayerSession
     /// Cleared by the first report that lands near the authoritative position.</summary>
     public bool AwaitingSpawnAdopt { get; set; }
 
+    /// <summary>#2001: the uptime of the last accepted move and the ground covered since the last step pulse — a
+    /// walking (not sneaking) player shakes the sand every few blocks.</summary>
+    public double StepClockAt { get; set; }
+    public float StepDistance { get; set; }
+
     /// <summary>The player's UI language ("en"/"de") sent on join (item 15). Server-authored dynamic text — LLM
     /// NPC greetings — is generated in this language. Connection-scoped (not persisted); defaults to English.</summary>
     public string Locale { get; set; } = "en";
@@ -115,6 +120,13 @@ public sealed class PlayerSession
     public double NextPaintAt { get; set; }
     public double NextCustomShapeAt { get; set; }
 
+    /// <summary>Earliest uptime the next world texture is accepted (#1958) — the same 2 s pacing: a disk write
+    /// and a broadcast to every client.</summary>
+    public double NextWorldTextureAt { get; set; }
+
+    /// <summary>The pages of the world texture list still to send to this client (#1958) — one per tick.</summary>
+    public System.Collections.Generic.Queue<BlocksBeyondTheStars.Networking.Messages.WorldTextureList> WorldTexturePages { get; } = new();
+
     /// <summary>Earliest uptime the next blueprint paste is accepted (#1117) — a paste is up to 4096
     /// placements in one intent, so it gets a real cooldown.</summary>
     public double NextBlueprintPasteAt { get; set; }
@@ -151,6 +163,30 @@ public sealed class PlayerSession
     public int StreamSettledRadius { get; set; }
     public int StreamSettledSentCount { get; set; }
     public int StreamSettledTicks { get; set; }
+
+    /// <summary>#1818: the player's horizontal velocity (blocks/s) as the streamer sees it — sampled from successive
+    /// positions, smoothed, zeroed on a teleport-sized jump. Drives the streaming look-ahead.</summary>
+    public float StreamVelX { get; set; }
+    public float StreamVelZ { get; set; }
+    public float StreamSampleX { get; set; }
+    public float StreamSampleZ { get; set; }
+    public double StreamSampleAt { get; set; } = -1;
+
+    /// <summary>#1821: far-terrain tiles this client asked for on its current world, with the version it has.</summary>
+    public Dictionary<(int Tx, int Tz), int> FarTilesSent { get; } = new();
+    public int FarTilesWorldId { get; set; }
+    public double FarTileTokens { get; set; } = 64;
+    public double FarTileTokensAt { get; set; }
+
+    /// <summary>#1871: accepted tile requests still waiting for their build. Tiles are built under a per-tick budget
+    /// (<c>ServeFarTiles</c>), never in the request handler — a burst of requests on a built-up world used to stall
+    /// the tick for a minute. <see cref="FarTileQueued"/> mirrors the queue so a re-ask of a queued tile is a no-op.</summary>
+    public Queue<(int Tx, int Tz)> FarTileQueue { get; } = new();
+    public HashSet<(int Tx, int Tz)> FarTileQueued { get; } = new();
+
+    /// <summary>#1820: the next streaming pass sends this session its world's FarTerrainWorldInfo (set on join and
+    /// whenever a WorldReset goes out).</summary>
+    public bool FarInfoDue { get; set; } = true;
 
     /// <summary>Uptime at which each chunk last triggered a full ghost re-stream for this session (#965), so a
     /// burst of ghosts in one chunk costs one re-stream (and one log line), not one per cell.</summary>
@@ -239,6 +275,9 @@ public sealed class PlayerSession
     /// <summary>Set once VEGA has said "no room for the Mk3 parts" this session, so the final memory fragment
     /// waits quietly instead of nagging every tick (#1104).</summary>
     public bool VegaMemoryHoldFullWarned { get; set; }
+
+    /// <summary>#2009: VEGA has pointed out an arachnid to this player (once per session — a sighting, not a nag).</summary>
+    public bool ArachnidSighted { get; set; }
     public double VegaThreatReadyAt { get; set; }
     public double VegaEvadeReadyAt { get; set; }
 
@@ -251,6 +290,17 @@ public sealed class PlayerSession
     /// <summary>The suit lamp is switched on (client-reported via <c>SetLampIntent</c>; the server only sees
     /// whether the lamp is CARRIED otherwise). Session-scoped — a rejoin starts with the lamp off, like the client.</summary>
     public bool LampOn { get; set; }
+
+    /// <summary>Zero-g construction mode on the boarded player-built station (#1842): the suit floats everywhere
+    /// on the station, not only beyond its gravity volume. Per player, session-only and deliberately never
+    /// persisted — it is cleared on leaving the station, on any world change and on disconnect, so a rejoin
+    /// always lands walking. Any boarder of a player station may set it for themselves.</summary>
+    public bool StationZeroG { get; set; }
+
+    /// <summary>Server uptime (seconds) at which <see cref="StationZeroG"/> was last switched OFF, or negative
+    /// infinity. A fall reported within the grace window after that is not a fall: the player was hovering
+    /// in zero-g when the gravity came back, and the drop to the deck is the mode's doing, not theirs.</summary>
+    public double StationZeroGOffAt { get; set; } = double.NegativeInfinity;
 
     /// <summary>Uptime before which VEGA says no further context tip (global cadence, shared with banter).</summary>
     public double VegaTipReadyAt { get; set; }
@@ -292,6 +342,13 @@ public sealed class PlayerSession
     /// favour is not asked again until the next visit, so "not today" lets the ordinary smalltalk through.</summary>
     public HashSet<string> DeclinedMissionDialogs { get; } = new(StringComparer.Ordinal);
 
+    /// <summary>The reporter who just asked this player for an interview (2026-09), 0 = none — an answer is accepted only
+    /// for them, once.</summary>
+    public int PendingInterviewNpcId { get; set; }
+
+    /// <summary>The in-game days on which a streamer already asked this player for a photo, per streamer place (2026-09).</summary>
+    public HashSet<string> StreamerAskedToday { get; } = new(StringComparer.Ordinal);
+
     /// <summary>Uptime before which the player's companions do not growl at them again (#1210).</summary>
     public double NextCompanionAlertAt { get; set; }
 
@@ -308,6 +365,13 @@ public sealed class PlayerSession
     /// <summary>Decaying "is digging right now" score: +1 per broken block, ×0.9 per second.</summary>
     public double VegaMineRecent { get; set; }
 
+    /// <summary>Localized name of the block whose tool-tier gate just turned a swing away (#1686), and the
+    /// tool that would break it. Empty until the player runs into a gate; consumed by the <c>tier_gate</c>
+    /// context tip on the next cadence slot and cleared once it has been spoken.</summary>
+    public string VegaTierGateBlock { get; set; } = string.Empty;
+
+    public string VegaTierGateTool { get; set; } = string.Empty;
+
     // --- Deferred death respawn (choice between ship and home spawn, issue #462) ---
 
     /// <summary>Server uptime deadline for a pending respawn choice; 0 = no choice pending. While pending the
@@ -319,6 +383,13 @@ public sealed class PlayerSession
     public bool PendingRespawnSalvaged { get; set; }
     public bool PendingRespawnSameWorld { get; set; }
     public string PendingRespawnReason { get; set; } = string.Empty;
+
+    /// <summary>Destination body for an automatic landed-ship transit, or null when no transit is pending.</summary>
+    public string? PendingTransitBodyId { get; set; }
+    /// <summary>Indicates whether the player is currently in an automatic transit.</summary>
+    public bool AutomaticTransit { get; set; }
+    /// <summary>Pad index reserved for an automatic landed-ship transit, or -1 when none is pending.</summary>
+    public int PendingTransitPadIndex { get; set; } = -1;
 
     // --- Bandit hold-up (a robber demands part of the inventory; comply or fight) ---
 
@@ -372,6 +443,11 @@ public sealed class PlayerSession
     /// <summary>Server uptime of the last answered LocateStationIntent (rate limit).</summary>
     public double LastStationLocateAt { get; set; } = -1;
 
+    /// <summary>Server uptime when this player was last told that a flowing quench hardens only the surface
+    /// of a lava body (#1727). A flood over a trench crusts hundreds of cells in a few ticks — one sentence
+    /// per episode, not one per block.</summary>
+    public double LastFlowQuenchTold { get; set; } = double.NegativeInfinity;
+
     // --- Temperature hazard (#666): the effective-temperature scan is ~1 Hz, the drain applies every tick ---
 
     /// <summary>Countdown to the next effective-temperature rescan (block probe + shelter check are the
@@ -385,8 +461,44 @@ public sealed class PlayerSession
     /// overheat hint pick) WHICH extreme is stressing the suit.</summary>
     public float EffectiveTemperatureC { get; set; } = 15f;
 
+    // --- Exposure meter (2026-09, Titas): scanned at ~1 Hz with the temperature, applied every tick ---
+
+    /// <summary>True while the meter runs (on foot outside on a timed-exposure type) — sent to the HUD.</summary>
+    public bool ExposureActive { get; set; }
+
+    /// <summary>The last scan found the player in a hot zone (the heat timer applies).</summary>
+    public bool ExposureHot { get; set; }
+
+    /// <summary>The last scan found a roof overhead (the meter fills at half speed).</summary>
+    public bool ExposureRoofed { get; set; }
+
+    /// <summary>The last scan found warmth: base air, a campfire, the ground far below the surface.</summary>
+    public bool ExposureSheltered { get; set; }
+
+    /// <summary>Highest VEGA warning already given this episode (0 none, 1 = 50 %, 2 = 75 %, 3 = 90 %).</summary>
+    public int ExposureWarned { get; set; }
+
+    /// <summary>Seconds the meter has stood at full — the damage rises with it.</summary>
+    public double ExposureFullSeconds { get; set; }
+
+    /// <summary>Seconds in a toxic type's water (the damage starts after a grace).</summary>
+    public double ToxicWaterSeconds { get; set; }
+
+    /// <summary>The death line of the environment hazard that hurt the player this tick (null = the generic one).</summary>
+    public string? HazardDeathReason { get; set; }
+
+    public float LastSentExposure;
+
+    // --- Valuma's mood (2026-09): time on the world, the watched line, the fog ---
+    public string MoodLocationId { get; set; } = string.Empty;
+    public double MoodSeconds { get; set; }
+    public bool MoodWatchedTold { get; set; }
+    public bool MoodUneasy { get; set; }
+
     // --- Periodic vitals sync (HUD bars froze between event-driven sends before) ---
     public double VitalsSyncTimer { get; set; }
+    // Automatic landed-ship transit (#1614): server fallback if the client never signals launch completion.
+    public double TransitLaunchTimer { get; set; }
     public float LastSentHealth = 100f;
     public float LastSentOxygen = 100f;
     public float LastSentEnergy = 100f;

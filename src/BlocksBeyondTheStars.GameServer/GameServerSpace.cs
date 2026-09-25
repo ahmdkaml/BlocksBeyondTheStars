@@ -38,24 +38,75 @@ public sealed partial class GameServer
         /// shaft on the sea floor. The chooser marks these so a player can pick a dry pad instead.</summary>
         public bool Wet;
 
-        /// <summary>The generator raises a sand islet under this pad instead of sinking it to the seabed
-        /// (#1453) — rolled per pad on ocean-class worlds, so some ocean landings still go under.</summary>
+        /// <summary>Blocks of water above a <see cref="Wet"/> pad's ground (0 when dry) — the chooser shows
+        /// it (#1622) so a 4-block wade and an 80-block shaft read differently.</summary>
+        public int Depth;
+
+        /// <summary>The generator raises an islet under this pad instead of sinking it to the seabed
+        /// (#1453/#1619): every all-water pad in water deeper than <see cref="ShallowSeabedDepth"/>, on any
+        /// world with a water sea. Only shallow water still parks the ship on the seabed.</summary>
         public bool Islet;
+
+        /// <summary>A pad planned by the pre-generation-2 rules (#1665): the longitude-only march, the rolled
+        /// ocean-world islet two blocks over the sea with the plain sand-mound shape. Saves created before the
+        /// ocean-pad wave keep these, so their pads — and the ships and bases beside them — never move.</summary>
+        public bool Classic;
+
+        /// <summary>The footprint stands in lava and no islet covers it (terrain generation 7 and older, whose pads
+        /// never move): the worldgen shear left a shaft with lava walls — "landed in the lava" (2026-09-15). Ranked
+        /// last, refused as an explicit choice while another pad is free, and a ship parked on it moves on load.</summary>
+        public bool Molten;
+
+        /// <summary>A generation-8 islet raised over lava (built from basalt, see
+        /// <see cref="BlocksBeyondTheStars.WorldGeneration.LandingPadFlatten.Molten"/>).</summary>
+        public bool LavaIslet;
     }
 
     /// <summary>How far above the sea an islet pad's surface sits (a dry beach, not a tidal flat).</summary>
-    private const int IsletRise = 2;
+    private const int IsletRise = 3;
 
-    /// <summary>Radius of the islet's beach slope around the pad — 1:1 from the pad rim down to the sea.</summary>
-    private const int IsletRadius = LandingPadRadius + 8;
+    /// <summary>The pre-generation-2 islet (#1453): two blocks over the sea, a 1:1 sand slope out to
+    /// <see cref="ClassicIsletRadius"/>. Frozen for the saves created with it (#1665).</summary>
+    private const int ClassicIsletRise = 2;
+    private const int ClassicIsletRadius = LandingPadRadius + 8;
 
-    /// <summary>Roughly three of five all-water pads on an ocean-class world get an islet; the rest keep the
-    /// seabed shaft (decision 2026-09-02: "manchmal, nicht immer"). Seeded per body + pad, never rolled at
-    /// runtime, so every player and every load sees the same coast.</summary>
-    private static bool IsletRoll(string locationId, int padIndex)
+    /// <summary>Whether the active save plans its pads by the ocean-pad rules (#1618–#1622) — only worlds created
+    /// with terrain generation 2 or later (#1665). The generator carries the save's generation from start-up.</summary>
+    private bool OceanPadRules => _generator.TerrainGeneration >= WorldDescription.OceanPadsGeneration;
+
+    /// <summary>Whether the active save plans its pads by the lava-pad rules (terrain generation 8): the full
+    /// dry-footprint test and basalt islets over lava. Older saves keep their pads and only flag lava ones.</summary>
+    private bool LavaPadRules => _generator.TerrainGeneration >= WorldDescription.LavaPadsGeneration;
+
+    /// <summary>Roughly three of five all-water pads on a classic ocean-class world get an islet; the rest keep
+    /// the seabed shaft (#1453, frozen for pre-generation-2 saves by #1665).</summary>
+    private static bool ClassicIsletRoll(string locationId, int padIndex)
         => (WorldGenerator.StableHash("islet:" + locationId + ":" + padIndex) & 0xFF) < 154;
 
+    /// <summary>Radius of the islet's level top (#1620) — wider than the reserved pad, so there is room to
+    /// walk, build and dig beside the ship.</summary>
+    private const int IsletPlateauRadius = LandingPadRadius + 4;
+
+    /// <summary>Outer radius of the islet's beach slope (2:1, one block down per two blocks out).</summary>
+    private const int IsletRadius = IsletPlateauRadius + 16;
+
+    /// <summary>The deepest water a pad may still be sunk into as a seabed shaft (#1619): a wade with daylight
+    /// above, never a well. Deeper all-water pads always get an islet, so seabed landings stay possible but
+    /// rare (decision 2026-09-05, after Marie's 88-block shaft on the school playtest).</summary>
+    private const int ShallowSeabedDepth = 8;
+
+    /// <summary>How far the pad nudge searches for dry, flat ground around the planned position (#1618),
+    /// in blocks, in BOTH X and Z. Ocean-class worlds get a larger budget: land is scarce there, and the
+    /// probe (12 seeds) found real land within reach for 92 % of the all-water pads.</summary>
+    private const int PadSearchBudget = 180;
+    private const int PadSearchBudgetOcean = 300;
+
     private List<LandingPad> _landingPads => _worlds.Active.LandingPads;
+
+    /// <summary>Pads computed per body (#1618): the 2-D nudge on an all-water pad walks tens of thousands of
+    /// columns, and the chooser asks for a remote body's pads on every approach. Deterministic per body,
+    /// so the first computation is the only one. Cleared with the galaxy (server start).</summary>
+    private readonly Dictionary<string, List<LandingPad>> _padCache = new(System.StringComparer.Ordinal);
 
     // --- deterministic pad set ---
 
@@ -115,7 +166,10 @@ public sealed partial class GameServer
         flats.Clear();
         foreach (var pad in pads)
         {
-            flats.Add(new BlocksBeyondTheStars.WorldGeneration.LandingPadFlatten(pad.CenterX, pad.CenterZ, pad.CenterY, pad.Radius, pad.Islet, IsletRadius));
+            flats.Add(pad.Classic
+                ? new BlocksBeyondTheStars.WorldGeneration.LandingPadFlatten(pad.CenterX, pad.CenterZ, pad.CenterY, pad.Radius, pad.Islet, pad.Radius, ClassicIsletRadius, classicShape: true)
+                : new BlocksBeyondTheStars.WorldGeneration.LandingPadFlatten(pad.CenterX, pad.CenterZ, pad.CenterY, pad.Radius, pad.Islet, IsletPlateauRadius, IsletRadius,
+                    molten: pad.LavaIslet));
         }
     }
 
@@ -126,6 +180,94 @@ public sealed partial class GameServer
     /// reasonably flat ground. Deterministic from the body seed. Configures the shared generator for the target
     /// body (circumference + airless-moon cratering) and restores it afterwards.</summary>
     private List<LandingPad> ComputeLandingPads(PlanetType planet, CelestialKind kind, string locationId, int circ)
+    {
+        if (_padCache.TryGetValue(locationId, out var cached))
+        {
+            return cached;
+        }
+
+        // #1989: the save remembers what the search found last time — see WorldMetadata.BodyLandingPads.
+        if (TryReadPinnedPads(locationId) is { } pinned)
+        {
+            _padCache[locationId] = pinned;
+            return pinned;
+        }
+
+        var computed = ComputeLandingPadsUncached(planet, kind, locationId, circ);
+        _padCache[locationId] = computed;
+        PinPads(locationId, computed);
+        return computed;
+    }
+
+    /// <summary>The pads this save pinned for a body (#1989), or null when it never computed them (every save
+    /// written before the pin, and every body visited for the first time). A malformed entry is ignored rather
+    /// than thrown on: the search below re-derives exactly what the entry was meant to hold.</summary>
+    private List<LandingPad>? TryReadPinnedPads(string locationId)
+    {
+        if (!_meta.BodyLandingPads.TryGetValue(locationId, out var text) || string.IsNullOrEmpty(text))
+        {
+            return null;
+        }
+
+        var pads = new List<LandingPad>();
+        foreach (var entry in text.Split(';'))
+        {
+            var f = entry.Split(',');
+            if (f.Length != 7
+                || !int.TryParse(f[0], out int index) || !int.TryParse(f[1], out int x) || !int.TryParse(f[2], out int z)
+                || !int.TryParse(f[3], out int y) || !int.TryParse(f[4], out int radius) || !int.TryParse(f[5], out int depth)
+                || !int.TryParse(f[6], out int flags))
+            {
+                _log.Warn($"Pinned landing pads of '{locationId}' are malformed — searching for them again.");
+                return null;
+            }
+
+            pads.Add(new LandingPad
+            {
+                Index = index,
+                CenterX = x,
+                CenterZ = z,
+                CenterY = y,
+                Radius = radius,
+                Depth = depth,
+                Wet = (flags & 1) != 0,
+                Islet = (flags & 2) != 0,
+                Classic = (flags & 4) != 0,
+                Molten = (flags & 8) != 0,
+                LavaIslet = (flags & 16) != 0,
+            });
+        }
+
+        return pads.Count > 0 ? pads : null;
+    }
+
+    /// <summary>Writes a body's freshly searched pads into the save (#1989) so the next load reads them back.
+    /// The metadata is persisted by the callers that already save it (world load, travel).</summary>
+    private void PinPads(string locationId, List<LandingPad> pads)
+    {
+        if (pads.Count == 0)
+        {
+            return;
+        }
+
+        var text = new System.Text.StringBuilder();
+        foreach (var pad in pads)
+        {
+            if (text.Length > 0)
+            {
+                text.Append(';');
+            }
+
+            int flags = (pad.Wet ? 1 : 0) | (pad.Islet ? 2 : 0) | (pad.Classic ? 4 : 0)
+                        | (pad.Molten ? 8 : 0) | (pad.LavaIslet ? 16 : 0);
+            text.Append(pad.Index).Append(',').Append(pad.CenterX).Append(',').Append(pad.CenterZ).Append(',')
+                .Append(pad.CenterY).Append(',').Append(pad.Radius).Append(',').Append(pad.Depth).Append(',').Append(flags);
+        }
+
+        _meta.BodyLandingPads[locationId] = text.ToString();
+    }
+
+    private List<LandingPad> ComputeLandingPadsUncached(PlanetType planet, CelestialKind kind, string locationId, int circ)
     {
         int savedCirc = _generator.Circumference;
         bool savedCratered = _generator.Cratered;
@@ -170,24 +312,27 @@ public sealed partial class GameServer
                     baseZ = (int)System.Math.Round((gz - 0.5) * 2.0 * latBand);
                 }
 
-                // March the longitude (at this pad's latitude) to the nearest dry + reasonably flat column, so
-                // a ship never lands in water (B36) or perches on a terrain spike (dramatic-terrain worlds).
-                int cx = NudgePadToDryAndFlat(planet, baseX, baseZ);
-                // Still wet after the march = an all-sea band. Ocean-class worlds (waterAbundance ≥ 1, 78–97 %
-                // water) get a rolled islet raised out of the sea (#1453); everything else keeps the seabed
-                // shaft and is flagged so the chooser can say so (#1454).
-                bool wet = LandingFootprintWet(planet, cx, baseZ);
-                int seaLevel = _generator.SeaLevel(planet);
-                bool islet = wet && seaLevel != int.MinValue && (planet.WaterAbundance ?? 0.0) >= 1.0 && IsletRoll(locationId, i);
-                pads.Add(new LandingPad
+                bool oceanClass = (planet.WaterAbundance ?? 0.0) >= 1.0;
+                if (!OceanPadRules)
                 {
-                    Index = i,
-                    CenterX = cx,
-                    CenterZ = baseZ,
-                    CenterY = islet ? seaLevel + IsletRise : PadGroundY(planet, cx, baseZ),
-                    Wet = wet && !islet,
-                    Islet = islet,
-                });
+                    // A save from before the ocean-pad wave (#1665): the longitude-only march and the rolled
+                    // ocean-world islet it was created with, so its pads stay exactly where its ships and bases
+                    // are. Pads are not persisted — the rule that re-derives them is the only thing holding
+                    // them in place.
+                    int classicX = ClassicNudgePadToDryAndFlat(planet, baseX, baseZ);
+                    var classic = DecideClassicPad(planet, locationId, i, classicX, baseZ, oceanClass);
+                    classic.Molten = !classic.Islet && FootprintLava(planet, classic.CenterX, classic.CenterZ, out _);
+                    pads.Add(classic);
+                    continue;
+                }
+
+                // Search around the planned position — longitude AND latitude (#1618) — for the nearest dry
+                // + reasonably flat column, so a ship never lands in water (B36) or perches on a terrain
+                // spike (dramatic-terrain worlds). Ocean-class worlds search further: land is scarce there.
+                var (cx, cz) = NudgePadToDryAndFlat(planet, baseX, baseZ, latBand, oceanClass ? PadSearchBudgetOcean : PadSearchBudget);
+                var decided = DecidePad(planet, i, cx, cz);
+                decided.Molten = !decided.Islet && FootprintLava(planet, cx, cz, out _);
+                pads.Add(decided);
             }
 
             return pads;
@@ -196,6 +341,169 @@ public sealed partial class GameServer
         {
             _generator.SetWorldMode(savedCirc, savedCratered, savedPads, savedLocation, savedOreBoost);
         }
+    }
+
+    /// <summary>What a pad at its final column becomes (#1619): dry ground as it is; an all-water footprint in
+    /// water deeper than <see cref="ShallowSeabedDepth"/> gets an islet raised to sea level + <see cref="IsletRise"/>
+    /// (any world whose sea is water — not lava); shallow water, ponds and lava keep the seabed shaft and are
+    /// flagged <see cref="LandingPad.Wet"/> with their depth so the chooser can say so (#1454/#1622).
+    /// The generator must be configured for the pad's body.</summary>
+    private LandingPad DecidePad(PlanetType planet, int index, int cx, int cz)
+    {
+        int groundY = PadGroundY(planet, cx, cz);
+        if (LavaPadRules && FootprintLava(planet, cx, cz, out int lavaTop))
+        {
+            // Generation 8: lava anywhere under the footprint — sea, crater, river, caldera or shield lake — gets a
+            // basalt islet over the melt, whatever its depth. A shaft cut into lava stands as molten walls until the
+            // first mined block wakes them. The plateau never sits below the natural ground median, so a pad on a
+            // shore does not carve the bank away.
+            return new LandingPad
+            {
+                Index = index,
+                CenterX = cx,
+                CenterZ = cz,
+                CenterY = System.Math.Max(lavaTop + IsletRise, groundY),
+                Islet = true,
+                LavaIslet = true,
+            };
+        }
+
+        bool wet = LandingFootprintWet(planet, cx, cz);
+        int seaLevel = _generator.SeaLevel(planet);
+        int seaDepth = wet && seaLevel != int.MinValue ? seaLevel - groundY : 0;
+        bool islet = wet && seaDepth > ShallowSeabedDepth && _generator.SeaIsWater(planet);
+        int depth = 0;
+        if (wet && !islet)
+        {
+            // A pond or river pad reports the water standing over its own ground, not the sea's.
+            depth = _generator.TryGetWaterSurface(planet, cx, cz, out int waterTop, out _)
+                ? System.Math.Max(0, waterTop - groundY)
+                : System.Math.Max(0, seaDepth);
+        }
+
+        return new LandingPad
+        {
+            Index = index,
+            CenterX = cx,
+            CenterZ = cz,
+            CenterY = islet ? seaLevel + IsletRise : groundY,
+            Wet = wet && !islet,
+            Depth = depth,
+            Islet = islet,
+        };
+    }
+
+    /// <summary>What a classic pad (pre-generation-2 save, #1665) becomes — the #1453/#1454 rule, frozen: still
+    /// wet after the march = an all-sea band; an ocean-class world rolls an islet two blocks over the sea for
+    /// roughly three pads in five, everything else keeps the seabed shaft and is flagged wet with its depth so
+    /// the chooser can say so.</summary>
+    private LandingPad DecideClassicPad(PlanetType planet, string locationId, int index, int cx, int cz, bool oceanClass)
+    {
+        bool wet = LandingFootprintWet(planet, cx, cz);
+        int seaLevel = _generator.SeaLevel(planet);
+        bool islet = wet && seaLevel != int.MinValue && oceanClass && ClassicIsletRoll(locationId, index);
+        int groundY = PadGroundY(planet, cx, cz);
+        int depth = 0;
+        if (wet && !islet)
+        {
+            depth = _generator.TryGetWaterSurface(planet, cx, cz, out int waterTop, out _)
+                ? System.Math.Max(0, waterTop - groundY)
+                : System.Math.Max(0, seaLevel != int.MinValue ? seaLevel - groundY : 0);
+        }
+
+        return new LandingPad
+        {
+            Index = index,
+            CenterX = cx,
+            CenterZ = cz,
+            CenterY = islet ? seaLevel + ClassicIsletRise : groundY,
+            Wet = wet && !islet,
+            Depth = depth,
+            Islet = islet,
+            Classic = true,
+        };
+    }
+
+    /// <summary>The pre-#1618 pad nudge, frozen for pre-generation-2 saves (#1665): marches the pad LONGITUDE
+    /// (at a fixed latitude) to the nearest column that is both dry and reasonably flat (footprint spread ≤ 5),
+    /// preferring green ground where the world offers it. Falls back to the flattest dry candidate seen, then to
+    /// the plain dry march. Byte-for-byte the rule those saves' pads were derived with.</summary>
+    private int ClassicNudgePadToDryAndFlat(PlanetType planet, int baseX, int baseZ)
+    {
+        int circ = _generator.Circumference;
+        bool seekEarthy = _generator.HasEarthySurfaceBiome(planet);
+        int bestX = ClassicNudgePadToDry(planet, baseX, baseZ);
+        int bestSpread = int.MaxValue;
+        int earthyX = int.MinValue, earthySpread = int.MaxValue;
+
+        void Consider(int x)
+        {
+            if (LandingFootprintWet(planet, x, baseZ))
+            {
+                return;
+            }
+
+            int spread = PadFootprintSpread(planet, x, baseZ);
+            if (spread < bestSpread)
+            {
+                bestSpread = spread;
+                bestX = x;
+            }
+
+            if (seekEarthy && spread < earthySpread && _generator.IsEarthySurface(planet, x, baseZ))
+            {
+                earthySpread = spread;
+                earthyX = x;
+            }
+        }
+
+        Consider(bestX);
+        if (bestSpread <= 5 && (!seekEarthy || earthyX == bestX))
+        {
+            return bestX;
+        }
+
+        for (int step = 1; step <= 60; step++)
+        {
+            foreach (int x in new[] { WorldConstants.WrapX(baseX + step * 3, circ), WorldConstants.WrapX(baseX - step * 3, circ) })
+            {
+                Consider(x);
+                if (earthySpread <= 5)
+                {
+                    return earthyX;
+                }
+            }
+        }
+
+        return earthyX != int.MinValue && earthySpread <= 10 ? earthyX : bestX;
+    }
+
+    /// <summary>The pre-#1618 dry nudge, frozen for pre-generation-2 saves (#1665): the nearest dry column along
+    /// the latitude, ±120 blocks in steps of 3; the planned column itself on an all-ocean band.</summary>
+    private int ClassicNudgePadToDry(PlanetType planet, int baseX, int baseZ)
+    {
+        int circ = _generator.Circumference;
+        if (!LandingFootprintWet(planet, baseX, baseZ))
+        {
+            return baseX;
+        }
+
+        for (int step = 1; step <= 40; step++)
+        {
+            int xp = WorldConstants.WrapX(baseX + step * 3, circ);
+            if (!LandingFootprintWet(planet, xp, baseZ))
+            {
+                return xp;
+            }
+
+            int xm = WorldConstants.WrapX(baseX - step * 3, circ);
+            if (!LandingFootprintWet(planet, xm, baseZ))
+            {
+                return xm;
+            }
+        }
+
+        return baseX;
     }
 
     /// <summary>The pad/ship ground height on the ACTIVE world: the MEDIAN surface height over the landing
@@ -276,101 +584,133 @@ public sealed partial class GameServer
     }
 
     /// <summary>Height spread over the landing footprint — small = flat enough to set a ship down on.</summary>
-    private int PadFootprintSpread(PlanetType planet, int cx, int cz)
+    /// <summary>The nine columns a pad's flatness is measured over — a static set, because the ring search
+    /// asks for tens of thousands of candidates and allocating this array per call was pure garbage (#1989).</summary>
+    private static readonly (int Dx, int Dz)[] PadSpreadSamples =
     {
-        const int r = 4;
+        (0, 0), (-4, -4), (4, -4), (-4, 4), (4, 4), (-4, 0), (4, 0), (0, -4), (0, 4),
+    };
+
+    private int PadFootprintSpread(PlanetType planet, int cx, int cz, int cutoff = int.MaxValue)
+    {
         int min = int.MaxValue, max = int.MinValue;
-        foreach (var (dx, dz) in new[] { (0, 0), (-r, -r), (r, -r), (-r, r), (r, r), (-r, 0), (r, 0), (0, -r), (0, r) })
+        foreach (var (dx, dz) in PadSpreadSamples)
         {
             int y = _generator.SurfaceHeight(planet, cx + dx, cz + dz);
             min = System.Math.Min(min, y);
             max = System.Math.Max(max, y);
+
+            // #1989: once this candidate is already rougher than the best one found, the remaining samples
+            // cannot change the outcome — every caller only ever asks "is this spread SMALLER". Stopping here
+            // returns a value that is still ≥ cutoff, so the decision is bit-for-bit the one it was before.
+            if (max - min >= cutoff)
+            {
+                return max - min;
+            }
         }
 
         return max - min;
     }
 
-    /// <summary>Marches a pad longitude (at a fixed latitude) to the nearest column that is both DRY and
-    /// reasonably FLAT (footprint spread ≤ 5). Falls back to the flattest dry candidate seen, then to the dry
-    /// nudge. Uses the generator's currently-configured circumference for the wrap.</summary>
-    private int NudgePadToDryAndFlat(PlanetType planet, int baseX, int baseZ)
+    /// <summary>Moves a pad from its planned column to the nearest column that is both DRY and reasonably
+    /// FLAT (footprint spread ≤ 5), searching outward in rings over X AND Z (#1618; step 3, up to
+    /// <paramref name="budget"/> blocks, |Z| kept inside <paramref name="latBand"/>). Falls back to the
+    /// flattest dry candidate seen, then to the nearest dry one, then to the planned column itself (an
+    /// all-sea neighbourhood — the caller sinks or islets it). Uses the generator's currently-configured
+    /// circumference for the wrap. Deterministic: fixed ring order, no randomness.</summary>
+    private (int X, int Z) NudgePadToDryAndFlat(PlanetType planet, int baseX, int baseZ, int latBand, int budget)
     {
         int circ = _generator.Circumference;
-        // Prefer WELCOMING ground: on worlds that have grass/dirt biomes at all, keep marching for a green
+        // Prefer WELCOMING ground: on worlds that have grass/dirt biomes at all, keep searching for a green
         // column instead of settling on the first flat one — since the altitude-biome pass, "flat + dry"
         // is often the mud marsh just above the sea, where a new player's first dig finds no visible
         // topsoil ore windows (user playtest 2026-07-26). Preference only: a desert world, or a world
-        // whose whole equator band is marsh, still gets the flattest dry spot as before.
+        // whose whole neighbourhood is marsh, still gets the flattest dry spot as before.
         bool seekEarthy = _generator.HasEarthySurfaceBiome(planet);
-        int bestX = NudgePadToDry(planet, baseX, baseZ);
-        int bestSpread = int.MaxValue;
-        int earthyX = int.MinValue, earthySpread = int.MaxValue;
+        int bestX = baseX, bestZ = baseZ, bestSpread = int.MaxValue;
+        int earthyX = int.MinValue, earthyZ = 0, earthySpread = int.MaxValue;
+        bool anyDry = false;
 
-        void Consider(int x)
+        void Consider(int x, int z)
         {
-            if (LandingFootprintWet(planet, x, baseZ))
+            if (LandingFootprintWet(planet, x, z))
             {
                 return;
             }
 
-            int spread = PadFootprintSpread(planet, x, baseZ);
+            anyDry = true;
+            // #1989: the flatness scan may stop as soon as this candidate is rougher than everything kept so far.
+            int cutoff = seekEarthy ? System.Math.Max(bestSpread, earthySpread) : bestSpread;
+            int spread = PadFootprintSpread(planet, x, z, cutoff);
             if (spread < bestSpread)
             {
                 bestSpread = spread;
                 bestX = x;
+                bestZ = z;
             }
 
-            if (seekEarthy && spread < earthySpread && _generator.IsEarthySurface(planet, x, baseZ))
+            if (seekEarthy && spread < earthySpread && _generator.IsEarthySurface(planet, x, z))
             {
                 earthySpread = spread;
                 earthyX = x;
+                earthyZ = z;
             }
         }
 
-        Consider(bestX);
-        if (bestSpread <= 5 && (!seekEarthy || earthyX == bestX))
+        Consider(baseX, baseZ);
+        if (anyDry && bestSpread <= 5 && (!seekEarthy || earthyX == bestX))
         {
-            return bestX; // already flat + dry (+ green where the world offers green)
+            return (bestX, bestZ); // already flat + dry (+ green where the world offers green)
         }
 
-        // ±180 blocks (was ±120): biome regions are broad, so the nearest green column regularly sits just
-        // beyond the old march (measured 138 on the 2026-07-26 playtest world).
-        for (int step = 1; step <= 60; step++)
+        // Rings of step 3 (the old ±180 X march found its green column at 138 on the 2026-07-26 playtest
+        // world; the 2-D probe of 2026-09-05 found land within 30–90 blocks for most all-water pads).
+        // Cells on a ring are visited east/west first, then the rest of the perimeter, so a tie between
+        // equidistant land keeps the pad on its planned latitude where possible.
+        int rings = budget / 3;
+        for (int ring = 1; ring <= rings; ring++)
         {
-            foreach (int x in new[] { WorldConstants.WrapX(baseX + step * 3, circ), WorldConstants.WrapX(baseX - step * 3, circ) })
+            for (int dz = -ring; dz <= ring; dz++)
             {
-                Consider(x);
+                int z = baseZ + dz * 3;
+                if (System.Math.Abs(z) > latBand && latBand > 0)
+                {
+                    continue; // keep the pad inside the navigable latitude band (map + wrap safety)
+                }
+
+                if (latBand == 0 && dz != 0)
+                {
+                    continue;
+                }
+
+                if (dz == -ring || dz == ring)
+                {
+                    for (int dx = -ring; dx <= ring; dx++)
+                    {
+                        Consider(WorldConstants.WrapX(baseX + dx * 3, circ), z);
+                    }
+                }
+                else
+                {
+                    Consider(WorldConstants.WrapX(baseX + ring * 3, circ), z);
+                    Consider(WorldConstants.WrapX(baseX - ring * 3, circ), z);
+                }
+
                 if (earthySpread <= 5)
                 {
-                    return earthyX; // green + flat + dry — done
+                    return (earthyX, earthyZ); // green + flat + dry — done
                 }
+            }
+
+            if (!seekEarthy && bestSpread <= 5)
+            {
+                return (bestX, bestZ); // flat + dry on a world without green — done
             }
         }
 
-        // Green ground wins while it is still reasonably level; else the flattest dry spot found.
-        return earthyX != int.MinValue && earthySpread <= 10 ? earthyX : bestX;
-    }
-
-    /// <summary>Nudges a pad longitude (at a fixed latitude) to the nearest dry column (deterministic
-    /// out-stepping), so the ship never lands in a sea or upland pond (B36). Returns the original X on an
-    /// all-ocean band (seabed pad fallback — the cabin floor is a dry platform anyway).</summary>
-    private int NudgePadToDry(PlanetType planet, int baseX, int baseZ)
-    {
-        int circ = _generator.Circumference;
-        if (!LandingFootprintWet(planet, baseX, baseZ))
-        {
-            return baseX;
-        }
-
-        for (int step = 1; step <= 40; step++)
-        {
-            int xp = WorldConstants.WrapX(baseX + step * 3, circ);
-            if (!LandingFootprintWet(planet, xp, baseZ)) { return xp; }
-            int xm = WorldConstants.WrapX(baseX - step * 3, circ);
-            if (!LandingFootprintWet(planet, xm, baseZ)) { return xm; }
-        }
-
-        return baseX;
+        // Green ground wins while it is still reasonably level; else the flattest dry spot found; else the
+        // planned column (all sea within the budget).
+        return earthyX != int.MinValue && earthySpread <= 10 ? (earthyX, earthyZ) : (bestX, bestZ);
     }
 
     /// <summary>True if the pad (its centre or any radius edge) sits over surface water/lava on the ACTIVE
@@ -381,9 +721,63 @@ public sealed partial class GameServer
     /// circumference) — so a ship never touches down in a sea or pond, on any body (B36/B54).</summary>
     private bool LandingFootprintWet(PlanetType planet, int cx, int cz)
     {
+        if (LavaPadRules)
+        {
+            return LandingFootprintWetGen8(planet, cx, cz);
+        }
+
         int r = LandingPadRadius;
         bool Wet(int x, int z) => _generator.IsSurfaceWater(planet, x, z) || _generator.IsSurfaceLava(planet, x, z);
         return Wet(cx, cz) || Wet(cx - r, cz) || Wet(cx + r, cz) || Wet(cx, cz - r) || Wet(cx, cz + r);
+    }
+
+    /// <summary>The footprint samples of the generation-8 pad tests: the centre, the four rim points, four diagonal rim
+    /// points and four points halfway out — a lava river or a small caldera lake passes between the old five.</summary>
+    private static readonly (int Dx, int Dz)[] PadFootprintSamples =
+    {
+        (0, 0),
+        (LandingPadRadius, 0), (-LandingPadRadius, 0), (0, LandingPadRadius), (0, -LandingPadRadius),
+        (6, 6), (-6, 6), (6, -6), (-6, -6),
+        (4, 0), (-4, 0), (0, 4), (0, -4),
+    };
+
+    /// <summary>Generation-8 dry test (2026-09): wet if ANY footprint sample stands in a body of water or lava the
+    /// generator makes — the seas and craters of the old test plus rivers, generation-1 lakes and every lava lake or
+    /// flow (<see cref="WorldGenerator.TryGetLavaSurface"/>). Short-circuits on the first wet sample.</summary>
+    private bool LandingFootprintWetGen8(PlanetType planet, int cx, int cz)
+    {
+        int circ = _generator.Circumference;
+        foreach (var (dx, dz) in PadFootprintSamples)
+        {
+            int x = WorldConstants.WrapX(cx + dx, circ);
+            int z = cz + dz;
+            if (_generator.IsSurfaceWater(planet, x, z)
+                || _generator.SurfaceGen1WaterDepth(planet, x, z) > 0
+                || _generator.TryGetLavaSurface(planet, x, z, out _, out _))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>True if lava stands anywhere under a pad footprint (every lava body the generator makes), with the
+    /// highest melt surface found. Used on every generation: generation 8 raises a basalt islet to it, older saves
+    /// only flag the pad <see cref="LandingPad.Molten"/>. The generator must be configured for the pad's body.</summary>
+    private bool FootprintLava(PlanetType planet, int cx, int cz, out int lavaTop)
+    {
+        lavaTop = int.MinValue;
+        int circ = _generator.Circumference;
+        foreach (var (dx, dz) in PadFootprintSamples)
+        {
+            if (_generator.TryGetLavaSurface(planet, WorldConstants.WrapX(cx + dx, circ), cz + dz, out int top, out _))
+            {
+                lavaTop = System.Math.Max(lavaTop, top);
+            }
+        }
+
+        return lavaTop != int.MinValue;
     }
 
     // --- live occupancy (derived from sessions, never persisted) ---
@@ -418,7 +812,8 @@ public sealed partial class GameServer
         return false;
     }
 
-    /// <summary>The lowest free pad index on a body, or -1 if every pad is currently taken (the body is full).</summary>
+    /// <summary>The lowest free pad index on a body, or -1 if every pad is currently taken (the body is full).
+    /// The plain rule — NPC traders use it. Players go through <see cref="PreferredFreePadIndex"/>.</summary>
     private int FirstFreePadIndex(string locationId, int total, string exceptPlayerId)
     {
         for (int i = 0; i < total; i++)
@@ -430,6 +825,71 @@ public sealed partial class GameServer
         }
 
         return -1;
+    }
+
+    /// <summary>The free pad a PLAYER gets when they do not choose one (#1621) — first spawn, the safety-net
+    /// assignment and an auto landing: natural dry ground first, then an islet, a seabed shaft last; ties by
+    /// index, so pad 0 stays the home touchdown whenever it is dry. -1 when the body is full.</summary>
+    private int PreferredFreePadIndex(string locationId, IReadOnlyList<LandingPad> pads, string exceptPlayerId)
+    {
+        int best = -1, bestRank = int.MaxValue;
+        for (int i = 0; i < pads.Count; i++)
+        {
+            if (PadOccupiedByOther(locationId, pads[i].Index, exceptPlayerId))
+            {
+                continue;
+            }
+
+            int rank = PadRank(pads[i]);
+            if (rank < bestRank)
+            {
+                bestRank = rank;
+                best = pads[i].Index;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>Test/diagnostic: the landing pad a player currently holds (-1 when they hold none).</summary>
+    public int AssignedPadForTest(string playerId)
+        => FindSessionByPlayerId(playerId)?.AssignedPadIndex ?? -1;
+
+    /// <summary>0 = natural dry ground, 1 = generated islet, 2 = seabed shaft, 3 = a shaft in lava (old saves).</summary>
+    private static int PadRank(LandingPad pad) => pad.Molten ? 3 : pad.Wet ? 2 : pad.Islet ? 1 : 0;
+
+    /// <summary>
+    /// Every pad index of the active world in the order a player would like it (#1678): free before reserved,
+    /// then dry ground before an islet before a seabed shaft, then by index so pad 0 stays the home touchdown.
+    /// Unlike <see cref="PreferredFreePadIndex"/> this never returns "none" — the caller re-homing a hull off an
+    /// occupied footprint needs a full fallback order, and its own footprint test has the final say (the pad
+    /// bookkeeping being wrong is exactly the situation it is recovering from).
+    /// </summary>
+    private List<LandingPad> PadsByPreference(string locationId, IReadOnlyList<LandingPad> pads, string exceptPlayerId)
+    {
+        var order = new List<LandingPad>(pads);
+        order.Sort((a, b) =>
+        {
+            int ra = PadOccupiedByOther(locationId, a.Index, exceptPlayerId) ? 1 : 0;
+            int rb = PadOccupiedByOther(locationId, b.Index, exceptPlayerId) ? 1 : 0;
+            return ra != rb ? ra - rb
+                : PadRank(a) != PadRank(b) ? PadRank(a) - PadRank(b)
+                : a.Index - b.Index;
+        });
+        return order;
+    }
+
+    /// <summary>A body's pads: the active world's set, or the deterministic (cached) computation for a body
+    /// that is not loaded — the auto-landing preference needs the Wet/Islet flags before the world exists.</summary>
+    private IReadOnlyList<LandingPad> PadsForBody(string locationId)
+    {
+        if (_world != null && string.Equals(locationId, _world.LocationId, System.StringComparison.Ordinal) && _landingPads.Count > 0)
+        {
+            return _landingPads;
+        }
+
+        var body = _galaxy?.FindBody(locationId);
+        return body != null ? ComputeLandingPadsForBody(body) : System.Array.Empty<LandingPad>();
     }
 
     /// <summary>How many of a body's pads are currently free (live occupancy). <paramref name="exceptPlayerId"/>
@@ -514,10 +974,27 @@ public sealed partial class GameServer
                 return -1;
             }
 
+            // A pad standing in lava (old saves) is only taken when nothing better is free.
+            var known = PadsForBody(locationId);
+            if (known.Count == total && known[requestedIndex].Molten)
+            {
+                int better = PreferredFreePadIndex(locationId, known, session.State.PlayerId);
+                if (better >= 0 && !known[better].Molten)
+                {
+                    reason = "@srv.land.pad_lava";
+                    return -1;
+                }
+            }
+
             return requestedIndex;
         }
 
-        int free = FirstFreePadIndex(locationId, total, session.State.PlayerId);
+        // An auto request prefers dry ground over an islet over the seabed (#1621); a body whose pads could
+        // not be computed (no galaxy body) falls back to the plain lowest-free rule.
+        var pads = PadsForBody(locationId);
+        int free = pads.Count == total
+            ? PreferredFreePadIndex(locationId, pads, session.State.PlayerId)
+            : FirstFreePadIndex(locationId, total, session.State.PlayerId);
         if (free < 0)
         {
             reason = "@srv.land.full";
@@ -541,7 +1018,7 @@ public sealed partial class GameServer
         if (idx < 0 || idx >= _landingPads.Count
             || PadOccupiedByOther(_world.LocationId, idx, session.State.PlayerId))
         {
-            idx = FirstFreePadIndex(_world.LocationId, _landingPads.Count, session.State.PlayerId);
+            idx = PreferredFreePadIndex(_world.LocationId, _landingPads, session.State.PlayerId); // dry first (#1621)
             if (idx < 0)
             {
                 idx = 0; // overflow: the body is full but an initial spawn must still place the player
@@ -666,6 +1143,8 @@ public sealed partial class GameServer
             pads[i].X = p.CenterX;
             pads[i].Z = p.CenterZ;
             pads[i].Wet = p.Wet;
+            pads[i].Depth = p.Depth;
+            pads[i].Lava = p.Molten;
         }
 
         // This is the active body, so its day fraction is live (drives the world-map terminator client-side).
@@ -760,6 +1239,8 @@ public sealed partial class GameServer
             pads[i].X = p.CenterX;
             pads[i].Z = p.CenterZ;
             pads[i].Wet = p.Wet; // seabed pad (#1454) — the chooser says so before the player commits
+            pads[i].Depth = p.Depth; // …and how deep (#1622)
+            pads[i].Lava = p.Molten; // a pad standing in lava (old saves) — red, and only taken when nothing else is free
         }
 
         Send(session, new LandingPadList { BodyId = requestedId, Pads = pads, TimeOfDay = BodyArrivalTimeOfDay(body.Id) });
@@ -809,8 +1290,42 @@ public sealed partial class GameServer
     /// <summary>Test hook: the active world's sea level (int.MinValue on a dry world).</summary>
     public int SeaLevelForTest() => _generator.SeaLevel(_world.Planet);
 
-    /// <summary>Test hook: a pad's centre, levelled ground height and its seabed/islet flags (#1453/#1454).</summary>
-    public (int X, int Y, int Z, bool Wet, bool Islet) LandingPadInfoForTest(int index)
+    /// <summary>Test hook: the 2-D dry-and-flat nudge from a planned column on the active world (#1618) —
+    /// where the pad would end up, and whether that footprint is dry.</summary>
+    public (int X, int Z, bool Dry) NudgePadForTest(int baseX, int baseZ, int budget)
+    {
+        int latP = WorldConstants.LatitudePeriodFor(_world.Circumference);
+        int latBand = System.Math.Max(0, System.Math.Min((int)(latP * 0.38), latP / 2 - LandingPadRadius - 8));
+        var (x, z) = NudgePadToDryAndFlat(_world.Planet, baseX, baseZ, latBand, budget);
+        return (x, z, !LandingFootprintWet(_world.Planet, x, z));
+    }
+
+    /// <summary>Test hook: the player pad preference (#1621) over synthetic pads (wet, islet) with the given
+    /// occupied indices — dry &gt; islet &gt; seabed, ties by index.</summary>
+    public static int PreferredPadIndexForTest(IReadOnlyList<(bool Wet, bool Islet)> pads, IReadOnlyCollection<int> occupied)
+    {
+        int best = -1, bestRank = int.MaxValue;
+        for (int i = 0; i < pads.Count; i++)
+        {
+            if (occupied.Contains(i))
+            {
+                continue;
+            }
+
+            int rank = PadRank(new LandingPad { Index = i, Wet = pads[i].Wet, Islet = pads[i].Islet });
+            if (rank < bestRank)
+            {
+                bestRank = rank;
+                best = i;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>Test hook: a pad's centre, levelled ground height and its seabed/islet flags (#1453/#1454)
+    /// plus the water depth over a seabed pad (#1622).</summary>
+    public (int X, int Y, int Z, bool Wet, bool Islet, int Depth) LandingPadInfoForTest(int index)
     {
         if (_landingPads.Count == 0)
         {
@@ -818,7 +1333,42 @@ public sealed partial class GameServer
         }
 
         var pad = _landingPads[index];
-        return (pad.CenterX, pad.CenterY, pad.CenterZ, pad.Wet, pad.Islet);
+        return (pad.CenterX, pad.CenterY, pad.CenterZ, pad.Wet, pad.Islet, pad.Depth);
+    }
+
+    /// <summary>Test hook: a pad's lava flags — standing in lava (<see cref="LandingPad.Molten"/>) and a generation-8
+    /// basalt islet (<see cref="LandingPad.LavaIslet"/>).</summary>
+    public (bool Molten, bool LavaIslet) LandingPadLavaForTest(int index)
+    {
+        if (_landingPads.Count == 0)
+        {
+            BuildLandingPads();
+        }
+
+        var pad = _landingPads[index];
+        return (pad.Molten, pad.LavaIslet);
+    }
+
+    /// <summary>Test hook: the player pad preference over synthetic pads including lava pads — molten ranks last.</summary>
+    public static int PreferredPadIndexWithLavaForTest(IReadOnlyList<(bool Wet, bool Islet, bool Molten)> pads, IReadOnlyCollection<int> occupied)
+    {
+        int best = -1, bestRank = int.MaxValue;
+        for (int i = 0; i < pads.Count; i++)
+        {
+            if (occupied.Contains(i))
+            {
+                continue;
+            }
+
+            int rank = PadRank(new LandingPad { Index = i, Wet = pads[i].Wet, Islet = pads[i].Islet, Molten = pads[i].Molten });
+            if (rank < bestRank)
+            {
+                bestRank = rank;
+                best = i;
+            }
+        }
+
+        return best;
     }
 
     /// <summary>Test hook: true if the active world's pad at this index sits on dry land (B36).</summary>

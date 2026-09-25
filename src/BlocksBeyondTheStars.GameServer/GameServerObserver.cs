@@ -56,7 +56,8 @@ public sealed partial class GameServer
         MoveIntent or SelectHotbarIntent or ChatIntent or AdminCommandIntent or BumpReport => true,
         MineBlockIntent => true, // moderation: remove an offensive build (logged via CheatLog)
         RequestStarMap or RequestMissions or RequestCompanionsIntent or RequestLandingPadsIntent => true,
-        SetAppearanceIntent or SetFaceIntent or SetBodyPaintIntent => true, // cosmetic, and never broadcast while spectating anyway
+        FarTerrainTileRequest => true, // read-only: the observer's far view (#1821)
+        SetAppearanceIntent or SetFaceIntent or SetBodyPaintIntent or SetToolLookIntent => true, // cosmetic, and never broadcast while spectating anyway
         _ => false,
     };
 

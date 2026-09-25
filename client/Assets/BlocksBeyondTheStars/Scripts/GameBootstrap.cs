@@ -19,7 +19,7 @@ namespace BlocksBeyondTheStars.Client
     /// incoming chunk/state messages into the rendered world. Attach to a single GameObject
     /// in the scene and assign a material for chunk meshes.
     /// </summary>
-    public sealed class GameBootstrap : MonoBehaviour
+    public sealed partial class GameBootstrap : MonoBehaviour
     {
         [Header("Connection")]
         public string Host = "127.0.0.1";
@@ -108,6 +108,26 @@ namespace BlocksBeyondTheStars.Client
         public ClientWorld World { get; private set; }
         public BlockTextureAtlas Atlas { get; private set; }
 
+        private WaterProbe _waterProbe;
+
+        /// <summary>True when the cell holding <paramref name="point"/> is under water — plain water, or a plant, ladder
+        /// or building form the water surrounds (#1902). The underwater wash, the audio muffle and swimming all ask
+        /// this, with the same rule as the server's oxygen drain.</summary>
+        public bool IsWaterAt(Vector3 point)
+        {
+            if (World == null || Content == null)
+            {
+                return false;
+            }
+
+            if (_waterProbe == null || !_waterProbe.IsFor(World, Content))
+            {
+                _waterProbe = new WaterProbe(World, Content);
+            }
+
+            return _waterProbe.IsWet(Mathf.FloorToInt(point.x), Mathf.FloorToInt(point.y), Mathf.FloorToInt(point.z));
+        }
+
         /// <summary>Runtime atlas of player-painted block designs (#819) — fed from the server's design
         /// registry (join list + live additions/wipes); the mesher samples it via a thread-safe snapshot.</summary>
         public PaintDesignAtlas PaintAtlas { get; private set; }
@@ -124,6 +144,14 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>True while the suit's climate control is fighting extreme heat/cold/vacuum (#666) —
         /// the HUD colors the energy bar and names the drain; server-authoritative.</summary>
         public bool SuitClimateActive { get; private set; }
+
+        /// <summary>The exposure meter 0..1 (2026-09, Titas) and whether it is running / counting heat — server-authoritative.</summary>
+        public float Exposure { get; private set; }
+        public bool ExposureActive { get; private set; }
+        public bool ExposureHot { get; private set; }
+
+        /// <summary>Valuma's mood (2026-09): the music darkens after a long stay — server-authoritative.</summary>
+        public bool Uneasy { get; private set; }
 
         /// <summary>Which life support keeps us breathing (#794): 0 none (own tank / the world's air),
         /// 1 ship cabin, 2 station, 3 base (zone cube or sealed room). Server-authoritative — the client
@@ -156,6 +184,10 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>Whether this save was created with continents (#704, from JoinAccepted) — the local
         /// preview generators (minimap/orbit bakes) must apply the same gate as the server.</summary>
         public bool TerrainContinents { get; private set; }
+
+        /// <summary>The terrain generation this save was created with (#1644, from JoinAccepted) — the local
+        /// preview generators apply it like <see cref="TerrainContinents"/>.</summary>
+        public int TerrainGeneration { get; private set; }
         private System.Collections.Generic.Dictionary<ushort, Color> _floraTintByBlock;
 
         /// <summary>Total seconds this world has been played (from JoinAccepted, server-accumulated). The live
@@ -219,8 +251,8 @@ namespace BlocksBeyondTheStars.Client
                 // trunk (wood_log) rolls its own DARK per-world bark hue (ForWood) so it always reads clearly
                 // darker than the leaves it carries, never the same colour.
                 bool isLeaf = def.Key.StartsWith("flora_", System.StringComparison.Ordinal)
-                    || def.Key == "tree_leaves" || def.Key == "pine_needles" || def.Key == "palm_frond";
-                bool isWood = def.Key == "wood_log";
+                    || def.Key == "tree_leaves" || def.Key == "pine_needles" || def.Key == "palm_frond" || def.Key == "giant_leaves";
+                bool isWood = def.Key == "wood_log" || def.Key == "giant_log";
                 if (!isLeaf && !isWood)
                 {
                     continue;
@@ -243,6 +275,52 @@ namespace BlocksBeyondTheStars.Client
             }
 
             _floraTintByBlock = map;
+            ChunkMesher.LinearColorSpace = QualitySettings.activeColorSpace == ColorSpace.Linear; // main thread: the mesher may run on a worker
+            RebuildPlantLights();
+        }
+
+        /// <summary>Generation 11: the glowing plants that light their surroundings (<c>FloraCatalog.Species.Light</c>)
+        /// cast a dim version of their own colour — this world's colour of the species, or the plant's own cell colour
+        /// for the rainbow class. Registered with the light-source index before the world's chunks arrive.</summary>
+        private void RebuildPlantLights()
+        {
+            if (World == null || Content == null)
+            {
+                return;
+            }
+
+            var lightById = new System.Collections.Generic.Dictionary<ushort, int>();
+            var rainbowStrength = new System.Collections.Generic.Dictionary<ushort, float>();
+            foreach (var sp in BlocksBeyondTheStars.Shared.Definitions.FloraCatalog.All)
+            {
+                if (sp.Light <= 0f || sp.Cultivated || Content.GetBlock(sp.Key) is not { } def)
+                {
+                    continue;
+                }
+
+                if (sp.Rainbow)
+                {
+                    rainbowStrength[def.NumericId.Value] = sp.Light;
+                }
+                else
+                {
+                    lightById[def.NumericId.Value] = FloraTints.ToRgb24(FloraTints.For(_worldSeed, LocationName, sp.Key), sp.Light);
+                }
+            }
+
+            var ids = new System.Collections.Generic.List<ushort>(lightById.Keys);
+            ids.AddRange(rainbowStrength.Keys);
+            World.SetCellLightResolver((id, pos) =>
+            {
+                if (lightById.TryGetValue(id, out int rgb))
+                {
+                    return rgb;
+                }
+
+                return rainbowStrength.TryGetValue(id, out float strength)
+                    ? FloraTints.ToRgb24(FloraTints.RainbowAt(pos.X, pos.Y, pos.Z), strength)
+                    : 0;
+            }, ids);
         }
 
         /// <summary>The mesher's tint lookup: a flora block's per-world colour, black (= "use the global
@@ -258,6 +336,11 @@ namespace BlocksBeyondTheStars.Client
         /// fall — <see cref="PlayerController"/> drops gravity. Groundwork for item 10 (building a structure up
         /// into space); nothing sets it yet, so it's a no-op until that lands.</summary>
         public bool OnFootInSpace { get; set; }
+
+        /// <summary>Zero-g construction mode on the boarded player station (#1842), server-authoritative and
+        /// session-only. While set, <see cref="OnFootInSpace"/> is a chosen float rather than a drift over the
+        /// deck's edge: the HUD shows a badge and the toggle hints instead of the atmosphere wording.</summary>
+        public bool StationZeroG { get; private set; }
 
         /// <summary>Fleet-admin observer mode (issue #487), server-authoritative. The controller switches to
         /// free flight without collision, the HUD hides the hotbar/viewmodel and shows the SPECTATOR badge.
@@ -463,6 +546,13 @@ namespace BlocksBeyondTheStars.Client
         /// Replaced wholesale by every <see cref="MarkerList"/>; cleared on a world switch.</summary>
         public NetMarker[] Markers { get; private set; } = System.Array.Empty<NetMarker>();
 
+        /// <summary>This player's own notes (#1844), newest first. Replaced wholesale by every <see cref="NoteList"/>.</summary>
+        public NetNote[] Notes { get; private set; } = System.Array.Empty<NetNote>();
+
+        /// <summary>Bumped on every <see cref="NoteList"/> — the menu hashes THIS (plus the count) instead of the
+        /// note text, so the open editor is only rebuilt when the server actually answered a save/delete.</summary>
+        public int NotesVersion { get; private set; }
+
         /// <summary>This player's tamed-creature roster, for the Companions menu tab. Refreshed by the server.</summary>
         public CompanionList Companions { get; private set; } = new CompanionList();
 
@@ -614,6 +704,7 @@ namespace BlocksBeyondTheStars.Client
         }
         public bool InSpace { get; private set; }
         public bool SpaceSkipLaunch { get; private set; }    // entered space already airborne (helm) → no take-off anim
+        public bool SpaceAutomaticTransit { get; private set; } // #1614: this flight is an automatic landed-ship transit (launch → signal → landing)
         public NetCombatEntity[] PlanetEnemies { get; private set; } = System.Array.Empty<NetCombatEntity>();
 
         // --- Crosshair enemy aiming (#693): published by PlayerController every frame ---
@@ -632,6 +723,9 @@ namespace BlocksBeyondTheStars.Client
 
         /// <summary>Live procedural creatures near the player (fauna), with their species descriptor.</summary>
         public NetCreature[] Creatures { get; private set; } = System.Array.Empty<NetCreature>();
+
+        /// <summary>#1998: world effects (thumps, stomps, breaches) waiting for the creature view to play them.</summary>
+        public readonly System.Collections.Generic.List<WorldFx> PendingWorldFx = new System.Collections.Generic.List<WorldFx>();
 
         /// <summary>Settlement / station NPCs (vendors, quartermasters, settlers) near the player.</summary>
         public NetNpc[] Npcs { get; private set; } = System.Array.Empty<NetNpc>();
@@ -705,7 +799,7 @@ namespace BlocksBeyondTheStars.Client
 
         private void ApplyCaptureEnv(WorldEnvironment env)
         {
-            env.TimeOfDay = Mathf.Repeat(_captureLocalTime - PlayerPosition.x / Circumference, 1f);
+            env.TimeOfDay = Mathf.Repeat(_captureLocalTime - (string.IsNullOrEmpty(StationName) ? PlayerPosition.x / Circumference : 0f), 1f); // #1869: no longitude aboard a station
             env.Weather = "clear";
             env.Precipitation = "none";
             env.Intensity = 0f;
@@ -765,9 +859,12 @@ namespace BlocksBeyondTheStars.Client
 
         /// <summary>Time-of-day at the player's position — the server's global day fraction shifted by the
         /// player's longitude (world X), wrapped to 0..1. Drives the sky + HUD clock, so two players at
-        /// different X see different times (one's day side, the other's night side).</summary>
+        /// different X see different times (one's day side, the other's night side). Aboard a station there is no
+        /// longitude (#1869): the station clock is the local clock, the same one its crew sleeps by and its deck lights
+        /// dim to — walking across the deck no longer moves the HUD clock.</summary>
         public float LocalTimeOfDay
-            => Mathf.Repeat((Environment != null ? Environment.TimeOfDay : 0.5f) + PlayerPosition.x / Circumference, 1f);
+            => Mathf.Repeat((Environment != null ? Environment.TimeOfDay : 0.5f)
+                            + (string.IsNullOrEmpty(StationName) ? PlayerPosition.x / Circumference : 0f), 1f);
 
         /// <summary>
         /// Maps an authoritative (canonical) world X to the Unity scene X nearest the player. World-X is a
@@ -798,6 +895,13 @@ namespace BlocksBeyondTheStars.Client
         /// before that the ledger never left the server, so a scan left no permanent record in the UI.</summary>
         public readonly System.Collections.Generic.Dictionary<string, string> Discoveries
             = new System.Collections.Generic.Dictionary<string, string>();
+
+        /// <summary>Where each discovery was made (#1843): ledger key → (body name, system name) as the server
+        /// recorded them at scan time. Entries without a known site — scanned before the game recorded sites,
+        /// or somewhere the galaxy cannot place — are simply absent, and the Codex shows no location line for
+        /// them. Cleared together with <see cref="Discoveries"/> on the join snapshot.</summary>
+        public readonly System.Collections.Generic.Dictionary<string, (string Body, string System)> DiscoveryWhere
+            = new System.Collections.Generic.Dictionary<string, (string Body, string System)>();
 
         /// <summary>Persisted explored-map cells per body (#1113), as the server sent them on arrival —
         /// the planet map draws these as "remembered" ground under its live fog. Keyed by body id so an
@@ -1109,8 +1213,38 @@ namespace BlocksBeyondTheStars.Client
         /// the loading veil times out, with no hint anything went wrong (#409).</summary>
         public string ConnectFailedReason { get; private set; } = string.Empty;
 
-        /// <summary>Last server feedback line (craft result / rejection / message) for a HUD toast.</summary>
-        public string LastMessage { get; private set; } = string.Empty;
+        /// <summary>Last server feedback line (craft result / rejection / message) for a HUD toast. Every
+        /// assignment bumps <see cref="LastMessageSeq"/>, so the HUD can tell a RE-SENT identical line from the
+        /// one it already showed (#1860); <see cref="ExpireMessage"/> blanks it once the toast's lifetime is up.</summary>
+        public string LastMessage
+        {
+            get => _lastMessage;
+            private set
+            {
+                _lastMessage = value ?? string.Empty;
+                LastMessageSeq++;
+            }
+        }
+
+        private string _lastMessage = string.Empty;
+
+        /// <summary>Bumped on every <see cref="LastMessage"/> assignment (#1860) — the HUD toast keys on it.</summary>
+        public int LastMessageSeq { get; private set; }
+
+        /// <summary>The HUD toast for <paramref name="seq"/> ran its lifetime out (#1860): blank the message —
+        /// unless a newer one has already replaced it. Blanking bumps the sequence, so the next identical
+        /// server line shows again instead of comparing equal to a toast that already faded.</summary>
+        public void ExpireMessage(int seq)
+        {
+            if (seq == LastMessageSeq && _lastMessage.Length > 0)
+            {
+                LastMessage = string.Empty;
+            }
+        }
+
+        /// <summary>The resolved station hull-open warning while it is the toast (#1836) — cleared once the station
+        /// reports the pocket sealed again, so the banner does not outlive the leak.</summary>
+        private string _stationAirWarning = string.Empty;
 
         /// <summary>Shows a transient HUD message from a client-side system (e.g. the VEGA autopilot).</summary>
         public void ShowMessage(string text) => LastMessage = text ?? string.Empty;
@@ -1231,8 +1365,9 @@ namespace BlocksBeyondTheStars.Client
             // #1473: a player-built station's hull is open — no air outside a sealed pocket until it is patched.
             if (text == "@station_air_lost")
             {
-                return Localizer?.Get("ui.station.air_lost")
+                _stationAirWarning = Localizer?.Get("ui.station.air_lost")
                     ?? "Warning: the station is no longer airtight — helmet on until the hull is patched!";
+                return _stationAirWarning;
             }
 
             // #1559: the pocket is closed but bigger than the life-support budget.
@@ -1494,6 +1629,8 @@ namespace BlocksBeyondTheStars.Client
             public ulong ColliderHash;    // #1529: hash of the collider geometry the chunk carries (or holds pending)
             public Mesh PendingCollider;  // #1529: built but not cooked — the chunk was beyond collider range
             public int PendingColliderGen;
+            public bool DistanceVisible = true; // #1823: inside the renderer cull distance (RepositionChunks)
+            public bool ShadowsOnly;            // #1823: hidden by the visibility walk but still casting
         }
 
         private readonly Dictionary<ChunkCoord, ChunkView> _chunkObjects = new Dictionary<ChunkCoord, ChunkView>();
@@ -1510,6 +1647,13 @@ namespace BlocksBeyondTheStars.Client
         private const float DeferredDirtySettleSeconds = 0.15f;
         private const float DeferredDirtyMaxSeconds = 1.0f;
 
+        // #1903: chunks whose water surface (shore foam, open-water waves) was changed by a water edit a few blocks
+        // AWAY from them. They only need a cosmetic refresh, so a spreading flood — the fluid simulation writes a
+        // cell per tick — parks them here and rebuilds each once after WaterReachSettleSeconds instead of every tick.
+        private readonly Dictionary<ChunkCoord, float> _waterReachDirty = new Dictionary<ChunkCoord, float>();
+        private readonly HashSet<ChunkCoord> _waterReachScratch = new HashSet<ChunkCoord>();
+        private const float WaterReachSettleSeconds = 0.5f;
+
         // When the last chunk arrived from the server. The loading veil uses "no new chunk for a moment" (plus a
         // drained mesh queue) as the "initial view is fully streamed + meshed" signal so it doesn't lift mid-fill
         // (#390). During streaming the ≥1-chunk-per-tick guarantee keeps this fresh; the gap only opens once the
@@ -1520,7 +1664,7 @@ namespace BlocksBeyondTheStars.Client
         public float TimeSinceLastChunk => Time.time - _lastChunkArrivalTime;
 
         /// <summary>Chunks still queued to be (re)meshed — the client-side mesh backlog.</summary>
-        public int PendingMeshCount => _dirty.Count + _deferredDirty.Count;
+        public int PendingMeshCount => _dirty.Count + _deferredDirty.Count + _waterReachDirty.Count;
 
         // Performance (P1): cap how many chunk meshes are (re)built per frame so a burst of chunks arriving
         // while moving fast spreads over several frames instead of stalling one. Nearest chunks build first;
@@ -1595,12 +1739,24 @@ namespace BlocksBeyondTheStars.Client
         // ViewDistanceChunks is the join-time value the server actually streams at (0 = server default 4).
         private (float Cull, float Collider, float Unload) EffectiveChunkDistances()
         {
+            int vd = ViewDistanceChunks > 0 ? ViewDistanceChunks : 4;
             if (!BrowserDevice.IsMobileBrowser)
             {
-                return (ChunkDrawDistanceBlocks, ChunkColliderDistanceBlocks, ChunkUnloadDistanceBlocks);
+                // Above view distance 14 the fog edge (vd × 16 blocks) reaches the fixed 256-block cull, which
+                // would clip the last hazed ring by chunk centre; grow the cull with the view like mobile does
+                // (16 → 288), still well inside the 384-block unload.
+                float desktopCull = Mathf.Max(ChunkDrawDistanceBlocks, (vd + 2) * WorldConstants.ChunkSize);
+                // #1822: with the far view off the haze is at full strength by vd × 16 on every world that has fog —
+                // chunks beyond (vd + 2) × 16 were drawn only to be painted over in the sky colour. Airless worlds
+                // (no fog) and a far view (haze pushed out, real chunks preferred over the far terrain) keep the reach.
+                if (FarViewBlocks <= 0 && FogActive)
+                {
+                    desktopCull = (vd + 2) * WorldConstants.ChunkSize;
+                }
+
+                return (desktopCull, ChunkColliderDistanceBlocks, ChunkUnloadDistanceBlocks);
             }
 
-            int vd = ViewDistanceChunks > 0 ? ViewDistanceChunks : 4;
             float cull = Mathf.Min(ChunkDrawDistanceBlocks, (vd + 2) * WorldConstants.ChunkSize);
             float collider = Mathf.Min(ChunkColliderDistanceBlocks, cull);
             float unload = Mathf.Min(ChunkUnloadDistanceBlocks, (vd + 4) * WorldConstants.ChunkSize);
@@ -1805,6 +1961,12 @@ namespace BlocksBeyondTheStars.Client
         private bool _joinSendFailureLogged;
         private float _retryTimer;
         private int _retries;
+        private float _connectWaited;   // seconds since the initial dial (the local-server ceiling)
+        private bool _localReadyDialed; // the launcher's "started on port" signal has been acted on
+
+        /// <summary>The bundled server this client spawned (set by WorldRig from the shell), or null for a
+        /// remote host. Switches the connect loop to the patient local budget — see <see cref="ConnectRetryPolicy"/>.</summary>
+        public LocalServerLauncher LocalServer;
 
         private void Start()
         {
@@ -1868,7 +2030,9 @@ namespace BlocksBeyondTheStars.Client
             if (atlasShader != null)
             {
                 ChunkMaterial = new Material(atlasShader) { mainTexture = Atlas.Texture };
-                ChunkMaterial.SetTexture("_NormalTex", Atlas.NormalTexture); // per-pixel normal mapping
+                Atlas.BindNormals(ChunkMaterial); // per-pixel normal mapping; stays bound across a repaint (#1952)
+                Atlas.Changed += OnAtlasRepainted;
+                _animationVersionSeen = Atlas.AnimationVersion; // what is meshed from now on already knows this layout (#1957)
 
                 // Alpha-blended material for the see-through submesh (glass viewports + energy fields).
                 var transparentShader = Shader.Find("BlocksBeyondTheStars/BlockAtlasTransparent");
@@ -1895,6 +2059,9 @@ namespace BlocksBeyondTheStars.Client
                 Atlas != null && Content?.GetBlock(key) is { } b && b.NumericId.Value != 0
                     ? (Atlas.Texture, Atlas.TileUv(b.NumericId.Value))
                     : null;
+
+            // A tool's own look comes from the item data (#1962).
+            HeldItem.ModelResolver = key => Content?.GetItem(key)?.HeldModel;
 
             // The empty-slot hand (#1033) wears a glove in the player's suit arm colour — and the player's
             // own arm painting from the appearance editor, so first person matches third person (#1427).
@@ -1942,6 +2109,7 @@ namespace BlocksBeyondTheStars.Client
                 LoadingPlanetType = m.PlanetType;
                 _worldSeed = m.WorldSeed;
                 TerrainContinents = m.TerrainContinents; // #704: previews must match the server's gate
+                TerrainGeneration = m.TerrainGeneration; // #1644: same for the landform generation
                 CumulativePlaytimeSeconds = m.CumulativePlaytimeSeconds; // saved world total; session ticks on top
                 if (_sessionStartRealtime < 0f)
                 {
@@ -1984,6 +2152,10 @@ namespace BlocksBeyondTheStars.Client
             {
                 CustomShapes?.RegisterAll(m.Ids, m.Voxels, m.Names, m.Owners);
             };
+            // World textures (#1959): pages after the join become ONE batch (one atlas repaint), a publish or wipe
+            // while playing a batch of one. The atlas repaints in place, so no chunk has to re-mesh for it.
+            Network.WorldTextureListReceived += m => ApplyWorldTextures(_worldTextureInbox.Accept(m));
+            Network.WorldTextureReceived += m => ApplyWorldTextures(_worldTextureInbox.Accept(m));
             Network.CustomShapeReceived += m =>
             {
                 if (CustomShapes == null)
@@ -2136,6 +2308,11 @@ namespace BlocksBeyondTheStars.Client
                 ShowMessage(t.Replace("{name}", m.FromName).Replace("{crew}", m.CrewName));
             };
             Network.MarkerListReceived += m => Markers = m?.Markers ?? System.Array.Empty<NetMarker>();
+            Network.NoteListReceived += m =>
+            {
+                Notes = m?.Notes ?? System.Array.Empty<NetNote>();
+                NotesVersion++;
+            };
             Network.CompanionsReceived += m => Companions = m ?? new CompanionList();
             Network.SpeedersReceived += m => Speeders = m.Speeders ?? System.Array.Empty<NetSpeeder>();
             Network.SpeederFxReceived += m =>
@@ -2182,6 +2359,7 @@ namespace BlocksBeyondTheStars.Client
                 if (!InSpace)
                 {
                     SpaceSkipLaunch = m.SkipLaunch; // latched on entry only (later updates don't re-trigger Enter)
+                    SpaceAutomaticTransit = m.AutomaticTransit; // #1614: latched with it — the launch sequence reads it once it ends
                     if (m.Hyperjump)
                     {
                         HyperjumpStarted?.Invoke(); // warp VFX as we arrive in flight in a new system
@@ -2279,6 +2457,13 @@ namespace BlocksBeyondTheStars.Client
             Network.StationBoardedReceived += m => { LastMessage = $"Boarded {m.Name}."; CurrentStationId = m.StationId ?? string.Empty; };
             Network.PlanetEnemiesReceived += m => PlanetEnemies = m.Enemies;
             Network.CreaturesReceived += m => Creatures = m.Creatures;
+            Network.WorldFxReceived += m =>
+            {
+                if (PendingWorldFx.Count < 64)
+                {
+                    PendingWorldFx.Add(m);
+                }
+            };
             Network.NpcsReceived += m => Npcs = m.Npcs;
             Network.NpcStandingsReceived += m =>
             {
@@ -2416,13 +2601,24 @@ namespace BlocksBeyondTheStars.Client
                 if (m.Full)
                 {
                     Discoveries.Clear(); // the join snapshot replaces whatever a previous session left
+                    DiscoveryWhere.Clear();
                 }
 
                 var entries = m.Entries ?? System.Array.Empty<string>();
                 var names = m.Names ?? System.Array.Empty<string>();
+                // Where each was found (#1843) — parallel arrays an older server leaves empty, so index-guard.
+                var bodyNames = m.BodyNames ?? System.Array.Empty<string>();
+                var systemNames = m.SystemNames ?? System.Array.Empty<string>();
                 for (int i = 0; i < entries.Length; i++)
                 {
                     Discoveries[entries[i]] = i < names.Length ? names[i] ?? string.Empty : string.Empty;
+
+                    string bodyName = i < bodyNames.Length ? bodyNames[i] ?? string.Empty : string.Empty;
+                    string systemName = i < systemNames.Length ? systemNames[i] ?? string.Empty : string.Empty;
+                    if (bodyName.Length > 0 || systemName.Length > 0)
+                    {
+                        DiscoveryWhere[entries[i]] = (bodyName, systemName);
+                    }
                 }
             };
             Network.WreckRepairStatusChanged += m => Wreck = m.Claimed ? null : m;
@@ -2544,25 +2740,38 @@ namespace BlocksBeyondTheStars.Client
                 }
                 else
                 {
-                    // Safety net: re-attempt the connection a few times (e.g. the local
-                    // singleplayer server is still starting up).
+                    // Re-dial until the server answers — ConnectRetryPolicy decides how patiently: a remote
+                    // host gets a few attempts, the bundled local server gets as long as a fresh world takes
+                    // to generate (it used to get the remote budget and lost the race by seconds).
                     _retryTimer += Time.deltaTime;
-                    if (_retryTimer >= 2f)
+                    _connectWaited += Time.deltaTime;
+                    bool local = LocalServer != null;
+                    bool readySignal = local && !_localReadyDialed && LocalServer.Ready;
+                    switch (ConnectRetryPolicy.Next(local, readySignal, _retryTimer, _retries, _connectWaited))
                     {
-                        if (_retries < 6)
-                        {
+                        case ConnectRetryPolicy.Verdict.Retry:
+                            if (readySignal)
+                            {
+                                _localReadyDialed = true;
+                                Debug.Log($"Local server reports ready after {_connectWaited:0.0} s — connecting.");
+                            }
+
                             _retryTimer = 0f;
                             _retries++;
                             Network.Connect(Host, Port);
-                        }
-                        else if (string.IsNullOrEmpty(ConnectFailedReason))
-                        {
-                            // All retries spent and still no connection: give up loudly. Disconnected
-                            // never fires for a never-connected session, so this flag is the only
-                            // signal AppShell gets to bail back to the menu with a message (#409).
-                            Debug.LogError($"Could not connect to {Host}:{Port} after {_retries} retries — giving up.");
-                            ConnectFailedReason = Localizer?.Get("ui.connect.failed") ?? "Could not connect to the server.";
-                        }
+                            break;
+
+                        case ConnectRetryPolicy.Verdict.GiveUp:
+                            if (string.IsNullOrEmpty(ConnectFailedReason))
+                            {
+                                // All retries spent and still no connection: give up loudly. Disconnected
+                                // never fires for a never-connected session, so this flag is the only
+                                // signal AppShell gets to bail back to the menu with a message (#409).
+                                Debug.LogError($"Could not connect to {Host}:{Port} after {_retries} retries ({_connectWaited:0} s) — giving up.");
+                                ConnectFailedReason = Localizer?.Get("ui.connect.failed") ?? "Could not connect to the server.";
+                            }
+
+                            break;
                     }
                 }
             }
@@ -2572,11 +2781,14 @@ namespace BlocksBeyondTheStars.Client
             ReturnRetiredChunkArrays(); // #1555
             DrainBuiltChunks();
             DrainBakedColliders();
+            DrainSyncCooks(); // #1819: browser collider cooks within their own frame budget
+            SampleMotion();   // #1818: the build order looks ahead along the player's velocity
 
             // Kick off off-thread (re)builds for chunks that changed, but cap how many we DISPATCH per frame (P1)
             // so a burst of chunks arriving while moving fast spreads over several frames instead of stalling one.
             // Nearest chunks build first; chunks past the budget stay queued for the next frames.
             PromoteDeferredDirty(); // #1529
+            PromoteWaterReachDirty(); // #1903
             if (_dirty.Count > 0)
             {
                 _dirtyScratch.Clear();
@@ -2590,12 +2802,13 @@ namespace BlocksBeyondTheStars.Client
                 _dirtyDistScratch.Clear();
                 for (int i = 0; i < _dirtyScratch.Count; i++)
                 {
-                    _dirtyDistScratch.Add(ChunkDistSqToPlayer(_dirtyScratch[i], pp));
+                    _dirtyDistScratch.Add(BuildOrderKey(_dirtyScratch[i], pp)); // #1818: nearest first, then ahead
                 }
 
                 int budget = Mathf.Max(1, MeshChunksPerFrame);
                 int built = 0;
-                while (built < budget && _dirtyScratch.Count > 0)
+                _frameWork.Restart(); // #1819: the browser builds inline — a time budget, not a count, decides
+                while (BuildBudgetLeft(built, budget) && _dirtyScratch.Count > 0)
                 {
                     int best = 0;
                     float bestDist = _dirtyDistScratch[0];
@@ -2647,6 +2860,8 @@ namespace BlocksBeyondTheStars.Client
                 _sinceReposTick = 0f;
                 RepositionChunks();
             }
+
+            UpdateVisibility(); // #1823: re-walks when the camera changes chunk or chunk connectivity changed
         }
 
         private int _lastReposX = int.MinValue;
@@ -2668,6 +2883,8 @@ namespace BlocksBeyondTheStars.Client
             float colliderSq = collider * collider;
             float unloadSq = unload * unload;
             float cookDrop = ColliderCookAheadDrop(); // #1583: the descent the cook gate reaches down along
+            float shadowSq = CurrentShadowDistance(); // #1823: hidden chunks inside it keep casting
+            shadowSq *= shadowSq;
             _unloadScratch.Clear();
             foreach (var kv in _chunkObjects)
             {
@@ -2703,11 +2920,12 @@ namespace BlocksBeyondTheStars.Client
                 // Distance culling: disable the renderer of chunks well beyond the draw distance so the
                 // accumulated far chunks stop costing draw calls; re-enabled when the player moves back into
                 // range. Frustum culling Unity does for free once the per-chunk bounds are correct.
-                bool visible = distSq <= cullSq;
-                if (view.RendererEnabled != visible && view.Renderer != null)
+                // #1823: combined with the visibility walk (ApplyRendererState) — a chunk behind solid rock stays hidden
+                // even inside the draw distance.
+                view.DistanceVisible = distSq <= cullSq;
+                if (view.Renderer != null)
                 {
-                    view.Renderer.enabled = visible;
-                    view.RendererEnabled = visible;
+                    ApplyRendererState(kv.Key, view, distSq, shadowSq);
                 }
 
                 // Near-only colliders: only chunks within reach keep an ACTIVE collider; far ones are disabled so
@@ -2754,10 +2972,18 @@ namespace BlocksBeyondTheStars.Client
                 _chunkObjects.Remove(coord);
                 _dirty.Remove(coord);
                 _deferredDirty.Remove(coord);
+                _waterReachDirty.Remove(coord);
                 _colliderGen.Remove(coord);
                 _colliderAppliedGen.Remove(coord);
                 _meshGen.Remove(coord);
                 _meshFailCounts.Remove(coord);
+                ForgetConnectivity(coord); // #1823
+                if (_syncCooks.TryGetValue(coord, out var parkedCook)) // #1819: a browser cook still waiting
+                {
+                    Destroy(parkedCook.Collider);
+                    _syncCooks.Remove(coord);
+                }
+
                 World.RemoveChunk(coord);
                 RetireChunkArray(WorldConstants.CanonicalChunk(coord, Circumference)); // #1555
             }
@@ -2866,6 +3092,48 @@ namespace BlocksBeyondTheStars.Client
             {
                 _deferredDirty.Remove(_deferredScratch[i]);
                 _dirty.Add(_deferredScratch[i]);
+            }
+        }
+
+        /// <summary>#1903: releases the water-reach refreshes parked by <see cref="MarkWaterReachDirty"/> once they have
+        /// waited <see cref="WaterReachSettleSeconds"/> (measured from the FIRST park, so a long flood still refreshes).</summary>
+        private void PromoteWaterReachDirty()
+        {
+            if (_waterReachDirty.Count == 0)
+            {
+                return;
+            }
+
+            float now = Time.time;
+            _deferredScratch.Clear();
+            foreach (var kv in _waterReachDirty)
+            {
+                if (now - kv.Value >= WaterReachSettleSeconds)
+                {
+                    _deferredScratch.Add(kv.Key);
+                }
+            }
+
+            for (int i = 0; i < _deferredScratch.Count; i++)
+            {
+                _waterReachDirty.Remove(_deferredScratch[i]);
+                _dirty.Add(_deferredScratch[i]);
+            }
+        }
+
+        /// <summary>#1903: a cell turned into or out of water. Every other already-meshed chunk whose shore foam / wave
+        /// weights read that cell is parked for a refresh (the edited chunk and its face neighbours rebuild at once).</summary>
+        private void MarkWaterReachDirty(int wx, int wy, int wz)
+        {
+            _waterReachScratch.Clear();
+            WaterSurface.ChunksInWaterReach(wx, wy, wz, Circumference, _waterReachScratch);
+            float now = Time.time;
+            foreach (var c in _waterReachScratch)
+            {
+                if (!_dirty.Contains(c) && _meshGen.ContainsKey(c) && !_waterReachDirty.ContainsKey(c))
+                {
+                    _waterReachDirty[c] = now;
+                }
             }
         }
 
@@ -3003,6 +3271,7 @@ namespace BlocksBeyondTheStars.Client
             _chunkObjects.Clear();
             _dirty.Clear();
             _deferredDirty.Clear();
+            _waterReachDirty.Clear();
             // Mesh/bake bookkeeping for the old world is now stale; WorldEpoch (bumped below) fences any
             // in-flight off-thread builds + bakes so they're dropped in DrainBuiltChunks/DrainBakedColliders
             // instead of landing on the new world's chunks.
@@ -3010,6 +3279,19 @@ namespace BlocksBeyondTheStars.Client
             _colliderAppliedGen.Clear();
             _meshGen.Clear();
             _meshFailCounts.Clear();
+            foreach (var parked in _syncCooks.Values) // #1819: browser cooks of the old world
+            {
+                if (parked.Collider != null)
+                {
+                    Destroy(parked.Collider);
+                }
+            }
+
+            _syncCooks.Clear();
+            _connectivity.Clear(); // #1823
+            _walkVisible.Clear();
+            _visibilityDirty = true;
+            FarView?.ResetWorld(); // #1820: the new world's info + tiles arrive after this reset
             World.Clear();
 
             ServerSpawn = null; // re-snap at the new spawn once the next PlayerState arrives
@@ -3125,6 +3407,14 @@ namespace BlocksBeyondTheStars.Client
                     _dirty.Add(nc);
                 }
             }
+
+            // #1903: a water surface reads its shore up to WaterSurface.MeshReach blocks away, so a flood spreading
+            // inland also changes the foam of water in chunks that are not face neighbours of the edited cell.
+            ushort water = Content?.GetBlock("water")?.NumericId.Value ?? 0;
+            if (water != 0 && (oldId.Value == water || m.Block == water))
+            {
+                MarkWaterReachDirty(m.X, m.Y, m.Z);
+            }
         }
 
         private void OnPlayerState(BlocksBeyondTheStars.Networking.Messages.PlayerStateUpdate m)
@@ -3140,7 +3430,18 @@ namespace BlocksBeyondTheStars.Client
             SuitEnergy = m.SuitEnergy;
             Hunger = m.Hunger;
             SuitClimateActive = m.SuitClimateActive;
+            Exposure = m.Exposure;
+            ExposureActive = m.ExposureActive;
+            ExposureHot = m.ExposureHot;
+            Uneasy = m.Uneasy;
             LifeSupportSource = m.LifeSupportSource;
+            if (m.LifeSupportSource == 2 && _stationAirWarning.Length > 0 && LastMessage == _stationAirWarning)
+            {
+                // #1836: the station reports the pocket sealed again — the hull-open banner has no lifetime of its own
+                // and would stay pinned over a breathing player until the next server line replaced it.
+                LastMessage = string.Empty;
+                _stationAirWarning = string.Empty;
+            }
             // Comfort: auto-stow loose materials into the cargo hold the moment you board the ship (off by
             // default — opt in via Settings). Fires only on the not-aboard → aboard edge, and reuses the same
             // server-authoritative bulk "stow all" intent the cargo tab's button sends.
@@ -3164,11 +3465,26 @@ namespace BlocksBeyondTheStars.Client
 
             CanFly = m.CanFly;
 
+            // Zero-g construction mode on a player station (#1842): its own hints, worded for the station, replace
+            // the planet's "left the atmosphere" line for the float that comes with the flip.
+            bool zeroGChanged = m.StationZeroG != StationZeroG;
+            StationZeroG = m.StationZeroG;
+            if (zeroGChanged)
+            {
+                LastMessage = m.StationZeroG
+                    ? string.Format(Localizer?.Get("hud.station.zero_g.on") ?? "Construction mode: zero gravity. Press {0} to walk again.",
+                        InputMap.Glyph(InputAction.ToggleStationZeroG))
+                    : Localizer?.Get("hud.station.zero_g.off") ?? LastMessage;
+            }
+
             // Built/climbed above the atmosphere → zero-g float on foot + space sky (item 10).
             if (m.AboveAtmosphere != OnFootInSpace)
             {
                 OnFootInSpace = m.AboveAtmosphere;
-                LastMessage = Localizer?.Get(m.AboveAtmosphere ? "hud.atmosphere.left" : "hud.atmosphere.entered") ?? LastMessage;
+                if (!zeroGChanged && !m.StationZeroG)
+                {
+                    LastMessage = Localizer?.Get(m.AboveAtmosphere ? "hud.atmosphere.left" : "hud.atmosphere.entered") ?? LastMessage;
+                }
             }
 
             // Boarding or leaving a space station is a server-side teleport (to the station interior, or
@@ -3270,14 +3586,18 @@ namespace BlocksBeyondTheStars.Client
             job.Error = null;
             MeshBuildsDispatched++;
 
-#if UNITY_WEBGL && !UNITY_EDITOR
-            // WebGL: no worker threads — build inline on the main thread. DrainBuiltChunks still uploads the
-            // result next frame, exactly as it does for the async path on every other platform.
-            job.Run();
-#else
-            // One static callback + the job as state: no Task, no closure, no execution-context capture.
-            System.Threading.ThreadPool.UnsafeQueueUserWorkItem(RunMeshJob, job);
-#endif
+            if (InlineChunkWork)
+            {
+                // WebGL: no worker threads — build inline on the main thread (within the #1819 frame budget).
+                // DrainBuiltChunks still uploads the result, exactly as it does for the async path elsewhere.
+                // A runtime check (not #if) so the PR CI and the desktop build compile both paths.
+                job.Run();
+            }
+            else
+            {
+                // One static callback + the job as state: no Task, no closure, no execution-context capture.
+                System.Threading.ThreadPool.UnsafeQueueUserWorkItem(RunMeshJob, job);
+            }
 
             return true;
         }
@@ -3314,7 +3634,11 @@ namespace BlocksBeyondTheStars.Client
         /// superseded or world-changed builds). Mirrors <see cref="DrainBakedColliders"/>.</summary>
         private void DrainBuiltChunks()
         {
-            while (_builtChunks.TryDequeue(out var built))
+            // #1819: on desktop the workers can finish a burst between two frames; uploading all of them at once is a
+            // spike of its own. Cap the uploads per frame — the rest stay queued (in completion order) for the next.
+            int uploads = 0;
+            int uploadCap = InlineChunkWork ? int.MaxValue : Mathf.Max(1, MaxChunkUploadsPerFrame);
+            while (uploads < uploadCap && _builtChunks.TryDequeue(out var built))
             {
                 var job = built; // recycled on every exit path below (#1550)
                 if (built.Data == null)
@@ -3357,6 +3681,7 @@ namespace BlocksBeyondTheStars.Client
 
                 _meshFailCounts.Remove(built.Coord); // healthy again — a later transient fault gets fresh retries
                 ApplyChunkMesh(built.Coord, built.Data);
+                uploads++;
                 // The upload copied everything into the Unity meshes (+ GroundScatter's matrices), so the
                 // pooled geometry buffers can go back for the next build.
                 built.Data.Release();
@@ -3373,6 +3698,7 @@ namespace BlocksBeyondTheStars.Client
             // non-readable mesh cannot be rewritten. So every rebuild gets a fresh mesh and the outgoing one is
             // destroyed below; Unity never collects Mesh objects, and A2's rebuild rate would grow that leak fast.
             bool exists = _chunkObjects.TryGetValue(coord, out var view) && view?.Go != null;
+            RecordConnectivity(coord, data.Connectivity); // #1823: the visibility walk reads what this build found
             // #1529: a rebuild whose collider geometry hashes identically to what the chunk already carries (or
             // holds pending) needs no new collision Mesh and no cook — tint/glow/paint edits and neighbour
             // re-dirties are the common case.
@@ -3417,6 +3743,9 @@ namespace BlocksBeyondTheStars.Client
                 var mc = go.AddComponent<MeshCollider>();
                 view = new ChunkView { Go = go, Filter = filter, Renderer = mr, Collider = mc, ScenePos = scenePos, ScenePosKnown = true };
                 _chunkObjects[coord] = view;
+                // #1823: a chunk arriving behind solid rock starts hidden (the next reposition refines the distance cull).
+                float shadow = CurrentShadowDistance();
+                ApplyRendererState(coord, view, ChunkDistSqToPlayer(coord, PlayerPosition), shadow * shadow);
             }
 
             var staleMesh = view!.Filter.sharedMesh; // the mesh this rebuild replaces (null on the first build)
@@ -3512,28 +3841,19 @@ namespace BlocksBeyondTheStars.Client
         private void StartColliderBake(ChunkCoord coord, ChunkView view, Mesh collider, int bakeGen)
         {
             var mcol = view.Collider;
-#if UNITY_WEBGL && !UNITY_EDITOR
-            // WebGL: no worker threads to bake on, so cook synchronously by assigning the mesh directly —
-            // MeshCollider.sharedMesh cooks the collision mesh on the spot. The collider is live in THIS
-            // frame, so the spawn ground-check raycast finds footing and the player never falls through.
-            if (mcol != null)
-            {
-                var oldWebgl = mcol.sharedMesh; // freshly cooked each remesh — free the previous one (leak otherwise)
-                mcol.sharedMesh = collider;
-                _colliderAppliedGen[coord] = bakeGen; // #1493: cooked on the spot — the fall-guard log must not call it pending
-                if (oldWebgl != null && oldWebgl != collider)
-                {
-                    Destroy(oldWebgl);
-                }
-            }
-            else
-            {
-                Destroy(collider);
-            }
-#else
             if (mcol == null)
             {
                 Destroy(collider);
+                return;
+            }
+
+            // WebGL: no worker threads to bake on, so the mesh is cooked synchronously by assigning it directly —
+            // MeshCollider.sharedMesh cooks on the spot. #1819: cooked by DrainSyncCooks within the frame's cook
+            // budget, nearest first; the footing chunk always cooks the frame it is drained, so the spawn ground-check
+            // raycast still finds its floor. A runtime check (not #if) so the PR CI and the desktop build compile it.
+            if (InlineChunkWork)
+            {
+                EnqueueSyncCook(coord, collider, bakeGen);
                 return;
             }
 
@@ -3554,7 +3874,6 @@ namespace BlocksBeyondTheStars.Client
 
                 _bakedColliders.Enqueue((capturedCoord, capturedCollider, bakeGen, epoch));
             });
-#endif
         }
 
         /// <summary>Assigns collision meshes whose off-thread <see cref="Physics.BakeMesh"/> has finished.
@@ -3611,13 +3930,97 @@ namespace BlocksBeyondTheStars.Client
         /// world created (sky/starfield meshes+materials, chunk render meshes, icon sprites) becomes
         /// unreferenced with the world root and is swept by AppShell.ReturnToMenu's
         /// <c>Resources.UnloadUnusedAssets</c> pass.</summary>
+        /// <summary>The block atlas repainted tiles in place (a texture layer changed, #1952). Chunk meshes keep
+        /// their UVs, so they stay; everything that BAKED a tile's colour or pixels has to go.</summary>
+        private int _animationVersionSeen;
+
+        private void OnAtlasRepainted()
+        {
+            IconResolver.ClearCache();
+            ShapeIconFactory.ClearCache();
+            if (FarView != null)
+            {
+                FarView.InvalidateBlockColors();
+            }
+
+            // A repaint changes pixels in place and needs no re-mesh — unless a tile became animated, stopped being
+            // animated or changed its frame count (#1957): the faces carry "frames, speed, strip start", so every
+            // loaded chunk is rebuilt once. Rare: a world texture with frames arrives, or the player switches packs.
+            if (Atlas != null && Atlas.AnimationVersion != _animationVersionSeen)
+            {
+                _animationVersionSeen = Atlas.AnimationVersion;
+                foreach (var c in _chunkObjects.Keys)
+                {
+                    _dirty.Add(c);
+                }
+            }
+        }
+
+        private readonly WorldTextureInbox _worldTextureInbox = new WorldTextureInbox();
+
+        private readonly Dictionary<string, List<BlocksBeyondTheStars.Shared.Definitions.HeldModelPart>> _localToolLooks
+            = new Dictionary<string, List<BlocksBeyondTheStars.Shared.Definitions.HeldModelPart>>(System.StringComparer.Ordinal);
+
+        /// <summary>The local player's own look for the tool behind <paramref name="itemKey"/> (#1963), or null for
+        /// the standard model. Looks are edited in the main menu only, so the merged parts are cached per session.</summary>
+        public IReadOnlyList<BlocksBeyondTheStars.Shared.Definitions.HeldModelPart> LocalToolLook(string itemKey)
+        {
+            if (string.IsNullOrEmpty(itemKey) || Settings == null)
+            {
+                return null;
+            }
+
+            string baseKey = BlocksBeyondTheStars.Shared.State.ItemKey.Base(itemKey);
+            if (!_localToolLooks.TryGetValue(baseKey, out var parts))
+            {
+                string model = Settings.GetToolLook(baseKey);
+                parts = string.IsNullOrEmpty(model) ? null : BlocksBeyondTheStars.Shared.State.ToolLook.ToParts(model);
+                _localToolLooks[baseKey] = parts != null && parts.Count > 0 ? parts : null;
+            }
+
+            return _localToolLooks[baseKey];
+        }
+
+        private static void ApplyWorldTextures(WorldTextureBatch batch)
+        {
+            if (batch == null)
+            {
+                return;
+            }
+
+            var changes = new Dictionary<string, TextureFrames>(batch.Changes.Count, System.StringComparer.Ordinal);
+            foreach (var kv in batch.Changes)
+            {
+                changes[kv.Key] = kv.Value == null
+                    ? null
+                    : new TextureFrames(kv.Value.Frames, kv.Value.Fps, TextureLayer.World) { Owner = kv.Value.Owner };
+            }
+
+            GameTextures.ApplyWorldBatch(changes, batch.Complete);
+        }
+
+        /// <summary>True when this player may publish world textures: the server offers them, the world rule is on
+        /// and the player is a world admin (the server fills the mode roster for admins only, #1121). The server
+        /// checks again — this only decides whether the buttons are offered.</summary>
+        public bool CanPublishWorldTextures
+            => Rules != null && string.Equals(Rules.WorldTextures, "Admins", System.StringComparison.Ordinal)
+               && Rules.PlayerModeNames != null && Rules.PlayerModeNames.Length > 0;
+
         private void OnDestroy()
         {
             Network?.Dispose();
 
+            // The atlas and the texture source are shared with the menu and its editors — a world's textures
+            // must not outlive the world (#1959).
+            _worldTextureInbox.Reset();
+            GameTextures.ClearWorldLayer();
+
             IconResolver.ClearCache();
             ShapeIconFactory.ClearCache();
             HeldItem.BlockTileResolver = null;
+            HeldItem.ModelResolver = null;
+            HeldItem.ReleasePartMaterials();
+            PropTextures.Release(); // the doors and machines that used them are going away with the world
             HeldItem.HandTintResolver = null;  // both closures capture Settings (and this object graph) — #1464
             HeldItem.HandPaintResolver = null;
             HeldItem.ReleaseHandAtlas();
@@ -3642,6 +4045,11 @@ namespace BlocksBeyondTheStars.Client
             if (ChunkMaterialPaint != null)
             {
                 Destroy(ChunkMaterialPaint);
+            }
+
+            if (Atlas != null)
+            {
+                Atlas.Changed -= OnAtlasRepainted;
             }
 
             Atlas?.Release(); // shared per process (#1523) — the last owner decides, not this world

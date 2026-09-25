@@ -3,6 +3,8 @@
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
 using System.Linq;
 using BlocksBeyondTheStars.Networking.Messages;
+using BlocksBeyondTheStars.Shared.State;
+using BlocksBeyondTheStars.Shared.World;
 
 namespace BlocksBeyondTheStars.GameServer;
 
@@ -28,8 +30,9 @@ public sealed partial class GameServer
     /// an ordinary material scan.</summary>
     private static readonly string[] RuneBlocks = { "rune_stone" };
 
-    /// <summary>Handheld scan of a creature species ("creature") or a block/flora/material ("block").</summary>
-    public ScanResult ScanSubject(string playerId, string subjectType, string subjectKey)
+    /// <summary>Handheld scan of a creature species ("creature") or a block/flora/material ("block").
+    /// <paramref name="entityId"/> is the aimed creature when the client sends it (#1926).</summary>
+    public ScanResult ScanSubject(string playerId, string subjectType, string subjectKey, string? entityId = null)
     {
         var session = FindSessionByPlayerId(playerId);
         if (session is null)
@@ -57,6 +60,16 @@ public sealed partial class GameServer
                 "ui.scan.temperament." + sp.Temperament.ToString().ToLowerInvariant(),
                 Shared.Definitions.CreatureVoices.DescriptorKey(voice),
             };
+            if (sp.BodyPlan == Shared.Definitions.CreatureBodyPlan.Arachnid)
+            {
+                // #2009: the plan is a trait of its own — and an ambusher's habit is the one thing a scan must warn about,
+                // because "territorial" alone promises it only bites back.
+                readout.TraitKeys = readout.TraitKeys
+                    .Concat(new[] { "ui.scan.body.arachnid" })
+                    .Concat(Shared.Definitions.ArachnidRules.Lurks(sp) ? new[] { "ui.scan.body.ambush" } : System.Array.Empty<string>())
+                    .ToArray();
+            }
+
             readout.ThreatKey = sp.Hostile ? "ui.scan.threat.hostile"
                 : sp.Temperament == Shared.Definitions.CreatureTemperament.Territorial ? "ui.scan.threat.provokable"
                 : "ui.scan.threat.safe";
@@ -64,6 +77,20 @@ public sealed partial class GameServer
             readout.LegacyThreat = sp.Hostile ? "Hostile" : sp.Temperament == Shared.Definitions.CreatureTemperament.Territorial ? "Provokable" : "Safe";
             value = sp.Hostile ? KnowledgeCreatureHostile : KnowledgeCreature;
             readout.Display = string.IsNullOrEmpty(sp.Name) ? subjectKey : sp.Name; // the coined species name on the readout
+            bool disguise = string.IsNullOrEmpty(entityId)
+                ? SreekmakraAnomalyFor(session, subjectKey)          // an older client: the nearest of that kind is it
+                : SreekmakraDisguisedAs(entityId, subjectKey);       // #1926: exactly the creature under the crosshair
+            if (disguise && _speciesById.TryGetValue(SreekmakraSpeciesId, out var trueForm))
+            {
+                // 2026-09 (Valuma): the disguise fools the eye, not the scanner — which reads its true name (#1926) and
+                // counts it as the discovery of the shapeshifter, not of the animal it imitates.
+                readout.ThreatKey = "ui.scan.threat.anomaly";
+                readout.TraitKeys = new[] { "ui.scan.disguise" }.Concat(readout.TraitKeys).ToArray();
+                readout.Display = string.IsNullOrEmpty(trueForm.Name) ? SreekmakraSpeciesId : trueForm.Name;
+                readout.SubjectKey = SreekmakraSpeciesId;
+                ledgerKey = "creature:" + SreekmakraSpeciesId;
+                value = KnowledgeCreatureHostile;
+            }
         }
         else if (subjectType == "block" && System.Array.IndexOf(RuneBlocks, subjectKey) >= 0
                  && MonumentForScan(session) is { } monument)
@@ -185,7 +212,9 @@ public sealed partial class GameServer
         return result;
     }
 
-    /// <summary>Ship scan of a space asteroid — reveals whether it holds resources (server knows the loot).</summary>
+    /// <summary>Ship scan of a space asteroid — reveals whether it holds resources (server knows the loot).
+    /// Anomalies (#1129) and derelict wrecks (#1664) are scannable too; a wreck's scan is also what flying
+    /// up to it triggers (see <see cref="CheckSpaceWreckApproach"/>).</summary>
     public ScanResult ScanSpaceEntity(string playerId, string entityId)
     {
         var session = FindSessionByPlayerId(playerId);
@@ -197,9 +226,14 @@ public sealed partial class GameServer
         if (!_playerInstance.TryGetValue(playerId, out var instanceId)
             || !_spaceInstances.TryGetValue(instanceId, out var instance)
             || instance.Entities.FirstOrDefault(e => e.Id == entityId) is not { } target
-            || target.Kind is not (CombatEntityKind.Asteroid or CombatEntityKind.Anomaly))
+            || target.Kind is not (CombatEntityKind.Asteroid or CombatEntityKind.Anomaly or CombatEntityKind.Wreck))
         {
             return Rejected(session, entityId, "ui.scan.not_scannable", "Not a scannable object.");
+        }
+
+        if (target.Kind == CombatEntityKind.Wreck)
+        {
+            return ScanSpaceWreck(session, target); // #1664: the manifest readout + derelict lore + "visited"
         }
 
         // An anomaly (#1129): the scan is the whole encounter — knowledge once per save per player,
@@ -272,13 +306,17 @@ public sealed partial class GameServer
             // is unresolvable once the player leaves this planet (#484).
             p.ScannedNames[ledgerKey] = readout.Display;
 
-            // Append the new entry to the client's Codex discovery list.
-            Send(session, new DiscoveryLog
+            // …and WHERE it was found (#1843): body + system by name, for the Codex line. Only the first
+            // scan writes it — a re-scan elsewhere is not a discovery. Null when the galaxy cannot place the
+            // player (a ship interior): the entry then simply has no site.
+            var site = SiteFor(session);
+            if (site is not null)
             {
-                Entries = new[] { ledgerKey },
-                Names = new[] { readout.Display },
-                Full = false,
-            });
+                p.ScannedWhere[ledgerKey] = site;
+            }
+
+            // Append the new entry to the client's Codex discovery list.
+            Send(session, DiscoveryDelta(ledgerKey, readout.Display, site));
 
             OnAchievementScan(session, readout.Kind); // "Scholar" / "Archaeologist" and friends (#1102)
             if (readout.Kind == "monument")
@@ -295,19 +333,123 @@ public sealed partial class GameServer
     /// <summary>Sends the player's whole first-scan ledger — the Codex "Discoveries" snapshot on join.</summary>
     private void SendDiscoveryLog(PlayerSession session)
     {
-        var entries = session.State.Scanned.ToArray();
+        var p = session.State;
+        var entries = p.Scanned.ToArray();
         var names = new string[entries.Length];
+        var bodyIds = new string[entries.Length];
+        var bodyNames = new string[entries.Length];
+        var systemIds = new string[entries.Length];
+        var systemNames = new string[entries.Length];
         for (int i = 0; i < entries.Length; i++)
         {
             // Pre-#484 entries have no recorded name — send empty and let the client show the raw key.
-            names[i] = session.State.ScannedNames.TryGetValue(entries[i], out var n) ? n : string.Empty;
+            names[i] = p.ScannedNames.TryGetValue(entries[i], out var n) ? n : string.Empty;
+
+            // Pre-#1843 entries (and unplaceable scans) have no site — all four empty, no location line.
+            var site = p.ScannedWhere.TryGetValue(entries[i], out var s) ? s : null;
+            bodyIds[i] = site?.BodyId ?? string.Empty;
+            bodyNames[i] = site?.BodyName ?? string.Empty;
+            systemIds[i] = site?.SystemId ?? string.Empty;
+            systemNames[i] = site?.SystemName ?? string.Empty;
         }
 
-        Send(session, new DiscoveryLog { Entries = entries, Names = names, Full = true });
+        Send(session, new DiscoveryLog
+        {
+            Entries = entries,
+            Names = names,
+            BodyIds = bodyIds,
+            BodyNames = bodyNames,
+            SystemIds = systemIds,
+            SystemNames = systemNames,
+            Full = true,
+        });
+    }
+
+    /// <summary>A one-entry ledger delta (#1843): the key, its display name and — when known — where it was
+    /// found. Shared by the scan path and the first-landing "Places" entry.</summary>
+    private static DiscoveryLog DiscoveryDelta(string ledgerKey, string name, ScanSite? site) => new()
+    {
+        Entries = new[] { ledgerKey },
+        Names = new[] { name },
+        BodyIds = new[] { site?.BodyId ?? string.Empty },
+        BodyNames = new[] { site?.BodyName ?? string.Empty },
+        SystemIds = new[] { site?.SystemId ?? string.Empty },
+        SystemNames = new[] { site?.SystemName ?? string.Empty },
+        Full = false,
+    };
+
+    /// <summary>Where this player is scanning right now (#1843): the body they stand on (a boarded station's
+    /// <c>station:</c> world resolves to the station body), or — in flight — the body the space instance is
+    /// anchored to. Null when the galaxy does not carry the location (a ship interior, the synthesised local
+    /// fallback station), in which case the discovery is recorded without a site.</summary>
+    private ScanSite? SiteFor(PlayerSession session)
+    {
+        string? locationId = session.CurrentLocationId;
+        if (_playerInstance.TryGetValue(session.State.PlayerId, out var instanceId))
+        {
+            // A flight instance is keyed "space:<body>" (see EnterSpace) — the body the ship launched from
+            // or arrived at is the one the asteroid/anomaly/wreck belongs to.
+            locationId = instanceId.StartsWith("space:", System.StringComparison.Ordinal)
+                ? instanceId.Substring("space:".Length)
+                : instanceId;
+        }
+
+        var body = ResolveLocationBody(locationId);
+        return body is null ? null : SiteForBody(body, ResolveLocationHostBody(locationId)?.SystemId);
+    }
+
+    /// <summary>The site record for a galaxy body: its own name plus its star system's. A player station's
+    /// system is its HOST body's (mirrors <c>LocationNamesFor</c>); callers that know the host pass its
+    /// system id, everyone else gets the body's own.</summary>
+    private ScanSite SiteForBody(CelestialBody body, string? systemId = null)
+    {
+        string sysId = string.IsNullOrEmpty(systemId) ? body.SystemId : systemId;
+        var sys = _galaxy?.Systems.FirstOrDefault(s => s.Id == sysId);
+        return new ScanSite
+        {
+            BodyId = body.Id,
+            BodyName = body.Name,
+            SystemId = sysId,
+            SystemName = sys?.Name ?? string.Empty,
+        };
+    }
+
+    /// <summary>Join backfill (#1843): entries scanned before the game recorded WHERE carry no site. For the
+    /// keys that embed a body id — <c>place:&lt;body&gt;</c> and <c>monument:&lt;body&gt;:&lt;archetype&gt;</c> —
+    /// the site is derivable from the galaxy, so fill it in once, silently, BEFORE the full snapshot goes out.
+    /// Everything else (a creature scanned on a planet the save never named) stays without a site and shows
+    /// no location line.</summary>
+    private void BackfillScanSites(PlayerSession session)
+    {
+        var p = session.State;
+        foreach (var key in p.Scanned)
+        {
+            if (p.ScannedWhere.ContainsKey(key))
+            {
+                continue;
+            }
+
+            string? bodyId = null;
+            if (key.StartsWith(PlaceLedgerPrefix, System.StringComparison.Ordinal))
+            {
+                bodyId = key.Substring(PlaceLedgerPrefix.Length);
+            }
+            else if (key.StartsWith("monument:", System.StringComparison.Ordinal))
+            {
+                string rest = key.Substring("monument:".Length);
+                int colon = rest.IndexOf(':');
+                bodyId = colon > 0 ? rest.Substring(0, colon) : rest;
+            }
+
+            if (bodyId is not null && ResolveLocationBody(bodyId) is { } body)
+            {
+                p.ScannedWhere[key] = SiteForBody(body);
+            }
+        }
     }
 
     private void HandleScan(PlayerSession session, ScanIntent intent)
-        => ScanSubject(session.State.PlayerId, intent.SubjectType, intent.SubjectKey);
+        => ScanSubject(session.State.PlayerId, intent.SubjectType, intent.SubjectKey, intent.EntityId);
 
     private void HandleScanEntity(PlayerSession session, ScanEntityIntent intent)
         => ScanSpaceEntity(session.State.PlayerId, intent.EntityId);

@@ -265,6 +265,24 @@ Useful parameters:
 > or `data/`, run the **full** build *without* `-SkipPrereqs` — those changes reach the
 > client only through the synced DLLs/content from step 1.
 
+**Playtest a chosen planet.** The create-world panel never lets you pick the planet you spawn on; the
+server does (`--start-planet`). `scripts/make-test-world.ps1` runs the built client's bundled server once
+with the launcher's own arguments plus that flag, lets it create the save, and stops it gracefully — the
+world then sits in the Singleplayer picker like any other:
+
+```powershell
+./scripts/make-test-world.ps1 -Launch                                    # "Regenbogenplanet" on rainbow_sea, then start that client
+./scripts/make-test-world.ps1 -Planet flower_fields,scrapyard,gamer_hills,glacier -Peaceful
+./scripts/make-test-world.ps1 -Planet gamer_hills -World "Bens Welt" -Sandbox -Force
+./scripts/make-test-world.ps1 -List                                      # planet keys the client knows
+```
+
+It prefers `client/Build/Windows`, then the installed game (`-Client <folder>` overrides), and writes to
+that client's saves folder (portable marker honoured). The client must know the planet type — a
+generation-5 planet needs a build that contains it — and so must the client that later OPENS the save:
+an older client's server silently adopts another start planet and saves it (`-Launch` starts the right
+one; recreate a spoiled world with `-Force`).
+
 To package the built player locally as a Velopack installer/update feed, run
 `scripts/publish-client-installer.ps1` after a successful `build-client.ps1` (it ships the launcher exe as
 `--mainExe`). Add `-Msi` to also build the machine-wide WiX MSI (its ProductVersion major maxes out at 255,
@@ -524,6 +542,55 @@ goes through `AppPaths.Root`; the marker parsing lives Unity-free in `Client.Cor
 (`PortableDataDirTests`). Never use `Application.persistentDataPath` directly in new client code.
 Add a `Debug.Log` before the guard that might fail (e.g. log the layer index or whether
 `Shader.Find` returned null) and rebuild.
+
+## Why is a world taking so long to load? (`[boot]` timings)
+
+Starting a world runs a fixed set of passes before the server opens its port — and the player waits for all
+of them, because the client cannot join earlier. Since #1988 each pass reports itself:
+
+```
+[boot] 1/12 persistence (361 ms)
+[boot] 2/12 galaxy (43 ms)
+[boot] 3/12 registries (40 ms)
+[boot] 4/12 weather (21 ms)
+[boot] 5/12 flora (8 ms)
+[boot] 6/12 containers (5 ms)
+[boot] 7/12 landing pads (7947 ms)
+[boot] 8/12 fluids (3 ms)
+…
+[boot] 11/12 structures (8355 ms)
+[boot] 12/12 ready (16897 ms total)
+```
+
+Read them in the server log (`<save>/logs/server.log`, or the client's `Player.log`, which relays the
+bundled server's stdout with a `[server]` prefix). The same lines drive the desktop loading bar: the
+launcher parses `k/n` off stdout (`LoadingHandoffPolicy.TryParseBootStage`) and
+`LoadingHandoffPolicy.Progress` moves the bar with the passes instead of the clock. Only the initial boot is
+instrumented — a travel-time world load runs the same passes unreported.
+
+To time a world without the client, run the server straight at a **copy** of the save
+(`--saves <dir> --world <name> --data <repo>/data --port 31599`) and pipe `stop` into its stdin.
+
+The `structures` pass runs a dozen stampers, so it reports each of them underneath itself (#1990) — anything
+under a millisecond stays quiet:
+
+```
+[boot]   · settlements (4095 ms)
+[boot]   · bandit camps (4 ms)
+[boot]   · monuments (1 ms)
+[boot] 11/12 structures (4111 ms)
+```
+
+Two things to know when reading the numbers: the **NetCodec warm-up** (7–8 s of MessagePack codegen) runs on
+a background thread beside these passes since #1987, so its line reports a duration that overlaps them; and
+a body's **landing pads** are searched once and then pinned in the save (#1989, see
+[WORLD_GENERATION.md](WORLD_GENERATION.md) §22), so the first boot of a world pays for the search and every
+later one does not.
+
+A third, for a city world: composing the city itself is **~20 ms**, and since #1994 neither hanging its doors
+nor populating it reads a world block either (both work off the layout), so the `settlements` line is ~100 ms
+and the city's chunks stay unloaded until somebody walks there. If that line grows again, something started
+asking the world for what the structure already knows — see [WORLD_GENERATION.md](WORLD_GENERATION.md) §24.
 
 ## Optional AI backend (development)
 

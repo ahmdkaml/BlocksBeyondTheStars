@@ -35,6 +35,7 @@ namespace BlocksBeyondTheStars.Client
             public bool Seated;            // sit pose (#806) — avatar lowered onto the chair seat
             public bool Hidden;            // stealth field active, or the player is up in space — no avatar
             public int Gear = -1;          // cached so gear is only rebuilt on change
+            public int Skin, Torso, Arms, Legs; // #1777: cached colours — re-applied when a presence carries new ones
             public string Held = "\0";     // cached held item key
             public double LastUpdate;      // when the newest presence arrived — drives the stale timeout (#958)
             public bool TimedOut;          // hidden because updates stopped (kept separate from Hidden: that
@@ -114,6 +115,7 @@ namespace BlocksBeyondTheStars.Client
                 Game.Network.PlayerLeftReceived += OnLeft;
                 Game.Network.PlayerFaceReceived += OnFace;
                 Game.Network.PlayerBodyPaintReceived += OnBodyPaint;
+                Game.Network.PlayerToolLookReceived += OnToolLook;
                 Game.Network.WorldResetReceived += OnWorldReset;
                 _subscribed = true;
             }
@@ -208,8 +210,23 @@ namespace BlocksBeyondTheStars.Client
                 }
 
                 avatar.SetVisible(true);
-                r = new Remote { Go = go, Avatar = avatar, Name = m.Name, Interp = new RemoteEntityInterpolator(InterpolationDelay) };
+                r = new Remote
+                {
+                    Go = go, Avatar = avatar, Name = m.Name, Interp = new RemoteEntityInterpolator(InterpolationDelay),
+                    Skin = m.Skin, Torso = m.Torso, Arms = m.Arms, Legs = m.Legs,
+                };
                 _remotes[m.PlayerId] = r;
+            }
+
+            // #1777: a suit recoloured in the game reaches everyone else — the colours used to be applied on the
+            // first presence only, so the others kept seeing the creation-time look until they reconnected.
+            if (m.Skin != r.Skin || m.Torso != r.Torso || m.Arms != r.Arms || m.Legs != r.Legs)
+            {
+                r.Skin = m.Skin;
+                r.Torso = m.Torso;
+                r.Arms = m.Arms;
+                r.Legs = m.Legs;
+                r.Avatar.ApplyColors(Rgb(m.Skin), Rgb(m.Torso), Rgb(m.Arms), Rgb(m.Legs));
             }
 
             r.Name = m.Name;
@@ -248,7 +265,55 @@ namespace BlocksBeyondTheStars.Client
             {
                 r.Held = m.Held;
                 var (kind, tint, blockKey) = HeldItem.For(Game?.Content, m.Held);
-                r.Avatar.SetHeldItem(kind, tint, blockKey);
+                r.Avatar.SetHeldItem(kind, tint, blockKey, m.Held, ToolLookOf(m.PlayerId, m.Held));
+            }
+        }
+
+        // Tool looks (#1963): per player, base item key → merged parts. A look may arrive before or after the
+        // presence update that says what the player holds, so both paths ask this table.
+        private readonly Dictionary<string, Dictionary<string, List<BlocksBeyondTheStars.Shared.Definitions.HeldModelPart>>> _toolLooks
+            = new Dictionary<string, Dictionary<string, List<BlocksBeyondTheStars.Shared.Definitions.HeldModelPart>>>();
+
+        private IReadOnlyList<BlocksBeyondTheStars.Shared.Definitions.HeldModelPart> ToolLookOf(string playerId, string heldKey)
+        {
+            if (string.IsNullOrEmpty(heldKey) || playerId == null || !_toolLooks.TryGetValue(playerId, out var looks))
+            {
+                return null;
+            }
+
+            return looks.TryGetValue(BlocksBeyondTheStars.Shared.State.ItemKey.Base(heldKey), out var parts) ? parts : null;
+        }
+
+        private void OnToolLook(PlayerToolLook m)
+        {
+            if (m == null || string.IsNullOrEmpty(m.PlayerId) || (Game != null && m.PlayerId == Game.LocalPlayerId))
+            {
+                return; // our own looks are applied locally
+            }
+
+            if (!_toolLooks.TryGetValue(m.PlayerId, out var looks))
+            {
+                looks = new Dictionary<string, List<BlocksBeyondTheStars.Shared.Definitions.HeldModelPart>>(System.StringComparer.Ordinal);
+                _toolLooks[m.PlayerId] = looks;
+            }
+
+            // Not trusted further than the server trusts a client: ToParts validates again and yields nothing for garbage.
+            var parts = string.IsNullOrEmpty(m.Model) ? null : BlocksBeyondTheStars.Shared.State.ToolLook.ToParts(m.Model);
+            if (parts == null || parts.Count == 0)
+            {
+                looks.Remove(m.ItemKey ?? string.Empty);
+            }
+            else if (looks.Count < BlocksBeyondTheStars.Shared.State.ToolLook.MaxLooksPerPlayer || looks.ContainsKey(m.ItemKey))
+            {
+                looks[m.ItemKey] = parts;
+            }
+
+            // If that player holds this very tool right now, rebuild what is in their hand.
+            if (_remotes.TryGetValue(m.PlayerId, out var r) && r.Avatar != null && !string.IsNullOrEmpty(r.Held) && r.Held != "\0"
+                && BlocksBeyondTheStars.Shared.State.ItemKey.Base(r.Held) == m.ItemKey)
+            {
+                var (kind, tint, blockKey) = HeldItem.For(Game?.Content, r.Held);
+                r.Avatar.SetHeldItem(kind, tint, blockKey, r.Held, ToolLookOf(m.PlayerId, r.Held));
             }
         }
 
@@ -349,6 +414,7 @@ namespace BlocksBeyondTheStars.Client
                 Game.Network.PlayerLeftReceived -= OnLeft;
                 Game.Network.PlayerFaceReceived -= OnFace;
                 Game.Network.PlayerBodyPaintReceived -= OnBodyPaint;
+                Game.Network.PlayerToolLookReceived -= OnToolLook;
                 Game.Network.WorldResetReceived -= OnWorldReset;
             }
         }

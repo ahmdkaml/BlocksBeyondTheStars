@@ -66,6 +66,10 @@ public sealed class PlayerSnapshot
     /// <summary>Display name per <see cref="Scanned"/> entry, captured at scan time (#484). Absent in saves
     /// written before it existed — those entries just have no name.</summary>
     public Dictionary<string, string> ScannedNames { get; set; } = new();
+
+    /// <summary>Where each <see cref="Scanned"/> entry was found (#1843): body + system ids and names captured
+    /// at scan time. Absent in saves written before it existed — those entries just have no site.</summary>
+    public Dictionary<string, ScanSite> ScannedWhere { get; set; } = new();
     public List<InventorySlotDto> RationStore { get; set; } = new();
     public List<InventorySlotDto> Inventory { get; set; } = new();
     public List<MissionProgress> Missions { get; set; } = new();
@@ -82,6 +86,9 @@ public sealed class PlayerSnapshot
     public string ArmPixels { get; set; } = string.Empty;
     public string LegPixels { get; set; } = string.Empty;
     public string HelmetPixels { get; set; } = string.Empty;
+
+    /// <summary>Player tool looks (#1963): base item key → look payload. Absent in older saves.</summary>
+    public Dictionary<string, string>? ToolLooks { get; set; }
 
     /// <summary>Celestial bodies this player has physically landed on (gates travel-screen quick-travel). Persisted
     /// so the "only travel where you've been" rule survives a reload.</summary>
@@ -112,6 +119,9 @@ public sealed class PlayerSnapshot
 
     /// <summary>Named map markers (#1217) — per world, restored on reload. Absent in older saves ⇒ empty.</summary>
     public List<PlayerMarker> Markers { get; set; } = new();
+
+    /// <summary>Player notes (#1844) — restored on reload. Absent in older saves ⇒ empty.</summary>
+    public List<PlayerNote> Notes { get; set; } = new();
 
     /// <summary>The landing pad held on <see cref="CurrentLocationId"/> (#848), or -1 for none. Absent in
     /// pre-#848 saves, which then fall back to the first free pad exactly as before.</summary>
@@ -222,6 +232,7 @@ public static class StateMapper
         ModeOverride = (int)p.ModeOverride,
         Scanned = p.Scanned.ToList(),
         ScannedNames = new Dictionary<string, string>(p.ScannedNames),
+        ScannedWhere = CloneScanSites(p.ScannedWhere),
         RationStore = DumpInventory(p.RationStore),
         Inventory = DumpInventory(p.Inventory),
         Missions = p.Missions.Select(CloneProgress).ToList(),
@@ -234,6 +245,7 @@ public static class StateMapper
         TamedSpecies = p.TamedSpecies.ToList(),
         DeployedSpeeders = p.DeployedSpeeders.Select(CloneSpeeder).ToList(),
         Markers = p.Markers.Select(CloneMarker).ToList(),
+        Notes = p.Notes.Select(CloneNote).ToList(),
         LandingPadIndex = p.LandingPadIndex,
         FleetShipIds = new List<string>(p.FleetShipIds),
         ActiveShipId = p.ActiveShipId,
@@ -242,6 +254,7 @@ public static class StateMapper
         ArmPixels = p.ArmPixels,
         LegPixels = p.LegPixels,
         HelmetPixels = p.HelmetPixels,
+        ToolLooks = p.ToolLooks.Count > 0 ? new Dictionary<string, string>(p.ToolLooks) : null,
     };
 
     /// <summary>Copies the explored-map bitmaps so a snapshot doesn't alias the live arrays, dropping
@@ -279,6 +292,16 @@ public static class StateMapper
         Color = m.Color,
         Shared = m.Shared,
         CreatedUtc = m.CreatedUtc,
+    };
+
+    /// <summary>Copies a player note so a snapshot doesn't alias the live list (#1844).</summary>
+    private static PlayerNote CloneNote(PlayerNote n) => new()
+    {
+        Id = n.Id,
+        Title = n.Title,
+        Body = n.Body,
+        CreatedUtc = n.CreatedUtc,
+        UpdatedUtc = n.UpdatedUtc,
     };
 
     /// <summary>Copies a deployed speeder record so a snapshot doesn't alias the live list.</summary>
@@ -325,6 +348,34 @@ public static class StateMapper
     };
 
     /// <summary>Deep-clones the per-NPC memory (item 14) so a snapshot doesn't alias the live state.</summary>
+    /// <summary>Deep-copies the scan-site map (#1843) so a snapshot never aliases the live state's entries.</summary>
+    private static Dictionary<string, ScanSite> CloneScanSites(Dictionary<string, ScanSite>? sites)
+    {
+        var clone = new Dictionary<string, ScanSite>();
+        if (sites is null)
+        {
+            return clone;
+        }
+
+        foreach (var (key, site) in sites)
+        {
+            if (site is null)
+            {
+                continue; // a hand-edited or truncated save: no site is better than a null entry
+            }
+
+            clone[key] = new ScanSite
+            {
+                BodyId = site.BodyId ?? string.Empty,
+                BodyName = site.BodyName ?? string.Empty,
+                SystemId = site.SystemId ?? string.Empty,
+                SystemName = site.SystemName ?? string.Empty,
+            };
+        }
+
+        return clone;
+    }
+
     private static Dictionary<string, NpcRelationship> CloneNpcMemory(Dictionary<string, NpcRelationship>? memory)
     {
         var clone = new Dictionary<string, NpcRelationship>();
@@ -412,6 +463,7 @@ public static class StateMapper
             : Shared.Configuration.PlayerModeOverride.None,
         Scanned = new HashSet<string>(s.Scanned ?? new List<string>()),
         ScannedNames = new Dictionary<string, string>(s.ScannedNames ?? new Dictionary<string, string>()),
+        ScannedWhere = CloneScanSites(s.ScannedWhere ?? new Dictionary<string, ScanSite>()),
         RationStore = RestoreInventory(BlocksBeyondTheStars.Shared.State.PlayerState.RationStoreSlots, s.RationStore ?? new List<InventorySlotDto>()),
         Missions = s.Missions.Select(CloneProgress).ToList(),
         Milestones = new HashSet<string>(s.Milestones ?? new List<string>()),
@@ -423,6 +475,7 @@ public static class StateMapper
         TamedSpecies = new HashSet<string>(s.TamedSpecies ?? new List<string>()),
         DeployedSpeeders = (s.DeployedSpeeders ?? new List<DeployedSpeeder>()).Select(CloneSpeeder).ToList(),
         Markers = (s.Markers ?? new List<PlayerMarker>()).Select(CloneMarker).ToList(),
+        Notes = (s.Notes ?? new List<PlayerNote>()).Select(CloneNote).ToList(),
         LandingPadIndex = s.LandingPadIndex,
         FleetShipIds = new List<string>(s.FleetShipIds ?? new List<string>()),
         ActiveShipId = s.ActiveShipId ?? string.Empty,
@@ -431,6 +484,7 @@ public static class StateMapper
         ArmPixels = s.ArmPixels ?? string.Empty,
         LegPixels = s.LegPixels ?? string.Empty,
         HelmetPixels = s.HelmetPixels ?? string.Empty,
+        ToolLooks = s.ToolLooks != null ? new Dictionary<string, string>(s.ToolLooks, System.StringComparer.Ordinal) : new Dictionary<string, string>(System.StringComparer.Ordinal),
     };
 
     public static ShipSnapshot ToSnapshot(ShipState ship) => new()

@@ -48,6 +48,25 @@ public enum CreatureBodyPlan
     Standard, // segment-row body + head + limbs (the original, and still the most common)
     Medusa,   // jellyfish: translucent bell, long rim tentacles, drifts in air or water (#637)
     Titan,    // elephant/giraffe-scale land megafauna: pillar legs, neck/trunk, tusks (#638)
+    Floral,   // a walking flower: two legs, a petal ring around the head, a grin that becomes a maw (#1760, authored only)
+    Ray,      // a flat disc that flies on wing waves — under water, or hovering through the sky (#1778, generation 6)
+    Colossus, // a 40–60 block quadruped on very flat, light worlds (#1999, generation 9) — a one-per-world giant
+    Sandworm, // the sand sea's giant worm (#2001, generation 9): hears vibrations, breaches through the sand
+    Arachnid, // a speeder-sized eight-legger (#2009, generation 10): a rolled head shape, an ambusher when it hunts
+}
+
+/// <summary>
+/// The silhouette of a head (#2009). Every plan before the arachnid wore <see cref="Box"/>; the arachnid rolls one
+/// of the pyramids — all apex up — so its head is sometimes a pyramid and, when it is, not always the same one.
+/// The tiers of each shape are in <see cref="ArachnidRules.HeadTiers"/>; the client builds the mesh from them.
+/// </summary>
+public enum CreatureHeadShape
+{
+    Box,      // the classic cube head with a hinged jaw
+    Pyramid,  // a plain square pyramid, apex up
+    Spire,    // a tall, narrow pyramid
+    Frustum,  // a pyramid with its top cut flat
+    Ziggurat, // two stacked tiers: a flat-topped base and a small pyramid on it
 }
 
 /// <summary>
@@ -123,6 +142,12 @@ public sealed class CreatureSpecies
     /// <summary>A translucent buoyancy gas-sac above the body (floating grazers) — item-21 morphology.</summary>
     public bool HasGasSac { get; set; }
 
+    /// <summary>Pectoral + tail fins instead of legs — a legless swimmer's only limbs. Derived from the
+    /// species' own traits rather than drawn from the generator's RNG (see
+    /// <see cref="CreatureMotion.FinsFor"/>), so adding it left every existing world's species untouched and
+    /// a companion snapshot saved before it existed can be lifted on load.</summary>
+    public bool HasFins { get; set; }
+
     /// <summary>Secondary/belly accent colour (packed RGB) for a two-tone body, for more visible variety.</summary>
     public int BellyRgb { get; set; } = 0xFFFFFF;
 
@@ -135,6 +160,23 @@ public sealed class CreatureSpecies
 
     /// <summary>Titan plan only (#638): a segmented trunk hanging from the head (elephant).</summary>
     public bool HasTrunk { get; set; }
+
+    /// <summary>The head's silhouette (#2009): the classic box on every species that predates it, one of the pyramids on
+    /// an arachnid that rolled one. Additive with a classic default, so no older world or companion snapshot changes.</summary>
+    public CreatureHeadShape HeadShape { get; set; } = CreatureHeadShape.Box;
+
+    /// <summary>How many heads the body carries (#1780, generation 6): 1 = the classic single head, 2-3 = side by
+    /// side on a standard body, or each on its own neck on a titan (the hydra). Rolled AFTER every older roll and
+    /// only on a generation-6 world, so every older species keeps its one head.</summary>
+    public int Heads { get; set; } = 1;
+
+    /// <summary>How many wing PAIRS a winged body carries (#1781, generation 6): 1 = the classic pair, 2-3 = pairs
+    /// spread along the torso beating with a row lag (the dragonfly read). Ignored without <see cref="HasWings"/>.</summary>
+    public int WingPairs { get; set; } = 1;
+
+    /// <summary>How many pectoral fin PAIRS a finned body carries (#1782, generation 6): 1 = the classic pair, 2-3 =
+    /// pairs along the flanks sculling with a row lag. Ignored without <see cref="HasFins"/>.</summary>
+    public int FinPairs { get; set; } = 1;
 
     /// <summary>How high above the ground an <see cref="CreatureHabitat.Air"/> species hovers (#637) —
     /// per-species instead of one global constant, so the sky gets layers. 0 = the legacy default.</summary>
@@ -162,6 +204,52 @@ public sealed class CreatureSpecies
     public string DropItem { get; set; } = string.Empty;
     public int DropCount { get; set; } = 1;
     public CreatureDropKind DropKind { get; set; } = CreatureDropKind.Food;
+
+    // --- Authored traits (school club wave 3, #1763 / #1760). Every rolled species keeps the defaults, so the
+    // spawner, the client and the companion snapshots behave exactly as before for them. ---
+
+    /// <summary>The biome SURFACE block keys this species is native to (authored species only; empty = any).</summary>
+    public string[] BiomeSurfaces { get; set; } = System.Array.Empty<string>();
+
+    /// <summary>A hard rule: the species spawns only on ground whose block is in <see cref="BiomeSurfaces"/> —
+    /// Leni lives in the snow and the ice and nowhere else. The procedural affinity stays a bias.</summary>
+    public bool BiomeExclusive { get; set; }
+
+    /// <summary>The client's hide tile name ("fur", "shaggy", "petal", …); empty = the classic id-hashed pick.</summary>
+    public string Hide { get; set; } = string.Empty;
+
+    /// <summary>Turns hostile toward a player it sees breaking a block (the flowerling).</summary>
+    public bool AngeredByMining { get; set; }
+
+    /// <summary>Spills a small gift to a nearby player who has not mined for a while (the flowerling).</summary>
+    public bool GiftsWhenCalm { get; set; }
+
+    // --- Giants (#1998, generation 9): the colossus and the sandworm. Zero/empty on every other species. ---
+
+    /// <summary>A giant's height in blocks (the colossus to the top of its head, the sandworm how high it rears);
+    /// 0 = not a giant. <see cref="Size"/> is this ÷ 10, so the scan and the voice keep their scale.</summary>
+    public float GiantHeight { get; set; }
+
+    /// <summary>Colossus: what grows on its back — "plates", "spikes", "crystals", "forest" or empty.</summary>
+    public string BackFeature { get; set; } = string.Empty;
+
+    /// <summary>Colossus: leg length relative to the torso (0.8 stocky … 1.3 long-legged).</summary>
+    public float LegRatio { get; set; } = 1f;
+
+    /// <summary>Sandworm: how many mandible petals its mouth opens into (3–5).</summary>
+    public int Mandibles { get; set; }
+
+    /// <summary>Sandworm: body length in blocks.</summary>
+    public float WormLength { get; set; }
+
+    /// <summary>Sandworm: body diameter in blocks.</summary>
+    public float WormGirth { get; set; }
+
+    /// <summary>Sandworm: how far it hears a vibration (blocks).</summary>
+    public float Hearing { get; set; }
+
+    /// <summary>True for the one-per-world giants (#1998): they never come from the spawner and move by their own rules.</summary>
+    public bool IsGiant => BodyPlan is CreatureBodyPlan.Colossus or CreatureBodyPlan.Sandworm;
 
     /// <summary>Only Aggressive/PackHunter creatures roam and deal proximity damage.</summary>
     public bool Hostile => Temperament is CreatureTemperament.Aggressive or CreatureTemperament.PackHunter;
