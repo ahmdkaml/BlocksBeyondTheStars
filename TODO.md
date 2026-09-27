@@ -24,6 +24,28 @@ envelope at the WebSocket edge; deterministic seed world-gen; SQLite default per
 
 ---
 
+### 🌸 The Fifi plant — Sophie's tree-sized glowing berry plant (#2085: #2086–#2090, 2026-09-27, branch feat/fifi-plant, terrain generation 16)
+
+Sophie's idea from the school club, Marcel's decisions (2026-09-27): a plant as tall as a tree with a **green trunk, yellow
+leaves and pink blossoms**; the **blossoms glow and light up their surroundings**; it **always bears berries** — normal,
+edible berries that grow back **120 s** after picking; it grows **everywhere** there is plant life and stands **in groups**;
+name "Fifipflanze" / "Fifi Plant"; generation 16 (shared with the bipeds #2080 and Arena Nigra); a placed blossom working as a lamp is fine.
+
+- **✅ Content (#2086).** Blocks `fifi_stem` / `fifi_leaf` / `fifi_blossom` (emission + `lightColor`) / `flora_fifi_berries`
+  (drops `berries`), the three parts as placeable items, 14 locales with Sophie's credit, `ui.scan.subject.fifi_plant`.
+  New catalog flag `FloraCatalog.Species.Authored` (no roster, no world tint, no greenhouse), `FifiPlant` names the keys,
+  `WorldDescription.FifiPlantGeneration` = 16.
+- **✅ World generation (#2087).** `FifiPlantRules` (grove cells of 48, 35 % hold a grove of 3–6 on an integer ring, the
+  shape: trunk, crown of radius 2–3, 5–8 blossoms, 3–6 berries) + `WorldGenerator.FifiPlantsGen16.cs` (every world with
+  plant life, soft natural ground, not in water / sand sea / deep woods); goldens `meadowlands-gen16`, `desert-gen16`.
+- **✅ Server (#2088).** Berries regrow after 120 s under an intact leaf, never toxic; every part scans as the edible
+  "Fifi plant", one discovery; settlements clear Fifi plants like trees.
+- **✅ Client (#2089).** Cutout yellow leaves without world tint, berries in their own colour, glowing pink blossoms as light
+  sources. Local Unity build before the merge.
+- **✅ Assets (#2090).** Four tiles via `gen_textures.py` (the leaves and berries alpha-baked), NOTICES.md.
+- ⚠ OPEN: Marcel's playtest on a fresh generation-16 world (any green world — a grove every 80–100 blocks): the groves by day
+  and their pink light at night, picking berries and waiting two minutes; show Sophie.
+
 ### 💎 Crystal Net review fixes — devices only listen, the Device Eye, a travelling glow (#2091: #2092–#2099, 2026-09-27, branch fix/crystal-net-review)
 
 Why: the review of v2026.9.17 found that "one port per device" made listening devices hear their own reports — a
