@@ -68,6 +68,8 @@ ITEMS = [
     ("grain", "a small loose handful of ripe golden wheat grains with two short ears of wheat"),
     ("toxic_gland", "a glistening wet alien organ gland"),
     ("toxic_berries", "a small cluster of round berries with a leaf"),
+    # Toxica-Maxima (#2066): the meat of a contaminated animal.
+    ("toxic_meat", "a slab of raw red meat with a sickly glowing green sheen and dripping green veins"),
     # Fruit trees (#2038): one icon per fruit shape and its toxic twin (the toxic ones stay uncoloured — the client tints them).
     ("fruit_round", "a single plump round red-orange apple-like fruit with a short stem and one small green leaf"),
     ("fruit_long", "a single long slender smooth green pod-like fruit with a short stem"),
@@ -201,6 +203,8 @@ MODULES = [
     ("cargo_hold_3", "a tall triple-stack of large ship cargo container modules bound by a heavy steel frame, glowing cyan status strips"),
     ("refinery", "a ship ore refinery smelter module"),
     ("detoxifier", "a ship chemical detoxifier purifier module"),
+    # Toxica-Maxima (#2067): the decontaminator ship module (the placed block shows its own tile).
+    ("decontaminator", "a ship decontamination module, a sealed steel rinse chamber with a round porthole of glowing green fluid, green-and-black hazard stripes and pipes"),
     ("transmuter", "a ship matter transmuter module, a dark hexagonal reactor housing with a glowing violet matter-reassembly core and faint energy arcs"),
     ("tractor_beam", "a ship tractor-beam emitter dish projecting a beam"),
     ("oxygen_generator", "a ship oxygen generator with a tank"),
