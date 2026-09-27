@@ -114,6 +114,14 @@ public sealed class PlanetType
     /// above the surface — drifting voxel islands you reach by flying up or building a tower. Off by default.</summary>
     public bool FloatingIslands { get; set; }
 
+    /// <summary>The gas giant (#2112, generation 18): <c>"gas"</c> makes the world's sea a sea of GAS that floods the whole
+    /// heightfield (the <c>gas</c> block: a still liquid you sink into and die in; there is no solid surface) — with
+    /// <see cref="FloatingIslands"/> the islands are the only ground. Empty (every classic type) = the water/lava rule.</summary>
+    public string SeaFluid { get; set; } = string.Empty;
+
+    /// <summary>True for the gas-giant class (#2112): the sea is gas.</summary>
+    public bool IsGasWorld => string.Equals(SeaFluid, "gas", System.StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Islands afloat on the sea (#1757, generation 5): lens-shaped land bodies whose top rises a few
     /// blocks above the waterline and whose keel hangs a few blocks below it, with open water between the keel
     /// and the seabed — the "schwimmende Inseln" of the rainbow planet. The world's own terrain stays almost
@@ -265,6 +273,13 @@ public sealed class PlanetType
     /// this), so nothing grows or lives here — note the worldgen flora *branch* still keys off
     /// <see cref="FloraDensity"/>, so airless types should not declare a flora density (#479).</summary>
     public bool IsAirless => string.Equals(Atmosphere, "none", System.StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>A world where plants AND animals live (#2106, Marcel's rule for "a living world"): air of any kind, a
+    /// flora density above zero and a creature abundance that is not "none". Derived from the fields, never from a
+    /// planet key, so a new type joins by its data. Oil pockets (generation 18) form only on such worlds — oil is
+    /// old life.</summary>
+    public bool HasLife => !IsAirless && FloraDensity > 0f && !Void
+        && !string.Equals(CreatureAbundance, "none", System.StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// When true, the sky is always space (black + stars) even on the surface — the system's sun

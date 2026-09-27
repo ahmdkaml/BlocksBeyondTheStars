@@ -182,8 +182,33 @@ public sealed class WorldDescription
     /// #1715 flora roster, #1778-#1783 new creature kinds + giant trees, 2026-09 lava pads + the Titas and Valuma
     /// planet types, 2026-09 the giants + the sand-sea planet class, #2009 the arachnid body plan, 2026-09 cave flora,
     /// #2018 big herds + the begging trait, #2024 the toxic-world class, #2038 the fruit trees, #2062 Toxica-Maxima,
-    /// #2080 the bipeds + favourite foods + Mini-Michi-Paul, #2085 the Fifi plant, #2073 Arena Nigra).</summary>
-    public const int CurrentTerrainGeneration = 17;
+    /// #2080 the bipeds + favourite foods + Mini-Michi-Paul, #2085 the Fifi plant, #2073 Arena Nigra, #2104 Justus' package:
+    /// oil pockets, the worm body plan, the gas giant).</summary>
+    public const int CurrentTerrainGeneration = 18;
+
+    /// <summary>The generation of Justus' package (#2104, 2026-09): <b>oil</b> (#2106) — a finite, still liquid in sealed
+    /// tar-rimmed pockets 40–120 below the surface of every living world (<c>PlanetType.HasLife</c>), harvested with the fluid
+    /// pump; the <b>worm</b> body plan (#2109) — legless slitherers rolled last for some standard Land species; and the
+    /// <b>gas giant</b> world class (#2112). Every new field defaults to its classic no-op and every roll is appended after
+    /// every older roll, so a world of any older generation keeps its terrain, its roster and its chunks bit for bit.</summary>
+    public const int OilGeneration = 18;
+
+    /// <summary>The generation of the worm body plan (#2109, the same wave as <see cref="OilGeneration"/>): a standard Land
+    /// species may roll <c>CreatureBodyPlan.Worm</c> — legless, a chain of links, the slither style — as the LAST draw, and
+    /// the legged slitherer roll (a long body with legs that "slithered") is gone. Older rosters keep every species bit for bit.</summary>
+    public const int WormGeneration = 18;
+
+    /// <summary>The generation of the sea giant (#2111, the same wave as <see cref="OilGeneration"/>): a <b>leviathan</b> —
+    /// the largest form of water life — lives under every deep sea of a living water world (<c>GiantRules.HostsLeviathan</c>),
+    /// on the sandworm's model: it hears swimmers, boats and fish, breaches, strikes and swallows. Rolled outside the roster
+    /// like every giant, so no older world's species move; an older save never hosts one.</summary>
+    public const int LeviathanGeneration = 18;
+
+    /// <summary>The generation of the gas giant (#2112, the same wave as <see cref="OilGeneration"/>): a world class with no
+    /// solid surface — a lethal sea of gas over the whole heightfield, floating islands above it, metal landing decks, sky
+    /// cities with a breathable pocket, and the passive <b>sky giant</b> drifting between the islands. The galaxy's
+    /// <c>LoneGiant</c> planet becomes one, plus a roll on the outermost orbit. An older galaxy keeps every body's type.</summary>
+    public const int GasGiantGeneration = 18;
 
     /// <summary>The generation of the bipeds (#2080, 2026-09, the school club idea of Paul and Ben): an upright two-legged body
     /// plan with two arms and a big head, rolled last for some standard Land species and always peaceful

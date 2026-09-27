@@ -36,6 +36,9 @@ public sealed partial class GameServer
     private const int BlasterRadius = 3;         // sphere radius (blocks) — a sizeable crater (~120 blocks)
     private const double BlasterCooldown = 3.0;
 
+    // --- balance: fluid pump (#2106) ---
+    private const double PumpCooldown = 0.4;     // one cell per pull; a pocket of a few hundred cells is a minute's work
+
     // --- balance: creature translator (taming) ---
     private const double TranslatorCooldown = 1.5; // seconds between decodes (the ritual responses are free)
 
@@ -93,6 +96,14 @@ public sealed partial class GameServer
                 UseTerrainBlaster(session, target);
                 cooldown = BlasterCooldown;
                 break;
+            case "fluid_pump":
+                if (!UseFluidPump(session, target))
+                {
+                    return; // a miss (no liquid, or a protected cell) costs neither energy nor cooldown
+                }
+
+                cooldown = PumpCooldown;
+                break;
             case "terrain_scanner":
                 UseTerrainScanner(session);
                 cooldown = ScannerCooldown;
@@ -108,6 +119,32 @@ public sealed partial class GameServer
             case "speeder":
             case "boat":
                 DeployVehicle(session, item.Key); // unfolds a hover speeder / launches a boat ahead (consumes the item, #1215)
+                cooldown = SpeederDeployCooldown;
+                break;
+            case RailRules.LinkerItemKey: // #2113: the linker couples two pylons (first pick, second pick)
+                if (!UseRailLinker(session, target))
+                {
+                    return;
+                }
+
+                cooldown = 0.2;
+                break;
+            case RailRules.CabItemKey: // #2113: the cab appears on the line under the aim
+                if (!UseRailCab(session, target))
+                {
+                    return;
+                }
+
+                cooldown = SpeederDeployCooldown;
+                break;
+            case "wagon_seats":
+            case "wagon_sleeper":
+            case "wagon_bar": // #2113: a wagon couples behind the last one
+                if (!UseRailWagon(session, item.Key, target))
+                {
+                    return;
+                }
+
                 cooldown = SpeederDeployCooldown;
                 break;
             default:
@@ -233,6 +270,37 @@ public sealed partial class GameServer
                 }
     }
 
+    /// <summary>The fluid pump (#2106): pulls ONE cell of liquid into the player's pack — oil (a still deposit: the cell
+    /// stays air, the pocket is finite), or water / lava (the automaton refills the cell from its neighbours, exactly as
+    /// when a tier-3 drill mines them). Goes through the ordinary break path, so the drop, the fluid wake and the sand
+    /// above behave as for any mined block; protected cells (ship, settlement, station, someone else's base) are refused.
+    /// Returns false on a miss so the caller charges nothing.</summary>
+    private bool UseFluidPump(PlayerSession session, Vector3f target)
+    {
+        var p = WorldConstants.CanonicalBlock(new Vector3i(
+            (int)System.Math.Floor(target.X), (int)System.Math.Floor(target.Y), (int)System.Math.Floor(target.Z)), _world.Circumference);
+        var b = _world.GetBlock(p);
+        var d = b.IsAir ? null : _world.Definition(b);
+        if (d is null || !(IsFluid(b.Value) || d.Liquid) || d.Drops.Count == 0)
+        {
+            Reject(session, "gadget", "@srv.pump.no_fluid"); // #2112: a liquid that yields nothing (the gas sea) cannot be pumped
+            return false;
+        }
+
+        if (IsShipBlock(p) || IsSettlementBlock(p) || IsStationBlock(p)
+            || IsBaseProtected(p, session.State.PlayerId, session.State.IsAdmin))
+        {
+            Reject(session, "gadget", "@srv.gadget.not_usable");
+            return false;
+        }
+
+        var pool = new MaterialPool(_content, session.State, _ship);
+        BreakBlockCore(session, session.State.PlayerId, p, d, pool, null);
+        SendInventory(session);
+        SpillPoolOverflow(session, pool, p); // #853: a full pack leaves the cell's yield on the ground
+        return true;
+    }
+
     /// <summary>Terrain scanner (Feature 40): scans a sphere around the player for valuable blocks (ores,
     /// crystal, data caches) and sends their positions to that player as <see cref="OreScanResult"/> — the
     /// client renders them as through-wall glow markers. Non-destructive; nearest hits win when the world is
@@ -306,10 +374,11 @@ public sealed partial class GameServer
         return result;
     }
 
-    /// <summary>What the scanner counts as "valuable": every ore vein block, crystal, and data caches.</summary>
+    /// <summary>What the scanner counts as "valuable": every ore vein block, crystal, data caches — and oil (#2106), or
+    /// nobody would ever find a pocket forty blocks down.</summary>
     private static bool IsValuableBlock(string? key)
         => key != null
-           && (key.EndsWith("_ore", System.StringComparison.Ordinal) || key is "crystal" or "data_cache");
+           && (key.EndsWith("_ore", System.StringComparison.Ordinal) || key is "crystal" or "data_cache" or "oil");
 
     /// <summary>Test hook: how many seconds until the gadget is usable again for this player (0 = ready).</summary>
     public double GadgetCooldownForTest(string playerId, string gadgetKey)

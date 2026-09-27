@@ -1746,8 +1746,8 @@ namespace BlocksBeyondTheStars.Client
 
         private static bool IsFluidBlockSlow(GameContent content, BlockId id)
         {
-            var key = content.BlockById(id)?.Key;
-            return key is "water" or "lava";
+            var def = content.BlockById(id);
+            return def?.Key is "water" or "lava" || (def?.Liquid ?? false); // #2106: a still liquid (oil) meshes like one
         }
 
         /// <summary>True for slim props that mesh their OWN geometry and never fill their cell: the
@@ -1824,6 +1824,14 @@ namespace BlocksBeyondTheStars.Client
         };
 
         private static Vector2 BlockMaterial(GameContent content, BlockId id) => TraitsFor(content).MaterialOf(id);
+
+        /// <summary>The (gloss, metal) pair the mesher packs into a face of this block — for anything outside the
+        /// chunk path that wears <c>ChunkMaterial</c> on its own mesh (the drop packets, #2105) and must fill the
+        /// vertex colour the shader reads.</summary>
+        public static Vector2 MaterialFor(GameContent content, BlockId id) => BlockMaterial(content, id);
+
+        /// <summary>The emission (0..1) the mesher packs into a face of this block — see <see cref="MaterialFor"/>.</summary>
+        public static float EmissionFor(GameContent content, BlockId id) => BlockEmission(content, id);
 
         private static Vector2 BlockMaterialSlow(GameContent content, BlockId id)
         {
@@ -2124,7 +2132,7 @@ namespace BlocksBeyondTheStars.Client
 
             var def = content.BlockById(id);
             // alpha-blended — see through them
-            return def?.Key is "glass" or "glass_clear" or "force_field" or "water" or "fire" or "energy_fence" or "energy_gate";
+            return def?.Key is "glass" or "glass_clear" or "force_field" or "water" or "gas" or "fire" or "energy_fence" or "energy_gate"; // #2112: the gas sea
         }
 
         /// <summary>The one deliberately CLEAR glass (#1274): the canopy/dome exception to the frosted rule
@@ -2197,14 +2205,15 @@ namespace BlocksBeyondTheStars.Client
                     if (IsFluidBlockSlow(content, id)) f |= TraitFluid;
                     if (IsClearGlassSlow(content, id)) f |= TraitClearGlass;
                     if (IsWoodBlockSlow(content, id)) f |= TraitWood;
-                    if (key != "water" && key != "fire" && key != "energy_gate") f |= TraitCollidable;
+                    bool liquid = content.BlockById(id)?.Liquid ?? false; // #2106: oil — you sink into it like water
+                    if (key != "water" && key != "fire" && key != "energy_gate" && !liquid) f |= TraitCollidable;
                     if (key != null && key.StartsWith("flora_", System.StringComparison.Ordinal)) f |= TraitFloraPrefix;
                     if (key != null && TallFlora.Contains(key)) f |= TraitTallFlora;
                     if (key != null && SolidFlora.Contains(key)) f |= TraitSolidFlora;
                     if (key != null && BlocksBeyondTheStars.Shared.Definitions.FloraCatalog.KeepsOwnColour(key)) f |= TraitCultivated;
                     if (key != null && BlocksBeyondTheStars.Shared.Definitions.FloraCatalog.IsHanging(key)) f |= TraitHangingFlora;
                     if (key != null && BlocksBeyondTheStars.Shared.Definitions.FloraCatalog.IsRainbow(key)) f |= TraitRainbowFlora;
-                    if (key == "water") f |= TraitWater;
+                    if (key == "water" || key == "gas") f |= TraitWater; // #2112: the gas sea meshes like water (a see-through surface)
                     if (key == "lava") f |= TraitLava;
                     if (key == "fire") f |= TraitFire;
                     if (key == "torch" || key == "lantern") f |= TraitTorchProp;

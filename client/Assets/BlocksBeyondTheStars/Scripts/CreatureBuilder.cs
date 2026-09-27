@@ -92,6 +92,24 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
+            if (c.BodyPlan == "Worm")
+            {
+                BuildWorm(root, c); // #2109
+                return;
+            }
+
+            if (c.BodyPlan == "Leviathan")
+            {
+                BuildLeviathan(root, c); // #2111
+                return;
+            }
+
+            if (c.BodyPlan == "SkyGiant")
+            {
+                BuildSkyGiant(root, c); // #2112
+                return;
+            }
+
             float unit = 0.5f * Mathf.Clamp(c.Size, 0.4f, 3f);
             Color baseColor = Rgb(c.ColorRgb);
             Color bellyColor = Rgb(c.BellyRgb);
@@ -912,6 +930,94 @@ namespace BlocksBeyondTheStars.Client
             anim.Init(rig);
         }
 
+        /// <summary>The worm (#2109, Marcel's finding "the sandworms have legs"): a legless slitherer — the classic box head
+        /// (skull, hinged jaw, eyes, optional antennae) on a low pivot at the front, and behind it a chain of
+        /// <c>BodySegments</c> tapering links built with <see cref="AddTail"/> and handed to the animator AS the tail: its beat
+        /// already travels link by link (each lags the one before), and a legless land crawler "undulates", so the whole body
+        /// runs the wave that is the slither — no new animator code. A belly stripe under the front links, a dorsal ridge when
+        /// the species has a crest. Small: render-only, no colliders.</summary>
+        private void BuildWorm(GameObject root, NetCreature c)
+        {
+            float unit = 0.5f * Mathf.Clamp(c.Size, 0.4f, 3f);
+            Color baseColor = Rgb(c.ColorRgb);
+            Color bellyColor = Rgb(c.BellyRgb);
+            if (c.Hostile)
+            {
+                baseColor = Color.Lerp(baseColor, new Color(0.85f, 0.2f, 0.15f), 0.25f);
+            }
+
+            if (c.Asleep)
+            {
+                baseColor *= 0.85f;
+            }
+
+            if (!string.IsNullOrEmpty(c.OwnerId))
+            {
+                baseColor = Color.Lerp(baseColor, new Color(0.35f, 0.85f, 0.65f), 0.18f);
+            }
+
+            _bodyMat = Lit(c.Glows ? baseColor * 1.6f : baseColor, PickHide(c));
+            var bellyMat = Lit(c.Glows ? bellyColor * 1.4f : bellyColor, PickHide(c));
+            int idh = StableIdHash(c.SpeciesId);
+            float girth = unit * (0.55f + ((idh >> 5) & 7) / 7f * 0.25f);   // 0.55..0.8 units — slim or plump
+            float bodyY = girth * 0.55f;                                      // lies on the ground
+
+            var body = new GameObject("BodyRig");
+            body.transform.SetParent(root.transform, false);
+
+            // The head: a blunt box on a low pivot at the front — AddHeadBox registers it, so the gesture / gaze / jaw / eye
+            // code works on it unchanged; the horns are antennae with a bobble, like the biped's.
+            float headScale = 0.9f;
+            _headPivot = NewPivot(body.transform, "Head", new Vector3(0f, bodyY + unit * 0.05f, girth * 0.7f));
+            AddHeadBox(unit * 0.8f * headScale, unit * 0.7f * headScale, unit * 0.75f * headScale, unit * 0.4f, _bodyMat);
+            AddEyes(c, unit, headScale);
+            int antennae = Mathf.Clamp(c.Horns, 0, 2);
+            for (int a = 0; a < antennae; a++)
+            {
+                float ax = antennae == 1 ? 0f : (a == 0 ? -1f : 1f) * unit * 0.2f;
+                var stalk = NewPivot(_headPivot, "Antenna" + a, new Vector3(ax, unit * 0.3f, unit * 0.35f));
+                stalk.localRotation = Quaternion.Euler(-14f, 0f, antennae == 1 ? 0f : (a == 0 ? 14f : -14f));
+                AddPartTo(stalk, "Stalk", new Vector3(0f, unit * 0.2f, 0f), new Vector3(unit * 0.05f, unit * 0.4f, unit * 0.05f), _bodyMat);
+                AddPartTo(stalk, "Bobble", new Vector3(0f, unit * 0.42f, 0f), Vector3.one * (unit * 0.12f), bellyMat, PrimitiveType.Sphere);
+            }
+
+            // The body: the chain of links, root link right behind the head, tapering to the tail tip. Its total length grows
+            // with the link count, so a twelve-link worm is a long one.
+            int links = Mathf.Clamp(c.BodySegments, 6, 12);
+            float length = unit * 0.3f * links;
+            AddTail(body.transform, new Vector3(0f, bodyY, girth * 0.2f), length, girth, links, _bodyMat);
+
+            // A paler belly stripe and, on a crested species, a dorsal ridge — both on the first few links so the ridge rides
+            // the wave with the body.
+            for (int i = 0; i < Mathf.Min(_tailChain.Count, 4); i++)
+            {
+                float w = girth * (1f - 0.22f * i);
+                float linkLen = length / links;
+                AddPartTo(_tailChain[i], "Belly" + i, new Vector3(0f, -w * 0.42f, -linkLen * 0.5f), new Vector3(w * 0.8f, w * 0.14f, linkLen * 0.95f), bellyMat);
+                if (c.HasCrest)
+                {
+                    AddPartTo(_tailChain[i], "Ridge" + i, new Vector3(0f, w * 0.52f, -linkLen * 0.5f), new Vector3(w * 0.18f, w * 0.22f, linkLen * 0.7f), bellyMat);
+                }
+            }
+
+            if (c.Glows)
+            {
+                var go = new GameObject("Glow");
+                go.transform.SetParent(body.transform, false);
+                go.transform.localPosition = new Vector3(0f, bodyY, 0f);
+                _glow = go.AddComponent<Light>();
+                _glow.type = LightType.Point;
+                _glow.range = unit * 4f;
+                _glow.intensity = 1.0f;
+                _glow.color = Rgb(c.ColorRgb);
+                _glow.shadows = LightShadows.None;
+            }
+
+            var rig = Describe(c, body.transform, unit, girth, idh);
+            var anim = root.AddComponent<CreatureAnimator>();
+            anim.Init(rig);
+        }
+
         /// <summary>Spider eye clusters (#2009): up to eight eyes in two rows on the head's front — on the face of a box head,
         /// or ON the front slope of a pyramid, each pushed out along the slope's normal so none sinks into the mesh (the
         /// flowerling's face was lost inside its head exactly that way, #1997). Every eye gets its eyelid, so the cluster blinks.</summary>
@@ -1646,6 +1752,217 @@ namespace BlocksBeyondTheStars.Client
             MakeGiantBody(root);
             var view = root.AddComponent<SandwormView>();
             view.Init(segments, head, petalPivots, girth, length, _renderers.ToArray());
+        }
+
+        /// <summary>The leviathan (#2111): the sandworm's long body in the sea — a smooth tapering tube of segments with a pale
+        /// belly, a dorsal fin on a crested species, pairs of flank fins along the body, a fluke at the tail, and a sleek head
+        /// with two eyes and two hinged jaws (the worm's petals, two of them: top and bottom). The same <see cref="SandwormView"/>
+        /// poses it along the shared <c>SandwormPath</c>; the view's water flag turns the sand fountains into spray.</summary>
+        private void BuildLeviathan(GameObject root, NetCreature c)
+        {
+            float girth = Mathf.Max(2f, c.WormGirth > 0f ? c.WormGirth : 5f);
+            int segCount = Mathf.Clamp(c.BodySegments, 20, 40);
+            float length = Mathf.Max(20f, c.WormLength > 0f ? c.WormLength : girth * 16f);
+            float segLen = length / segCount;
+            Color baseColor = Rgb(c.ColorRgb);
+            Color bellyColor = Rgb(c.BellyRgb);
+            _bodyMat = Lit(c.Glows ? baseColor * 1.3f : baseColor, PickHide(c));
+            var bellyMat = Lit(bellyColor, PickHide(c));
+            var finMat = Lit(Color.Lerp(baseColor, bellyColor, 0.35f) * 0.95f, _plated ?? _hide);
+            var spineMat = Lit(baseColor * 0.6f, null);
+            var glowMat = Unlit(Color.Lerp(bellyColor, new Color(0.5f, 0.95f, 1f), 0.7f));
+            int spineRows = Mathf.Clamp(c.Horns, 0, 2);
+            int finPairs = Mathf.Clamp(c.FinPairs, 1, 3);
+
+            var segments = new Transform[segCount];
+            for (int i = 0; i < segCount; i++)
+            {
+                float t = i / (float)(segCount - 1);
+                // Thickest a third of the way back, tapering to a narrow tail stock for the fluke.
+                float taper = Mathf.Lerp(0.8f, 1f, Mathf.Clamp01(t / 0.3f)) * Mathf.Lerp(1f, 0.32f, Mathf.Clamp01((t - 0.3f) / 0.7f) * Mathf.Clamp01((t - 0.3f) / 0.7f));
+                float g = girth * taper;
+                var seg = new GameObject("Seg" + i).transform;
+                seg.SetParent(root.transform, false);
+                _keepColliders = true;
+                AddPartTo(seg, "Core", Vector3.zero, new Vector3(g, g * 0.92f, segLen * 1.08f), _bodyMat);
+                _keepColliders = false;
+                AddPartTo(seg, "Belly", new Vector3(0f, -g * 0.42f, 0f), new Vector3(g * 0.7f, g * 0.14f, segLen * 1.0f), bellyMat);
+                if (c.HasCrest && t > 0.15f && t < 0.5f)
+                {
+                    // The dorsal fin: tallest over the thickest part of the body, a thin blade.
+                    float fin = g * (0.55f + 0.5f * Mathf.Sin((t - 0.15f) / 0.35f * Mathf.PI));
+                    AddPartTo(seg, "Dorsal", new Vector3(0f, g * 0.46f + fin * 0.5f, 0f), new Vector3(g * 0.08f, fin, segLen * 0.9f), finMat);
+                }
+
+                if (spineRows > 0 && t > 0.5f && i % 2 == 0)
+                {
+                    for (int s = 0; s < spineRows; s++)
+                    {
+                        float x = spineRows == 1 ? 0f : (s == 0 ? -g * 0.18f : g * 0.18f);
+                        AddPartTo(seg, "Spine" + s, new Vector3(x, g * 0.5f, 0f), new Vector3(g * 0.07f, g * 0.3f, g * 0.07f), spineMat);
+                    }
+                }
+
+                if (c.Glows && (i & 1) == 0)
+                {
+                    AddPartTo(seg, "SpotL", new Vector3(-g * 0.5f, g * 0.05f, 0f), new Vector3(g * 0.03f, g * 0.1f, segLen * 0.35f), glowMat);
+                    AddPartTo(seg, "SpotR", new Vector3(g * 0.5f, g * 0.05f, 0f), new Vector3(g * 0.03f, g * 0.1f, segLen * 0.35f), glowMat);
+                }
+
+                segments[i] = seg;
+            }
+
+            // Flank fins: pairs spread along the front two thirds, swept back, angled a little down.
+            for (int p = 0; p < finPairs; p++)
+            {
+                int at = Mathf.Clamp(Mathf.RoundToInt(segCount * (0.18f + 0.22f * p)), 1, segCount - 2);
+                float g = girth * Mathf.Lerp(1f, 0.7f, p / 2f);
+                float finLen = g * (1.6f - 0.3f * p);
+                foreach (int side in new[] { -1, 1 })
+                {
+                    var pivot = NewPivot(segments[at], "Fin" + p + (side < 0 ? "L" : "R"), new Vector3(side * g * 0.45f, -g * 0.1f, 0f));
+                    pivot.localRotation = Quaternion.Euler(0f, side * -35f, side * 18f);
+                    AddPartTo(pivot, "FinBlade", new Vector3(side * finLen * 0.5f, 0f, -finLen * 0.1f), new Vector3(finLen, g * 0.08f, g * 0.7f), finMat);
+                }
+            }
+
+            // The fluke: two horizontal blades on the last segment.
+            var tail = segments[segCount - 1];
+            float tailG = girth * 0.32f;
+            foreach (int side in new[] { -1, 1 })
+            {
+                var pivot = NewPivot(tail, "Fluke" + (side < 0 ? "L" : "R"), new Vector3(0f, 0f, -segLen * 0.3f));
+                pivot.localRotation = Quaternion.Euler(0f, side * 28f, 0f);
+                AddPartTo(pivot, "FlukeBlade", new Vector3(side * girth * 0.7f, 0f, -girth * 0.25f), new Vector3(girth * 1.4f, tailG * 0.25f, girth * 0.8f), finMat);
+            }
+
+            // The head: a sleek snout, two eyes, and two hinged jaws with a row of teeth each.
+            var head = new GameObject("WormHead").transform;
+            head.SetParent(root.transform, false);
+            _keepColliders = true;
+            AddPartTo(head, "Skull", new Vector3(0f, 0f, -girth * 0.05f), new Vector3(girth * 1.0f, girth * 0.85f, girth * 0.7f), _bodyMat);
+            _keepColliders = false;
+            AddPartTo(head, "Snout", new Vector3(0f, girth * 0.12f, girth * 0.45f), new Vector3(girth * 0.7f, girth * 0.4f, girth * 0.5f), _bodyMat);
+            var eyeMat = Unlit(c.Glows ? new Color(0.6f, 1f, 0.95f) : new Color(0.95f, 0.9f, 0.5f));
+            AddPartTo(head, "EyeL", new Vector3(-girth * 0.42f, girth * 0.2f, girth * 0.25f), new Vector3(girth * 0.16f, girth * 0.16f, girth * 0.16f), eyeMat);
+            AddPartTo(head, "EyeR", new Vector3(girth * 0.42f, girth * 0.2f, girth * 0.25f), new Vector3(girth * 0.16f, girth * 0.16f, girth * 0.16f), eyeMat);
+            var mawMat = Lit(new Color(0.5f, 0.1f, 0.14f), null);
+            var toothMat = Lit(new Color(0.95f, 0.93f, 0.85f), null);
+            AddPartTo(head, "Maw", new Vector3(0f, -girth * 0.1f, girth * 0.3f), new Vector3(girth * 0.66f, girth * 0.3f, girth * 0.05f), mawMat);
+
+            var jaws = new Transform[2];
+            for (int k = 0; k < 2; k++)
+            {
+                float a = k == 0 ? Mathf.PI * 0.5f : Mathf.PI * 1.5f; // top, bottom
+                var rim = new Vector3(0f, Mathf.Sin(a) * girth * 0.24f - girth * 0.1f, girth * 0.3f);
+                var pivot = NewPivot(head, "Jaw" + k, rim);
+                pivot.localRotation = Quaternion.Euler(0f, 0f, a * Mathf.Rad2Deg - 90f);
+                AddPartTo(pivot, "Petal", new Vector3(0f, -girth * 0.12f, girth * 0.4f), new Vector3(girth * 0.7f, girth * 0.12f, girth * 0.85f), _bodyMat);
+                for (int tth = 0; tth < 5; tth++)
+                {
+                    float x = Mathf.Lerp(-girth * 0.26f, girth * 0.26f, tth / 4f);
+                    AddPartTo(pivot, "Tooth" + tth, new Vector3(x, -girth * 0.02f, girth * 0.25f + tth * girth * 0.12f), new Vector3(girth * 0.06f, girth * 0.14f, girth * 0.06f), toothMat);
+                }
+
+                jaws[k] = pivot;
+            }
+
+            MakeGiantBody(root);
+            var view = root.AddComponent<SandwormView>();
+            view.Water = true;
+            view.Init(segments, head, jaws, girth, length, _renderers.ToArray());
+        }
+
+        /// <summary>The sky giant (#2112): a long tapering sailer — a tube of segments with a pale belly, a row of tall
+        /// wing-sails standing up from the back (the species' <c>WingPairs</c>), a pair of broad glide fins under the front
+        /// third, a fluke at the tail, a blunt head with two eyes. The <see cref="SkyGiantView"/> lays the body along the
+        /// head's own track every frame; there is no gait, so no <see cref="CreatureAnimator"/>.</summary>
+        private void BuildSkyGiant(GameObject root, NetCreature c)
+        {
+            float girth = Mathf.Max(2f, c.WormGirth > 0f ? c.WormGirth : 5f);
+            int segCount = Mathf.Clamp(c.BodySegments, 14, 30);
+            float length = Mathf.Max(20f, c.WormLength > 0f ? c.WormLength : girth * 10f);
+            float segLen = length / (segCount - 1);
+            Color baseColor = Rgb(c.ColorRgb);
+            Color bellyColor = Rgb(c.BellyRgb);
+            _bodyMat = Lit(c.Glows ? baseColor * 1.3f : baseColor, PickHide(c));
+            var bellyMat = Lit(bellyColor, PickHide(c));
+            var sailMat = Lit(Color.Lerp(bellyColor, baseColor, 0.3f), _plated ?? _hide);
+            var glowMat = Unlit(Color.Lerp(bellyColor, new Color(0.7f, 0.95f, 1f), 0.6f));
+            int sailPairs = Mathf.Clamp(c.WingPairs, 2, 5);
+
+            var segments = new Transform[segCount];
+            var sails = new System.Collections.Generic.List<Transform>();
+            for (int i = 0; i < segCount; i++)
+            {
+                float t = i / (float)(segCount - 1);
+                float taper = Mathf.Lerp(0.85f, 1f, Mathf.Clamp01(t / 0.25f)) * Mathf.Lerp(1f, 0.3f, Mathf.Clamp01((t - 0.25f) / 0.75f));
+                float g = girth * taper;
+                var seg = new GameObject("Seg" + i).transform;
+                seg.SetParent(root.transform, false);
+                _keepColliders = true;
+                AddPartTo(seg, "Core", Vector3.zero, new Vector3(g, g * 0.8f, segLen * 1.08f), _bodyMat);
+                _keepColliders = false;
+                AddPartTo(seg, "Belly", new Vector3(0f, -g * 0.36f, 0f), new Vector3(g * 0.7f, g * 0.14f, segLen), bellyMat);
+                if (c.Glows && (i & 1) == 0)
+                {
+                    AddPartTo(seg, "SpotL", new Vector3(-g * 0.5f, 0f, 0f), new Vector3(g * 0.03f, g * 0.12f, segLen * 0.3f), glowMat);
+                    AddPartTo(seg, "SpotR", new Vector3(g * 0.5f, 0f, 0f), new Vector3(g * 0.03f, g * 0.12f, segLen * 0.3f), glowMat);
+                }
+
+                segments[i] = seg;
+            }
+
+            // The sails: tall thin blades standing up from the back, spread over the front two thirds, leaning back.
+            for (int p = 0; p < sailPairs; p++)
+            {
+                int at = Mathf.Clamp(Mathf.RoundToInt(segCount * (0.12f + 0.55f * p / Mathf.Max(1, sailPairs - 1))), 1, segCount - 3);
+                float g = girth * Mathf.Lerp(1f, 0.7f, p / (float)Mathf.Max(1, sailPairs - 1));
+                float sail = g * (2.2f - 0.25f * p);
+                foreach (int side in new[] { -1, 1 })
+                {
+                    var pivot = NewPivot(segments[at], "Sail" + p + (side < 0 ? "L" : "R"), new Vector3(side * g * 0.18f, g * 0.35f, 0f));
+                    pivot.localRotation = Quaternion.Euler(-18f, 0f, side * -28f);
+                    AddPartTo(pivot, "SailBlade", new Vector3(0f, sail * 0.5f, 0f), new Vector3(g * 0.06f, sail, segLen * 1.6f), sailMat);
+                    sails.Add(pivot);
+                }
+            }
+
+            // Glide fins under the front third, and the fluke at the tail.
+            int finAt = Mathf.Clamp(Mathf.RoundToInt(segCount * 0.3f), 1, segCount - 2);
+            foreach (int side in new[] { -1, 1 })
+            {
+                var pivot = NewPivot(segments[finAt], "Glide" + (side < 0 ? "L" : "R"), new Vector3(side * girth * 0.45f, -girth * 0.05f, 0f));
+                pivot.localRotation = Quaternion.Euler(0f, side * -20f, side * 8f);
+                AddPartTo(pivot, "GlideBlade", new Vector3(side * girth * 1.1f, 0f, -girth * 0.2f), new Vector3(girth * 2.2f, girth * 0.08f, girth * 0.9f), sailMat);
+            }
+
+            var tail = segments[segCount - 1];
+            foreach (int side in new[] { -1, 1 })
+            {
+                var pivot = NewPivot(tail, "Fluke" + (side < 0 ? "L" : "R"), new Vector3(0f, 0f, -segLen * 0.3f));
+                pivot.localRotation = Quaternion.Euler(0f, side * 30f, 0f);
+                AddPartTo(pivot, "FlukeBlade", new Vector3(side * girth * 0.6f, 0f, -girth * 0.2f), new Vector3(girth * 1.2f, girth * 0.06f, girth * 0.7f), sailMat);
+            }
+
+            // The head: a blunt skull, a short snout, two eyes; the mouth stays shut — it eats nobody.
+            var head = new GameObject("SkyHead").transform;
+            head.SetParent(root.transform, false);
+            _keepColliders = true;
+            AddPartTo(head, "Skull", new Vector3(0f, 0f, 0f), new Vector3(girth * 0.95f, girth * 0.8f, girth * 0.8f), _bodyMat);
+            _keepColliders = false;
+            AddPartTo(head, "Snout", new Vector3(0f, -girth * 0.08f, girth * 0.5f), new Vector3(girth * 0.6f, girth * 0.4f, girth * 0.5f), _bodyMat);
+            var eyeMat = Unlit(c.Glows ? new Color(0.7f, 1f, 0.95f) : new Color(0.95f, 0.85f, 0.45f));
+            AddPartTo(head, "EyeL", new Vector3(-girth * 0.4f, girth * 0.18f, girth * 0.3f), new Vector3(girth * 0.15f, girth * 0.15f, girth * 0.15f), eyeMat);
+            AddPartTo(head, "EyeR", new Vector3(girth * 0.4f, girth * 0.18f, girth * 0.3f), new Vector3(girth * 0.15f, girth * 0.15f, girth * 0.15f), eyeMat);
+            if (c.HasCrest)
+            {
+                AddPartTo(head, "Crest", new Vector3(0f, girth * 0.55f, -girth * 0.1f), new Vector3(girth * 0.08f, girth * 0.5f, girth * 0.6f), sailMat);
+            }
+
+            MakeGiantBody(root);
+            var view = root.AddComponent<SkyGiantView>();
+            view.Init(segments, sails.ToArray(), head, length);
         }
 
         /// <summary>Puts a giant's collider parts on the giant layer and gives the root a kinematic rigidbody, so the moving

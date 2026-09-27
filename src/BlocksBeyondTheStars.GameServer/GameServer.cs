@@ -816,6 +816,7 @@ public sealed partial class GameServer
         LoadBeacons();     // placed radio beacons restore their label/owner entities (the blocks come back via edits)
         LoadBeams();       // placed beam blocks restore their name/owner entities (the blocks come back via edits)
         LoadCrystalNet();  // #2046: conduits + devices rebuild their networks from their rows
+        LoadRails();       // #2113: the monorail's pylons, links and trains from the metadata
 
         MarkBodyVisited(locationId); // #1856: resolves a station world's `station:` id to its body, so stations chart too
 
@@ -1059,6 +1060,7 @@ public sealed partial class GameServer
         SendMarkers(session); // the new body's markers (#1217) — the old world's set is stale now
         SendBeams(session); // placed beam blocks (teleporter pads) on this body
         SendCrystalNet(session); // #2046: the Crystal Net lists of this world
+        SendRails(session);      // #2113: the rail lines and trains of this world
         SendBases(session); // player-founded bases on this body (Grundstein markers)
         BroadcastLandingPads(session); // the arrival claimed a pad — everyone's map must show it (#1020)
         SendContainers(session);
@@ -1723,6 +1725,7 @@ public sealed partial class GameServer
             Guard("TickCreatures", deltaSeconds, TickCreatures);
             Guard("TickSreekmakra", deltaSeconds, TickSreekmakra); // 2026-09: Valuma's shapeshifter and mood (1 Hz)
             Guard("TickGiants", deltaSeconds, TickGiants); // #1998: the colossus, the sandworms and the thumpers
+            Guard("TickTrains", deltaSeconds, TickTrains); // #2113: the monorail trains and their riders
             Guard("TickNpcRoutine", deltaSeconds, TickNpcRoutine); // #1867/#1868: work by day, sit in the evening, sleep at night; jobs
             Guard("TickNpcPaths", deltaSeconds, TickNpcPaths); // #1866: at most one NPC path search per tick
             Guard("TickNpcs", deltaSeconds, TickNpcs);
@@ -1935,16 +1938,18 @@ public sealed partial class GameServer
             // #2070: an intact factory hall still breathes — under its roof the old industrial life support holds, on every
             // world (Toxica-Maxima's plants are the shelters its corrosive air and acid storms leave you).
             bool factoryAir = !p.InEva && InFactoryAir(p.Position);
-            bool lifeSupport = !p.InEva && (p.AboardShip || insideShip || atBase || stationAir || factoryAir
+            bool cityAir = !p.InEva && InSkyCityAir(p.Position); // #2112: a sky city's breathable pocket
+            bool lifeSupport = !p.InEva && (p.AboardShip || insideShip || atBase || stationAir || factoryAir || cityAir
                 || !Rules.OxygenEnabledFor(p.ModeOverride));
             // Which source keeps this player breathing — sent to the client so the HUD can name it
-            // (0 none, 1 ship cabin/aboard, 2 station, 3 base zone or sealed room, 4 factory hall). Base ranks after the
-            // ship and the station so the label only claims the base when nothing closer already covers you.
+            // (0 none, 1 ship cabin/aboard, 2 station, 3 base zone or sealed room, 4 factory hall, 5 sky city). Base ranks
+            // after the ship and the station so the label only claims the base when nothing closer already covers you.
             p.LifeSupportSource = (byte)(!lifeSupport ? 0
                 : p.AboardShip || insideShip ? 1
                 : stationAir ? 2
                 : atBase ? 3
-                : factoryAir ? 4 : 0);
+                : factoryAir ? 4
+                : cityAir ? 5 : 0);
             // Submerged underwater the suit runs on its own air, even on a breathable world — diving spends
             // the oxygen tank just like a toxic/airless atmosphere does (the extractor can't pull from water).
             // Life support overrides this (ship cabin, station, base zone): an underwater base is a dome.
@@ -1979,7 +1984,7 @@ public sealed partial class GameServer
             {
                 // Outside without breathable air (toxic / airless) or submerged underwater: drain the tank.
                 float drain = (float)(dt * Rules.OxygenDrainPerSecond);
-                if (!submerged && !p.InEva && !p.AboveAtmosphere && _oxygenExtractability > 0 && p.Inventory.Has("oxygen_extractor", 1))
+                if (!submerged && !p.InEva && !p.AboveAtmosphere && _oxygenExtractability > 0 && Wears(p, "oxygen_extractor"))
                 {
                     // The suit extracts some oxygen from a toxic atmosphere — reduces (never refills)
                     // the drain, scaled by how breathable-ish this world is. Airless worlds (0) don't help.
@@ -1999,6 +2004,14 @@ public sealed partial class GameServer
             if (InLava(p.Position))
             {
                 p.Health = System.Math.Max(0f, p.Health - Mitigate(p, (float)(dt * 15)));
+            }
+
+            // The gas sea (#2112, the gas giant): there is no bottom and nothing to breathe — armour is no help. Faster than
+            // lava, so a fall from an island ends in seconds, not in a long sink.
+            if (InGas(p.Position))
+            {
+                p.Health = System.Math.Max(0f, p.Health - (float)(dt * GasContactDps));
+                session.HazardDeathReason = "@srv.death.gas";
             }
 
             // Standing in fire burns too (item 30) — a little less than lava.
@@ -2116,8 +2129,13 @@ public sealed partial class GameServer
 
         _wetBlockAt ??= (x, y, z) => _world.GetBlock(new BlocksBeyondTheStars.Shared.Geometry.Vector3i(x, y, z)).Value;
         _wetNonFull ??= IsNonFullCell;
-        return WetCell.IsWet(_wetBlockAt, _waterId, _wetNonFull,
-            (int)System.Math.Floor(p.Position.X), (int)System.Math.Floor(p.Position.Y + 1.5f), (int)System.Math.Floor(p.Position.Z));
+        int hx = (int)System.Math.Floor(p.Position.X), hy = (int)System.Math.Floor(p.Position.Y + 1.5f), hz = (int)System.Math.Floor(p.Position.Z);
+        if (IsLiquid(_world.GetBlock(new BlocksBeyondTheStars.Shared.Geometry.Vector3i(hx, hy, hz))))
+        {
+            return true; // #2106: a head in oil breathes as little as a head in water
+        }
+
+        return WetCell.IsWet(_wetBlockAt, _waterId, _wetNonFull, hx, hy, hz);
     }
 
     private System.Func<int, int, int, ushort>? _wetBlockAt;
@@ -2353,6 +2371,7 @@ public sealed partial class GameServer
         _inShipInterior.Remove(p.PlayerId); // and any in-ship walkabout
         _dockedFromEva.Remove(p.PlayerId);  // and any "ship floating while docked" memory
         ReleaseDrivenVehicle(p);            // and the seat of a speeder/boat — the bond used to survive (#1661)
+        LeaveTrainSilently(p);              // #2113: and the train — the respawn places the body
 
         if (useCustomSpawn && TryCustomRespawn(session, reason, salvaged, sameWorld))
         {
@@ -2503,6 +2522,7 @@ public sealed partial class GameServer
         SendMarkers(session);
         SendBeams(session);
         SendCrystalNet(session); // #2046: the Crystal Net lists of this world
+        SendRails(session);      // #2113: the rail lines and trains of this world
         SendBases(session);
         SendSpeeders(session);
     }
@@ -3576,6 +3596,8 @@ public sealed partial class GameServer
             case FarTerrainTileRequest farTiles: HandleFarTerrainTileRequest(session, farTiles); break; // #1821
             case SelectHotbarIntent hotbar: session.State.SelectedHotbarSlot = System.Math.Clamp(hotbar.Slot, 0, HotbarSlots - 1); break;
             case MoveItemIntent moveItem: HandleMoveItem(session, moveItem); break;
+            case EquipItemIntent equip: HandleEquipItem(session, equip); break;       // #2110
+            case UnequipItemIntent unequip: HandleUnequipItem(session, unequip); break; // #2110
             case DiscardItemIntent discard: HandleDiscardItem(session, discard); break;
             case MineBlockIntent mine: HandleMine(session, mine); break;
             case PlaceBlockIntent place: HandlePlace(session, place); break;
@@ -3645,6 +3667,10 @@ public sealed partial class GameServer
             case RefuelSpeederIntent refuelSpeeder: HandleRefuelSpeeder(session, refuelSpeeder); break;
             case SpeederImpactIntent speederImpact: HandleSpeederImpact(session, speederImpact); break;
             case RecallVehicleIntent recallVehicle: HandleRecallVehicle(session, recallVehicle); break;
+            case EnterTrainIntent enterTrain: HandleEnterTrain(session, enterTrain); break; // #2113
+            case ExitTrainIntent: HandleExitTrain(session); break;
+            case SetTrainIntent setTrain: HandleSetTrain(session, setTrain); break;
+            case StowTrainIntent stowTrain: HandleStowTrain(session, stowTrain); break;
             case SetBeaconLabelIntent beacon: HandleSetBeaconLabel(session, beacon); break;
             case SetBeamNameIntent beamName: HandleSetBeamName(session, beamName); break;
             case BeamTeleportIntent beamJump: HandleBeamTeleport(session, beamJump); break;
@@ -3818,6 +3844,10 @@ public sealed partial class GameServer
         {
             state = _repo.LoadPlayer(name) ?? CreateNewPlayer(name);
             ClampInventory(state.Inventory, $"player '{name}' inventory");
+            EnsureEquipmentInitialised(state); // #2110: a pre-slot save's gear moves into the slots once
+            state.InTrain = string.Empty;      // #2113: a train bond never survives a join — the player stands where they were
+            state.TrainSeat = -1;
+            ClampInventory(state.Equipment, $"player '{name}' equipment");
             ClampInventory(state.RationStore, $"player '{name}' ration store");
         }
         catch (InvalidDataException ex)
@@ -3987,6 +4017,7 @@ public sealed partial class GameServer
         SendBeacons(session);
         SendBeams(session); // placed beam blocks (teleporter pads) on the join world
         SendCrystalNet(session); // #2046: the Crystal Net lists of this world
+        SendRails(session);      // #2113: the rail lines and trains of this world
         SendBases(session); // player-founded bases on the join world (Grundstein markers)
         SendAllianceList(session); // the player's alliance roster (shared station/base access + Funk tab)
         SendCrewList(session);     // crew roster + open invites (#1216)
@@ -4219,6 +4250,10 @@ public sealed partial class GameServer
         {
             state = _repo.LoadPlayer(name) ?? CreateNewPlayer(name);
             ClampInventory(state.Inventory, $"player '{name}' inventory");
+            EnsureEquipmentInitialised(state); // #2110: a pre-slot save's gear moves into the slots once
+            state.InTrain = string.Empty;      // #2113: a train bond never survives a join — the player stands where they were
+            state.TrainSeat = -1;
+            ClampInventory(state.Equipment, $"player '{name}' equipment");
             ClampInventory(state.RationStore, $"player '{name}' ration store");
         }
         catch (InvalidDataException ex)
@@ -4434,6 +4469,11 @@ public sealed partial class GameServer
             return; // lying dead awaiting the respawn choice — the corpse doesn't walk
         }
 
+        if (HandleFramedMove(session, move))
+        {
+            return; // #2113: aboard a train the pose is wagon-local; the world position is derived from the train
+        }
+
         // MVP: trust position but clamp to sane finite values. (Full movement validation later.)
         if (float.IsFinite(move.X) && float.IsFinite(move.Y) && float.IsFinite(move.Z))
         {
@@ -4505,6 +4545,11 @@ public sealed partial class GameServer
             return; // piloting in space — there is no on-foot fall to take
         }
 
+        if (p.InTrain.Length > 0)
+        {
+            return; // #2113: the frame's own motion is never a fall
+        }
+
         if (session.StationZeroG || InStationZeroGFallGrace(session))
         {
             return; // #1842: hovering in zero-g construction mode, or dropped to the deck because it was just switched off
@@ -4519,6 +4564,7 @@ public sealed partial class GameServer
         }
 
         float over = intent.ImpactSpeed - FallSafeImpactSpeed;
+        over *= 1f - FallProtection(p); // #2110: the boots take a share of the excess before it hurts
         if (over <= 0f)
         {
             return;
@@ -4791,6 +4837,7 @@ public sealed partial class GameServer
         _world.SetBlock(pos, BlockId.Air, owner: ownerId);
         _miningProgress.Remove(pos);
         OnCrystalBlockRemoved(pos, def); // #2046: a mined conduit or device leaves the Crystal Net
+        OnRailBlockRemoved(pos, def); // #2113: a mined pylon leaves the rail graph
 
         if (IsContainerBlock(def.Key))
         {
@@ -5428,6 +5475,7 @@ public sealed partial class GameServer
         }
 
         OnCrystalBlockPlaced(session, pos, blockDef, place.Label, place.Yaw); // #2046: a conduit or device joins the Crystal Net
+        OnRailBlockPlaced(session, pos, blockDef); // #2113: a pylon joins the rail graph (and auto-links), a stop joins its line
         BroadcastToWorld(new BlockChanged { X = pos.X, Y = pos.Y, Z = pos.Z, Block = blockDef.NumericId.Value, Tint = placeTint, Glow = placeGlow, Shape = placeShape });
         NudgeCreatureBodyChecks(pos); // #1357: an animal the block landed in steps aside on its next tick
         if (IsFluid(blockDef.NumericId.Value))
@@ -6992,6 +7040,8 @@ public sealed partial class GameServer
             StationName = CurrentStationName(p.PlayerId),
             AiCoreTier = VegaCoreTier(session),
             InSpeeder = p.InSpeeder,
+            InTrain = p.InTrain, // #2113
+            TrainSeat = p.TrainSeat,
             Spectating = session.Spectating,
             // A creative world lets everybody fly; a per-player Creative override (#1121) grants it too;
             // /fly keeps working as the per-player admin cheat.
@@ -7397,6 +7447,8 @@ public sealed partial class GameServer
         Send(session, new InventoryUpdate
         {
             Personal = DumpInventory(session.State.Inventory),
+            PersonalSlotCount = session.State.Inventory.SlotCount,   // #2110
+            Equipment = DumpInventory(session.State.Equipment),      // #2110
             Cargo = session.State.AboardShip ? DumpInventory(_ship.Cargo) : Array.Empty<NetItemStack>(),
             CargoSlotCount = session.State.AboardShip ? _ship.Cargo.SlotCount : 0,
             UnlockedBlueprints = unchanged ? Array.Empty<string>() : unlocked.ToArray(),
@@ -7503,9 +7555,9 @@ public sealed partial class GameServer
 
     /// <summary>Whether a player can transmit on comms at all (holds any radio tier).</summary>
     private static bool HasAnyRadio(PlayerSession s)
-        => s.State.Inventory.Has("comm_radio", 1)
-        || s.State.Inventory.Has("system_radio", 1)
-        || s.State.Inventory.Has("galaxy_radio", 1);
+        => s.State.Equipment.Has("comm_radio", 1)      // #2110: a radio works only while worn (a module slot)
+        || s.State.Equipment.Has("system_radio", 1)
+        || s.State.Equipment.Has("galaxy_radio", 1);
 
     /// <summary>The players who can hear <paramref name="sender"/>'s comms, by the widest radio tier they hold
     /// (the tiers stack as upgrades). <c>galaxy_radio</c> = everyone joined; <c>system_radio</c> = everyone on a
@@ -7514,7 +7566,7 @@ public sealed partial class GameServer
     /// resolvable star system (station/void worlds), the system tier falls back to same-world reach.</summary>
     private IEnumerable<PlayerSession> RadioAudience(PlayerSession sender)
     {
-        var inv = sender.State.Inventory;
+        var inv = sender.State.Equipment; // #2110: the worn radio
 
         if (inv.Has("galaxy_radio", 1))
         {

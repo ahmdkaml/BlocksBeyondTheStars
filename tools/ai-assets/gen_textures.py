@@ -181,6 +181,12 @@ TEXTURES = [
     ("auto_drill_1", "a sci-fi auto-drill mk1 block, compact dark metal rig with a single steel drill bit pointing down and one violet crystal light, front view"),
     ("auto_drill_2", "a sci-fi auto-drill mk2 block, heavier dark metal rig with twin steel drill bits pointing down, carbide edges and two violet crystal lights, front view"),
     ("auto_drill_3", "a sci-fi auto-drill mk3 block, massive dark metal rig with a wide diamond-tipped drill head pointing down and three glowing violet crystal lights, front view"),
+    # #2108 the drill laser (2026-09-27): a Crystal Net machine that cuts a shaft straight down.
+    ("drill_laser", "a sci-fi drill laser machine block, dark armoured metal housing with a large downward-pointing cyan laser emitter lens in the centre, thin glowing cyan light strips, three small violet crystal studs, front view"),
+    # #2113 the monorail (2026-09-27): the pylon, the stop and the rail dealer's post.
+    ("rail_pylon", "a sci-fi monorail pylon block, a dark steel post with riveted bands and a glowing cyan energy emitter ring at the top, front view, flat lighting"),
+    ("rail_stop", "a sci-fi monorail stop block, a dark steel signal post with a bright amber halt light and a small holographic timetable panel, front view, flat lighting"),
+    ("rail_post", "a rail dealer's trading post block, a dark steel counter with a small model monorail wagon on top and a cyan rail-line sign, front view, flat lighting"),
     ("matter_sender", "a sci-fi matter sender block, dark metal pedestal with an upward violet crystal emitter ring and cyan energy motes rising, front view"),
     ("matter_receiver", "a sci-fi matter receiver block, dark metal pedestal with a downward cyan crystal collector ring and violet energy motes settling, front view"),
     # #2092 the Device Eye (2026-09-27): reads what a machine is doing and tells the wire.
@@ -300,6 +306,8 @@ TEXTURES = [
     ("fifi_leaf", "a dense crown of many small overlapping bright lemon-yellow leaves with sunny highlights, dark olive shadows in the gaps between the leaves, top-down"),
     ("fifi_blossom", "densely packed bright pink flower blossoms filling the whole image edge to edge, overlapping soft hot-pink and light pink petals with small luminous pale pink centres, no background visible, top-down"),
     ("flora_fifi_berries", "a single hanging cluster of many small round shiny deep magenta-pink berries with bright highlights, hanging from a short green stem at the top edge of the image, the entire rest of the image solid pitch-black #000000 with no gradient and no vignette, side view"),
+    # #2106 oil (2026-09-27): the finite underground fluid of the living worlds.
+    ("oil", "thick black crude oil filling the whole image edge to edge, glossy near-black liquid surface with a faint iridescent oily sheen and a few slow dull bubbles, no background visible, no edges, no border, top-down"),
 ]
 
 if TYPE_CHECKING:

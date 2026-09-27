@@ -223,6 +223,10 @@ namespace BlocksBeyondTheStars.Client
         public event Action<SpeederList>? SpeedersReceived;
         public event Action<SpeederFx>? SpeederFxReceived;
 
+        // #2113: the monorail — the world's rail lines and its trains.
+        public event Action<RailList>? RailsReceived;
+        public event Action<TrainList>? TrainsReceived;
+
         public bool Connected { get; private set; }
 
         /// <summary>Uses the UDP transport by default; pass a loopback transport for singleplayer.</summary>
@@ -584,6 +588,12 @@ namespace BlocksBeyondTheStars.Client
         /// (B58 — customising the quick-bar).</summary>
         public void SendMoveItem(int fromSlot, int toSlot) => Send(new MoveItemIntent { FromSlot = fromSlot, ToSlot = toSlot });
 
+        /// <summary>Wears the gear in a backpack slot (#2110); <paramref name="slot"/> −1 = the item's own slot.</summary>
+        public void SendEquipItem(int fromSlot, int slot = -1) => Send(new EquipItemIntent { FromSlot = fromSlot, Slot = slot });
+
+        /// <summary>Takes worn gear off into a backpack slot (#2110); <paramref name="toSlot"/> −1 = the first free one.</summary>
+        public void SendUnequipItem(int slot, int toSlot = -1) => Send(new UnequipItemIntent { Slot = slot, ToSlot = toSlot });
+
         /// <summary>Permanently destroys every stack of the item sitting in <paramref name="slot"/> — of the
         /// backpack, or of the ship's hold with <paramref name="fromCargo"/> (#599). Irreversible: only call
         /// this behind a confirmation. The starter kit is refused server-side.</summary>
@@ -915,6 +925,24 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>Dismount the speeder I'm driving.</summary>
         public void SendExitSpeeder() => Send(new ExitSpeederIntent());
 
+        // --- #2113: the monorail ---
+
+        /// <summary>Boards a train's wagon: standing (seat −1) or on a seat.</summary>
+        public void SendEnterTrain(string trainId, int wagon, int seat = -1)
+            => Send(new EnterTrainIntent { TrainId = trainId ?? string.Empty, Wagon = wagon, Seat = seat });
+
+        public void SendExitTrain() => Send(new ExitTrainIntent());
+
+        /// <summary>The cab's panel: −1 leaves a setting unchanged.</summary>
+        public void SendSetTrain(string trainId, int speed = -1, int halt = -1, int autopilot = -1)
+            => Send(new SetTrainIntent { TrainId = trainId ?? string.Empty, Speed = speed, Halt = halt, Autopilot = autopilot });
+
+        public void SendStowTrain(string trainId) => Send(new StowTrainIntent { TrainId = trainId ?? string.Empty });
+
+        /// <summary>A rider's pose aboard a train: the wagon-local offset in the frame (#2113).</summary>
+        public void SendFramedMove(string frameId, Vector3f local, float yaw, float pitch)
+            => Send(new MoveIntent { FrameId = frameId ?? string.Empty, X = local.X, Y = local.Y, Z = local.Z, Yaw = yaw, Pitch = pitch }, DeliveryMode.Unreliable);
+
         /// <summary>Pack a deployed speeder back into the item.</summary>
         public void SendStowSpeeder(string speederId) => Send(new StowSpeederIntent { SpeederId = speederId ?? string.Empty });
 
@@ -1089,6 +1117,8 @@ namespace BlocksBeyondTheStars.Client
                 case CompanionList m: CompanionsReceived?.Invoke(m); break;
                 case SpeederList m: SpeedersReceived?.Invoke(m); break;
                 case SpeederFx m: SpeederFxReceived?.Invoke(m); break;
+                case RailList m: RailsReceived?.Invoke(m); break;   // #2113
+                case TrainList m: TrainsReceived?.Invoke(m); break; // #2113
                 case CrewList m: CrewListReceived?.Invoke(m); break;
                 case CrewInviteNotice m: CrewInviteReceived?.Invoke(m); break;
                 case MarkerList m: MarkerListReceived?.Invoke(m); break;

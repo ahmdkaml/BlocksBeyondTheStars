@@ -35,6 +35,11 @@
     "unlockCost": [ { "item": "data_fragment", "count": 4 }, { "item": "titanium_plate", "count": 6 }, { "item": "carbide", "count": 2 } ]
   },
   {
+    "key": "fluid_pump", "nameKey": "blueprint.fluid_pump.name", "descriptionKey": "blueprint.fluid_pump.desc",
+    "category": "Tools", "prerequisites": [ "titanium_drill" ], "knowledgeCost": 40,
+    "unlockCost": [ { "item": "data_fragment", "count": 3 }, { "item": "titanium_plate", "count": 3 } ]
+  },
+  {
     "key": "terrain_scanner", "nameKey": "blueprint.terrain_scanner.name", "descriptionKey": "blueprint.terrain_scanner.desc",
     "category": "Tools", "prerequisites": [], "knowledgeCost": 20,
     "unlockCost": [ { "item": "data_fragment", "count": 3 }, { "item": "titanium_plate", "count": 3 } ]
@@ -58,6 +63,11 @@
     "key": "speeder", "nameKey": "blueprint.speeder.name", "descriptionKey": "blueprint.speeder.desc",
     "category": "Tools", "prerequisites": [], "knowledgeCost": 80,
     "unlockCost": [ { "item": "data_fragment", "count": 5 }, { "item": "titanium_plate", "count": 10 }, { "item": "cable", "count": 8 }, { "item": "energy_cell_1", "count": 3 } ]
+  },
+  {
+    "key": "monorail", "nameKey": "blueprint.monorail.name", "descriptionKey": "blueprint.monorail.desc",
+    "category": "Tools", "prerequisites": [ "speeder", "fluid_pump" ], "knowledgeCost": 160,
+    "unlockCost": [ { "item": "data_fragment", "count": 6 }, { "item": "titanium_plate", "count": 12 }, { "item": "crystal", "count": 6 }, { "item": "polymer", "count": 6 } ]
   },
   {
     "key": "camera", "nameKey": "blueprint.camera.name", "descriptionKey": "blueprint.camera.desc",
@@ -248,6 +258,11 @@
     "key": "armor_legs", "nameKey": "blueprint.armor_legs.name", "descriptionKey": "blueprint.armor_legs.desc",
     "category": "Suit", "prerequisites": [], "knowledgeCost": 13,
     "unlockCost": [ { "item": "data_fragment", "count": 1 }, { "item": "iron_plate", "count": 9 } ]
+  },
+  {
+    "key": "boots", "nameKey": "blueprint.boots.name", "descriptionKey": "blueprint.boots.desc",
+    "category": "Suit", "prerequisites": [], "knowledgeCost": 10,
+    "unlockCost": [ { "item": "data_fragment", "count": 1 }, { "item": "iron_plate", "count": 5 } ]
   },
   {
     "key": "helmet", "nameKey": "blueprint.helmet.name", "descriptionKey": "blueprint.helmet.desc",
@@ -449,6 +464,11 @@
     "key": "auto_drill_3", "nameKey": "blueprint.auto_drill_3.name", "descriptionKey": "blueprint.auto_drill_3.desc",
     "category": "Crystal", "prerequisites": [ "auto_drill_2", "mining_beam" ], "knowledgeCost": 170,
     "unlockCost": [ { "item": "data_fragment", "count": 6 }, { "item": "crystal", "count": 12 }, { "item": "power_cell", "count": 1 } ]
+  },
+  {
+    "key": "drill_laser", "nameKey": "blueprint.drill_laser.name", "descriptionKey": "blueprint.drill_laser.desc",
+    "category": "Crystal", "prerequisites": [ "auto_drill_3", "fluid_pump" ], "knowledgeCost": 220,
+    "unlockCost": [ { "item": "data_fragment", "count": 8 }, { "item": "crystal", "count": 16 }, { "item": "lubricant", "count": 2 } ]
   },
   {
     "key": "matter_sender", "nameKey": "blueprint.matter_sender.name", "descriptionKey": "blueprint.matter_sender.desc",

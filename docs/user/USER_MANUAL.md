@@ -107,7 +107,7 @@ Last updated: 2026-08-26.
 |---|---|
 | **W / A / S / D** | Move |
 | **Mouse** | Look |
-| **Space** | Jump — **hold in the air to fire the jetpack** (if one is in your backpack — there is nothing to equip); **in water: swim up / surface** |
+| **Space** | Jump — **hold in the air to fire the jetpack** (if you **wear** one — the back slot of the Inventory's Worn row); **in water: swim up / surface** |
 | **Space ×2** | **Creative/Sandbox worlds only:** toggle free flight — then Space rises, Ctrl/C sinks, and you keep colliding with the world (so you can still land and build). Touching down turns it off |
 | **Ctrl / C** (hold) | Crouch/sneak — walk slower, stop at ledges instead of walking off (corners included); climb **down** ladders; descend in zero-g |
 | **Left-click** | Mine the targeted block (or **scan** it when a scanner is selected) |
@@ -417,6 +417,14 @@ separate unlock; admins can still disable it through server world rules.
   remain), but **6–10 factories** stand there, one near the landing pad — and **every factory hall breathes**: under its
   roof you have air, no corrosion and no rain, on this planet and on every other world (the HUD says "factory life
   support"). Carbon and silicate are clean there, so the wash loop closes on site.
+- **Gas giant** (Justus' idea, new galaxies since generation 18): a world with **no ground at all**. Below is a bottomless
+  sea of cold **gas** — fall in and you sink and die within seconds, armour or not, there is nothing to breathe. Above it
+  float **islands of rock**, up to three tiers of them; on the lowest ones stand the **sky cities**, and every inhabited
+  city holds a **pocket of breathable air** over its lanes (the HUD says so; an abandoned one has lost it). Everything else
+  is **−120 °C and toxic**, and the storm never stops — the suit will not last long out there. Ships land on **metal decks**
+  hanging over the gas (a rail and lights around the rim); nothing can be pumped out of the gas. Every animal here **flies**,
+  and so does the **sky giant** (see *Giants*). The lone giant of a star system is one of these, and sometimes the
+  outermost planet of any other; most wear rings. From space it shows its banded cloud tops.
 - **Arena Nigra** (Theo's planet — at most one per galaxy, never in the start system; an exotic type): the black
   landmark. The air is **breathable** but it is **hot** (58 °C — the suit's climate drains, then your health; rock islands,
   the ship and a roof shelter you). Two thirds of the world is a **sea of black sand** over basalt, with sharp needles,
@@ -460,7 +468,8 @@ separate unlock; admins can still disable it through server world rules.
   items there — walk your loot past a row of dedicated crates and it sorts itself. The HUD prompt shows
   **Filter on** at such a crate; select nothing in the dialog (or hit *Allow everything*) to go back to
   accepting it all. Dyed or re-formed variants of a chosen material count as that material.
-- **Armor**: each piece (chest/legs/helmet) adds resistance, summed and capped (~75%).
+- **Armor**: each worn piece (chest/legs/helmet/boots) adds resistance, summed and capped (~75%); worn boots also
+  soften a hard landing by about a third.
 - **Water meets lava**: lava hardens wherever water touches it — a lava **pool** (a source) turns to
   **obsidian**, a flowing lava **tongue** cools to **basalt**. Place water onto a lava pool and the pool is
   quenched to obsidian in place; place it beside lava and the neighbouring lava crusts over while the water
@@ -546,14 +555,20 @@ separate unlock; admins can still disable it through server world rules.
   modules (medbay, cockpit, …) cannot be removed. Step or hop up through the hatch to enter.
 
 ### Inventory & cargo hold
-- Your **inventory** is your personal backpack (24 slots) — it travels with you everywhere, and its first
-  nine slots are the **quick-bar** (the on-screen hotbar).
-- **Suit gear works while carried.** Armour, oxygen tanks, suit liners, the jetpack, the suit lamp and the
-  stealth suit take effect as soon as they are *anywhere* in your backpack — there is nothing to equip and
-  no slot to put them in. The Inventory's **Suit** tab lists just that gear and shows what it currently
-  gives you: **armour** (pieces add up, capped at 75 %), **maximum oxygen** and **insulation** (of tanks and
-  liners only the best one you carry counts). The same line sits at the top of the Backpack tab, and the
-  HUD oxygen bar's full mark is your real maximum.
+- Your **inventory** is your personal backpack — **36 slots** since 2026-09 (a nine-wide grid: the
+  **quick-bar** row of nine, the on-screen hotbar, under a line, and 27 backpack slots above it). It travels
+  with you everywhere. Older saves are simply widened.
+- **Suit gear works only while you WEAR it** (2026-09; before, a piece worked anywhere in the pack). The
+  Inventory tab shows a **Worn** row of nine slots above the backpack: **head** (helmet), **chest** (chest
+  armour *or* the stealth suit), **legs**, **feet** (the new **boots**: a softer landing, a little warmth),
+  **back** (the jetpack), **tank** (one oxygen tank), **liner** (one suit liner) and **two modules** (lamp,
+  extractor, a radio, the radar scanner). **Click a piece, then click its slot** — the slot wears it and hands
+  back whatever was worn there; click a worn piece, then a backpack slot, to take it off (or use the
+  **Wear / Take off** button in the detail pane). Two backpack clicks move or swap. The same works by touch and
+  with a gamepad (A picks and places). Worn gear **stays with you** when you stow, stash or die. The status
+  line above the grid shows what the worn gear gives you: **armour** (pieces add up, capped at 75 %),
+  **maximum oxygen** and **insulation**; the HUD oxygen bar's full mark is your real maximum. The first time
+  you open an old save, your best helmet, tank, liner, jetpack, armour and two modules are put on for you.
 - Your ship's **cargo hold** is bulk storage that belongs to the ship (48 slots, growing with cargo-hold
   modules) and is shared by everyone aboard that ship.
 - **What goes where:** mined and crafted items fill your inventory first and only spill into the cargo hold
@@ -590,7 +605,7 @@ separate unlock; admins can still disable it through server world rules.
   during an EVA) to act directly on the **selected hotbar slot** — no trip through the Tab menu. A **radial
   menu** opens around the screen centre: **Swap** on top, **Colour** on the left, **Form** on the right and
   **Close** at the bottom; quarters that don't apply to the held item stay visible but dimmed:
-  - **Swap** — a grid of all 24 backpack slots; pick one and it exchanges with the hotbar slot (an empty slot
+  - **Swap** — a grid of all 36 backpack slots; pick one and it exchanges with the hotbar slot (an empty slot
     simply receives the item). *Remove from quick-bar* stows the slot into the first free backpack slot.
   - **Colour** — only for a dyeable building material: the familiar swatch palette recolours the **whole
     stack** in place. **Dye** is free; **Glow** turns the stack into coloured light sources and costs **one
@@ -630,6 +645,13 @@ separate unlock; admins can still disable it through server world rules.
   lithium, neodymium, plus light alloy, biofuel and magnets) feeds at least three recipes across two stations —
   refinery variants of bronze, brass, steel, carbide, power cells and magnets out-yield the workshop ones, lithium
   triples a cell batch, and biofuel makes torches and lanterns where no tree grows.
+- **Oil products (2026-09):** the refinery turns **crude oil** (pumped from the pockets under living worlds, see
+  the fluid pump in §5) into **polymer** (3 per cell — cheaper than the carbon-and-sulfur road) and, with a piece of
+  carbon, into **lubricant** (2 per cell). Oil is **never fuel**. Lubricant is the gate of the drill and vehicle
+  tier: the diamond drill, the mining beam, the auto-drills Mk2/Mk3, the drill laser, the speeder, the clone tank,
+  the fabricator, and the jump generator and asteroid breaker modules need it. Polymer now also seals the beam
+  block, the sentry post and the matter sender/receiver. The starter tier (basic and titanium drill, the base core,
+  the first machines) stays oil-free, so you can always reach a living world first.
 - **Interior decor is craftable:** the lights, light strips, force field, medbay/lab/cargo/engine panels, engine
   nozzle, factory terminal, pipe and machine housing that ship interiors, stations and factories are built from all
   have workshop recipes (lights: crystal in a glass housing — no power needed; the force field needs the energy-door
@@ -1036,6 +1058,13 @@ separate unlock; admins can still disable it through server world rules.
   stays standing — the default) or **everything** (a real pit). It stops in front of water and lava, never
   touches anything a player built, and pauses with its **amber light** on when the crate is full or the pit is
   done (a Device Eye on the drill and a siren behind the eye = "come and empty me").
+- **Drill laser (a shaft, not a pit).** Place it on the ground with a crate beside it and switch its network
+  ON: it lasers a **one-block shaft straight down** from where it stands, a block every half second, **up to 128
+  deep**, and puts the **ore and the oil** it hits into the crate — the way to reach a deep oil pocket the scanner
+  showed you without digging. **Only ore** (the default) vaporises the plain rock, **everything** keeps it. It stops
+  for good at water or lava (in the shaft or right beside it), at bedrock, at anything a player built, when the
+  crate is full or at its full depth — the **amber light** comes on (a Device Eye reads it); empty the crate and
+  start it again and it continues from where it stopped, even after a reload. Two per player. Needs lubricant.
 - **Fabricator (an automatic workbench).** Pick one recipe in its menu; every pulse crafts it once, taking the
   parts from the crates beside it and putting the result back into one. It needs the recipe's blueprint, like
   a hand craft, and it only works **while you are on the world**. Its amber light shows when it is stuck
@@ -1333,8 +1362,16 @@ separate unlock; admins can still disable it through server world rules.
   **Micro-fauna** discoveries chapter and awards a little knowledge. Thermal vision (see §5 → Binoculars)
   also picks critters up as small named contacts.
 - **Terrain scanner** (`terrain_scanner`, workshop recipe + blueprint): a **right-click** gadget that
-  pulses once (10 suit energy, 10 s cooldown) and reveals ores, crystal and data caches within 20 blocks
-  as through-wall glow markers for 8 s, tinted by ore type. An `ai_core_mk2` extends the radius.
+  pulses once (10 suit energy, 10 s cooldown) and reveals ores, crystal, data caches — and **oil** — within
+  20 blocks as through-wall glow markers for 8 s, tinted by ore type. An `ai_core_mk2` extends the radius.
+- **Fluid pump** (`fluid_pump`, workshop recipe + the `fluid_pump` blueprint after the titanium drill): a
+  **right-click** gadget that pulls **one cell of liquid** into your pack (2 suit energy, 0.4 s): **oil**,
+  **water** or **lava**. **Oil** (new worlds since 2026-09) lies in **sealed, tar-rimmed pockets 40–120 blocks
+  under living worlds** — worlds with plants *and* animals; the terrain scanner finds them. It is a **deposit**:
+  what you pump is gone, the pocket never refills and never floods a cave; a drill cannot mine it. Water and
+  lava flow back as they do for a tier-3 drill. Oil **burns** (a torch or lava sets a pocket alight), and the
+  **refinery** turns it into polymer (3 per cell) — see §crafting. You can place oil again; you sink into it
+  and cannot breathe in it, like water.
 
 ### Binoculars & thermal vision
 - Craft **Binoculars** (`binoculars`, workshop recipe + a cheap blueprint). Select them and **right-click**
@@ -1532,6 +1569,9 @@ separate unlock; admins can still disable it through server world rules.
   head**, from knee-high to child-high. They are **always peaceful** (some are shy), never alone, and many of them beg:
   they come running with **both arms up** and chatter something that sounds like **"meins, meins!"** If you hurt one,
   **the whole herd runs away** and wants no food for a while. The scan says "Walks upright on two legs".
+- **Worms** (worlds created from terrain generation 18 on): knee- to hip-high **legless slitherers** — a head and a
+  long chain of links that runs a wave along the body. On these worlds nothing "slithers" on legs any more; a worm is
+  slow, lives in a small group, and can be as peaceful or as bitey as any other rolled animal.
 - **Mini-Michi-Paul** — invented by **Paul and Ben** of the school club: a **knee-high, yellow biped** with a big head
   and two big eyes that lives in herds of ten on the **tropical worlds** (jungle, karst, archipelago, coral sea,
   rainbow sea — worlds created from terrain generation 16 on). It begs for food and **loves bananas**: **two bananas
@@ -1545,7 +1585,7 @@ separate unlock; admins can still disable it through server world rules.
   in wait"), and VEGA points out the first one you get near. You bump into its body, your shots land where you
   aim on it, and it can be tamed like any other animal.
 
-### Giants (the colossus and the sandworm)
+### Giants (the colossus, the sandworm, the leviathan and the sky giant)
 - **A colossus** is a 40–60 block tall four-legged giant. It only lives on **very flat, very light worlds** (the lighter
   moons of plains, downs and dune types) and even there only on one world in three. Every colossus is different:
   peaceful ones migrate and graze on treetops, shy ones walk away, territorial ones fight back when hit, aggressive
@@ -1568,7 +1608,20 @@ separate unlock; admins can still disable it through server world rules.
 - **Sound devices as lures:** a Crystal-Net **chime** or **horn** standing on sea sand shakes it once each time it sounds,
   and an **alarm siren** keeps shaking it every two seconds while it wails — wire one to a switch, a sensor or a clock and
   the worm comes to it (or stays away from you). On rock they are as silent to the worm as everything else.
-- A defeated giant is gone for a few in-game days, then another one comes. Neither ever changes a block.
+- **A leviathan** (new worlds since generation 18, Justus' idea) is the sea's giant — the largest form of water life, a
+  60–120 block body with fins, a fluke and two jaws — and lives under the **deep sea of a warm, living water world** (oceans,
+  coral seas, archipelagos, river lowlands: plenty of water, not frozen over, at least a few percent of the world at least
+  twelve blocks deep). It does everything the sandworm does, in water: it hears **swimmers, boats and the fish** through the
+  water (a step on a pier, a raft or the shore is silent, and so is mining), a **wake** rolls toward you and VEGA warns you,
+  then it **breaches** in an arc or rears up and **strikes** the spot — a boat under its head takes heavy **hull damage** (a
+  parked one too), whoever is on it is hurt, and every fish in reach is **swallowed**, leaving a little meat. You can only
+  hit it while it is above the water. Get to the shore, or hold still.
+- **A sky giant** (new galaxies since generation 18, Justus' idea) drifts over every **gas giant**: a sailer 40–80 blocks
+  long — a row of tall sails along its back, glide fins, a fluke — that circles slowly between the islands 40–70 blocks
+  over the gas, wandering to a new spot every couple of minutes, and calls now and then. It is **passive**: it never lands,
+  never strikes and eats nobody — a spectacle. You can still fight it (it is always in the open; hit it anywhere along the
+  body); a hit only makes it climb out of reach for a while.
+- A defeated giant is gone for a few in-game days, then another one comes. None of them ever changes a block.
 
 ### Taming creatures (companions)
 - Craft a **Creature Translator** (`creature_translator`, workshop recipe + blueprint) and some **bait**
@@ -1642,6 +1695,26 @@ separate unlock; admins can still disable it through server world rules.
   reverse off or step out — no damage. Keep driving over land anyway and after a few seconds the server sets you
   back onto the last spot that floated. Shallow water lets you nose onto a beach to get out.
 - Hull damage, destruction and persistence match the speeder; the boat cannot be refuelled (nothing to fill).
+
+### Monorail hover train (Justus' idea)
+- **The line.** Craft **rail pylons** (blueprint *Monorail*, or buy them from a **rail dealer** — place a *Rail Dealer's
+  Post* at your base). Place a row of pylons: each one **links itself** to the last one you placed within **32 blocks**, as
+  long as the line does not bend more than about **30°** — and a glowing **energy line** appears between them. **Stack**
+  pylons to lift the line over things. A line that would run **through solid blocks is refused** ("Obstacle") — give it
+  room. A pylon carries **at most two links** (no forks). The **rail linker** couples any two pylons by hand (use it on
+  the first, then the second): close a **loop**, join two lines, or — on two linked pylons — uncouple them.
+- **Stops.** A **rail stop** placed beside the line (within four blocks) halts a train on autopilot for a few seconds. It
+  is a Crystal-Net device: a signal on its port (a switch, a button, a sensor) sends the halted train off at once.
+- **The train.** Use the **monorail cab** on a line and it appears there, hovering. Use a **seat wagon**, **sleeper
+  wagon** or **bar wagon** just behind the last wagon to couple it on (six wagons at most). **E** near a wagon boards it;
+  inside, **you walk around while it moves** — the wagon is your ground, wagon to wagon through the open ends — or sit
+  down on a seat (E beside it; jump or move to stand up). **E in the cab** opens the panel: **speed 1–3**, **halt / go**,
+  **autopilot** (the train runs by itself, halts at every stop, and turns round at the ends of an open line — on a
+  loop it just keeps going). **F** or walking out of the open side leaves the train; you are set down beside it.
+  Allies may ride your train. The owner **packs it up** from the cab panel or with the stow key beside it: the cab
+  and every wagon come back as items. A fall taken aboard is never a fall.
+- Other riders on the same train are placed inside the wagons exactly as your game draws them, so nobody slides
+  through a wall on a curve or across the world seam.
 
 ### Craftable block shapes
 - Any held **building material** can be re-formed into a non-cube **shape** — **slab, pyramid, dome (half-sphere),
@@ -2043,7 +2116,7 @@ rejections) appear in the **chat scrollback**, not just the brief HUD toast.
 | `/tpp Player` | Teleport to a player on the body you are on — you land **beside** them, never inside them (#1055) |
 | `/settime day\|night\|…` | Set the world time of day |
 | `/setweather clear\|storm\|…` | Set the world weather |
-| `/giant colossus\|sandworm` | Summon this world's colossus or sandworm near you (a sandworm needs a sand sea) — for testing |
+| `/giant colossus\|sandworm\|leviathan\|sky` | Summon this world's colossus, sandworm, leviathan or sky giant near you (a sandworm needs a sand sea, a leviathan a deep sea) — for testing |
 | `/arachnid` | Summon this world's arachnid near you (rolls one into the world's fauna first if it has none) — for testing |
 | `/biped` | Summon a begging herd of this world's bipeds near you (Mini-Michi-Paul on a tropical world; rolls a begging biped into the world's fauna first if it has none) — for testing |
 | `/fly` | Toggle free flight for yourself (no gravity). In **Creative/Sandbox** worlds everybody can already fly — double-tap **Space**; this is the per-player admin cheat for the other modes |

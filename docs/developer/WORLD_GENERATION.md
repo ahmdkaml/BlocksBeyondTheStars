@@ -2074,3 +2074,118 @@ Tests: `ArenaNigraWorldTests` (data, once per galaxy, the black sea over lava wi
 the authored worm and the roster, the worm count, the hunting roll, the rules), `ArenaNigraServerTests` (the authored worm
 in the slots and never in the spawner, black sand heard and stone not, an animal's walk heard and a breach swallowing it
 with meat left and a pet spared, horn / siren / rock), golden `arena_nigra-gen17`.
+
+## 33. Generation 18 — oil pockets and the fluid pump (#2104/#2106, 2026-09-27, Justus' idea)
+
+**A new raw material that is a liquid but not a fluid.** Justus asked for oil; Marcel's rules: it lies **underground**,
+**only on living worlds**, in **pockets of its own beside the caves** (no cave ever floods), and a **hand tool** harvests
+liquids. The engine's two fluids are bottomless sources to the automaton (§5: a mined water or lava cell refills, and a
+pocket with a tunnel under its bed would pour into it forever), so oil is deliberately **not** a third automaton fluid:
+`BlockDefinition.Liquid` (`"liquid": true`, `"solid": false`, `"mineable": false`, `"flammable": true`) marks a **still
+liquid** — you sink into it and cannot breathe in it (`HeadUnderwater`, the client's `WaterProbe`), the aim ray passes
+through it like water unless the pump asks for it (`FluidAim.Liquid`), the chunk mesher meshes it like a fluid
+(`TraitFluid`, no collider), the terrain scanner counts it as valuable — but it never flows, a pumped cell stays air,
+and `IsFluid` (water/lava) is untouched. A **finite deposit.** Gated on `WorldDescription.OilGeneration` (18) through
+`WonderProfile.OilPockets`, which no older world sets, so every generation ≤ 17 chunk is bit-identical.
+
+**Living worlds (`PlanetType.HasLife`).** Air of any kind, `floraDensity > 0`, `creatureAbundance != "none"`, not void —
+derived from the fields, never from a key (jungle, meadowlands, swamp, … yes; toxic_world, crystal, gds_desert, the void
+worlds no). `HasOilPockets` additionally excludes cratered bodies.
+
+**The pocket (`WorldGenerator.OilPocketsGen18.cs`).** A hotspot ellipsoid (`TryGetHotspot`, cell 600, chance 0.25, salt
+`0x01A5EED`): rx 6–14, ry 3–7, centre **40–120 below `BaseHeight`**, a **1.6-thick shell of `tar`** around **`oil`**
+cells. It is claimed in the column's y-loop **right after the geode branch and before the tunnels and blob caves**
+(`Columns.cs`), so the carvers never open it; a column that only grazes the ellipsoid is all shell (the geode's trick,
+#1646). The shell is clamped to `seabedY − 4` and the oil to two cells below that, so a valley never opens the top. The
+mega-cavern and the sub-surface river spans run earlier and win where they overlap — that exposes still oil in a cavern
+wall (a find, not a flood). `ColumnProfile.OilHere/OilLo/OilHi/OilInLo/OilInHi` carry the spans; `ColumnContext.OilWorld`
++ the two block ids are resolved once per chunk. Tests scan for a pocket through `TryGetOilPocketSpanForTest`.
+
+**The pump (`fluid_pump`, gadget, `GameServerGadgets.UseFluidPump`).** Right-click a liquid cell: oil (the cell stays
+air), or water / lava (the automaton refills them, exactly as when a tier-3 drill mines them). The pull goes through
+`BreakBlockCore` — the drop, the fluid wake and the sand above behave as for any mined block; ship, settlement, station
+and other players' base cells are refused; a miss costs neither energy nor cooldown. Blueprint `fluid_pump` (Tools, after
+`titanium_drill`), workshop recipe. The refinery turns oil into `polymer` (3 per cell, out-yielding the carbon+sulfur
+road) — the product chain continues in #2107.
+
+Tests: `OilPocketsWorldTests` (data, the life rule, a sealed tar-rimmed pocket under the ground of a living world, no oil
+on generation 17 or on dead worlds), `GadgetTests` (the pump pulls oil and leaves air, harvests water, refuses rock for
+free), golden `jungle-gen18`.
+
+**The worm body plan (#2109, `WorldDescription.WormGeneration` = 18).** Marcel's finding on a sand sea: "the sandworms
+have legs" — the giant is fine, but `PickLegs` never gave a Land species 0 legs, and `PickLocoStyle` let a long body
+(3–4 segments) roll the `Slitherer` style anyway, so every small "worm" walked with a wobble. On a generation-18 world
+(`CreatureGenerator.MakeSpecies`): the legged slitherer roll is gone (the `BodySegments >= 3` weight is skipped — same
+draw count, different weights, so nothing moves below 18), and a standard Land species the biped draw left standard
+rolls `WormRules.WormChance` (0.15) **as the very last draw** to become `CreatureBodyPlan.Worm` (`ApplyWormPlan`: legs
+0, arms 0, 6–12 links, the slither style, a slow pace, knee- to hip-high, antennae for horns, a small group). Rosters of
+every older generation are bit for bit unchanged (`CreatureWormTests`). The client draws the chain as the tail rig
+(`CREATURE_RIG.md`, Worm).
+
+**The sea giant (#2111, `WorldDescription.LeviathanGeneration` = 18).** Justus asked for "the largest form of water life";
+Marcel's decision: the sea giant first, on the sandworm's mover, and it hunts. Nothing in the chunk pipeline changes — the
+leviathan is a query over the water the world was born with. `WorldGenerator.DeepSeaGen18.cs`: a column is **deep sea**
+(`IsDeepSeaAt`, `TryGetDeepSea`) when `TryGetWaterSurface` reports at least `GiantRules.LeviathanMinDepth` (12) blocks of
+liquid water over the bed — enough to hide a body that cruises at girth × 1.4 + 2 below the surface; a world **hosts** the
+giant (`HostsDeepSea`, measured once per type on a 48-block grid) when at least `LeviathanMinDeepShare` (3 %) of its
+columns are. The data gate is `GiantRules.AllowsLeviathan`: generation 18, `waterAbundance ≥ 0.6`, `baseTemperature > 0`
+(no breach through an ice sheet), fauna that admits giants — oceans, coral seas, archipelagos, rainbow seas, river
+lowlands; never the sand sea (0.15) and never an older save. `CreatureGenerator.GenerateLeviathan` (id `gi_leviathan`)
+rolls it outside the roster like every giant. On the server every sandworm rule that asked "is this the sea, where is its
+surface, how deep am I hidden" now goes through `InMedium` / `SurfaceYOf` / `HiddenY` keyed on the giant's kind
+(`GameServerGiants`): the same spawn, path, hearing (`VibratesWater`: the first block under the source, within two cells, is
+water — a pier, a raft and the shore are silent; `GiantRules.CarriesThroughWater` says which sources the water carries: a
+swimmer, a boat, the fish's steps, a hard landing, a blast — not mining, not a thumper), the same strike, plus
+`StrikeBoatsNear` (hull damage twice the strike, a parked boat too). Effects: `sea_breach` / `sea_strike` / `sea_dive` /
+`wake`. Tests: `LeviathanServerTests`, `GiantRulesTests`.
+
+## 34. Generation 18 — the gas giant and the sky giant (#2112, 2026-09-27, Justus' "where are the gases?")
+
+**A world class with no solid surface.** Marcel's decisions: cold (−120 °C) **and** toxic; the `LoneGiant` system's planet
+becomes a gas giant on generation-18 galaxies plus an outermost-orbit roll; sky cities carry a breathable pocket; rings on
+about three in five; the sky giant is passive — a spectacle. The class is one data row (`gas_giant`, `minTerrainGeneration`
+18, `spawnWeight` 0) and one new type field, `seaFluid: "gas"` (`PlanetType.IsGasWorld`), plus `floatingIslands`.
+
+- **The gas sea.** A third sea fluid next to water and lava: the `gas` block — a still liquid like oil (#2106: `liquid`,
+  not `solid`, not `mineable`, **no drops**, so the pump refuses it), meshed by the client like water (`TraitWater`, its own
+  banded amber tile, alpha 0.62 — a haze you see a little way into). The calibration takes a gas branch before the water
+  one: `SeaLevel = MaxHeight + GasSeaRise` (6), so the gas floods the **whole heightfield** and nothing of it ever shows —
+  every column is a sea column, there are no ponds, rivers, beaches or ice (`waterAbundance` 0), and `SeaIsGas` answers
+  for the far terrain (`FarSurface.Gas`), the minimap, the pads and the server. The contact rule (`GameServerGasGiant`):
+  `InGas` = the feet cell or the cell under them is gas → `GasContactDps` (30, twice lava, **no armour**), death line
+  `srv.death.gas`; an animal that falls in burns the same way (`BurnDpsFor`); a giant never does.
+- **The islands.** The classic floating-island tiers (`FloatingIslandTier`, 1–3 tiers from `BaseHeight + 28`) over a
+  low, flat heightfield (`baseHeight` 40, `amplitude` 6): tier 0 hangs just over the gas, the lower stalactites dip into it.
+  The islands are the only ground: the roster is **all fliers** (`GenerateRoster` re-rolls every non-Air slot with a
+  salted seed on a gas world — the type is gated, so no older roster moves), and a settlement seats **only on an island**
+  (`GameServerSettlements`: `wantIsland` is forced, the guaranteed search returns false instead of a ground seat — a
+  build too big for an island has no spot).
+- **The decks.** Every landing pad of a gas world is a **metal deck** (`LandingPad.Deck`, `LandingPadFlatten.Deck`, flag
+  32 in the pinned pads, code 3 on the far-terrain wire): `DecidePad` seats it at `SeaLevel + IsletRise` like an ocean
+  islet, and `FlattenLandingPads` builds a platform instead of a mound — a `steel_floor` top over three blocks of
+  `metal_panel`, gas again below, no beach slope, an `energy_fence` rail around the plateau rim with a `light_white` every
+  seventh post, no flora.
+- **The sky cities.** `InSkyCityAir`: on a gas world every inhabited settlement on an island holds a pocket of air over its
+  footprint (a 6-block margin, 12 blocks over its roofs; an abandoned one has lost it) — life-support source 5,
+  `ui.hud.city_air`. The base-air idea for a place nobody founded.
+- **The galaxy.** `UniverseGenerator.ApplyGasGiants` runs after the generic gen-1 retype: for every system but the start
+  system, the lone giant's planet (`SystemArchetypes.ForIndex`) becomes the gas giant, any other system's **outermost**
+  planet rolls one in `GasGiantOuterOrbitChance` (40/256), both ring in `GasGiantRingChance` (154/256) if they had no ring;
+  the first breathable planet and a once-per-galaxy landmark are spared, moons keep their types. The generic roll never
+  picks the type (weight 0). A description below generation 18 keeps every body's type (`GalaxyLayoutRegressionTests`
+  pins generation 0).
+- **The sky giant** (`CreatureBodyPlan.SkyGiant`, `GiantRules.HostsSkyGiant`, `CreatureGenerator.GenerateSkyGiant`, id
+  `gi_sky_giant`): a 40–80 block passive sailer rolled outside the roster. `TrySpawnSkyGiant` puts it on a **lane** 120–200
+  blocks from a player — a ring of 70–130 blocks around a centre, 42–70 over the gas — and `TickSkyGiant` runs it round
+  the ring at the species' pace while the centre wanders to a new spot every two minutes; it bobs, calls every half minute
+  (`WorldFx` `skycall`, the clip `sky_giant_call`), never lands and never strikes; a hit only makes it climb for twenty
+  seconds. It is hit along a **trail** of its own recent positions (`GiantRuntime.Trail`, a capsule per span,
+  `SkyGiantAimPoint`), which is also how the client draws it (`SkyGiantView`: the head's local track, follow-the-leader).
+  Achievement `sky_giant`, `/giant sky`.
+- **Glue per key:** `Sky.GradeFor`, `UrpScenePost` (the ice mood), `SpaceView` (the `gas` tile is the whole face of the
+  sphere; the amber storm shell), `WorldMinimap`, `MusicLibrary` (toxic), `ClientAudio` (`amb_gas_giant`),
+  `GameServerShipAi` (`vega.hint.world.gas_giant`), test lists (`TerrainTagsAndGenerationTests`, `ToxicaMaximaWorldTests`).
+
+Tests: `GasGiantWorldTests` (the data, the flooded heightfield with islands above, the galaxy placement, the all-flying
+roster, the sky giant's rules), `GasGiantServerTests` (the deck, the contact rule, the city air, the sky giant), golden
+`gas_giant-gen18`.

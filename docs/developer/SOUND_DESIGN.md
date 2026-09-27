@@ -138,6 +138,19 @@ at the eaten animal's spot) and the ambience bed `amb_black_dunes` (hot wind ove
 rock — `ClientAudio.BiomeBed` for the `arena_nigra` key). The Crystal Net's chime, horn and siren keep their own clips
 (#2052); on sea sand they now also shake the ground for the worm, which is a server rule, not a sound.
 
+**The leviathan (#2111, 2026-09-27, Justus' idea):** four more ElevenLabs one-shots for the sea giant's `WorldFx` kinds
+(the sandworm's kinds in water, played by `CreatureView.PlayWorldFx` with pale spray instead of dust and a smaller camera
+shake — water carries no tremor to the shore): `leviathan_breach` (a wall of water erupting + a deep whale-like bellow),
+`leviathan_strike` (the body slamming down, a hull cracking), `leviathan_dive` (a massive body sliding back under, water
+closing over it) and `leviathan_wake` (the approach: something enormous moving fast just under the surface, every 1.5 s at
+the giant's position, scaled by the server's strength).
+
+**The gas giant (#2112, 2026-09-27, Justus' idea):** two ElevenLabs clips — the ambience bed `amb_gas_giant` (an endless
+howling wind over a bottomless sea of cold gas, thunder far below; `ClientAudio.BiomeBed` for the `gas_giant` key, a
+seamless loop) and `sky_giant_call` (a vast, slow, resonant whale-like moan carried on the wind — played by
+`CreatureView.PlayWorldFx` for the server's `skycall` kind at the giant's position every half minute or so, no camera
+shake: it is far up).
+
 ## 9. NPCs (humans + aliens) — *ElevenLabs, NON-VERBAL*
 
 No speech. Short vocalisations only: **idle murmur, greet/notice, acknowledge, trade-confirm,
@@ -208,6 +221,7 @@ All cues are 3D at the device cell. See [CRYSTAL_NET.md](CRYSTAL_NET.md).
 | announcer | rising edge (a toast to the owner + allies) | `ai_blip` (existing VEGA chirp) | EL (existing) |
 | switch flip / button press | the player's Interact | `crystal_switch`, `crystal_button` | EL |
 | auto-drill | working (loop while it mines) | `auto_drill_loop` | EL |
+| drill laser (#2108) | one cell cut (per `WorldFx laser`) | `drill_laser_zap` | EL |
 | clone tank | growing (loop for 60 s), stop on release | `clone_tank_bubble` | EL |
 | fabricator | one craft done | `fabricator_craft` | EL |
 | caller | pulse | `caller_whistle` | EL |

@@ -66,6 +66,7 @@ namespace BlocksBeyondTheStars.Client
 
             // #1998: the giants — the sandworm's own view, the local phase clock, the last announced stomp.
             public SandwormView Worm;
+            public SkyGiantView Sky; // #2112: the sky giant's follow-the-leader body
             public NetCreature LastNet;
             public string PhaseKey = string.Empty;
             public float PhaseStartLocal;
@@ -301,6 +302,7 @@ namespace BlocksBeyondTheStars.Client
                         entry.FaceDir = Vector3.Slerp(entry.FaceDir.sqrMagnitude > 1e-4f ? entry.FaceDir : want, want, 1f - Mathf.Exp(-3f * dt));
                         entry.Root.transform.rotation = Quaternion.LookRotation(entry.FaceDir, Vector3.up);
                         GiantStomp(entry, c, phaseTime);
+                        entry.Sky?.Apply(now); // #2112: the body trails the head along its own track
                     }
                 }
 
@@ -882,12 +884,16 @@ namespace BlocksBeyondTheStars.Client
 
         private PlayerController LocalPlayer => _player != null ? _player : (_player = FindAnyObjectByType<PlayerController>());
 
+        /// <summary>#2111: the leviathan's spray — pale sea foam, whatever the seabed.</summary>
+        private static readonly Color SeaSpray = new Color(0.8f, 0.9f, 0.97f);
+
         /// <summary>Wires a freshly built giant: its colliders into the aim/scan lookup, a colossus's footfalls into dust and
         /// a ground shake.</summary>
         private void SetUpGiant(Entry entry, NetCreature c)
         {
             RegisterGiant(c.Id, entry.Root);
             entry.Worm = entry.Root.GetComponent<SandwormView>();
+            entry.Sky = entry.Root.GetComponent<SkyGiantView>();
             if (entry.Animator != null)
             {
                 float height = c.GiantHeight;
@@ -1003,6 +1009,11 @@ namespace BlocksBeyondTheStars.Client
                         audio?.At("sandworm_swallow", at, 0.7f, 1f);
                         player?.AddCameraShake(Mathf.Clamp01(1f - dist / 40f) * 0.25f);
                         break;
+                    case "laser": // #2108: the drill laser cut a cell — the beam runs from the device (Radius blocks above) down to it
+                        Fx?.Shoot(at + Vector3.up * Mathf.Max(1f, fx.Radius), at, new Color(0.45f, 0.92f, 1f));
+                        Fx?.Dust(at + Vector3.up * 0.3f, 4);
+                        audio?.At("drill_laser_zap", at, 0.5f, 1f);
+                        break;
                     case "dive":
                         Fx?.Dust(at + Vector3.up * 0.3f, 16);
                         audio?.At("sandworm_dive", at, 0.6f, 0.8f); // the sand collapsing into the hole (was a thunder placeholder)
@@ -1011,6 +1022,46 @@ namespace BlocksBeyondTheStars.Client
                     case "rumble":
                         audio?.At("sandworm_rumble", at, 0.45f, 0.5f * Mathf.Clamp01(fx.Strength)); // something huge moving under the sand
                         player?.AddCameraShake(Mathf.Clamp01(1f - dist / 120f) * 0.25f * Mathf.Clamp01(fx.Strength));
+                        break;
+
+                    // #2111: the leviathan's moves — the sandworm's kinds in water: spray instead of dust, its own clips, less shake
+                    // (water does not carry a tremor to the shore).
+                    case "sea_breach":
+                        for (int i = 0; i < 6; i++)
+                        {
+                            var off = Random.insideUnitCircle * 4f;
+                            Fx?.Dust(at + new Vector3(off.x, 0.4f, off.y), 10, SeaSpray);
+                        }
+
+                        audio?.At("leviathan_breach", at, 0.75f, 1f);
+                        player?.AddCameraShake(Mathf.Clamp01(1f - dist / 100f) * 0.35f);
+                        break;
+                    case "sea_strike":
+                        for (int i = 0; i < 8; i++)
+                        {
+                            var off = Random.insideUnitCircle * Mathf.Max(1f, fx.Radius * 0.8f);
+                            Fx?.Dust(at + new Vector3(off.x, 0.4f, off.y), 10, SeaSpray);
+                        }
+
+                        audio?.At("leviathan_strike", at, 0.75f, Mathf.Clamp(fx.Strength, 0.5f, 1f));
+                        player?.AddCameraShake(Mathf.Clamp01(1f - dist / 70f) * 0.7f * fx.Strength);
+                        break;
+                    case "sea_dive":
+                        for (int i = 0; i < 3; i++)
+                        {
+                            var off = Random.insideUnitCircle * 3f;
+                            Fx?.Dust(at + new Vector3(off.x, 0.3f, off.y), 8, SeaSpray);
+                        }
+
+                        audio?.At("leviathan_dive", at, 0.6f, 0.8f);
+                        player?.AddCameraShake(Mathf.Clamp01(1f - dist / 60f) * 0.2f);
+                        break;
+                    case "wake":
+                        Fx?.Dust(at + Vector3.up * 0.2f, 6, SeaSpray);
+                        audio?.At("leviathan_wake", at, 0.45f, 0.5f * Mathf.Clamp01(fx.Strength)); // something enormous under the surface
+                        break;
+                    case "skycall": // #2112: the sky giant's call, carried on the wind — no shake, it is far up
+                        audio?.At("sky_giant_call", at, 0.8f, 1f);
                         break;
                 }
 
