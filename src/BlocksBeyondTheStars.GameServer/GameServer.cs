@@ -755,6 +755,7 @@ public sealed partial class GameServer
                     if (_config.PlaceSettlements && !restricted)
                     {
                         BootDetail("settlements", StampSettlement);
+                        BootDetail("intercity rail", StampIntercityRail); // #2125 (generation 19): right after the towns, before anything else reserves ground
                     }
 
                     if (_config.PlaceRuins && !restricted)
@@ -1961,7 +1962,10 @@ public sealed partial class GameServer
             // Above the atmosphere (built a tower up into space) the air runs out too, even on a breathable
             // world — the suit tank drains until the player descends back below the line. Life support wins
             // over the altitude line as well, so a base founded on a peak above it still breathes.
-            if (!submerged && (lifeSupport || (!p.AboveAtmosphere && !p.InEva && AtmosphereBreathable && !InSpsLab(p.Position)))) // 2026-09: a lab module holds no air
+            // #2120: the ship interior's void world "breathes" only so the cabin needs no special case — out in space
+            // there is no air: an extension that is not sealed is outside the ship's air, helmet on.
+            bool worldAir = AtmosphereBreathable && !InShipInterior(p.PlayerId);
+            if (!submerged && (lifeSupport || (!p.AboveAtmosphere && !p.InEva && worldAir && !InSpsLab(p.Position)))) // 2026-09: a lab module holds no air
             {
                 // Aboard the ship (life support), boarded on a station (its life support), oxygen disabled
                 // by rules, or a breathable atmosphere: regenerate, no drain (up to the tank capacity).
@@ -2367,6 +2371,7 @@ public sealed partial class GameServer
         p.Hunger = 100f;
         p.Stealthed = false;
         p.Seated = false; // death stands you up (#806)
+        p.SeatCell = null; // and frees the chair (#2122)
         p.InEva = false; // a death ends any spacewalk
         _inShipInterior.Remove(p.PlayerId); // and any in-ship walkabout
         _dockedFromEva.Remove(p.PlayerId);  // and any "ship floating while docked" memory
@@ -3970,6 +3975,7 @@ public sealed partial class GameServer
             TerrainContinents = _meta.Description.TerrainContinents,
             TerrainGeneration = _meta.Description.TerrainGeneration, // #1644
         });
+        session.AnnouncedWorldId = WorldIdOf(state.CurrentLocationId); // #2117
         SendInventory(session);
         SendPlayerState(session);
         SendShipRepairStatus(session); // a ship at 1/200 hull shows its repair panel from the first frame (#1561)
@@ -4286,6 +4292,7 @@ public sealed partial class GameServer
             // and never sends a payload, so silence is normal rather than a sign of a dead client.
         };
         _sessions[connectionId] = session;
+        session.AnnouncedWorldId = WorldIdOf(joinBody); // #2117: joined on this body, like a JoinAccepted would say
         state.LastSeenUtc = UtcNowIso();
         SetupPlayerShip(session); // local/test players get their own ship too
         EnsureSafeSpawn(session); // self-heal a position persisted mid-fall (don't load them into the void)
@@ -4609,6 +4616,12 @@ public sealed partial class GameServer
             return;
         }
 
+        // #2119: a door the player built into their own parked ship is the ship's — picking it up is a ship edit.
+        if (TryPickUpShipDoor(session, pos))
+        {
+            return;
+        }
+
         // #1746: the client can aim at doors now, so a stamped station / settlement door arrives here as well.
         // It is protected like the wall it sits in — say so, rather than healing a "ghost block" at its air cell.
         if (StampedDoorAt(pos))
@@ -4657,6 +4670,13 @@ public sealed partial class GameServer
         // its bed, so this takes nothing permanent from the settlement. Everything else the greenhouse is made
         // of — glass, beds, frame — stays protected.
         bool harvestingPlant = IsFlora(current.Value);
+
+        // #2125: the intercity line's stations and pylons are the towns' — protected like them, with a line of their own.
+        if (!harvestingPlant && IsIntercityRailBlock(pos) && !IsSettlementBoxBlock(pos))
+        {
+            Reject(session, "mine", "@srv.protect.rail");
+            return;
+        }
 
         // A natural tree inside the box is not the settlement's either (#1659) — see IsSettlementProtected.
         if (!harvestingPlant && IsSettlementProtected(pos, current))
@@ -5406,6 +5426,19 @@ public sealed partial class GameServer
             placeShape = StampPropShape(session, place, blockDef.Key, pos);
         }
 
+        // A block with a FRONT (#2124) — a vending machine, a forge, a watcher — stays a plain cube but remembers
+        // which side its front is on, in the descriptor's otherwise unused up-face field (CubeFacing). "toward" turns
+        // it to the player, "away" the way the player looks; an explicit quarter turn (the rotate key) stands in for the
+        // look heading — the Crystal Net's convention, so a gate's wire and its drawn front can never disagree. The mined
+        // drop keeps only the shape index (0), so the front never rides an item into a stack.
+        int crystalYaw = place.Yaw;
+        if (placeShape == 0 && blockDef.Facing != null && PropShapes.DefaultPlaceShape(blockDef.Key) == 0)
+        {
+            int front = CubeFacing.FrontForPlacement(blockDef.Facing, place.Yaw, session.State.Yaw);
+            placeShape = CubeFacing.Pack(front);
+            crystalYaw = CubeFacing.LookHeadingOf(blockDef.Facing, front); // a gate / watcher signals the way it looks
+        }
+
         // A painted item carries its design id in the key; stamp it into the descriptor's design bits so the
         // placed block shows the texture. Composes with any form above (built-in, custom or prop-stamped).
         // Only a LIVE design is honoured — an item holding a wiped/foreign id places as the plain material,
@@ -5474,7 +5507,7 @@ public sealed partial class GameServer
             OnBasePostChanged(session, pos, placed: true); // #1865: a post at home is staffed by a resident
         }
 
-        OnCrystalBlockPlaced(session, pos, blockDef, place.Label, place.Yaw); // #2046: a conduit or device joins the Crystal Net
+        OnCrystalBlockPlaced(session, pos, blockDef, place.Label, crystalYaw); // #2046: a conduit or device joins the Crystal Net
         OnRailBlockPlaced(session, pos, blockDef); // #2113: a pylon joins the rail graph (and auto-links), a stop joins its line
         BroadcastToWorld(new BlockChanged { X = pos.X, Y = pos.Y, Z = pos.Z, Block = blockDef.NumericId.Value, Tint = placeTint, Glow = placeGlow, Shape = placeShape });
         NudgeCreatureBodyChecks(pos); // #1357: an animal the block landed in steps aside on its next tick
@@ -7504,6 +7537,7 @@ public sealed partial class GameServer
         {
             case WorldReset reset:
                 reset.WorldId = WorldIdOf(session.CurrentLocationId); // the stream that follows is this world's
+                session.AnnouncedWorldId = reset.WorldId; // #2117: the world the client now accepts chunks for
                 session.FarInfoDue = true; // #1820: the far view needs the new world's generator settings
                 break;
             case BlockChanged change:

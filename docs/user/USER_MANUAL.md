@@ -116,7 +116,7 @@ Last updated: 2026-08-26.
 | **1 – 9** | Select hotbar slot |
 | **Middle mouse** | **Hotbar slot actions** on the selected slot: swap it against any backpack item, and for a building material also colour it (dye / glow / own pattern) or re-form it — see §5 → Hotbar slot actions (rebindable) |
 | **F** | Attack with the held tool/weapon — hits what's **under your crosshair** (the reticle turns red over a target; with **auto-aim** on, the nearest enemy in front of you is acquired automatically) |
-| **R** | At your own **cockpit / ship console** while the repair panel is up: repair the ship (see §5 → Repairing your own ship); otherwise repair the targeted wreck breach with the selected hotbar block (see §5 → Wrecks); with a **shaped block, furniture, ladder or stairs** selected: rotate its placement orientation (**Shift+R** cycles backwards — see §5 → Craftable block shapes) |
+| **R** | At your own **cockpit / ship console** while the repair panel is up: repair the ship (see §5 → Repairing your own ship); otherwise repair the targeted wreck breach with the selected hotbar block (see §5 → Wrecks); with a **shaped block, furniture, ladder, stairs or a block with a front** (machines, counters, devices) selected: rotate its placement orientation (**Shift+R** cycles backwards — see §5 → Craftable block shapes) |
 | **L** | Toggle the suit headlamp (requires a `suit_lamp`) |
 | **G** | Loot the nearest container |
 | **Q** | **Feed** — with food in your hand and a **begging herd** nearby, throw the animals one piece (see §5 → Creatures); does nothing otherwise, so it never wastes food |
@@ -129,7 +129,7 @@ Last updated: 2026-08-26.
 | **O** | Aboard your own (or any player-built) station: toggle **zero-g construction mode** for yourself — the suit floats over the decks (Jump rises, Crouch sinks) so you can extend the hull without walking; press again to walk. Not saved; off whenever you board |
 | **V** | Toggle first / third-person camera |
 | **I** | Toggle **thermal vision** while looking through the thermal binoculars (see §5 → Binoculars) |
-| **N** | Advance the current **VEGA** dialogue line (also fast-completes the typewriter) — rebindable; gamepad **View** (Back), touch **NEXT ▶** |
+| **N** | Advance the current **VEGA** dialogue line (also fast-completes the typewriter; also opens the folded VEGA tab) — rebindable; gamepad **View** (Back), touch **NEXT ▶** |
 | **Tab** | Open / close the gameplay menu (Inventory, Crafting, Tech, Ship, Map, Missions, Character); also closes full-screen menu screens such as the Codex |
 | **M** | Toggle the world map (top-down planet view; click to set a waypoint) — rebindable; touch **MAP** |
 | **Enter** | Open the chat box (Esc cancels) |
@@ -160,7 +160,7 @@ buttons — retuning is tracked in issue #195):
 | **(Y)** | Toggle first / third-person camera |
 | **R3** (click the right stick) | **Hotbar slot actions** on the selected slot (see §5) — stick navigates the menu, **(A)** picks, **(B)** closes |
 | **L3** (click the left stick) | **Actions** — a list of everything you can do right now (rotate the held block, trade / dock with the player beside you, undock, loot / stash, repair, lamp, thermal vision, feed a begging herd, deploy a station in EVA, leave / refuel the speeder, …); stick navigates, **(A)** picks, **(B)** closes |
-| **View** (the two-rectangles button left of the Xbox logo; "Back" on a 360 pad, Share on PlayStation, − on Nintendo) | **VEGA: continue** — advance or dismiss the ship AI's line (the same as **N** on the keyboard) |
+| **View** (the two-rectangles button left of the Xbox logo; "Back" on a 360 pad, Share on PlayStation, − on Nintendo) | **VEGA: continue** — advance or dismiss the ship AI's line (the same as **N** on the keyboard); also opens the folded VEGA tab |
 | **Menu** (☰ — the three-lines button right of the Xbox logo; Unity and 360-era pads call it Start. The Xbox-logo button itself belongs to Windows' Game Bar and never reaches the game) | Open / close the gameplay menu — its top strip has the **Pause menu** button (Resume / Settings / Quit, the same dialog **Esc** opens on the keyboard); **(B)** resumes |
 
 In menus, the left stick / d-pad navigates, **(A)** confirms and **(B)** goes back — that includes **every
@@ -230,7 +230,7 @@ buttons swap with what you're doing:
 | **◄ ►** | Cycle hotbar slot (ship-systems bar — laser ↔ tractor beam — at the helm) |
 | **…** (beside ►) | **Hotbar slot actions** on the selected slot (see §5); shown only when the menu can open |
 | **ACT** (beside ◄) | **Actions** — a list of everything you can do right now: rotate the held block, trade / dock with the player beside you, undock, loot / stash, repair a wreck, lamp, thermal vision, deploy a station in EVA, leave / refuel the speeder, … Tap an entry to do it. Shown only when something applies |
-| **NEXT ▶** (top-centre) | **VEGA: continue** — advance or dismiss the ship AI's line; shown only while a line is up |
+| **NEXT ▶** (top-centre) | **VEGA: continue** — advance or dismiss the ship AI's line; also opens the folded VEGA tab; shown only while a line is up |
 | **≡** (top-right) | Open / close the gameplay menu |
 | *On foot:* **JUMP · MINE (hold) · PLACE · USE · DOWN · CHAT · VIEW · MAP** | Jump · mine · place · use/board · descend · open chat · camera · planet map |
 | *On foot, when it applies:* **ROTATE · ATTACK · FEED** | Rotate the held block's placement (appears while a rotatable block is selected) · swing / fire the held weapon (hold on the Guardian core to breach it) · throw one piece of the held food to a begging herd (appears while you hold food and an animal begs nearby) |
@@ -262,6 +262,7 @@ cockpit asks "Launch into space?"** — confirm with the button, **E** or **Ente
 | **W/A/S/D** | Fly through the **system** — every planet/moon is out there at its real position |
 | **L** | Land — on the body you've flown up to (the HUD shows "land on <name>") or, if none is near, back where you launched. Opens a confirmation (**Enter** = yes, **Esc** = no) |
 | **E** | Board a nearby space station (within range of its hull; the ship flies round to the station's hangar mouth and docks there before you board) |
+| **F** | **Step inside your ship** while it floats: walk its cabin, build, sleep. The **helm** takes you back to the flight, and walking out through the **hatch** starts a spacewalk — either way the ship is exactly where you left it, pointing the same way, and a landing afterwards comes down on the world as usual |
 | **P** | **Autopilot** (needs an `ai_core_mk2`+ module): flies to your nav waypoint if one is set, else the nearest station / landable body; any manual input takes the helm back |
 | **M** | **System chart**: a top-down map of the current system. Click a body/station to target it or empty space for a free **nav waypoint** — it shows on the radar with a distance readout, and the autopilot flies to it. The ship holds position while the chart is open. Space distances (radar, chart) read in **km**; only on a spacewalk is the way back to your ship given in metres. The chart's **Hyperspace** tab (LB/RB on a pad) shows the whole galaxy as stars in their real colours: the ringed star is where you are, named stars are systems you have visited, a **?** is one you have never entered, lines are relay jump lanes. Click a star to read about it and — with a jump generator aboard or a lane — **hyperjump to it straight from the chart** |
 | **Tab → Map** | Hyperspace **jump to another system** (needs a `jump_generator` module) — flying is within one system |
@@ -336,9 +337,12 @@ separate unlock; admins can still disable it through server world rules.
   until the arrow points to the top of the dial and walk; VEGA reminds you of this once you are a long way from
   the hull.
 - **VEGA panel** — the ship AI speaks through a typewriter speech panel with a persistent **objective
-  chip** (live progress, e.g. "mine 1/3") during onboarding. Advance lines with **N** — a line stays on
-  screen until you do (no auto-dismiss), and further lines wait in the queue. Advisor hints can
-  be muted (Settings → VEGA hints); the tutorial can be skipped or **restarted** from the Settings tab.
+  chip** (live progress, e.g. "mine 1/3") during onboarding. Advance lines with **N** or the **Continue** button in
+  the panel (clickable whenever the mouse cursor is free, tappable on touch) — a line stays until you do (no
+  auto-dismiss), and further lines wait in the queue. Leave a line for about 45 seconds and the panel **folds into a
+  small VEGA tab** beside the objective, showing how many messages are waiting; press **N** (pad **View**, touch
+  **NEXT ▶**) or click/tap the tab to open it again — nothing is lost. Advisor hints can be muted (Settings → VEGA
+  hints); the tutorial can be skipped or **restarted** from the Settings tab.
 
 ---
 
@@ -554,6 +558,12 @@ separate unlock; admins can still disable it through server world rules.
   **furnish the interior**: place blocks in free cabin space (and mine those again) — they stay with
   the ship across launches, landings and the walk-in interior. The hull cannot be damaged and ship
   modules (medbay, cockpit, …) cannot be removed. Step or hop up through the hatch to enter.
+- **Grow your ship**: on a spacewalk you can build onto its hull (and cut hull cells out of it); from inside you
+  can keep building outward — up to **15 × 15 × 15 blocks** in all. A **door** you build into the ship is a real
+  door (you see it while placing, it opens and closes, it shows on the ship in flight, and mining it gives it back).
+  An extension counts as ship and has **air only when it is sealed** — airtight walls (glass counts) and a door in
+  every opening; step into an open one and your helmet goes on. Walking through your hatch into a sealed extension
+  keeps you inside the ship; a spacewalk starts only when you leave the ship's blocks.
 
 ### Inventory & cargo hold
 - Your **inventory** is your personal backpack — **36 slots** since 2026-09 (a nine-wide grid: the
@@ -714,8 +724,9 @@ separate unlock; admins can still disable it through server world rules.
   ship on foot afterwards; the launch check re-runs every start (no engine → grounded until you add one).
 
 ### Repairing your own ship
-- Combat dents your ship's **hull** (it never regenerates on its own), and EVA-carved hull cells stay missing
-  until you refill them. Whenever your ship needs work, a **"Repair ship" / "Schiff reparieren"** panel sits on
+- Combat dents your ship's **hull** (it never regenerates on its own), and hull cells lost in a wreck stay missing
+  until you refill them. Cells **you** cut out on a spacewalk (to build onward) and doorways you hung a door in are
+  your ship's new shape, not damage — the repair leaves them alone. Whenever your ship needs work, a **"Repair ship" / "Schiff reparieren"** panel sits on
   the right of the HUD (a hull bar plus the materials still needed; it greys out and says so while you are
   short). To repair, stand at the **cockpit** or the **ship console** and press **R** — one action fixes hull and
   cells together. The panel refreshes on every landing and login, so it is never stale.
@@ -1288,7 +1299,8 @@ separate unlock; admins can still disable it through server world rules.
 
 ### Daily routines & jobs
 - **People keep the hours of the sun above them.** By day they are at work, in the evening they sit down on a
-  **chair or bench** near home, and at night they walk to **their bed** and sleep in it (*"asleep"* on the
+  **chair or bench** near home (every chair belongs to one person — when the tavern runs out of chairs, the others
+  use a chair at home or spend the evening standing), and at night they walk to **their bed** and sleep in it (*"asleep"* on the
   nameplate, a soft *z z z* above them). Without a bed they rest where they live. Talk to a sleeper and you get
   a mumbled *"come back in the morning"*. This goes for your residents, for **villagers** (every house has a
   bed) and for **station crew** — a station keeps its own clock, and its deck lights **dim at station night**
@@ -1719,6 +1731,12 @@ separate unlock; admins can still disable it through server world rules.
   and every wagon come back as items. A fall taken aboard is never a fall.
 - Other riders on the same train are placed inside the wagons exactly as your game draws them, so nobody slides
   through a wall on a curve or across the world seam.
+- **Intercity trains.** On some newer worlds, two towns or cities are joined by a monorail line. You'll find a
+  **station** at the edge of each town — look for the amber station marker on the world map ("… Station"). A
+  **public train** runs back and forth between the two stations on its own and waits about **30 seconds** at each one.
+  Walk up to a wagon and press **E** to board (E beside a seat sits down, **F** leaves), then enjoy the ride. The train
+  belongs to everyone: nobody needs a ticket, and nobody can drive, stop, pack up or add wagons to it. The stations and
+  the line's pylons can't be mined.
 
 ### Craftable block shapes
 - Any held **building material** can be re-formed into a non-cube **shape** — **slab, pyramid, dome (half-sphere),
@@ -1730,7 +1748,11 @@ separate unlock; admins can still disable it through server world rules.
   stacks like a block (form and dye colour combine freely). Shaped forms are **player-craft only**: world-gen,
   settlements, stations and ships stay plain cubes.
 - **Sitting:** press **E** on any **chair**- or **bench**-shaped cell to sit down — the camera settles to seat height
-  and other players see you sitting. Stand up with **E**, jump, crouch or any movement key.
+  and other players see you sitting. **One seat, one sitter:** a seat somebody already sits on — another player or a
+  villager/crew member — can't be taken (*"Someone is already sitting there."*), and people won't sit down on your
+  chair either: they wait beside it and sit down once you get up. Stand up with **E**, jump, crouch or any movement key.
+- **Faces:** everyone has a face of their own — some are clean-shaven, others wear a moustache, a goatee, a beard or a
+  full beard in their hair colour; androids have a small speaker grille instead.
 - **Beds are two cells long:** placing a bed writes the head end where you aim and the foot end in the cell you are
   facing (the preview shows both); the foot cell must be free. Mining either half takes the whole bed back, and **E**
   on either half sets your home spawn. Beds placed before this change stay one cell.
@@ -1746,6 +1768,12 @@ separate unlock; admins can still disable it through server world rules.
   the vertical axis — it always stays upright so beds and campfires keep working. Symmetric forms (sphere,
   dome, cylinder, …) ignore orientation. Mining returns the shaped item; orientation is re-derived each
   time you place it again.
+- **Blocks that face you:** machines, counters, screens and Crystal Net devices have a **front, sides and a top of
+  their own** (a forge shows its fire on the front and bricks on the sides, a crate its lid on top, a workbench its
+  tools on top and drawers on the sides). When you place one, its **front turns toward you** — a watcher and a Device
+  Eye are the exception: their eye looks the way you are looking. While you hold such a block, the preview shows an
+  **arrow** on the side that will be the front; press **R** (**Shift+R** backwards) to turn it before you place it.
+  Mining the block gives back the normal item.
 - **Auto follows your crosshair:** when a cell has no floor under it, the shape leans on **the wall face you
   actually clicked** instead of whichever neighbouring wall the game finds first. Building on a floor still
   keeps the shape upright, so extending a floor sideways lays the next block flat as before.

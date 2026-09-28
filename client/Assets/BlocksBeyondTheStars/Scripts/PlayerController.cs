@@ -95,7 +95,7 @@ namespace BlocksBeyondTheStars.Client
         // They are cheap (a few list scans) and are polled once per frame at most.
 
         /// <summary>The selected hotbar item has a placement orientation to cycle (RotateShape applies).</summary>
-        public bool HeldRotatable => Game != null && HeldPlaceShape(Game.ItemInSlot(Game.SelectedHotbarSlot), out _) > 0;
+        public bool HeldRotatable => Game != null && HeldOrientable(Game.ItemInSlot(Game.SelectedHotbarSlot), out _);
 
         /// <summary>The selected hotbar item is a weapon (PrimaryFire has something better than fists to swing).</summary>
         public bool HoldsWeapon =>
@@ -274,6 +274,13 @@ namespace BlocksBeyondTheStars.Client
         private static readonly Vector3 SeatedEye = new Vector3(0f, 1.05f, 0f);
         private Vector3Int? _seatCell;
         private int _satFrame; // debounce: the E that sat us down must not also stand us up
+
+        // One seat, one sitter (#2122): the server refuses a seat somebody already sits on; every refusal bumps
+        // GameBootstrap.SeatRejections, and a count that moved while we sit stands us back up.
+        private int _seatRejectionsSeen;
+
+        /// <summary>Other players (wired by WorldRig) — the quick "is somebody sitting there?" look (#2122).</summary>
+        public RemotePlayers Remotes;
 
         private CharacterController _controller;
         private float _pitch;
@@ -726,6 +733,7 @@ namespace BlocksBeyondTheStars.Client
 
                 bool chairGone = Game?.World == null
                     || Game.Health <= 0f // dying stands you up so the respawn teleport gets a live controller
+                    || Game.SeatRejections != _seatRejectionsSeen // #2122: the server says somebody sits there (toast shown)
                     || !FurnitureShapes.IsSeat(ShapeCode.ShapeOf(Game.World.GetShape(seat.x, seat.y, seat.z)));
                 bool wantsUp = Time.frameCount != _satFrame
                     && (InputMap.JumpDown() || InputMap.CrouchHeld() || InputMap.Down(InputAction.Interact)
@@ -809,7 +817,7 @@ namespace BlocksBeyondTheStars.Client
             if (InputMap.Down(InputAction.RotateShape))
             {
                 string held = Game != null ? Game.ItemInSlot(Game.SelectedHotbarSlot) : null;
-                if (HeldPlaceShape(held, out var heldCycle) > 0)
+                if (HeldOrientable(held, out var heldCycle))
                 {
                     bool backwards = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
                     StepPlaceOrientation(backwards, heldCycle);
@@ -1993,6 +2001,14 @@ namespace BlocksBeyondTheStars.Client
             if (_seatCell is null && AimBlock(out var chairHit, out _)
                 && FurnitureShapes.IsSeat(ShapeCode.ShapeOf(Game.World.GetShape(chairHit.x, chairHit.y, chairHit.z))))
             {
+                // #2122: somebody already sits there — say so instead of dropping the camera into them. The server
+                // checks again (it may know a sitter this client has not heard of yet).
+                if (SeatLooksTaken(chairHit))
+                {
+                    Game.ShowMessage(Game.Localizer?.Get("srv.seat.taken") ?? "Someone is already sitting there.");
+                    return;
+                }
+
                 SitDown(chairHit);
                 return;
             }
@@ -2800,7 +2816,33 @@ namespace BlocksBeyondTheStars.Client
                 ? Game.ScenePos(cell.x + 0.5f, cell.y, cell.z + 0.5f)
                 : new Vector3(cell.x + 0.5f, cell.y, cell.z + 0.5f);
             Avatar?.SetSeated(true);
-            Game?.Network?.SendSetSeated(true);
+            if (Game != null)
+            {
+                _seatRejectionsSeen = Game.SeatRejections; // only a refusal that arrives from now on stands us up
+            }
+
+            Game?.Network?.SendSitDown(cell.x, cell.y, cell.z); // the server checks the seat is free (#2122)
+        }
+
+        /// <summary>Whether a seated NPC or a seated remote player is on the seat cell as far as this client knows
+        /// (#2122) — see <see cref="SeatCells"/>.</summary>
+        private bool SeatLooksTaken(Vector3Int cell)
+        {
+            if (Game == null || Game.Npcs == null)
+            {
+                return false;
+            }
+
+            int circ = Game.Circumference;
+            foreach (var n in Game.Npcs)
+            {
+                if (n != null && n.Pose == 1 && SeatCells.Covers(n.X, n.Y, n.Z, cell.x, cell.y, cell.z, circ))
+                {
+                    return true;
+                }
+            }
+
+            return Remotes != null && Remotes.AnySeatedOn(cell.x, cell.y, cell.z);
         }
 
         /// <summary>Stands the player back up from a chair (#806) and re-enables normal movement.</summary>
@@ -4106,6 +4148,21 @@ namespace BlocksBeyondTheStars.Client
                         return;
                     }
 
+                    // #2120: building onto your OWN ship past its design box grows the ship (the server keeps it within
+                    // 15 × 15 × 15 and out of the ground) — but only from inside it: in the ship interior out in space,
+                    // or standing within its cells on a planet. A wall built against the hull from outside stays a
+                    // world block.
+                    if (aimedShip != null && aimedShip.OwnerId == Game.LocalPlayerId && StandingInShip(aimedShip))
+                    {
+                        var el = ShipLocal(aimedShip, placeCell);
+                        bool extOriented = PendingPlacement(item, hitCell, placeCell, out _, out int extUp, out int extYaw);
+                        Game.Network.SendStructureEdit(aimedShip.StructureId, el.x, el.y, el.z, mine: false, item,
+                            upFace: extOriented ? extUp : _placeUpFace,
+                            yaw: extOriented ? extYaw : _placeYaw);
+                        TriggerSwing();
+                        return;
+                    }
+
                     if (def.PlacesBlock == "radio_beacon" && BeaconLabelUi.Instance != null)
                     {
                         // Name the beacon before placing it — the typed label travels with the place (item 37).
@@ -4138,6 +4195,22 @@ namespace BlocksBeyondTheStars.Client
                     TriggerSwing();
                 }
             }
+        }
+
+        /// <summary>#2120: whether the player stands in their ship — anywhere in the ship interior out in space; on a planet
+        /// inside the parked ship's design box, or on one of its cells (the floor of an extension built onto it).</summary>
+        private bool StandingInShip(LandedShipModel ship)
+        {
+            if (Game.LoadingPlanetType == "ship_interior")
+            {
+                return true;
+            }
+
+            var p = transform.position;
+            var local = ShipLocal(ship, new Vector3Int(Mathf.FloorToInt(p.x), Mathf.FloorToInt(p.y + 0.05f), Mathf.FloorToInt(p.z)));
+            bool inBox = local.x >= 0 && local.x < ship.Width && local.y >= 0 && local.y <= ship.Height
+                && local.z >= 0 && local.z < ship.Length;
+            return inBox || ship.Cells.ContainsKey(new BlocksBeyondTheStars.Shared.Geometry.Vector3i(local.x, local.y - 1, local.z));
         }
 
         /// <summary>A world cell mapped into a parked ship's structure-local grid (wrap-aware on X).</summary>
@@ -4340,6 +4413,44 @@ namespace BlocksBeyondTheStars.Client
             return cycle == PropOrientation.None ? 0 : PropShapes.DefaultPlaceShape(def.PlacesBlock);
         }
 
+        /// <summary>The <see cref="BlockDefinition.Facing"/> of the plain cube block the held item places (#2124) — a
+        /// vending machine, a forge, a watcher — or null when it places no block with a front (a form, a prop, an
+        /// ordinary block, nothing at all).</summary>
+        private string HeldFacing(string held)
+        {
+            if (string.IsNullOrEmpty(held) || Game?.Content == null
+                || BlocksBeyondTheStars.Shared.State.ItemKey.Shape(held) > 0)
+            {
+                return null;
+            }
+
+            string placed = Game.Content.GetItem(BlocksBeyondTheStars.Shared.State.ItemKey.Base(held))?.PlacesBlock;
+            if (string.IsNullOrEmpty(placed) || PropShapes.DefaultPlaceShape(placed) != 0)
+            {
+                return null;
+            }
+
+            return Game.Content.GetBlock(placed)?.Facing;
+        }
+
+        /// <summary>True when the held item places something the rotate key and the ghost can orient: a form or prop
+        /// (<see cref="HeldPlaceShape"/>), or a cube with a front (#2124), which turns yaw-only like furniture.</summary>
+        private bool HeldOrientable(string held, out PropOrientation cycle)
+        {
+            if (HeldPlaceShape(held, out cycle) > 0)
+            {
+                return true;
+            }
+
+            if (HeldFacing(held) != null)
+            {
+                cycle = PropOrientation.YawOnly;
+                return true;
+            }
+
+            return false;
+        }
+
         /// <summary>The ladder's rotate-key states, in cycle order: the four walls it can hug, then
         /// free-standing (#909). Auto sits in front of them as index -1. Its plate is a square Panel, so the
         /// quarter turns the other shapes cycle through would be four identical states here, and the two
@@ -4412,7 +4523,19 @@ namespace BlocksBeyondTheStars.Client
             yaw = _placeYaw;
             if (shape <= 0)
             {
-                return false;
+                // A cube with a front (#2124): the one thing to orient is which side the front looks at. The quarter turn
+                // is a look HEADING here (CubeFacing.FrontForPlacement): the rotate key's turn, or in Auto the player's
+                // own heading, settled on the client and sent explicitly so the ghost's arrow and the placed front
+                // cannot disagree (the server would otherwise re-derive it from its own copy of the player's yaw).
+                if (HeldFacing(held) == null)
+                {
+                    return false;
+                }
+
+                shape = 0;
+                upFace = ShapeCode.UpPlusY;
+                yaw = yaw >= 0 && yaw <= 3 ? yaw : CubeFacing.HeadingOfYaw(transform.eulerAngles.y);
+                return true;
             }
 
             // The face the player clicked: the step from the block they aimed at to the cell being filled.
@@ -4483,7 +4606,7 @@ namespace BlocksBeyondTheStars.Client
         {
             _ghostFrame = Time.frameCount;
             string held = Game != null ? Game.ItemInSlot(Game.SelectedHotbarSlot) : null;
-            bool rotatable = HeldPlaceShape(held, out _) > 0;
+            bool rotatable = HeldOrientable(held, out _);
             if (Game != null)
             {
                 // Drives the HUD's "R — rotate" control hint. Answered from the held item alone, so the hint
@@ -4522,7 +4645,15 @@ namespace BlocksBeyondTheStars.Client
             // Shows exactly what the place will send (PendingPlacement feeds both), so the hologram cannot
             // promise a form or an orientation the placed block then contradicts.
             _placementGhost ??= new PlacementGhost();
-            _placementGhost.Show(placeCell, shape, yaw, upFace);
+            if (shape == 0)
+            {
+                // A cube with a front (#2124): the arrow stands on the face the server will make the front.
+                _placementGhost.ShowFacingCube(placeCell, CubeFacing.FrontForPlacement(HeldFacing(held), yaw, transform.eulerAngles.y));
+            }
+            else
+            {
+                _placementGhost.Show(placeCell, shape, yaw, upFace);
+            }
         }
 
         /// <summary>The door kind the held item places, or null when it places no door (#1975).</summary>

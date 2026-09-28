@@ -478,10 +478,21 @@ public sealed class SetLampIntent
 
 /// <summary>Client → server: the player sat down on (or stood up from) a chair-shaped cell (#806).
 /// Pure pose state — no buffs; it rides the presence broadcast so other players see a seated avatar.
-/// The client owns the camera/movement lock; the server only mirrors and sanity-checks the flag.</summary>
+/// The client owns the camera/movement lock; the server mirrors the flag and, since #2122, checks the seat:
+/// it must be a seat within reach that no seated NPC and no other seated player occupies — otherwise an
+/// <see cref="ActionRejected"/> with action <c>"seat"</c> comes back and the client stands up again.</summary>
 public sealed class SetSeatedIntent
 {
     public bool Active { get; set; }
+
+    /// <summary>#2122: <see cref="X"/>/<see cref="Y"/>/<see cref="Z"/> carry the seat cell the player sits down on.
+    /// Additive (contractless): false from an older client — the server then looks for the seat around the
+    /// player's position.</summary>
+    public bool HasCell { get; set; }
+
+    public int X { get; set; }
+    public int Y { get; set; }
+    public int Z { get; set; }
 }
 
 /// <summary>Client → server: the player starts (Active = true) or ends (Active = false) an EVA spacewalk —
@@ -1629,6 +1640,16 @@ public sealed class SpaceState
     /// client plays the warp VFX as the view opens (there is no surface take-off).</summary>
     public bool Hyperjump { get; set; }
 
+    /// <summary>#2118: set when the flight resumes where the ship was left floating (taking the helm again from the
+    /// ship interior, stepping out of its airlock, undocking back to an EVA): the ship's position in this instance's
+    /// flight coordinates and its heading (degrees) — the view places the ship there instead of the launch point.
+    /// Additive; an older client ignores it.</summary>
+    public bool HasResumePose { get; set; }
+    public float ResumeX { get; set; }
+    public float ResumeY { get; set; }
+    public float ResumeZ { get; set; }
+    public float ResumeYaw { get; set; }
+
     public bool AutomaticTransit { get; set; } = false;
 
     /// <summary>Friendly names of the star system and the body this flight is anchored on (#1565). An in-flight
@@ -1686,6 +1707,16 @@ public sealed class SpaceShipDesign
     public float DockZ { get; set; }
     public int DockOutX { get; set; }
     public int DockOutZ { get; set; }
+
+    /// <summary>#2119: the doors the owner built into this ship (design-local doorway base cells, parallel arrays):
+    /// the kind ("slide"/"hinge"/"wood"/"energy") and whether the leaf runs along X. The flight view draws a closed
+    /// door there — the cell itself is air, like every doorway. The design's own doors are not listed (the hatch
+    /// keeps its energy field). Contractless-additive: older payloads carry none.</summary>
+    public int[] DoorX { get; set; } = System.Array.Empty<int>();
+    public int[] DoorY { get; set; } = System.Array.Empty<int>();
+    public int[] DoorZ { get; set; } = System.Array.Empty<int>();
+    public string[] DoorKind { get; set; } = System.Array.Empty<string>();
+    public bool[] DoorAxisX { get; set; } = System.Array.Empty<bool>();
 }
 
 /// <summary>Server → client: a player's ship parked on the current world as a placed voxel OBJECT

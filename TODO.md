@@ -24,6 +24,71 @@ envelope at the WebSocket edge; deterministic seed world-gen; SQLite default per
 
 ---
 
+### 🚉 Screelit's reports 2026-09-27 — the ship in space, doors and extensions, seats, beards, block faces, the intercity monorail (#2127: #2117–#2126, 2026-09-28, branch fix/screelit-reports-0928, terrain generation 19)
+
+Eight F1 reports from Screelit (Justus) on v2026.9.17 and Marcel's decisions, all in ONE branch and ONE PR:
+
+1. ✅ **#2117 "DAS NICHTS! (schon wieder)"** — taking the helm again (or the airlock) from the ship interior now tells
+   the client the body under the flight is current (`SendReturnWorldSnapshot`, shared with undocking: `WorldReset` +
+   every per-world list); a landing whose body the client was not last told about takes the full landing path
+   (`PlayerSession.AnnouncedWorldId`). Before, a landing on the same body streamed chunks the client dropped as "the
+   world we just left" — the second path of #1945.
+2. ✅ **#2118 "WO?"** — the flight resumes where the ship floated: `SpaceState` carries a resume pose (position +
+   heading, additive fields); the ship's own pose is kept apart from the EVA suit's (`SpaceInstance.ShipPoses`), so
+   boarding from a spacewalk remembers the ship; undocking back to an EVA uses the same pose.
+3. ✅ **#2119 doors on ships** — a door block built onto/into an authored ship (spacewalk or on foot) is a real door:
+   the cell stays a doorway, `SpaceStructure.PlacedDoorAxes` + `DoorKinds`, persisted as the door block in the cell's
+   structure edit (axis in the shape field), hung one wide by `RegisterDoors`, picked up again (world mine, ship edit,
+   spacewalk); the flight view draws them (`SpaceShipDesign.DoorX/Y/Z/Kind/AxisX`, additive) and shows the door ghost
+   on a spacewalk (`PlacementGhost.ShowDoorAt`).
+4. ✅ **#2120 ship extensions** — authored ships grow up to 15³ (`ShipExtensionFits`; on foot only into open air
+   of the world); the hatch ejects into a spacewalk only outside the real cell extents; aboard = design box OR a
+   sealed pocket (`EnsureShipAir`: outside flood over the extents, airtight full cubes + whole door openings seal,
+   cached per structure revision); the ship interior's void world has no air outside the ship; a hint on stepping
+   into an unsealed extension; the client routes building from inside the ship past the box to the ship.
+5. ✅ **#2121 repair** — owner-mined cells (`OwnerRemovedMark` in the edit's shape field) and owner-built doorways are
+   the new design; a hit still counts.
+6. ✅ **#2122 one seat, one sitter** — `SetSeatedIntent` carries the seat cell (additive); the server checks
+   seat/reach/free (a seated NPC or another seated player) and rejects with `@srv.seat.taken|too_far|none`; the client
+   stands back up and pre-checks (`SeatCells`). NPCs never sit into a sitter (they rest beside the chair and sit once it
+   is free); residents, professions and station crew get the next *free* seat (the wrapping cursor double-booked
+   chairs), else a free home chair, else rest standing. Tests: `SeatOccupancyTests`, `SeatCellsTests`.
+7. ✅ **#2123 NPC facial hair** — the teal breather strip (read as a moustache) is gone from NPCs: `NpcLooks`
+   (Client.Core) picks per face seed ~40 % clean-shaven / moustache / goatee / beard / full beard in the hair tone;
+   androids get a speaker grille; players keep the strip. Tests: `NpcLooksTests`.
+8. ✅ **#2126 the VEGA tab** — a revealed, non-prologue line nobody advanced for 45 s folds into a "VEGA · n
+   messages" tab (never dismissed unread); continue/click/tap reopens it; the continue hint is a clickable pill
+   (touch taps forwarded by the look pad). `VegaCollapse` + `VegaCollapseTests`. Open: playtest on desktop, touch, pad.
+9. ✅ **#2125 the intercity monorail (terrain generation 19; Justus' idea, Marcel's rules: no tickets, no ID cards, no
+   vending machines)** — a gen-19 world with at least two inhabited towns or cities on the ground rolls 60 %
+   (`ServerConfig.IntercityRailChance`, `PlaceIntercityRail` switch) and joins the closest pair whose route fits (≤ 960
+   blocks; pylons ≤ 36 tall, never in lava; ≤ 4000 cut cells; clear of settlements, pads and the wreck site).
+   `StampIntercityRail` runs right after the settlements; later stampers keep clear. Two stations
+   (`RailStationGenerator`: platforms, benches, lamps, skylit roof, stop plate) at the towns' edges, pylons along the
+   route, the corridor carved exactly where `LinkClear` looks (whole trees included); pinned in placement records,
+   stamped once; stations + pylons protected like a settlement (`@srv.protect.rail`). A public train (empty owner,
+   cab + seat wagon, 8 blocks/s) shuttles and waits 30 s at each station — anyone rides, nobody steers, stows or
+   couples it. Both stations on the world map. `CurrentTerrainGeneration` 18 → 19, no chunk changes. Tests:
+   `IntercityRailTests`. Docs: MONORAIL.md, WORLD_GENERATION §35. Open: playtest on a gen-19 world with a line; the
+   pre-existing rider jump when a train reverses at a line end.
+10. ✅ **#2124 object blocks get their own sides, tops and fronts** — 73 object blocks declare `tileKind`; 62 picture
+    cubes keep their picture on the front (or on top) and wear casings, lids or sides. 33 new AI face tiles (`face_*`:
+    14 shared casings + 19 bespoke) dealt into the atlas extras band (`FaceTileBand`, loud on overflow). 34 blocks with
+    `"facing"` store their front in the cube descriptor's up-face field (`CubeFacing`; descriptor 0 = the front is
+    worked out from the neighbours, so world generation is unchanged), placed facing the player (watcher + Device Eye
+    look away); the rotate key and a ghost arrow show the front; drops strip it. The stretcher shows its picture on steel
+    legs. Tests: `BlockFaceTextureTests`, `CubeFacingTests`, `AtlasSlotAllocatorTests`. Doc: CUSTOM_SHAPES.md "Cube
+    faces, face tiles and fronts". Not yet: the held block, drop cubes, inventory icons and the editors' voxel views
+    still show one tile on all faces.
+
+**Found on the way:** the Unity EditMode suite has two failures that are already red on main (`ae8c8f34`):
+`ChunkMesherGoldenEditModeTests` (stale pins — the actual hashes 0xb2fba41e63f8dc45 / 0x3c749dd2a6cc18d1 are identical with
+and without #2124) and `InputAbstractionEditModeTests` (FeedCreature missing from the rebind groups).
+
+**Status 2026-09-28:** all ten built on the branch, merged from four worktrees (three helper worktrees for parallel
+work, removed after merging). Open: the playtests (a same-body landing after the interior; a door + sealed extension
+behind the hatch; two players on one chair; NPC beards; the VEGA tab; block fronts; a gen-19 world with a line).
+
 ### 🚝 Monorail playtest fixes (#2129, 2026-09-28, branch fix/monorail-ride-and-glow)
 
 Marcel's first ride in release 2026.9.18 fell out of the back of the moving train, and the line looked like a pale
