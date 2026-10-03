@@ -24,6 +24,90 @@ envelope at the WebSocket edge; deterministic seed world-gen; SQLite default per
 
 ---
 
+### 🔧 Bio lab fix round — everything a code read of the merged feature found (#2225: #2214–#2224, #2226, 2026-10-03, branch fix/bio-lab-playtest) — ✅ done (unreleased; ⚠ playtest open)
+
+**Why.** Before the first playtest of the bio lab (#2213) ten agents read the merged code and checked every claim a
+second time. They found a dozen defects in the new code and a few older gaps that the feature's two new blocks trigger
+again. Marcel: fix everything in one go, one pull request. Each work package was implemented in its own worktree,
+read by a second agent, and corrected.
+
+- **✅ Clone tank with samples (#2214):** the species list follows the owner's sample case and scans by itself, and an
+  open menu adopts the newer list; a finished cross waits (light on, one notice) while the sample case has no room;
+  the habitat check reads every block; an inert third tank refuses a start and takes nothing; a tank that was growing
+  when the world unloaded starts its minute over; a free game mode is free on the bait path too; the tank remembers
+  every living clone by species (config key `cl`, old rows are read as before) and forgets one that died or was
+  tamed; the started species is what comes out; the first list is headed "Species".
+- **✅ Guest clones on worlds without wildlife (#2215):** the creature tick no longer returns on an empty roster when
+  an animal exists, so a clone from a sample moves on an airless moon or an asteroid.
+- **✅ The lab (#2216):** the wash is part of the experiment (`/w` in the mix signature, `BioLabResult.Washed`,
+  mirrored in the preview and in the Codex); the Sandbox catalog and `/give` no longer hand out a sample, seedling
+  or preparation without content, an empty preparation is refused instead of eaten, the ration dispenser takes no
+  preparations; key payloads are validated when read; wash-off also removes a change this version cannot read; the
+  lab's "research first" lines follow the same free-mode rule as the server; the sampler names a full register as
+  such; the lab cannot be used from inside the ship.
+- **✅ Sampler and giants (#2217):** a giant needs no stasis — its long reach is the hurdle.
+- **✅ Effect temperature (#2218):** heat- and cold-sensitive effects and the wards read the air the player is really
+  in: the cabin (22 °C) aboard a ship or a station, the real outside temperature everywhere else, in every mode.
+- **✅ Function blocks in a ship are decoration, and the player is told (#2219):** a first version refused the bio
+  lab, the Crystal Net devices and the port blocks as ship cells; Marcel decided against forbidding decoration.
+  A ship takes every block as before, and the first time a player builds one of these into a ship VEGA says once
+  that it is only decoration there (`vega.hint.ship_decor`). A station built from a spacewalk still refuses what
+  the world place handler has to register, because the same block placed aboard works.
+- **✅ Admin commands (#2220):** `/settime` really sets the local time of the admin's world (words, clock time, hour,
+  day part); `/setweather` takes every key and `cloudy`, and speaks to its world only; `/give` says what was given
+  and what did not fit; the manual says what `/instant` does.
+- **✅ Self-built ships across block-set changes (#2221):** the first-open remap of a save now covers the hull of
+  self-built ships; a hull cell of a removed block no longer counts in the ship's statistics. A sweep over every
+  persisted record found no other numeric block id outside the remap. ⚠ Not repaired: a save with a self-built ship
+  that already went through an earlier block-adding update (or was opened with main at 9da3b28b).
+- **✅ Content fingerprint, protocol 9 (#2222):** the join carries a fingerprint of the block set; server and client
+  refuse each other when it is missing or different ("This server runs a different version of the game"). Protocol
+  **9**, so clients released before the fingerprint are kept off newer servers by the check they already have.
+- **✅ Save version and backups (#2223):** a save records the build that wrote it and an older build refuses a newer
+  save (exit code 3, its own message in singleplayer) instead of mapping unknown blocks to air;
+  `SaveCompatibilityTests` pins the block set per save version. A backup is written before a block-palette remap,
+  and `backupIntervalMinutes` finally works: rotating backups after every 60 minutes of play, newest 5 kept
+  (`backupKeepCount`). ⚠ Ops: this is on by default for every host, hosted fleet worlds included —
+  `BBS_BACKUP_INTERVAL_MINUTES=0` switches it off.
+- **✅ Docs, scripts, texts (#2224):** USER_MANUAL (bio lab, Crystal Net, admin table, backups and versions),
+  BIO_LAB.md, CRYSTAL_NET.md, SELF_HOSTING.md, DEVELOPER.md § "Adding or removing a block", SERVER_TESTING.md,
+  AGENTS.md rule 3, the Codex; `build-client.ps1` vendors the Velopack runtime when it is missing; 14 new and 4
+  changed texts in all 14 languages.
+- **Tests:** `BioTankFixTests`, `BioLabFixTests`, `BioFixFollowUpTests`, `ShipFunctionBlockTests`,
+  `AdminCommandFixTests`, `SaveCompatibilityTests`, `ContentFingerprintTests`, `PerWorldSpeciesTests` (+ client
+  tests for the fingerprint and the cloud save mark); the PostgreSQL
+  tests ran once locally against postgres:16.
+- **✅ Species tables per world (#2226):** found during this round — the creature species roster, the id table and
+  the movement profiles existed once per server, so with two resident worlds one world's wildlife ran on the
+  other's species (ids such as `sp0` repeat from world to world). They live on the loaded world now, like the
+  flora and tree species by block, the fruit kinds, the regrow accumulator, the gift / companion scan gates and
+  the feed-tame queue, which had the same flaw. `PerWorldSpeciesTests` runs two resident worlds (8 of its 10
+  tests fail on the old tables).
+- **✅ Final review before the merge (2026-10-04):** an independent read of the parts finished last (species
+  tables, the second client round, the small server follow-ups, texts and docs) confirmed 16 findings, none
+  critical. Fixed here:
+  - a tamed guest or cross clone and its wild siblings stood still after their world was loaded again (the
+    companion's species snapshot brought no movement profile);
+  - more server-wide state of the #2226 kind: the burn pass, the sentry posts' gates (and their cell cache,
+    which two occupied worlds threw away for each other) and the Crystal Net's last-sent levels are per world;
+    the shared world generator follows the world cursor, so a world's spawner and giants read their own terrain;
+  - the bio lab is never reached from space, also not on a spacewalk; the wash preview counts carbon in the
+    ship's hold where the server takes it from there;
+  - browser cloud save: a cloud world refused as saved by a newer version is no longer counted as synced (the
+    next start would have booted the older local world and uploaded it over the newer one);
+  - the refusals of `/settime` and `/setweather` are admin rejections and land in the chat; their usage lines
+    carry no angle brackets and stay under 160 characters (`/setweather ?` lists every weather);
+  - docs (decoration notice, tank keys, the save-too-new log line, which replies reach the chat) and two texts
+    (Ukrainian, Korean).
+- **⚠ Open (found, not fixed here):** crates, the base core, rail pylons and crafting-station blocks do nothing
+  when built into a ship and get no notice; which auto-drill or sender is over a cap after a reload follows the
+  store's row order; `/give` of a blank sample answers with the catalog's wording; #2233 (leaving the interior
+  of a self-built ship that can no longer fly strands the pilot — older code, found by the final review); #2235
+  (the station staff timer is still server-wide; one world generator per loaded world would close the last gap
+  inside a tick). And the playtest of #2213 itself.
+
+---
+
 ### 🇫🇷 French game texts: one name per thing (2026-10-03, branch fix/fr-locale-consistency) — ✅ done (unreleased)
 
 Found by the reviewers of the French devblog translation (#2227): the game's `fr.json` named the same things two ways.

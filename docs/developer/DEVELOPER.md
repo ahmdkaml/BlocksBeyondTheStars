@@ -230,9 +230,11 @@ One command produces a fully self-contained singleplayer/multiplayer client:
 It runs these steps:
 
 1. **Sync shared libs + content** (`scripts/sync-client-libs.ps1`) — `dotnet publish`es
-   `BlocksBeyondTheStars.Shared`, `.WorldGeneration`, `.Networking` and `.Client.Core` (netstandard2.1) with
-   their NuGet dependencies (MessagePack, LiteNetLib, …) and copies the DLLs into
-   `client/Assets/Plugins/`. It also copies `data/*` (blocks, items, recipes, locales, …)
+   `BlocksBeyondTheStars.Shared`, `.WorldGeneration`, `.Networking` and `.Client.Core` (netstandard2.1) and the
+   netstandard2.1 flavour of `.Persistence` and `.GameServer` (the browser build runs the real server
+   in-process) with their NuGet dependencies (MessagePack, LiteNetLib, …) and copies the DLLs into
+   `client/Assets/Plugins/`. On a checkout whose `Plugins/` has no `Velopack.dll` yet it then runs
+   `scripts/sync-velopack-libs.ps1` once (the in-app updater's runtime). It also copies `data/*` (blocks, items, recipes, locales, …)
    into `client/Assets/StreamingAssets/data/`, and the background-music library `client/Music/*.mp3`
    into `client/Assets/StreamingAssets/music/` (kept outside `Assets/` and streamed on demand by
    `ClientMusic`, so the WebGL player data file no longer carries 164 MB of songs — #1167).
@@ -624,3 +626,25 @@ in [SELF_HOSTING.md](SELF_HOSTING.md).
 - [TODO.md](../../TODO.md) — single Done/Open status doc
 - [USER_MANUAL.md](../user/USER_MANUAL.md) — player-facing controls, mechanics and commands
 - [SELF_HOSTING.md](SELF_HOSTING.md) — running a dedicated server
+
+## Adding or removing a block
+
+Block numeric ids are not stored in `data/blocks.json`: `GameContent.AssignBlockIds` numbers the blocks in ordinal
+key order. **Every added or removed block shifts ids** — where the entry stands in the file does not matter. Three
+mechanisms keep that safe; a change to the block set has to feed them:
+
+1. **Saves** are remapped on their first open (`EnsureBlockPalette` in every repository): block edits, structure
+   edits, flora regrowth, weather deposits, space structures and the hull of self-built ships. A backup
+   (`backups/pre-remap_…`) is written first. Anything new that persists a *numeric* block id must join that remap —
+   prefer block keys in new persisted data.
+2. **The save version.** `WorldMetadata.CurrentSaveVersion` says which build wrote a save; an older build refuses a
+   newer save instead of mapping unknown blocks to air. `SaveCompatibilityTests.ChangedBlockSet_NeedsANewSaveVersion`
+   pins the block-set fingerprint per save version and fails when the block set changes: raise
+   `CurrentSaveVersion`, note the step in its doc comment and add the row the failure message prints. (While a save
+   version is unreleased, update its row instead of raising the version.)
+3. **The join.** Client and server compare `GameContent.BlockFingerprint` (FNV-1a 64 over the block keys in id
+   order). A different block set is refused with "This server runs a different version of the game" — no protocol
+   bump is needed for a content-only change. `Protocol.Version` stays for wire-format changes.
+
+Do not open a save a development build touched with an older released build, and do not join release-hosted worlds
+with a development build that has another block set: released builds before v9 of the protocol have neither check.

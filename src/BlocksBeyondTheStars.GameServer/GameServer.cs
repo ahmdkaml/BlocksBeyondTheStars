@@ -180,7 +180,6 @@ public sealed partial class GameServer
     // Ctrl-C handler) hand the save off to the run loop instead of saving concurrently with a live Tick().
     private volatile bool _runLoopActive;
     private readonly System.Threading.ManualResetEventSlim _stopped = new(true);
-    private string _timeOfDay = "day";
 
     public GameServer(
         ServerConfig config,
@@ -247,6 +246,7 @@ public sealed partial class GameServer
 
         var launchRules = _config.Rules.Clone();
         _meta = _repo.LoadMetadata() ?? CreateInitialMetadata();
+        _meta.SaveVersion = WorldMetadata.CurrentSaveVersion; // #2223: this build wrote it from here on (a newer save was refused above)
 
         // World options: once created, the WORLD owns its rules — the save's override replaces the launch
         // config's rules (singleplayer passes creation options only once; dedicated restarts keep the set).
@@ -397,9 +397,12 @@ public sealed partial class GameServer
             throw;
         }
 
+        EnsureSaveVersionSupported(); // #2223: a save a newer build wrote is refused before anything is rewritten
+
         // Record the current block-id palette and remap any save written under a different block set BEFORE
         // world load. Block ids are assigned by key sort order, so adding a block shifts them; without this a
         // content update would silently decode every stored edit to the wrong block.
+        BackupBeforePaletteRemap(); // #2223: a copy of the save before its ids are rewritten
         _repo.EnsureBlockPalette(_content.BlockPalette());
     }
 
@@ -1453,6 +1456,7 @@ public sealed partial class GameServer
     private void Shutdown()
     {
         SaveAll();
+        FinishBackups(); // #2223: a backup still being written gets a moment to complete (it reads; the flush below wants no reader)
         _repo.Flush();
         _chunkGenPool?.Dispose(); // #1817: release the worker threads
         _transport.Stop();
@@ -1802,6 +1806,8 @@ public sealed partial class GameServer
                 _log.Info("Autosave complete.");
             }
         }
+
+        Guard("Backups", TickBackups); // #2223: rotating backups, written off the tick thread
 
         EndTickTiming(deltaSeconds);
     }
@@ -2230,10 +2236,11 @@ public sealed partial class GameServer
     {
         var p = session.State;
 
-        // 1) The ration dispenser — eat the first stored food (any consumable that sates hunger).
+        // 1) The ration dispenser — eat the first stored food (any consumable that sates hunger). #2216: never a
+        //    preparation (a bar that an older build let in): the suit would hand out its hunger and lose its effect.
         for (int i = 0; i < p.RationStore.SlotCount; i++)
         {
-            if (p.RationStore.Slots[i] is { } stack && !stack.IsEmpty
+            if (p.RationStore.Slots[i] is { } stack && !stack.IsEmpty && !IsPreparation(stack.Item)
                 && _content.GetItem(stack.Item) is { Category: ItemCategory.Consumable } food && food.ConsumeHunger > 0f)
             {
                 p.RationStore.Remove(stack.Item, 1);
@@ -2253,6 +2260,12 @@ public sealed partial class GameServer
         }
     }
 
+    /// <summary>Whether an item is a bio lab preparation — a real one or a blank (#2216). A preparation is not plain
+    /// food, whatever it feeds (a bar sates hunger too): its effect is only ever started by taking it deliberately,
+    /// so the ration dispenser neither stores nor dispenses one.</summary>
+    private static bool IsPreparation(string itemKey)
+        => Shared.Bio.BioItems.FormOf(ItemKey.Base(itemKey)) is not null;
+
     /// <summary>Loads food from the player's inventory into the suit ration dispenser (food only, up to capacity).</summary>
     public void LoadRation(string playerId, string itemKey, int count)
     {
@@ -2263,7 +2276,7 @@ public sealed partial class GameServer
         }
 
         var def = _content.GetItem(itemKey);
-        if (def is not { Category: ItemCategory.Consumable } || def.ConsumeHunger <= 0f)
+        if (def is not { Category: ItemCategory.Consumable } || def.ConsumeHunger <= 0f || IsPreparation(itemKey))
         {
             Reject(session, "ration", "@srv.ration.food_only");
             return;
@@ -3799,6 +3812,11 @@ public sealed partial class GameServer
             return;
         }
 
+        if (RefuseContentMismatch(connectionId, join)) // #2222: another block set — the client would draw the wrong blocks
+        {
+            return;
+        }
+
         if (!string.IsNullOrEmpty(_config.ServerPassword)
             && !Shared.Security.SecretCompare.FixedTimeEquals(join.Password, _config.ServerPassword))
         {
@@ -4001,6 +4019,7 @@ public sealed partial class GameServer
             TerrainContinents = _meta.Description.TerrainContinents,
             TerrainGeneration = _meta.Description.TerrainGeneration, // #1644
             TerrainLavaCoreVolcanoes = _meta.Description.LavaCoreVolcanoes, // #2172: the planet map previews need it too
+            ContentFingerprint = _content.BlockFingerprint, // #2222: the client checks it against its own
         });
         session.AnnouncedWorldId = WorldIdOf(state.CurrentLocationId); // #2117
         SendInventory(session);
@@ -5350,7 +5369,16 @@ public sealed partial class GameServer
                 if (BredPlantRefusal(place.ItemKey, pos) is { } refusal)
                 {
                     Reject(session, "place", refusal);
-                    ShipAiHintOnce(session, "plant_refused");
+
+                    // VEGA's hint is about the place (clean soil, air, a tray or a pot inside a base), so it is
+                    // for a real seedling that found none — the soil, the air, the world's cap. A seedling that
+                    // carries no species, or a species that is no single plant, gets its own line and no hint:
+                    // no other place would take it, and the hint is said only once.
+                    if (refusal is "@srv.bio.plant_soil" or "@srv.bio.plant_air" or "@srv.bio.plant_cap")
+                    {
+                        ShipAiHintOnce(session, "plant_refused");
+                    }
+
                     return;
                 }
             }
@@ -6416,14 +6444,33 @@ public sealed partial class GameServer
                         return;
                     }
 
+                    // #2216: a sample, a seedling or a preparation is nothing without what its key carries (a
+                    // species, a compound) — the rule of the Sandbox catalog. A blank one is dead weight in the
+                    // pack, so it is not given; the same key with its payload is an item like any other.
+                    if (Shared.Bio.BioItems.NeedsPayload(cmd.StringArg))
+                    {
+                        Reject(session, "admin", "@srv.catalog.needs_content");
+                        return;
+                    }
+
                     var target = FindSessionByName(cmd.TargetPlayer) ?? session;
                     int amount = System.Math.Max(1, cmd.IntArg);
                     // Resolve the TARGET's own ship, not the admin's cursor ship (`_ship`): a give to an
                     // aboard-ship target must spill into that player's cargo, not the admin's.
                     var targetShip = target.Ships.TryGetValue(target.ActiveShipId, out var ts) ? ts : _noShip;
-                    new MaterialPool(_content, target.State, targetShip).Add(cmd.StringArg!, amount);
+                    // #2220: Add returns what found no room. That used to be dropped without a word — and a give
+                    // that worked said nothing either. The admin is told what arrived and what did not fit.
+                    int given = amount - new MaterialPool(_content, target.State, targetShip).Add(cmd.StringArg!, amount);
                     SendInventory(target);
-                    CheatLog(p, $"gave {amount} {cmd.StringArg} to {target.State.Name}");
+                    Send(session, new ServerMessage
+                    {
+                        Text = Localize(session.Locale, given == amount ? "srv.admin.gave" : "srv.admin.gave_partial")
+                            .Replace("{count}", amount.ToString())
+                            .Replace("{given}", given.ToString())
+                            .Replace("{item}", ItemDisplayName(session, cmd.StringArg!))
+                            .Replace("{player}", target.State.Name),
+                    });
+                    CheatLog(p, $"gave {given} of {amount} {cmd.StringArg} to {target.State.Name}");
                     break;
                 }
 
@@ -6480,24 +6527,42 @@ public sealed partial class GameServer
                 }
 
             case "set_time":
-                _timeOfDay = cmd.StringArg ?? _timeOfDay;
-                Broadcast(new ServerMessage { Text = "@srv.admin.time_set:" + _timeOfDay });
-                CheatLog(p, $"set time to {_timeOfDay}");
+                // #2220: the command used to write a field nothing read and still answered "time set". It sets this
+                // world's clock now (a word, a clock time, an hour or a day fraction — the local time where the admin
+                // stands) and refuses anything else. The clock is this world's alone, so the line goes to the players
+                // whose sky changed — not to those on another body. A refusal goes out as an admin rejection, like every
+                // other refused command: the client's chat puts those into the scrollback, where the command was typed,
+                // while an "@srv." token in a plain message only flashes past as a toast.
+                if (AdminSetTime(session, cmd.StringArg, out string timeLabel) is { } timeRefusal)
+                {
+                    Reject(session, "admin", timeRefusal);
+                }
+                else
+                {
+                    BroadcastToWorld(new ServerMessage { Text = "@srv.admin.time_set:" + timeLabel });
+                    CheatLog(p, $"set time to {timeLabel}");
+                }
+
                 break;
 
             case "set_weather":
                 // #2065: the command used to write a field nothing read. It forces the simulation's state now (a ladder
-                // state or an event of the catalogue) and refuses anything the catalogue does not know.
-                if (cmd.StringArg is { Length: > 0 } weatherKey && WeatherCatalog.Find(weatherKey) is { } weatherDef)
+                // state or an event of the catalogue) and refuses anything the catalogue does not know. #2220: the name
+                // is read the way it is typed — any letter case, and "cloudy" for "clouds". The forced weather is
+                // this world's alone, so — like the clock above — the line goes to the players under this sky, not
+                // to those on another body.
+                if (WeatherCatalog.FindByName(cmd.StringArg) is { } weatherDef)
                 {
                     _planetWeatherMode = "dynamic";
                     _sim.Force(weatherDef.Key);
-                    Broadcast(new ServerMessage { Text = "@srv.admin.weather_set:" + weatherDef.Key });
+                    BroadcastToWorld(new ServerMessage { Text = "@srv.admin.weather_set:" + weatherDef.Key });
                     CheatLog(p, $"set weather to {weatherDef.Key}");
                 }
                 else
                 {
-                    Send(session, new ServerMessage { Text = "@srv.admin.weather_unknown" });
+                    // An admin rejection, so the answer stays readable in the chat: it is the line that names every
+                    // weather key, and the usage line points to it ("/setweather ?" lists all).
+                    Reject(session, "admin", "@srv.admin.weather_unknown");
                 }
 
                 break;
@@ -7813,15 +7878,22 @@ public sealed partial class GameServer
     }
 
     /// <summary>Points the Active cursor at the resident world for a body. True if it is the current world
-    /// or a cached one; false if not loaded (an occupied world is always loaded, so it normally succeeds).</summary>
+    /// or a cached one; false if not loaded (an occupied world is always loaded, so it normally succeeds).
+    /// <para>#2226: the shared generator follows the cursor. It keeps the mode — size, cratering, landing pads, the
+    /// body's own salt, the ore boost — of whichever world configured it last (a world load, a chunk generated
+    /// inline), while the systems of the world under the cursor ask it directly: the creature spawner, the giants,
+    /// the ground-height fallback. With two worlds resident they read the other body's terrain. The mode is applied
+    /// on every call, also when the cursor already points here — another world's chunk generation moves the
+    /// generator without moving the cursor — and an unchanged mode costs a comparison.</para></summary>
     private bool SetActiveWorld(string locationId)
     {
-        if (_worlds.Active != null && _worlds.Active.LocationId == locationId)
+        if ((_worlds.Active == null || _worlds.Active.LocationId != locationId) && !_worlds.SetActive(locationId))
         {
-            return true;
+            return false;
         }
 
-        return _worlds.SetActive(locationId);
+        _worlds.Active!.World.ApplyGeneratorMode();
+        return true;
     }
 
     /// <summary>The distinct bodies that currently have at least one joined player (the worlds to tick).</summary>

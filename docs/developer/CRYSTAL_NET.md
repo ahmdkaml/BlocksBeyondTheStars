@@ -290,9 +290,38 @@ network (before #2092 a blocked machine latched its own control line ON).
   instead: it costs one sample per parent and matter dust (2 for a clone, 4 for a cross) and no bait. A species
   from another world is registered as a guest species from the save's species register, so the clone works on any
   world (a water or lava animal needs its fluid within 8 blocks). A second choice in the config (`x=`) names a
-  cross partner (blueprint `bio_crossing`); `grow=` holds what the tank is growing. `sp`, `x`, `grow`, `growing`
-  and `clones` are server-owned — a client `configure` cannot overwrite them. `MaxLivingClonesPerWorld` (16) is
-  checked for every start. See [BIO_LAB.md](BIO_LAB.md) §11.
+  cross partner (blueprint `bio_crossing`); `grow=` holds what the tank is growing. `sp` and `x` are the
+  player's settings, sent with the menu's `configure`; the server-owned keys are listed in the fix-round note
+  below. `MaxLivingClonesPerWorld` (16) is checked for every start. See [BIO_LAB.md](BIO_LAB.md) §11.
+  **Fix round (#2214).** The tank's config keys are `sp=`, `x=`, `growing=`, `grow=`, `clones=`, `cl=`;
+  `growing`, `clones`, `grow` and `cl` are server-owned (`TankOwnedKeys`) and are stripped from a client
+  configure before the 96-character cut. `grow=` holds what the tank was started on for both paths (a native
+  id or `g:<seed hex>`), and the finish releases from it, so changing `sp` while the tank grows changes
+  nothing. `cl=` lists one entry per clone, comma-separated — the living ones, then the waiting ones;
+  `clones=` mirrors the count, and an older row (`clones=N;sp=X`) is read as N clones of X. At load every
+  listed clone waits (`ServerCrystalCell.CloneWaiting`) until the world's first beat; `RespawnCrystalClones`
+  brings each one back as its own species and drops an entry that can never be an animal again. A native id
+  is read from this world's own species table — the tables are per world since #2226, see
+  `LoadedWorld.SpeciesById`. Waiting clones count against both caps. The list
+  follows the living clones on release, on defeat and on taming (`ForgetClone`), and the sensor beat
+  (`WatchCloneTank`) reconciles every other removal; the same beat compares `CloneChoiceStamp(owner)` and
+  re-sends the device list when the owner's samples, animal scans or tames changed. A row that says
+  `growing=1` at load starts its wait over; an inert tank refuses a start with `vega.sys.crystal_cap`; the
+  bait path is free in a free game mode; a finished cross waits while the owner's sample case has no room.
+  `LoadCrystalNet` registers tanks that are growing or have clones before all other rows, so the tank over
+  the cap is not one that is in use.
+- **In a ship: decoration (#2219).** A Crystal Net block is a cell of the world grid. Built into a ship —
+  landed ship, ship interior in space, hull on a spacewalk, keel site, commissioned self-built ship — every kind
+  with `CrystalNetRules.NeedsRow` (all devices and the port blocks: radio beacon, beam pad, sentry post,
+  thumper, water spout, energy gate, hydro tray) and the bio lab is accepted like any block and does nothing
+  there. `NoteShipDecor` (GameServerSpaceStructure.cs) tells the player once, after the payment: it sets the
+  once-flag `vega:hint:ship_decor` itself and sends `vega.hint.ship_decor` as a system line (`ShipAiLine.Kind`
+  3), not through `ShipAiHintOnce` — a kind-1 hint is muted when the player switched VEGA's hints off, and the
+  flag would be used up unseen.
+  Conduits and lamps send nothing. On a station spacewalk `NeedsWorldPlaceHandler` still refuses
+  every kind the world place handler has to register (`srv.station.block_needs_deck`); lamps, the sentry
+  post, the energy gate and the hydro tray are read from the grid and stay allowed. A new kind is refused
+  there by default (`ShipFunctionBlockTests.TheLists_CoverEveryCrystalNetBlockOfTheContent`).
 - **Existing ports** (#2053) reach their own code: a beam pad beams everyone standing on it to `pair=` (owner /
   ally check as with a hand beam) and pulses the far pad's status ("someone arrived"); a hydro tray harvests the
   crop into the adjacent crate and schedules the regrow; a thumper starts its run; the sentry's firing pass goes

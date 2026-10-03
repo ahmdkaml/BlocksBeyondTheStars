@@ -100,13 +100,20 @@ public sealed partial class GameServer
     private bool IsBlockId(BlockId block, string key)
         => _content.GetBlock(key) is { } def && def.NumericId.Value == block.Value;
 
-    /// <summary>Extents of a cell map (min/max corners). False when empty.</summary>
-    private static bool CellBounds(Dictionary<Vector3i, BlockId> cells, out Vector3i min, out Vector3i max)
+    /// <summary>Extents of a cell map (min/max corners). False when empty. With <paramref name="hullOnly"/> the
+    /// air entries (see <see cref="HullCellCount"/>) are left out — the extents of the hull that is really there;
+    /// without it they count, which is what keeps the blob's coordinate frame where it was.</summary>
+    private static bool CellBounds(Dictionary<Vector3i, BlockId> cells, out Vector3i min, out Vector3i max, bool hullOnly = false)
     {
         min = max = default;
         bool any = false;
-        foreach (var c in cells.Keys)
+        foreach (var (c, block) in cells)
         {
+            if (hullOnly && block.IsAir)
+            {
+                continue;
+            }
+
             if (!any)
             {
                 min = max = c;
@@ -119,6 +126,25 @@ public sealed partial class GameServer
         }
 
         return any;
+    }
+
+    /// <summary>How many cells of a cell map are hull — everything but its air entries (#2221). A cell whose block
+    /// was removed from the game stays in the blob as air after the save's block-id remap, on purpose: it keeps the
+    /// coordinate frame (the anchor and the design box stay where they were). It is a hole, not a block, so nothing
+    /// that measures the hull — its hit points, its mass, its size — may count it. A door entry IS hull here: the
+    /// caller decides what a door counts as.</summary>
+    private static int HullCellCount(Dictionary<Vector3i, BlockId> cells)
+    {
+        int count = 0;
+        foreach (var block in cells.Values)
+        {
+            if (!block.IsAir)
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     /// <summary>Re-anchors a cell map so its minimum corner is (0,0,0) and shifts the world origin by the
@@ -234,7 +260,7 @@ public sealed partial class GameServer
 
         var cells = ParseCustomCells(blob);
         int engines = cells.Values.Count(b => IsBlockId(b, ShipEngineBlock));
-        var stats = CustomShipStats(cells.Count, engines);
+        var stats = CustomShipStats(HullCellCount(cells), engines); // #2221: a hole left by a removed block is no hull
         _customStatsCache.AddOrUpdate(blob, new CustomStatsBox { Stats = stats });
         CustomShipStatsParsesForTest++;
         return stats;
@@ -430,9 +456,10 @@ public sealed partial class GameServer
 
         if (intent.Mine)
         {
-            if (!cells.TryGetValue(pos, out var existing) || IsDoorBlockId(existing))
+            if (!cells.TryGetValue(pos, out var existing) || existing.IsAir || IsDoorBlockId(existing))
             {
-                // Door cells are air in the structure; the aim ray can't target them anyway.
+                // Door cells are air in the structure; the aim ray can't target them anyway. A hole a removed
+                // block type left behind (#2221) is nothing to mine either.
                 Reject(session, "structure", "@srv.structure.nothing");
                 return;
             }
@@ -445,9 +472,10 @@ public sealed partial class GameServer
                 SendInventory(session);
             }
 
-            if (cells.Count == 0)
+            if (HullCellCount(cells) == 0)
             {
-                // The last block came out: the construction is dismantled and the fleet entry goes with it
+                // The last block came out (holes of removed block types do not count, #2221): the construction is
+                // dismantled and the fleet entry goes with it
                 // (the persisted ship row is orphaned — RestoreFleet only loads ids in the fleet index).
                 session.Ships.Remove(uc.Id);
                 PersistFleet(session);
@@ -476,7 +504,10 @@ public sealed partial class GameServer
             return;
         }
 
-        if (cells.ContainsKey(pos))
+        // A hole a removed block type left behind (#2221) is free space and nothing to attach to.
+        bool Built(Vector3i c) => cells.TryGetValue(c, out var b) && !b.IsAir;
+
+        if (Built(pos))
         {
             Reject(session, "structure", "@srv.place.not_empty");
             return;
@@ -491,12 +522,12 @@ public sealed partial class GameServer
 
         // Attached to the existing build (6-neighbourhood over the blob, doors included — a lintel above a
         // door opening is legal), so no floating shards.
-        bool attached = cells.ContainsKey(new Vector3i(pos.X + 1, pos.Y, pos.Z))
-            || cells.ContainsKey(new Vector3i(pos.X - 1, pos.Y, pos.Z))
-            || cells.ContainsKey(new Vector3i(pos.X, pos.Y + 1, pos.Z))
-            || cells.ContainsKey(new Vector3i(pos.X, pos.Y - 1, pos.Z))
-            || cells.ContainsKey(new Vector3i(pos.X, pos.Y, pos.Z + 1))
-            || cells.ContainsKey(new Vector3i(pos.X, pos.Y, pos.Z - 1));
+        bool attached = Built(new Vector3i(pos.X + 1, pos.Y, pos.Z))
+            || Built(new Vector3i(pos.X - 1, pos.Y, pos.Z))
+            || Built(new Vector3i(pos.X, pos.Y + 1, pos.Z))
+            || Built(new Vector3i(pos.X, pos.Y - 1, pos.Z))
+            || Built(new Vector3i(pos.X, pos.Y, pos.Z + 1))
+            || Built(new Vector3i(pos.X, pos.Y, pos.Z - 1));
         if (!attached)
         {
             Reject(session, "structure", "@srv.structure.no_anchor");
@@ -534,6 +565,9 @@ public sealed partial class GameServer
             buildPool.Remove(new[] { new ItemAmount(intent.ItemKey, 1) });
             SendInventory(session);
         }
+
+        // #2219: a block that only works in a world's block grid is decoration in the hull being built.
+        NoteShipDecor(session, blockDef);
 
         cells[pos] = blockDef.NumericId;
         CommitCustomShipCells(session, uc.Ship, rec, commissioned: false, cells, pos,
@@ -612,13 +646,13 @@ public sealed partial class GameServer
     {
         var ship = _ship;
         var cells = ParseCustomCells(ship.BuiltCells);
-        if (!cells.TryGetValue(pos, out var existing))
+        if (!cells.TryGetValue(pos, out var existing) || existing.IsAir)
         {
             Reject(session, "structure", "@srv.structure.nothing");
             return;
         }
 
-        if (cells.Count <= 1)
+        if (HullCellCount(cells) <= 1)
         {
             Reject(session, "structure", "@srv.structure.hull_protected");
             return;
@@ -642,14 +676,16 @@ public sealed partial class GameServer
     /// was edited back into an invalid state is grounded again with the same message).</summary>
     private string? CustomShipLaunchProblem(ShipState ship)
     {
+        // #2221: size and extents are those of the hull that is really there — an air entry (a cell whose block was
+        // removed from the game) is a hole in it, not one of its blocks.
         var cells = ParseCustomCells(ship.BuiltCells);
-        int solid = cells.Count(kv => !IsDoorBlockId(kv.Value));
+        int solid = cells.Count(kv => !kv.Value.IsAir && !IsDoorBlockId(kv.Value));
         if (solid < CustomShipMinBlocks)
         {
             return "@srv.ship.too_small:" + CustomShipMinBlocks;
         }
 
-        if (!CellBounds(cells, out var min, out var max)
+        if (!CellBounds(cells, out var min, out var max, hullOnly: true)
             || max.X - min.X + 1 > CustomShipMaxFootprint
             || max.Z - min.Z + 1 > CustomShipMaxFootprint
             || max.Y - min.Y + 1 > CustomShipMaxHeight)

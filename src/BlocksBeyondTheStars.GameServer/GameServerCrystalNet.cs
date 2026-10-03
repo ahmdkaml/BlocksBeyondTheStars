@@ -36,6 +36,13 @@ public sealed partial class GameServer
         public double NextLogicBeat { get; set; }
         public double NextSensorBeat { get; set; }
         public bool NetListDirty { get; set; }
+
+        /// <summary>The level of every network as this world's players were last told it — the logic beat sends the
+        /// list again when a level differs. #2226: it is this world's own. It was one table for the server, keyed by
+        /// net ids that start at 1 on every world: two occupied worlds read each other's levels, sent their whole
+        /// list on every beat when the levels differed, and missed a real change when they happened to agree.</summary>
+        public Dictionary<int, bool> LastSentLevel { get; } = new();
+
         public bool DeviceListDirty { get; set; }
         public bool Subscribed { get; set; }
         public bool ClonesRespawned { get; set; }
@@ -93,6 +100,11 @@ public sealed partial class GameServer
         public double NextBeat;         // machines: the next move / craft / mine
         public double Progress;         // machines: seconds into the current job
         public int Cursor;              // auto-drill: the next cell index of its volume
+        public string CloneTag = string.Empty; // clone tank: the tag its clones carry (CombatEntity.CloneOf)
+        public int CloneCount;          // clone tank: its clones that live, as last counted (#2214)
+        public List<string>? CloneWaiting; // clone tank: clones its row lists that are not beside it yet — from the row's load to the world's first beat (#2214, #2226)
+        public int ChoiceStamp;         // clone tank: a signature of what its owner may pick, as the sensor beat last saw it (#2214)
+        public bool WaitTold;           // clone tank: the owner was told that the result waits for room (once per wait)
 
         public bool IsConduit => Kind == CrystalDeviceKind.Conduit;
         public bool IsGate => CrystalNetRules.IsGate(Kind);
@@ -111,6 +123,10 @@ public sealed partial class GameServer
     /// <summary>Test seam: the level of the network a cell belongs to (null when the cell is no net cell / a gate).</summary>
     public bool? CrystalLevelAt(Vector3i cell)
         => CrystalNet.Cells.TryGetValue(cell, out var c) && c.NetId != 0 && CrystalNet.Nets.TryGetValue(c.NetId, out var n) ? n.Level : null;
+
+    /// <summary>Test seam: a device's config line (<c>key=value;key=value</c>), or null when no device sits there.</summary>
+    public string? CrystalDeviceConfig(Vector3i cell)
+        => CrystalNet.Cells.TryGetValue(cell, out var c) && !c.IsConduit ? c.Config : null;
 
     /// <summary>Test seam: the number of registered cells (conduits + devices) in the active world.</summary>
     public int CrystalCellCount => CrystalNet.Cells.Count;
@@ -270,6 +286,11 @@ public sealed partial class GameServer
         if (!cell.Inert && !cell.IsGate)
         {
             JoinCrystalNet(cell);
+        }
+
+        if (kind == CrystalDeviceKind.CloneTank)
+        {
+            InitCloneTank(cell); // #2214: its clones' tag and list; a tank that was growing starts its wait over
         }
 
         if (persist)
@@ -473,7 +494,11 @@ public sealed partial class GameServer
             state.NextDeviceId = 1;
         }
 
-        var rows = _repo.ListCrystalCells(_world.LocationId);
+        // #2214: which machine of an owner is over a cap follows the order the cells register in — and the rows come
+        // back in the store's order (by coordinate), not in the order they were placed. A clone tank with a job
+        // running or with clones in its list goes first, so a reload never gives its place inside the cap to an idle
+        // tank and leaves the job hanging. The sort is stable: every other row keeps its place.
+        var rows = _repo.ListCrystalCells(_world.LocationId).OrderByDescending(CloneTankRowInUse);
         foreach (var row in rows)
         {
             if (!Enum.TryParse<CrystalDeviceKind>(row.Kind, out var kind) || kind == CrystalDeviceKind.None)
@@ -497,6 +522,11 @@ public sealed partial class GameServer
         state.NextLogicBeat = _uptime;
         state.NextSensorBeat = _uptime;
     }
+
+    /// <summary>Whether a stored row is a clone tank that is growing or has clones in its list.</summary>
+    private static bool CloneTankRowInUse(StoredCrystalCell row)
+        => row.Kind == nameof(CrystalDeviceKind.CloneTank)
+           && (CrystalConfigValue(row.Config, "growing") == "1" || TankClones(row.Config).Count > 0);
 
     /// <summary>The block key a kind places when the row carries none (old rows, the single-key kinds).</summary>
     private static string KeyForKind(CrystalDeviceKind kind) => kind switch
@@ -593,6 +623,28 @@ public sealed partial class GameServer
         return string.Join(";", parts);
     }
 
+    /// <summary>A config line without the given keys — what the client sent, before it is cleaned and cut to length
+    /// (bounded first, so a hostile line costs nothing to split).</summary>
+    private static string CrystalConfigWithout(string? config, string[] keys)
+    {
+        if (string.IsNullOrEmpty(config))
+        {
+            return string.Empty;
+        }
+
+        var parts = new List<string>();
+        foreach (var part in (config!.Length > 1024 ? config.Substring(0, 1024) : config).Split(';'))
+        {
+            int eq = part.IndexOf('=');
+            if (part.Length > 0 && (eq <= 0 || Array.IndexOf(keys, part.Substring(0, eq)) < 0))
+            {
+                parts.Add(part);
+            }
+        }
+
+        return string.Join(";", parts);
+    }
+
     /// <summary>A config line the client typed: printable, short, no separators that would break the line.</summary>
     private static string SanitizeCrystalConfig(string raw)
     {
@@ -664,7 +716,11 @@ public sealed partial class GameServer
                     cell.Mode = Math.Max(0, Math.Min(modes - 1, intent.Mode));
                 }
 
-                string fresh = SanitizeCrystalConfig(intent.Config);
+                // #2214: a tank's own keys leave what the client sent BEFORE the length cut — the client echoes the whole
+                // config, and the list of living clones must never push the player's own choice (sp, x) over the edge.
+                string fresh = SanitizeCrystalConfig(cell.Kind == CrystalDeviceKind.CloneTank
+                    ? CrystalConfigWithout(intent.Config, TankOwnedKeys)
+                    : intent.Config);
                 if (cell.IsGate || cell.Kind == CrystalDeviceKind.Watcher)
                 {
                     fresh = CrystalConfigWith(fresh, "yaw", cell.Yaw.ToString(System.Globalization.CultureInfo.InvariantCulture)); // the orientation is not the player's to overwrite
@@ -677,9 +733,9 @@ public sealed partial class GameServer
 
                 if (cell.Kind == CrystalDeviceKind.CloneTank)
                 {
-                    // #2207: what a tank is growing and how many clones it holds is the server's to say — a client
+                    // #2207: what a tank is growing and which clones it holds is the server's to say — a client
                     // that set it could release a species it never paid for.
-                    foreach (string owned in new[] { "growing", "clones", TankGrowKey })
+                    foreach (string owned in TankOwnedKeys)
                     {
                         string? kept = CrystalConfigValue(cell.Config, owned);
                         if (kept is not null || CrystalConfigValue(fresh, owned) is not null)
@@ -957,7 +1013,7 @@ public sealed partial class GameServer
         // The list goes out when a level differs from what the clients were last told.
         foreach (var net in state.Nets.Values)
         {
-            if (net.Level != _crystalLastSentLevel.GetValueOrDefault(net.Id))
+            if (net.Level != state.LastSentLevel.GetValueOrDefault(net.Id))
             {
                 anyLevelChanged = true;
             }
@@ -976,8 +1032,6 @@ public sealed partial class GameServer
 
     /// <summary>#2092: the shortest gap between two actions of one edge device (a 0.1 s flicker must not double-fire).</summary>
     private const double CrystalEdgeMinIntervalSeconds = 0.2;
-
-    private readonly Dictionary<int, bool> _crystalLastSentLevel = new();
 
     /// <summary>#2092: the Device Eye reads the status of the Crystal Net device in front of it (blocked, arrived, owner
     /// near, has a target, ripe, growing, ready, done — whatever that device reports), or whether a door in front of it
@@ -1127,6 +1181,13 @@ public sealed partial class GameServer
 
         foreach (var c in state.Cells.Values)
         {
+            if (c.Kind == CrystalDeviceKind.CloneTank)
+            {
+                // #2214: what its owner may pick now, and which of its clones still live. An inert tank too: its menu
+                // opens like any other's.
+                WatchCloneTank(c);
+            }
+
             if (c.Inert)
             {
                 continue;
@@ -1617,7 +1678,7 @@ public sealed partial class GameServer
     {
         var state = CrystalNet;
         var nets = new List<NetCrystalNet>(state.Nets.Count);
-        _crystalLastSentLevel.Clear();
+        state.LastSentLevel.Clear();
         foreach (var net in state.Nets.Values)
         {
             var cells = new int[net.Cells.Count * 3];
@@ -1630,7 +1691,7 @@ public sealed partial class GameServer
             }
 
             nets.Add(new NetCrystalNet { Id = net.Id, On = net.Level, Cells = cells });
-            _crystalLastSentLevel[net.Id] = net.Level;
+            state.LastSentLevel[net.Id] = net.Level;
         }
 
         return new CrystalNetList { Nets = nets.ToArray() };

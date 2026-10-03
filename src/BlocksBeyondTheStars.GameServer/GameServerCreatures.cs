@@ -60,10 +60,13 @@ public sealed partial class GameServer
     // run nothing else), so one walled in by the player steps out instead of standing in the block for good.
     private const double AwakeBodyCheckInterval = 2.0;
 
-    private CreatureSpecies[] _speciesRoster = System.Array.Empty<CreatureSpecies>();
+    // #2226: the species tables are the active WORLD's (see LoadedWorld.SpeciesRoster) — the rolled ids ("sp0",
+    // "sp1", …) repeat from world to world, so one table for the whole server gave a world the animals of whichever
+    // world had loaded last. Read them where they are used: a reference kept across a world switch is the old world's.
+    private CreatureSpecies[] _speciesRoster { get => _worlds.Active.SpeciesRoster; set => _worlds.Active.SpeciesRoster = value; }
     private readonly List<PlayerSession> _creatureTargets = new(); // reused per tick (no per-tick LINQ alloc)
-    private readonly Dictionary<string, CreatureSpecies> _speciesById = new();
-    private readonly Dictionary<string, LocomotionProfile> _locoProfiles = new(); // per-species movement tuning
+    private Dictionary<string, CreatureSpecies> _speciesById => _worlds.Active.SpeciesById;
+    private Dictionary<string, LocomotionProfile> _locoProfiles => _worlds.Active.LocoProfiles; // per-species movement tuning
     private List<CombatEntity> _creatures => _worlds.Active.Creatures;
     private double _creatureSpawnTimer { get => _worlds.Active.CreatureSpawnTimer; set => _worlds.Active.CreatureSpawnTimer = value; }
     private double _creatureClock { get => _worlds.Active.CreatureClock; set => _worlds.Active.CreatureClock = value; }
@@ -125,8 +128,14 @@ public sealed partial class GameServer
         }
     }
 
-    /// <summary>The procedural species this world derived from its seed + planet.</summary>
+    /// <summary>The procedural species the active world derived from its seed + planet (every resident world keeps
+    /// its own, #2226).</summary>
     public IReadOnlyList<CreatureSpecies> SpeciesRoster => _speciesRoster;
+
+    /// <summary>Test seam (#2226): points the server at a resident world, as the tick and every message handler do
+    /// before they act on one — so a test with two resident worlds reads the roster, the animals and the tanks of the
+    /// world it means. False when the body is not resident.</summary>
+    public bool ActivateWorldForTest(string locationId) => SetActiveWorld(locationId);
 
     /// <summary>#2029: the population base of a "none" world whose roster kept a few cave species (a toxic world).</summary>
     private const double CaveOnlyFaunaBase = 4.0;
@@ -222,7 +231,11 @@ public sealed partial class GameServer
             return;
         }
 
-        if (_speciesRoster.Length == 0)
+        // #2215: a world with no roster has no life of its own — but an animal that IS there (a guest clone from a
+        // sample on an airless moon, a companion tamed from one) must still move, sleep and be synced. A truly empty
+        // world still leaves here at once; its giants tick by their own rules and do not count.
+        bool rosterless = _speciesRoster.Length == 0;
+        if (rosterless && !AnyOrdinaryCreature())
         {
             return; // barren world — no life
         }
@@ -261,7 +274,7 @@ public sealed partial class GameServer
         // Fill faster while the world is far below its cap (a freshly visited world comes alive quickly),
         // then ease to the slow trickle near the cap.
         double interval = wild < cap / 2 ? 1.5 : CreatureSpawnInterval;
-        if (_creatureSpawnTimer >= interval && wild < cap)
+        if (_creatureSpawnTimer >= interval && wild < cap && !rosterless) // no roster, nothing to spawn (#2215)
         {
             _creatureSpawnTimer = 0;
             // #1720: the player who gets the next spawn rotates on the WILD population — companions used to
@@ -304,6 +317,9 @@ public sealed partial class GameServer
             return;
         }
 
+        // #2226: this world's table, read once. A bite that kills sends the player to their ship or bed — on another
+        // body that loads its world and moves the cursor, and the animals still to come in this loop are this world's.
+        var speciesById = _speciesById;
         foreach (var creature in _creatures)
         {
             if (creature.IsCompanion || creature.IsGiant)
@@ -311,7 +327,7 @@ public sealed partial class GameServer
                 continue; // a tamed companion never harms anyone; a giant stomps and strikes by its own rules (#1998)
             }
 
-            if (!_speciesById.TryGetValue(creature.SpeciesId, out var sp))
+            if (!speciesById.TryGetValue(creature.SpeciesId, out var sp))
             {
                 continue;
             }
@@ -371,6 +387,21 @@ public sealed partial class GameServer
                 }
             }
         }
+    }
+
+    /// <summary>Whether any animal other than a giant lives on the active world (a plain loop; the list is empty on a
+    /// barren world and holds a giant or two at most where only giants live).</summary>
+    private bool AnyOrdinaryCreature()
+    {
+        foreach (var c in _creatures)
+        {
+            if (!c.IsGiant)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // #470 (decision #4): a SAFETY ceiling only — the real population comes from WorldCreatureCap. The old
@@ -2267,6 +2298,10 @@ public sealed partial class GameServer
     /// pin the wire's motion flags (airborne / perched / glide) to the simulated state (#1368).</summary>
     public NetCreature NetCreatureForTest(string id) => ToNetCreature(_creatures.First(x => x.Id == id));
 
+    /// <summary>Test-only: the movement profile the active world's creature tick steps a species with — the all-zero
+    /// default (speed 0: the animal stands still) when the world has none for the id.</summary>
+    public LocomotionProfile LocomotionProfileForTest(string speciesId) => ProfileFor(speciesId);
+
     /// <summary>Test-only: puts a creature's locomotion controller into a roam PAUSE for <paramref name="seconds"/>
     /// (as if it had rolled one), so a test can trigger the behaviour a pause drives — a flier landing to
     /// rest (#1332) — without waiting for the seeded roll.</summary>
@@ -2303,6 +2338,11 @@ public sealed partial class GameServer
     /// <summary>Test seam (#1862): the generator's surface height for a column — no chunk is loaded or generated,
     /// so a test can size a large build above the terrain without streaming a hundred chunk columns first.</summary>
     public int SurfaceHeightForTest(int x, int z) => _generator.SurfaceHeight(_world.Planet, x, z);
+
+    /// <summary>Test seam (#2226): a fresh generator with this server's seed and galaxy-wide settings and no world
+    /// mode. A test configures it for one body and compares it with what the server's shared generator answers
+    /// while that body's world is the active one.</summary>
+    public BlocksBeyondTheStars.WorldGeneration.WorldGenerator FreshGeneratorForTest() => _generator.CreateSibling();
 
     /// <summary>The spawner's full reject list for the first roster species at a spot (#1314 seam).</summary>
     public bool SpawnSpotClearForTest(Vector3f at)
