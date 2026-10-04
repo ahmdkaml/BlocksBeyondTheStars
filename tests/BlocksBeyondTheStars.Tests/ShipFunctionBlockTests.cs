@@ -43,6 +43,22 @@ public sealed class ShipFunctionBlockTests : IDisposable
         "daylight_sensor", "storage_sensor", "watcher", "logic_block", "timer_block", "alarm_siren", "chime", "horn",
         "melody_block", "announcer", "fabricator", "auto_drill_1", "auto_drill_2", "auto_drill_3", "matter_sender",
         "matter_receiver", "drill_laser", "rail_stop", "device_eye",
+        // Crystal Net 2 (#2251)
+        "phase_block", "trapdoor", "bridge_motor", "piston", "lift_motor", "lift_stop",
+        "signal_display", "dice_block", "signal_sender", "signal_receiver", "environment_sensor", "ship_sensor",
+    };
+
+    /// <summary>#2264: the open twins of the moving blocks — no item places them (the net swaps them in), so they are only
+    /// part of the "every net block is classified" check.</summary>
+    private static readonly string[] CrystalTwins = { "phase_block_open", "trapdoor_open" };
+
+    /// <summary>#2261: blocks that gained a port but do their job by themselves wherever they stand — a field, a fence, a
+    /// fire, a forge, a heal tank, a pot, a bed (and their unlit / switched-off twins). No decoration notice in a ship, no
+    /// refusal on a station spacewalk.</summary>
+    private static readonly string[] PlainPorts =
+    {
+        "force_field", "force_field_off", "energy_fence", "campfire", "campfire_off", "forge", "forge_off", "heal_tank",
+        "flower_pot", "bed", "crew_bunk",
     };
 
     /// <summary>The older blocks that gained a Crystal Net port. Each has a function of its own that needs a world: a
@@ -53,8 +69,12 @@ public sealed class ShipFunctionBlockTests : IDisposable
     };
 
     /// <summary>What is only decoration in a ship, and what VEGA says so about: the bio lab and everything the Crystal
-    /// Net keeps a device row for — not a conduit, not a lamp.</summary>
-    private static readonly string[] WorldOnly = new[] { "bio_lab" }.Concat(CrystalDevices).Concat(PortBlocks).ToArray();
+    /// Net keeps a device row for — not a conduit, not a lamp, and (#2268) none of the devices that work aboard.</summary>
+    private static readonly string[] WorldOnly = new[] { "bio_lab" }
+        .Concat(CrystalDevices.Where(k => !CrystalNetRules.WorksAboard(CrystalNetRules.KindOfKey(k)))).Concat(PortBlocks).ToArray();
+
+    /// <summary>#2268: the devices that work aboard the own ship — a ship takes them without a word.</summary>
+    private static readonly string[] AboardDevices = CrystalDevices.Where(k => CrystalNetRules.WorksAboard(CrystalNetRules.KindOfKey(k))).ToArray();
 
     /// <summary>What a station refuses on a spacewalk: the blocks the world place handler has to register — a conduit,
     /// the devices, and the port blocks with a named entry or a start of their own.</summary>
@@ -223,7 +243,7 @@ public sealed class ShipFunctionBlockTests : IDisposable
             .Where(b => CrystalNetRules.KindOf(b) is not (CrystalDeviceKind.None or CrystalDeviceKind.Light or CrystalDeviceKind.Conduit))
             .Select(b => b.Key).OrderBy(k => k, StringComparer.Ordinal).ToArray();
 
-        Assert.Equal(CrystalDevices.Concat(PortBlocks).OrderBy(k => k, StringComparer.Ordinal).ToArray(), netBlocks);
+        Assert.Equal(CrystalDevices.Concat(CrystalTwins).Concat(PortBlocks).Concat(PlainPorts).OrderBy(k => k, StringComparer.Ordinal).ToArray(), netBlocks);
         Assert.All(DeckOnly.Concat(SpacewalkParts), key => Assert.NotEqual(CrystalDeviceKind.None, CrystalNetRules.KindOf(_content.GetBlock(key))));
     }
 
@@ -292,6 +312,35 @@ public sealed class ShipFunctionBlockTests : IDisposable
         }
     }
 
+    /// <summary>#2268: a switch, a gate, a chime … work aboard the own ship — each is built without the decoration notice
+    /// and joins the ship's own net.</summary>
+    [Fact]
+    public void InTheCabin_TheDevicesThatWorkAboard_AreBuilt_WithoutANotice_AndJoinTheShipsNet()
+    {
+        var t = new NpcLifeWorld.RecordingTransport();
+        var server = NewServer("shipfn_aboard", t, out var repo, starterShip: true);
+        using (repo)
+        {
+            var (pilot, cell) = InTheCabin(server, inSpace: false);
+            pilot.State.InstantBuild = false;
+            Assert.NotEmpty(AboardDevices);
+            foreach (string item in AboardDevices)
+            {
+                Give(pilot, item);
+                Assert.Null(Build(server, t, pilot, "ship:Pilot", cell, item));
+                Assert.Equal(Block(item), server.BuildShipStructureForTest("Pilot").Get(cell));
+                Assert.Equal(0, DecorNotices(t, pilot));
+                Assert.Equal(item, server.CrystalShipDeviceKeyForTest("Pilot", cell));
+
+                Assert.Null(TakeOut(server, t, pilot, "ship:Pilot", cell));
+                Assert.Null(server.CrystalShipDeviceKeyForTest("Pilot", cell));
+                EmptyPack(pilot);
+            }
+
+            Assert.DoesNotContain(DecorMilestone, pilot.State.Milestones);
+        }
+    }
+
     [Fact]
     public void OnASpacewalk_TheOwnShipsHull_TakesThemToo()
     {
@@ -335,9 +384,9 @@ public sealed class ShipFunctionBlockTests : IDisposable
             Assert.Equal(0, DecorNotices(t, mate));
             Assert.DoesNotContain(DecorMilestone, mate.State.Milestones);
 
-            Give(mate, "crystal_switch");
-            Assert.Null(Build(server, t, mate, "ship:Mate", mateCell, "crystal_switch"));
-            Assert.Equal(Block("crystal_switch"), server.BuildShipStructureForTest("Mate").Get(mateCell));
+            Give(mate, "storage_sensor");
+            Assert.Null(Build(server, t, mate, "ship:Mate", mateCell, "storage_sensor"));
+            Assert.Equal(Block("storage_sensor"), server.BuildShipStructureForTest("Mate").Get(mateCell));
             Assert.Equal(1, DecorNotices(t, mate));
             Assert.Equal(1, DecorNotices(t, pilot));
 
@@ -480,6 +529,7 @@ public sealed class ShipFunctionBlockTests : IDisposable
             Give(p, "bio_lab");
             Give(p, "clone_tank");
             Give(p, "crystal_switch");
+            int cellsBefore = server.CrystalCellCount; // a crystal vault's puzzle (#2260) may already be wired somewhere
             server.PlaceBlock("Builder", lab.X, lab.Y, lab.Z, "bio_lab");
             server.PlaceBlock("Builder", tank.X, tank.Y, tank.Z, "clone_tank");
             server.PlaceBlock("Builder", lever.X, lever.Y, lever.Z, "crystal_switch");
@@ -491,7 +541,7 @@ public sealed class ShipFunctionBlockTests : IDisposable
                 + p.State.Inventory.CountOf("crystal_switch"));
 
             // Both devices are Crystal Net cells of their own, and the lab answers.
-            Assert.Equal(2, server.CrystalCellCount);
+            Assert.Equal(cellsBefore + 2, server.CrystalCellCount);
             Assert.NotNull(server.CrystalDeviceOutput(lever));
             AssertTheLabAnalyses(server, p);
         }

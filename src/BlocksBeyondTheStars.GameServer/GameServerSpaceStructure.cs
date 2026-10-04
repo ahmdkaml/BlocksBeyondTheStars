@@ -655,7 +655,8 @@ public sealed partial class GameServer
     /// a prompt, a menu or a function: it is decoration. A conduit and a lamp are not named here: a conduit does
     /// nothing by itself anywhere, and a lamp shines in a cabin as it does on the ground.</summary>
     private static bool NeedsWorldGrid(BlockDefinition def)
-        => def.Key == BioItems.Lab || CrystalNetRules.NeedsRow(CrystalNetRules.KindOf(def));
+        => def.Key == BioItems.Lab
+           || (CrystalNetRules.NeedsRow(CrystalNetRules.KindOf(def)) && !CrystalNetRules.IsPlainBlockPort(CrystalNetRules.KindOf(def)));
 
     /// <summary>Tells the builder that the block just built into a SHIP is only decoration there (#2219, see
     /// <see cref="NeedsWorldGrid"/>). Players furnish their ships with exactly these blocks, so a ship takes them
@@ -666,9 +667,9 @@ public sealed partial class GameServer
     /// becomes a world when it is boarded and has its own rule (<see cref="RefusedOnStationSpacewalk"/>).</summary>
     private void NoteShipDecor(PlayerSession session, BlockDefinition def)
     {
-        if (!NeedsWorldGrid(def))
+        if (!NeedsWorldGrid(def) || CrystalNetRules.WorksAboard(CrystalNetRules.KindOf(def)))
         {
-            return;
+            return; // #2268: a switch, a gate, a lamp … works aboard the own ship (once it is parked or walked)
         }
 
         // The once-flag of a VEGA hint, but sent as a system line (kind 3): a player who switched VEGA's hints off
@@ -701,8 +702,7 @@ public sealed partial class GameServer
     /// stand, and a conduit laid beside them finds them as ports, so they are built on a spacewalk as before — and
     /// so is the bio lab, which the deck's grid scan finds.</summary>
     private static bool NeedsWorldPlaceHandler(BlockDefinition def)
-        => CrystalNetRules.KindOf(def) is not (CrystalDeviceKind.None or CrystalDeviceKind.Light or CrystalDeviceKind.Sentry
-            or CrystalDeviceKind.EnergyGate or CrystalDeviceKind.HydroTray);
+        => CrystalNetRules.KindOf(def) is var kind && kind != CrystalDeviceKind.None && !CrystalNetRules.IsPlainBlockPort(kind); // #2261: a fire, a field, a bed work by themselves
 
     /// <summary>Refuses a block that would be dead on the deck when it is built onto a station from OUTSIDE (#2219,
     /// see <see cref="NeedsWorldPlaceHandler"/>), before anything is consumed, with a line that says to build it
@@ -1117,6 +1117,7 @@ public sealed partial class GameServer
             }
 
             SetStructureCell(s, pos, BlockId.Air, 0);
+            OnCrystalShipCellRemoved(p.PlayerId, rec, pos); // #2268: it leaves the ship's net
 
             if (_content.BlockById(existing) is { } def && def.Drops.Count > 0)
             {
@@ -1213,7 +1214,8 @@ public sealed partial class GameServer
             var cells = ParseCustomCells(_ship.BuiltCells);
             cells[pos] = blockDef.NumericId;
             CommitCustomShipCells(session, _ship, rec, commissioned: true, cells, pos,
-                DoorBlocks.IsDoorBlock(blockDef.Key) ? BlockId.AirValue : blockDef.NumericId.Value);
+                DoorBlocks.IsDoorBlock(blockDef.Key) ? BlockId.AirValue : blockDef.NumericId.Value,
+                intent.DeviceDir >= 0 ? intent.DeviceDir : intent.Yaw);
             return;
         }
 
@@ -1255,6 +1257,8 @@ public sealed partial class GameServer
         {
             SetStructureCell(s, bedFootCell, blockDef.NumericId, FurnitureShapes.BedPartnerDescriptor(shape));
         }
+
+        OnCrystalShipCellPlaced(session, rec, pos, blockDef, intent.DeviceDir >= 0 ? intent.DeviceDir : intent.Yaw); // #2268
     }
 
     /// <summary>Writes one cell of a ship/station structure as a player edit: the live grid, the durable delta
@@ -1325,6 +1329,11 @@ public sealed partial class GameServer
         if (blockKey == BedBlock && !chosenYaw)
         {
             facing = ShapeCode.YawFacingForward(facing);
+        }
+
+        if (blockKey == "trapdoor")
+        {
+            return PropShapes.TrapdoorClosed(ShapeCode.YawFacingForward(facing)); // #2264 / #2268: a hatch in a cabin floor too
         }
 
         return ShapeCode.Pack(PropShapes.DefaultPlaceShape(blockKey), facing, ShapeCode.UpPlusY);

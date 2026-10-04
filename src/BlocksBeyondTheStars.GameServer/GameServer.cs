@@ -857,6 +857,7 @@ public sealed partial class GameServer
         LoadBeacons();     // placed radio beacons restore their label/owner entities (the blocks come back via edits)
         LoadBeams();       // placed beam blocks restore their name/owner entities (the blocks come back via edits)
         LoadCrystalNet();  // #2046: conduits + devices rebuild their networks from their rows
+        RegisterPendingWorldCircuits(); // #2260: the settlements' pre-built circuits (a reload finds their rows already)
         LoadBredPlants();  // #2209: which species stands in which cell of this world
         LoadRails();       // #2113: the monorail's pylons, links and trains from the metadata
 
@@ -4455,7 +4456,7 @@ public sealed partial class GameServer
     /// <summary>Places a block from a held item for a player (test/util entrypoint). An optional label rides
     /// along for labelled blocks (a radio beacon).</summary>
     public void PlaceBlock(string playerId, int x, int y, int z, string itemKey, string? label = null,
-        int upFace = -1, int yaw = -1)
+        int upFace = -1, int yaw = -1, int deviceDir = -1)
     {
         if (FindSessionByPlayerId(playerId) is { } session)
         {
@@ -4468,6 +4469,7 @@ public sealed partial class GameServer
                 Label = label ?? string.Empty,
                 UpFace = upFace,
                 Yaw = yaw,
+                DeviceDir = deviceDir,
             });
         }
     }
@@ -4635,6 +4637,11 @@ public sealed partial class GameServer
         if (p.InTrain.Length > 0)
         {
             return; // #2113: the frame's own motion is never a fall
+        }
+
+        if (_uptime < session.MovingFallGraceUntil)
+        {
+            return; // #2264: a trapdoor, a phase block or a bridge opened under this player — a moving block never hurts
         }
 
         if (session.StationZeroG || InStationZeroGFallGrace(session))
@@ -5026,6 +5033,7 @@ public sealed partial class GameServer
         }
 
         OnBlockMined(session, def.Key);
+        OnCrystalBlockMinedHint(session, def.Key); // #2257: the first crystal tells what crystal can do
         ShipAiOnMine(session); // VEGA onboarding: the "mine a few blocks" stage counts every break
         ShipAiOnBlockBroken(session, def.Key); // VEGA context tips (#1077): digging score, by-hand streak, rare-ore learned
         CreaturesOnBlockBroken(session, pos); // #1760: a flowerling that SEES this turns on the miner
@@ -5159,6 +5167,11 @@ public sealed partial class GameServer
         if (blockKey == BedBlock && !(place.Yaw >= 0 && place.Yaw <= 3))
         {
             facing = ShapeCode.YawFacingForward(facing);
+        }
+
+        if (blockKey == "trapdoor")
+        {
+            return PropShapes.TrapdoorClosed(ShapeCode.YawFacingForward(facing)); // #2264: hinged on the far side, flush with the floor
         }
 
         return ShapeCode.Pack(PropShapes.DefaultPlaceShape(blockKey), facing, ShapeCode.UpPlusY);
@@ -5645,6 +5658,11 @@ public sealed partial class GameServer
         else if (blockDef.Key is "station_vendor" or "mission_board" || NpcProfessions.ByPostBlock(blockDef.Key) != null)
         {
             OnBasePostChanged(session, pos, placed: true); // #1865: a post at home is staffed by a resident
+        }
+
+        if (place.DeviceDir is >= 0 and < CrystalNetRules.DirectionCount)
+        {
+            crystalYaw = place.DeviceDir; // #2267: the client's six-way choice (looking up / down, or the rotate cycle)
         }
 
         OnCrystalBlockPlaced(session, pos, blockDef, place.Label, crystalYaw); // #2046: a conduit or device joins the Crystal Net
@@ -6272,6 +6290,7 @@ public sealed partial class GameServer
         });
         SendInventory(session);
         ShipAiOnBlueprint(session); // VEGA onboarding: first blueprint researched
+        OnCrystalBlueprintUnlockedHint(session, bp.Key); // #2257: the comm radio opens the Crystal Net tab, the conduit the net
 
         // #2249: the bio lab's blueprints open things no recipe list shows — where the lab is built, and the Change tab.
         if (bp.Key == Shared.Bio.BioItems.LabBlueprint)
@@ -7455,6 +7474,7 @@ public sealed partial class GameServer
             InstantTravel = r.InstantTravel,
             AutoAim = r.AutoAim,
             StarterTeleporter = r.StarterTeleporter,
+            MachineCatchUpMinutes = r.MachineCatchUpMinutes, // #2269
             WorldTextures = r.WorldTextures ? "Admins" : "Off",
             FrontierDanger = r.FrontierDanger,
             BaseVisitors = r.BaseVisitors,
@@ -7520,6 +7540,11 @@ public sealed partial class GameServer
         if (!string.IsNullOrEmpty(intent.StarterTeleporter))
         {
             Rules.StarterTeleporter = intent.StarterTeleporter.Equals("On", System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (System.Array.IndexOf(CrystalNetRules.CatchUpChoicesMinutes, intent.MachineCatchUpMinutes) >= 0)
+        {
+            Rules.MachineCatchUpMinutes = intent.MachineCatchUpMinutes; // #2269: only the offered steps
         }
 
         if (!string.IsNullOrEmpty(intent.FrontierDanger))

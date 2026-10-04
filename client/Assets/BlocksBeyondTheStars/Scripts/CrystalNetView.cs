@@ -21,8 +21,11 @@ namespace BlocksBeyondTheStars.Client
     /// looked when placing it): a gate sends that way, a watcher and an eye look that way. It lights up while the
     /// block's own output is ON;</item>
     /// <item>a small amber <b>status light</b> on top of every other device while it reports ON (a flipped switch, a
-    /// sensor that sees something, a blocked sender, a full drill, a growing tank, …).</item>
+    /// sensor that sees something, a blocked sender, a full drill, a growing tank, …);</item>
+    /// <item>#2263: what a <b>display</b> shows, floating over it — its symbol, its own line or its count.</item>
     /// </list>
+    /// #2267: every device that points somewhere (a gate, a piston, a bridge motor, a watcher, an eye) gets the arrow — up
+    /// and down included. #2268: a parked ship's net arrives already moved into world cells (<see cref="ClientCrystalNet"/>).
     /// Built from <see cref="GameBootstrap.CrystalNets"/> and <see cref="GameBootstrap.CrystalDevices"/>: two meshes,
     /// rebuilt only when a list arrives (and every few seconds, so the wrap-around seam follows the player); the wave
     /// only rewrites the shell's vertex colours per frame — eight shared vertices per cell. Vertex colours need the
@@ -42,8 +45,13 @@ namespace BlocksBeyondTheStars.Client
         private static readonly Color32 ArrowOff = new Color32(70, 90, 120, 200);
         private static readonly Color32 StatusOn = new Color32(255, 180, 40, 245);
 
-        private GameObject _netGo, _devGo;
-        private Mesh _netMesh, _devMesh;
+        private GameObject _netGo, _devGo, _hiGo;
+        private Mesh _netMesh, _devMesh, _hiMesh;
+
+        // #2267: the network under the crosshair, outlined — built when the aimed network (or the lists) change.
+        private int _hiNetId = -1;
+        private NetCrystalNet[] _hiBuiltFrom;
+        private static readonly Color32 Highlight = new Color32(225, 235, 255, 70);
         private Material _mat;
         private NetCrystalNet[] _builtNets;
         private NetCrystalDevice[] _builtDevices;
@@ -90,6 +98,139 @@ namespace BlocksBeyondTheStars.Client
             {
                 _devGo.SetActive(visible && _devMesh.vertexCount > 0);
             }
+
+            UpdateHighlight(nets, visible);
+        }
+
+        /// <summary>#2267: outlines every cell of the network the player aims at — ON or OFF — so a kid sees what one wire
+        /// reaches. Nothing is rebuilt while the same network stays in the crosshair.</summary>
+        private void UpdateHighlight(NetCrystalNet[] nets, bool visible)
+        {
+            if (_hiGo == null)
+            {
+                return;
+            }
+
+            int netId = -1;
+            NetCrystalNet aimedNet = null;
+            if (visible && nets != null && Game.AimedCell is { } aim)
+            {
+                foreach (var net in nets)
+                {
+                    var cells = net.Cells;
+                    if (cells == null)
+                    {
+                        continue;
+                    }
+
+                    for (int i = 0; i + 2 < cells.Length; i += 3)
+                    {
+                        if (cells[i] == aim.x && cells[i + 1] == aim.y && cells[i + 2] == aim.z)
+                        {
+                            aimedNet = net;
+                            break;
+                        }
+                    }
+
+                    if (aimedNet != null)
+                    {
+                        netId = net.Id;
+                        break;
+                    }
+                }
+            }
+
+            if (aimedNet == null)
+            {
+                _hiNetId = -1;
+                _hiGo.SetActive(false);
+                return;
+            }
+
+            if (netId != _hiNetId || !ReferenceEquals(nets, _hiBuiltFrom))
+            {
+                _hiNetId = netId;
+                _hiBuiltFrom = nets;
+                _verts.Clear();
+                _tris.Clear();
+                var cells = aimedNet.Cells;
+                for (int i = 0; i + 2 < cells.Length && _verts.Count < MaxCells * 8; i += 3)
+                {
+                    var p = Game.ScenePos(cells[i], cells[i + 1], cells[i + 2]);
+                    const float o = 0.06f;
+                    AddBox(p + new Vector3(-o, -o, -o), p + new Vector3(1f + o, 1f + o, 1f + o));
+                }
+
+                var colors = new List<Color32>(_verts.Count);
+                for (int i = 0; i < _verts.Count; i++)
+                {
+                    colors.Add(Highlight);
+                }
+
+                _hiMesh.Clear();
+                _hiMesh.SetVertices(_verts);
+                _hiMesh.SetTriangles(_tris, 0);
+                _hiMesh.SetColors(colors);
+                _hiMesh.RecalculateBounds();
+            }
+
+            _hiGo.SetActive(true);
+        }
+
+        /// <summary>#2263: the displays' faces, as floating labels (pushed every frame, like the beacon names).</summary>
+        private void LateUpdate()
+        {
+            if (Game == null || Game.SpaceViewActive || Game.MenuOpen)
+            {
+                return;
+            }
+
+            var devices = Game.CrystalDevices;
+            var cam = Camera.main;
+            if (devices == null || devices.Length == 0 || cam == null)
+            {
+                return;
+            }
+
+            ScreenLabelLayer labels = null;
+            var here = Game.PlayerPosition;
+            foreach (var d in devices)
+            {
+                if (d.Kind != nameof(CrystalDeviceKind.SignalDisplay))
+                {
+                    continue;
+                }
+
+                string text = DisplayText(d);
+                if (string.IsNullOrEmpty(text))
+                {
+                    continue;
+                }
+
+                var pos = Game.ScenePos(d.X + 0.5f, d.Y + 1.35f, d.Z + 0.5f);
+                if ((pos - here).sqrMagnitude > 30f * 30f)
+                {
+                    continue;
+                }
+
+                labels ??= ScreenLabelLayer.Instance;
+                var col = d.Output ? new Color(0.55f, 0.95f, 1f) : new Color(0.55f, 0.6f, 0.75f);
+                labels.World(cam, pos, text, col, true, 16f, 24f);
+            }
+        }
+
+        /// <summary>What a display shows: its ON / OFF symbol, its own line while ON, or its count.</summary>
+        private static string DisplayText(NetCrystalDevice d)
+        {
+            switch ((DisplayMode)d.Mode)
+            {
+                case DisplayMode.Text:
+                    return d.Output ? d.Label : string.Empty;
+                case DisplayMode.Counter:
+                    return CrystalMenuEdits.ValueOf(d.Config, "n") ?? "0";
+                default:
+                    return CrystalDeviceUi.SymbolOf(CrystalMenuEdits.ValueOf(d.Config, d.Output ? "on" : "off") ?? (d.Output ? "0" : "12"));
+            }
         }
 
         private void Clear()
@@ -97,8 +238,10 @@ namespace BlocksBeyondTheStars.Client
             _builtNets = null;
             _builtDevices = null;
             _cellDistance.Clear();
+            _hiNetId = -1;
             if (_netGo != null) _netGo.SetActive(false);
             if (_devGo != null) _devGo.SetActive(false);
+            if (_hiGo != null) _hiGo.SetActive(false);
         }
 
         // ---------------------------------------------------------------------------------------------------
@@ -237,7 +380,7 @@ namespace BlocksBeyondTheStars.Client
                     }
 
                     var p = Game.ScenePos(d.X, d.Y, d.Z);
-                    bool pointed = CrystalNetRules.IsGate(kind) || kind == CrystalDeviceKind.Watcher;
+                    bool pointed = CrystalNetRules.IsDirectional(kind);
                     if (pointed)
                     {
                         int before = _verts.Count;
@@ -248,7 +391,7 @@ namespace BlocksBeyondTheStars.Client
                         }
                     }
 
-                    if (d.Output && !CrystalNetRules.IsGate(kind))
+                    if (d.Output && !CrystalNetRules.IsGate(kind) && kind != CrystalDeviceKind.SignalDisplay)
                     {
                         int before = _verts.Count;
                         var c = p + new Vector3(0.5f, 1.04f, 0.5f);
@@ -346,6 +489,7 @@ namespace BlocksBeyondTheStars.Client
             _mat = new Material(shader) { renderQueue = 3050 };
             _netGo = MakeLayer("CrystalNetGlow", out _netMesh);
             _devGo = MakeLayer("CrystalDeviceMarks", out _devMesh);
+            _hiGo = MakeLayer("CrystalNetHighlight", out _hiMesh);
         }
 
         private GameObject MakeLayer(string name, out Mesh mesh)

@@ -94,6 +94,11 @@ public sealed class PlaceBlockIntent
     /// direct control of all 24 orientations the shape descriptor already stores.
     /// </summary>
     public int Yaw { get; set; } = -1;
+
+    /// <summary>#2267 (additive): the direction a directional Crystal Net device points to — 0..3 the quarter turns
+    /// (0 = +Z, 1 = +X), 4 = up, 5 = down; -1 = none, the server derives the horizontal direction as before. The client
+    /// sends it from its rotate cycle or from looking steeply up / down while placing.</summary>
+    public int DeviceDir { get; set; } = -1;
 }
 
 public sealed class CraftIntent
@@ -1308,6 +1313,10 @@ public sealed class ServerRules
     /// teleporter (multiplayer convenience); default false.</summary>
     public bool StarterTeleporter { get; set; }
 
+    /// <summary>#2269: machines catch up for at most this many minutes of a world's absence (0 = off); -1 from a server
+    /// that predates the rule — the client then hides the row.</summary>
+    public int MachineCatchUpMinutes { get; set; } = -1;
+
     /// <summary>World textures (#1958): "Admins" when the world's admins may publish textures for everyone,
     /// "Off" when the world has them switched off. EMPTY from a server that predates the feature — the client
     /// then hides everything about world textures.</summary>
@@ -1369,6 +1378,9 @@ public sealed class SetWorldRulesIntent
 
     /// <summary>Starter-teleporter toggle (#1056): "On"/"Off" to set it, empty to leave unchanged.</summary>
     public string StarterTeleporter { get; set; } = string.Empty;
+
+    /// <summary>#2269: the machines' catch-up in minutes (one of <c>CrystalNetRules.CatchUpChoicesMinutes</c>); -1 = unchanged.</summary>
+    public int MachineCatchUpMinutes { get; set; } = -1;
 
     /// <summary>World-textures toggle (#1958): "On"/"Off" to set it, empty to leave unchanged.</summary>
     public string WorldTextures { get; set; } = string.Empty;
@@ -1852,6 +1864,9 @@ public sealed class StructureEditIntent
     /// <c>StampStructurePropShape</c>). Without it every prop built into a ship stamped as a plain cube.</summary>
     public int UpFace { get; set; } = -1;
     public int Yaw { get; set; } = -1;
+
+    /// <summary>#2268 (additive): a directional Crystal Net device's direction aboard, as <see cref="PlaceBlockIntent.DeviceDir"/>.</summary>
+    public int DeviceDir { get; set; } = -1;
 }
 
 /// <summary>Client → server: deploy a station core in front of the suit to start a player-built station (item

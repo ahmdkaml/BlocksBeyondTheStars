@@ -33,9 +33,12 @@ public sealed class WorldMetadata
     /// fingerprint (<c>GameContent.BlockFingerprint</c>) this version stands for and fails until the version is
     /// raised and the new pair is written down there.</para>
     /// <para>1 = every save before the check existed. 2 = the bio lab's blocks (<c>bio_lab</c>,
-    /// <c>flora_hybrid</c>) and the remap of a self-built ship's hull (#2221).</para>
+    /// <c>flora_hybrid</c>) and the remap of a self-built ship's hull (#2221). 3 = the Crystal Net 2 blocks (#2251:
+    /// the phase block, the trapdoor, the bridge motor and deck, the piston and its head, the lift, the display, the
+    /// dice block, the signal sender / receiver, the environment and ship sensors, and the unlit / open twins of the
+    /// force field, the campfire and the forge).</para>
     /// </summary>
-    public const int CurrentSaveVersion = 2;
+    public const int CurrentSaveVersion = 3;
 
     /// <summary>The save version of the build that last opened this world — see <see cref="CurrentSaveVersion"/>.
     /// Absent in the JSON ⇒ 1, the version every save carried before the check existed.</summary>
@@ -213,6 +216,11 @@ public sealed class WorldMetadata
 
     /// <summary>When a defeated giant comes back (#1998): "locationId|colossus" / "locationId|sandworm0" → unix seconds.</summary>
     public System.Collections.Generic.Dictionary<string, long> GiantBackAt { get; set; } = new();
+
+    /// <summary>#2269: when each world's Crystal Net last ran (UTC unix seconds, by location id) — the machines of a world
+    /// that was not ticking catch up for the gap (bounded by the <c>MachineCatchUpMinutes</c> rule). Additive: an older
+    /// build drops it, a missing entry means "no credit".</summary>
+    public System.Collections.Generic.Dictionary<string, double> CrystalLastTicked { get; set; } = new();
 }
 
 /// <summary>One interview a player gave a reporter (2026-09).</summary>
