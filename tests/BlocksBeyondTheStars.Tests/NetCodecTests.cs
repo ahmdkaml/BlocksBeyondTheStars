@@ -334,6 +334,7 @@ public sealed class NetCodecTests
         [286] = typeof(LiftList),            // #2266
         [287] = typeof(CrystalDeviceDelta),  // #2267
         [288] = typeof(DiscardSampleIntent), // #2301
+        [289] = typeof(SetGlidingIntent),    // #2296
 
     };
 

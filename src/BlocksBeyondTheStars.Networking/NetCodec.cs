@@ -580,6 +580,9 @@ public static class NetCodec
         // #2301: a sample kind thrown out of the sample case. No protocol bump — an older server drops the unknown tag
         // and simply throws nothing away.
         Register(288, typeof(DiscardSampleIntent));          // Client -> Server
+
+        // #2296 the glider (protocol v11): the player opened or closed the wing.
+        Register(289, typeof(SetGlidingIntent));             // Client -> Server
     }
 
     /// <summary>True for an id a message may be registered under: a one-byte tag below the two framing bytes,

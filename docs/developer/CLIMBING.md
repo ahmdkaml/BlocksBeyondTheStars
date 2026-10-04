@@ -30,12 +30,14 @@ The only thing on the wire is the pose: `MoveIntent.Climbing` → `PlayerState.C
 `PlayerPresence.Climbing`. All three are new fields on existing contractless MessagePack messages. That needs no
 `NetCodec.Register` and no protocol bump, and an older peer simply ignores them. The receiving client turns the
 avatar towards the wall itself (`RemotePlayers.TryWallYaw`: the solid neighbour at hand height closest to the
-reported look), so no facing field is sent. Gloves and claws ride the presence gear mask as bits 128 and 256.
+reported look), so no facing field is sent. Gloves and claws ride the presence gear mask as bits 128 and 256
+(`Shared/State/GearLook.cs`, the one mask server and client both build).
 
 ## The movement chain
 
 `Move()` decides in this order: spectator → **running pull-up** → water → ladder → **wall** → creative flight → ground
-→ zero-g float → gravity and jetpack. `UpdateWallClimb` runs after water, ladder and flight are known, because all of
+→ zero-g float → gravity and jetpack (or the glider, #2296: gliding at a wall while pushing towards it grabs the wall).
+`UpdateWallClimb` runs after water, ladder and flight are known, because all of
 them win, and before the vertical branches, which a climb replaces.
 
 - **Grab:** the player is airborne, pushes towards the wall, is not crouching, and the jetpack is not firing this
