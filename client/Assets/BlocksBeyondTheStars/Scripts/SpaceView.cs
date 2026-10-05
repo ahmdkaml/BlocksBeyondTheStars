@@ -415,6 +415,7 @@ namespace BlocksBeyondTheStars.Client
         private bool _hyperjumpSubscribed;
         private bool _hyperjumping; // a hyperspace jump is tearing down the view (warp covers it, no landing)
         private bool _transitLaunchDone; // #1614: the automatic transit's launch-done signal was sent (once per flight)
+        private float _transitTimer;
         private string _sceneInstance; // flight instance the current scene was built for (#1677)
         private bool _shipDestroyed; // the ship blew up in space — tear down at once (explosion stays, no landing descent)
 
@@ -1319,18 +1320,12 @@ namespace BlocksBeyondTheStars.Client
 
             if (_seq >= SeqDuration)
             {
+                _phase = Phase.Cruise;
+
                 if (Game.SpaceAutomaticTransit)
                 {
-                    if (!_transitLaunchDone)
-                    {
-                        _transitLaunchDone = true;
-                        Game.Network?.SendTransitLaunchDone();
-                    }
-
-                    return;
+                    _transitTimer = 0f;
                 }
-
-                _phase = Phase.Cruise;
             }
         }
 
@@ -1506,6 +1501,29 @@ namespace BlocksBeyondTheStars.Client
                 _moveSendTimer = 0.08f; // ~12 Hz
                 Game.Network?.SendShipMove(_ship.transform.localPosition, _yaw);
             }
+
+            // --- Automatic Travel Sequence Timer ---
+            if (Game.SpaceAutomaticTransit && !_transitLaunchDone)
+            {
+                _transitTimer += Time.deltaTime;
+
+                // Ramp throttle from 0 to 1 over 0.5s to initiate flight, then hold
+                float throttleRamp = Mathf.Clamp01(_transitTimer / 0.5f);
+                SetFlightThrottle(throttleRamp);
+
+                if (_transitTimer >= 3.0f) // 3-second space cruise visual
+                {
+                    _transitLaunchDone = true;
+                    SetFlightThrottle(-1f); // Release forced throttle back to player/input control
+
+                    // Visual/camera punch upon arrival
+                    FxCamera.FovPunch(4f);
+                    FxCamera.AddTrauma(0.2f);
+
+                    Game.Network?.SendTransitLaunchDone();
+                }
+            }
+            // ----------------------------------------
 
             // #2277: the target lock follows the instance every cruise frame (destroyed, gone, out of range, a new
             // attacker); its keys are read only while the helm takes input — not behind a menu, the chat or the pad map.
