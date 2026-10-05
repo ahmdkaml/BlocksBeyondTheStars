@@ -3022,8 +3022,20 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>True when the travel screen may quick-travel to this body: Instant Travel is on, or the
         /// player has already landed there (the current body is always reachable).</summary>
         private bool TravelUnlocked(NetBody b)
-            => Game.InstantTravel || b.Id == Game.StarMap?.ActiveLocationId || Game.HasLandedOn(b.Id);
+        {
+            var currentSystemId = CurrentSystemId();
+            var targetSystem = Game.StarMap?.Systems.FirstOrDefault(s => s.Bodies.Any(body => body.Id == b.Id));
+            bool crossSystem = targetSystem != null && targetSystem.Id != currentSystemId;
 
+            // Cross-system travel ALWAYS requires having landed on the body before.
+            if (crossSystem)
+            {
+                return Game.HasLandedOn(b.Id);
+            }
+
+            // Same-system travel: Instant Travel, currently docked/active, or landed previously.
+            return Game.InstantTravel || b.Id == Game.StarMap?.ActiveLocationId || Game.HasLandedOn(b.Id);
+        }
         private float BuildMissionsList()
         {
             if (_category == "create")
