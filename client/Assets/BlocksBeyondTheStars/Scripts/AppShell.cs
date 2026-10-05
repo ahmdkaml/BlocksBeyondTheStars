@@ -1877,6 +1877,7 @@ namespace BlocksBeyondTheStars.Client
             if (_confirmQuit)
             {
                 RefreshPauseStatus();
+                RefreshReturnShipButton(); // #2286: the cooldown on the "Back to my ship" row counts down live
             }
 
             // Track chat focus across frames: an Esc that closes the chat clears ChatTyping in the SAME
@@ -2027,8 +2028,17 @@ namespace BlocksBeyondTheStars.Client
         /// of the menus, instead of an IMGUI box) and shows/hides it with the confirmation state.</summary>
         private void ShowQuitDialog(bool show)
         {
-            if (show && _quitDialog == null)
+            if (show)
             {
+                // Rebuilt on every open (#2286): whether the "Back to my ship" row belongs in the menu depends on where
+                // the player is right now (on foot vs. aboard / flying / driving), and the panel grows a row for it.
+                if (_quitDialog != null)
+                {
+                    _quitDialog.SetActive(false); // Destroy() only takes effect at the end of the frame — hide first, or two pause canvases overlap for one frame
+                    Destroy(_quitDialog);
+                    _quitDialog = null;
+                }
+
                 BuildQuitDialog();
             }
 
@@ -2066,21 +2076,84 @@ namespace BlocksBeyondTheStars.Client
             _quitDialog = canvas.gameObject;
             UiNav.Enable(canvas.gameObject); // pad: stick walks Resume / Settings / Quit, A picks, B resumes
 
-            var (_, panel) = UiKit.AddModalOverlay(canvas.transform, 720f, 370f, 480f, 340f);
+            // "Back to my ship" (#2286) only while on foot in a world whose rule allows it — the server decides the rest
+            // (own ship landed here, not in a fight, not falling, the three-minute cooldown) and answers with a toast.
+            var boot = Boot();
+            bool returnShip = boot != null && boot.ReturnToShipOffered;
+            const float Row = 64f;
+            float panelH = returnShip ? 340f + Row : 340f;
+            var (_, panel) = UiKit.AddModalOverlay(canvas.transform, 720f, (1080f - panelH) / 2f, 480f, panelH);
             UiKit.AddText(panel.transform, 24f, 24f, 432f, 44f,
                 L("ui.pause.title"), 26, UiKit.TextCol, TextAnchor.MiddleCenter);
-            UiKit.AddButton(panel.transform, 90f, 88f, 300f, 56f, L("ui.pause.resume"), CancelQuit);
-            UiKit.AddButton(panel.transform, 90f, 152f, 300f, 56f, L("ui.menu.settings"), OpenSettings);
-            UiKit.AddButton(panel.transform, 90f, 216f, 300f, 56f, L("ui.pause.quit"), ReturnToMenu);
+            float y = 88f;
+            UiKit.AddButton(panel.transform, 90f, y, 300f, 56f, L("ui.pause.resume"), CancelQuit);
+            y += Row;
+            UiKit.AddButton(panel.transform, 90f, y, 300f, 56f, L("ui.menu.settings"), OpenSettings);
+            y += Row;
+            _returnShipButton = null;
+            _returnShipLabel = null;
+            _returnShipShownSecond = int.MinValue; // a fresh row shows its first state right away
+            if (returnShip)
+            {
+                _returnShipButton = UiKit.AddButton(panel.transform, 90f, y, 300f, 56f, L("ui.pause.return_ship"), ReturnToShip);
+                _returnShipLabel = _returnShipButton.GetComponentInChildren<UnityEngine.UI.Text>();
+                RefreshReturnShipButton();
+                y += Row;
+            }
+
+            UiKit.AddButton(panel.transform, 90f, y, 300f, 56f, L("ui.pause.quit"), ReturnToMenu);
+            y += Row;
 
             // In multiplayer the world only stops once everybody is in their menu (#973), so the dialog has to
             // say which of the two it is instead of silently claiming a pause that is not running.
-            _pauseStatusText = UiKit.AddText(panel.transform, 24f, 280f, 432f, 40f,
+            _pauseStatusText = UiKit.AddText(panel.transform, 24f, y, 432f, 40f,
                 string.Empty, 16, UiKit.CyanDim, TextAnchor.MiddleCenter);
             RefreshPauseStatus();
         }
 
         private UnityEngine.UI.Text _pauseStatusText;
+        private UnityEngine.UI.Button _returnShipButton; // #2286: the "Back to my ship" row (null when the menu has none)
+        private UnityEngine.UI.Text _returnShipLabel;
+        private int _returnShipShownSecond = int.MinValue; // the whole second the row last showed (0 = ready); the label is only re-formatted when it changes
+
+        /// <summary>"Back to my ship" (#2286): closes the menu and asks the server, so the snap aboard — or the server's
+        /// reason for refusing — is seen in the world, not behind the pause panel. The menu closes FIRST: in
+        /// singleplayer this menu is what holds the world, and the release must be on the wire before the intent (the
+        /// server serves the intent through a hold too, but the order keeps it from ever depending on that).</summary>
+        private void ReturnToShip()
+        {
+            CancelQuit();
+            Boot()?.Network?.SendReturnToShip();
+        }
+
+        /// <summary>Greys the "Back to my ship" row while its cooldown runs and shows the time left on it (m:ss),
+        /// counting down between the server's state updates. Called every frame the menu is up, so the label is only
+        /// re-formatted when the shown second changes — not three strings per frame.</summary>
+        private void RefreshReturnShipButton()
+        {
+            if (_returnShipButton == null)
+            {
+                return;
+            }
+
+            float left = Boot()?.ReturnToShipCooldownLeft ?? 0f;
+            int second = Mathf.CeilToInt(Mathf.Max(0f, left)); // what FormatRemaining shows: rounded up, 0 = ready
+            if (second == _returnShipShownSecond)
+            {
+                return;
+            }
+
+            _returnShipShownSecond = second;
+            bool ready = second <= 0;
+            _returnShipButton.interactable = ready;
+            if (_returnShipLabel != null)
+            {
+                _returnShipLabel.text = ready
+                    ? L("ui.pause.return_ship")
+                    : string.Format(L("ui.pause.return_ship_cooldown"),
+                        BlocksBeyondTheStars.Shared.Definitions.ReturnToShipRules.FormatRemaining(left));
+            }
+        }
 
         /// <summary>Keeps the pause dialog's status line in step with the server's tally: held, or still waiting
         /// on the players who are named in it. Blank in singleplayer, where the hold is never in doubt.</summary>
