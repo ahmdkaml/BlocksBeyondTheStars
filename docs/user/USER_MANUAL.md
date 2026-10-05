@@ -1784,7 +1784,7 @@ gloves' blueprint first, but crafting them does **not** use up your shock gloves
     other system keeps its **"Hyperjump to this system"** entry above its worlds, so a system you have jumped
     into but never landed in stays reachable — a locked world in another system offers the same jump in its
     detail pane (#1638).
-  - **On:** quick-travel works for any world/system immediately, visited or not.
+  - **On:** quick-travel works for any world immediately, except for unvisited planets in another system (which always require landing there first).
 - Jumping to **another star system** requires a fitted **`jump_generator`** module — or a **wormhole**, if the
   system has one (§ Mysteries).
 - A star system you have **never entered** shows as **"Unknown system"** — its name is part of what you

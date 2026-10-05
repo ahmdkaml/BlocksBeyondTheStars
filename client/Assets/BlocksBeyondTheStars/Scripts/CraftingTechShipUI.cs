@@ -309,11 +309,11 @@ namespace BlocksBeyondTheStars.Client
                     + (Game.StarMap?.Systems.Length ?? 0) * 211 + (Game.StarMap?.ActiveLocationId?.GetHashCode() ?? 0)
                     + (Game.Missions?.Available.Length ?? 0) * 307 + (Game.Missions?.Active.Length ?? 0) * 401
                     + (Game.KnownNpcs?.Length ?? 0) * 503 // #1118: the roster arrives async
-                    // #1484: the space contact list and the last HUD message are NOT hashed any more. Neither is
-                    // shown by any tab, yet in flight (contacts drifting in and out, autopilot chatter) they
-                    // changed every few seconds and rebuilt the open Inventory tab under the cursor — the item
-                    // beneath a half-confirmed "throw away" click silently became a different one. The footer
-                    // message refreshes in place instead (see Update).
+                                                          // #1484: the space contact list and the last HUD message are NOT hashed any more. Neither is
+                                                          // shown by any tab, yet in flight (contacts drifting in and out, autopilot chatter) they
+                                                          // changed every few seconds and rebuilt the open Inventory tab under the cursor — the item
+                                                          // beneath a half-confirmed "throw away" click silently became a different one. The footer
+                                                          // message refreshes in place instead (see Update).
                     + (Game.InSpace ? 7777 : 0)
                     // Aboard / ship-interior state drives the Map tab dimming + travel-button gating, so a change
                     // (board/leave the ship with the menu open) must rebuild the header + map buttons.
@@ -2622,8 +2622,20 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>True when the travel screen may quick-travel to this body: Instant Travel is on, or the
         /// player has already landed there (the current body is always reachable).</summary>
         private bool TravelUnlocked(NetBody b)
-            => Game.InstantTravel || b.Id == Game.StarMap?.ActiveLocationId || Game.HasLandedOn(b.Id);
+        {
+            var currentSystemId = CurrentSystemId();
+            var targetSystem = Game.StarMap?.Systems.FirstOrDefault(s => s.Bodies.Any(body => body.Id == b.Id));
+            bool crossSystem = targetSystem != null && targetSystem.Id != currentSystemId;
 
+            // Cross-system travel ALWAYS requires having landed on the body before.
+            if (crossSystem)
+            {
+                return Game.HasLandedOn(b.Id);
+            }
+
+            // Same-system travel: Instant Travel, currently docked/active, or landed previously.
+            return Game.InstantTravel || b.Id == Game.StarMap?.ActiveLocationId || Game.HasLandedOn(b.Id);
+        }
         private float BuildMissionsList()
         {
             if (_category == "create")
@@ -6639,20 +6651,20 @@ namespace BlocksBeyondTheStars.Client
                         ? L("ui.missions.traveltarget_" + target) // #1212: the relative "other_body" target
                         : target;
                 case "scan":
-                {
-                    string key = "ui.missions.scantarget." + target.Replace(':', '_');
-                    if (Game?.Localizer?.Has(key) == true)
                     {
-                        return L(key);
-                    }
+                        string key = "ui.missions.scantarget." + target.Replace(':', '_');
+                        if (Game?.Localizer?.Has(key) == true)
+                        {
+                            return L(key);
+                        }
 
-                    if (target.StartsWith("block:", System.StringComparison.Ordinal))
-                    {
-                        return BlockLabel(target.Substring("block:".Length));
-                    }
+                        if (target.StartsWith("block:", System.StringComparison.Ordinal))
+                        {
+                            return BlockLabel(target.Substring("block:".Length));
+                        }
 
-                    return target.StartsWith("creature:", System.StringComparison.Ordinal) ? target.Substring("creature:".Length) : target;
-                }
+                        return target.StartsWith("creature:", System.StringComparison.Ordinal) ? target.Substring("creature:".Length) : target;
+                    }
                 default:
                     return target;
             }
