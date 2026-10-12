@@ -60,6 +60,18 @@ Last updated: 2026-10-04.
   wrecks, vaults, stations, wormholes, exotic worlds, universe size), plus an **advanced page** with a frequency
   slider per planet type. The world *owns* its rules from then on; the world admin can live-edit the
   creature/enemy activity later in-game (Settings tab → "Weltregeln").
+- **Stories** ("Geschichten") at world creation: the row **"Stories: VEGA · Tutorial Auto ›"** at the bottom of the
+  world options opens its own page with three choices:
+  - **Main story** — the story this world tells: **The VEGA Protocol** (default; a line under the list says what it is
+    about) or **None (sandbox)** for free exploring and building. More stories appear in this list once they are installed.
+  - **Story pace** — *Slow / Normal / Fast*: how quickly the story's chapters unfold as you play.
+  - **Tutorial** — **Auto** (default: every new player starts with the basic training and can skip it at any time),
+    **On request** (it does not start by itself; players start it in their Journal) or **Off** (no basic training in
+    this world). A world without a story still has the tutorial when it is on.
+
+  The summary row shows your choice (e.g. "VEGA (Fast) · Tutorial Off ›"); the presets reset it to VEGA · Normal · Auto.
+  The world admin can change the **tutorial** and the **story pace** later in-game (Settings tab → world rules); the main
+  story stays what the world was created with. Official (hosted) worlds always start with VEGA and the tutorial on Auto.
 - The **Editors** submenu (main menu) holds the creation tools — see §6.
 - **Window mode** (Settings tab): the **"Window mode" / "Fenstermodus"** option cycles **Windowed → Borderless →
   Exclusive** and applies immediately. The default is **Windowed** (a normal movable, maximizable window);
@@ -74,17 +86,27 @@ Last updated: 2026-10-04.
   has been translated; until then — and while you are offline — they are in English (in German when the
   game is set to German).
 - On the **very first start** a short (~28 s) **intro cinematic** plays between the title splash and the
-  menu — any key skips it, and the Credits screen's **"Watch intro"** button replays it any time.
-- On a **new world**, the ship AI **VEGA** boots up and walks you through the first hour (see §5 →
-  VEGA) — her opening narration is staged like a scene (letterbox, an orbit shot of your landed ship);
-  **Esc** skips it. Veteran saves get a one-line "systems online" instead.
+  menu — any key, pad button or tap skips it, and the Credits screen's **"Watch intro"** button replays it any time.
+- On a **new world**, the ship AI **VEGA** boots up and walks you through the **basic training** (six short parts,
+  see §5 → VEGA) — her opening narration is staged like a scene (letterbox, an orbit shot of your landed ship, scaled
+  to your ship's size). Veteran saves get a one-line "systems online" instead.
+- **Skipping a cutscene works on every device:** **Esc** on the keyboard, the pad's back button **(B)** (or
+  whatever you bound to *Close / back*), or a click / tap on the **Skip** button in the corner — this goes for
+  the intro, VEGA's opening narration and the story's ending. The Skip label names the control for the device
+  in your hand. While a cutscene plays, your character holds still and the HUD, the on-screen touch controls,
+  the chat and the name tags step aside; the subtitles follow your **UI size** setting, and its flashes follow
+  **Reduce flashes**.
 - **Backups and game versions.** Every singleplayer world keeps its own safety copies in
   `singleplayer-saves/<world>/backups/`: one after every 60 minutes of play (the newest five are kept) and one
-  right before a game update changes the world's block set. To go back, close the game and copy a backup over
-  `world.db`. A world that was last saved by a **newer** version of the game is not opened by an older one —
-  the game says so and leaves the world untouched. And a server whose game version has a different set of
-  blocks refuses the join with "This server runs a different version of the game" — update the game (or the
-  server).
+  right before a game update changes the world's block set or first opens a world saved by an older version
+  (`pre-upgrade_…` — after that, the older version no longer opens it). To go back, close the game and copy a
+  backup over `world.db`. A world that was last saved by a **newer** version of the game is not opened by an
+  older one — the game says so and leaves the world untouched. On the **Official Worlds** the same holds: a
+  save from a newer game version than the server's is refused at upload, and a world the server cannot open
+  yet says so when you join it (the worlds page on the portal marks it **"needs a server update"**) — it opens
+  again once the server is updated. And a server whose game
+  version has a different set of blocks refuses the join with "This server runs a different version of the
+  game" — update the game (or the server).
 - **Portable data folder** (portable zip, USB stick, several profiles): by default the game keeps its
   settings, singleplayer saves, photos and exports in your user profile (Windows:
   `%USERPROFILE%\AppData\LocalLow\JuMaVe Games\Blocks Beyond the Stars\`). To keep them next to the game
@@ -143,7 +165,7 @@ Last updated: 2026-10-04.
 | **V** | Toggle first / third-person camera |
 | **I** | Toggle **thermal vision** while looking through the thermal binoculars (see §5 → Binoculars) |
 | **N** | Advance the current **VEGA** dialogue line (also fast-completes the typewriter; also opens the folded VEGA tab) — rebindable; gamepad **View** (Back), touch **NEXT ▶** |
-| **Tab** | Open / close the gameplay menu (Inventory, Crafting, Tech, Ship, Map, Missions, Character); also closes full-screen menu screens such as the Codex |
+| **Tab** | Open / close the gameplay menu (Inventory, Crafting, Blueprints, Ship, Map, Missions, Story, …, Settings); also closes full-screen menu screens such as the Codex |
 | **M** | Toggle the world map (top-down planet view; click to set a waypoint) — rebindable; touch **MAP** |
 | **Enter** | Open the chat box (Esc cancels) |
 | **J** | Hide / show the chat scrollback for this session (rebindable; see also Settings → Comfort → Chat display) |
@@ -170,14 +192,14 @@ buttons — retuning is tracked in issue #195):
 | **D-pad ▼** | Turn the building block you are holding |
 | **(A)** | Jump (hold in air = jetpack, or glide while falling with a glider; in water = swim up; jump at a wall, push the stick towards it and hold (A) to hold on and climb — let go of (A) to slide down, **(B)** drops you off, see §5 → Climbing walls) |
 | **(X)** | Use / board / interact |
-| **(Y)** | Toggle first / third-person camera |
+| **(Y)** | Toggle first / third-person camera (only that — it no longer jumps as well) |
 | **R3** (click the right stick) | **Hotbar slot actions** on the selected slot (see §5) — stick navigates the menu, **(A)** picks, **(B)** closes |
 | **L3** (click the left stick) | **Actions** — a list of everything you can do right now (rotate the held block, trade / dock with the player beside you, undock, loot / stash, repair, lamp and stealth (only while worn), thermal vision, feed a begging herd, deploy a station in EVA, leave / refuel the speeder, …); stick navigates, **(A)** picks, **(B)** closes |
 | **View** (the two-rectangles button left of the Xbox logo; "Back" on a 360 pad, Share on PlayStation, − on Nintendo) | **VEGA: continue** — advance or dismiss the ship AI's line (the same as **N** on the keyboard); also opens the folded VEGA tab |
 | **Menu** (☰ — the three-lines button right of the Xbox logo; Unity and 360-era pads call it Start. The Xbox-logo button itself belongs to Windows' Game Bar and never reaches the game) | Open / close the gameplay menu — its top strip has the **Pause menu** button (Resume / Settings / Quit, the same dialog **Esc** opens on the keyboard); **(B)** resumes |
 
 In menus, the left stick / d-pad navigates, **(A)** confirms and **(B)** goes back — that includes **every
-tab of the gameplay menu** (Inventory, Crafting, Tech, Ship, Map, Missions, Character, …), the Codex, the
+tab of the gameplay menu** (Inventory, Crafting, Blueprints, Ship, Map, Missions, Settings, …), the Codex, the
 Arcade, the landing-pad chooser (pick a pad with the stick, **(A)** lands, **(B)** cancels), trade and
 docking requests, the bandit demand, the blueprint / beacon / transporter windows, the bio lab, crystal devices,
 a storage crate's filter, the train cab, an NPC interview, and both maps. **(B)**
@@ -227,7 +249,9 @@ normal sensitivity, **invert up/down for the pad only**, **mine and place on the
 LB/RB — switch it off again if your controller mines by itself, which some pads do because they report
 their triggers differently), the **button names** shown in hints (Xbox, PlayStation or Nintendo — the
 buttons themselves do not change, only what we call them), and a **vibration** switch whose setting is
-remembered but which nothing acts on yet.
+remembered but which nothing acts on yet. The on-foot controls line at the bottom of the HUD follows these
+settings: it uses the chosen button names, shows your rebound buttons, and adds the triggers to mine and
+place once you switch them on. Walking with the keyboard while a pad is plugged in keeps the keyboard hints.
 
 **Rebinding:** every control row in **Settings** has two buttons — the keyboard key and the pad button.
 Tap the pad button and press any controller button to rebind it (actions marked **—** have no pad button
@@ -238,8 +262,9 @@ are rebindable as usual.
 
 ### Touch controls (experimental — tablet / touch browser)
 
-On a touch device (tablet, or a touch-capable browser) on-screen controls appear automatically. The
-buttons swap with what you're doing:
+On a touch device (tablet, or a touch-capable browser) on-screen controls appear automatically, and every
+hint names the on-screen button from your first tap on. The buttons swap with what you're doing (during a
+cutscene they step aside — tap its **Skip** button to leave it, or the **Continue** button on VEGA's line):
 
 | On-screen control | Action |
 |---|---|
@@ -340,11 +365,12 @@ separate unlock; admins can still disable it through server world rules.
 
 ## 4. Menus & HUD
 
-- **Tab menu** — tabs for Inventory, Crafting, Tech (blueprints), Ship (modules/build), Map, Missions,
-  Character (appearance), plus **Story** (the story log, and a **Notes** category: up to 20 titled notes of your own,
-  saved with your character — `§0`–`§f` colours a span, `§l` makes it bold, `§r` resets), **Companions** (tamed
-  creatures, see §5), **Alliances** (see §5) and
-  **Achievements**, with **Settings** pinned far right. The **Achievements** tab opens with a **Progress** block —
+- **Tab menu** — tabs for Inventory, Crafting, Blueprints (research), Ship (modules/build), Map, Missions,
+  plus **Journal** (your **stories** — the basic training, VEGA's story and any other story of the world, see
+  "The Journal" in §5 — then **VEGA's notes**, and a **Notes** category: up to 20 titled notes of your own,
+  saved with your character — `§0`–`§f` colours a span, `§l` makes it bold, `§r` resets), **Creatures** (your tamed
+  companions, see §5), **Alliances** (see §5), **Achievements** and **Photos**, with **Settings** (your character's
+  look included) pinned far right. On a pad the menu opens with the **Menu** button, on a tablet with the **≡** button. The **Achievements** tab opens with a **Progress** block —
   research N of M blueprints, Codex discoveries (with a button straight into the Codex chapter, where every entry
   now names the planet and system it was first scanned on), story %, achievements done — and a **Journey** grid of your
   lifetime tallies (worlds visited, systems entered, blocks mined/placed, subjects scanned, missions …); the
@@ -413,6 +439,9 @@ separate unlock; admins can still disable it through server world rules.
   - **Settings → Comfort → Reduce flashes** turns big full-screen flashes into a soft wash, for light-sensitive eyes.
   - **Settings → Comfort → Reduced effects** draws fewer particles and calmer screen effects; some of it applies from
     the next world start.
+  - **Settings → Comfort → Story text: wait for me** (on by default): the texts of story scenes wait until you turn the
+    page — **N** (pad **Back**), the **Continue** button, or a tap on the text box. Off, they turn the page by themselves
+    after a reading time. Titles always run on their own.
   - Lower graphics presets use fewer particles automatically.
 
 ### Atmosphere effects (Settings → Graphics → Atmosphere effects)
@@ -474,12 +503,13 @@ orbit, planets with air show a lit atmosphere rim with a warm terminator and a d
   until the arrow points to the top of the dial and walk; VEGA reminds you of this once you are a long way from
   the hull.
 - **VEGA panel** — the ship AI speaks through a typewriter speech panel with a persistent **objective
-  chip** (live progress, e.g. "mine 1/3") during onboarding. Advance lines with **N** or the **Continue** button in
+  chip** (live progress, e.g. "mine 1/3") during the basic training. Advance lines with **N** or the **Continue** button in
   the panel (clickable whenever the mouse cursor is free, tappable on touch) — a line stays until you do (no
   auto-dismiss), and further lines wait in the queue. Leave a line for about 45 seconds and the panel **folds into a
   small VEGA tab** beside the objective, showing how many messages are waiting; press **N** (pad **View**, touch
   **NEXT ▶**) or click/tap the tab to open it again — nothing is lost. Advisor hints can be muted (Settings → VEGA
-  hints); the tutorial can be skipped or **restarted** from the Settings tab.
+  hints); the tutorial is switched on or off in the Settings tab (**Tutorial: on/off**), and its parts are skipped,
+  restarted and replayed in the **Journal** (Settings → **Open the Journal**).
 
 ---
 
@@ -762,7 +792,11 @@ players.
   rather than a bare "wrong tool". The first time a tier gate turns you away, VEGA explains it once.
   Tier-2 blocks (machine housings, factory terminals, titanium/platinum/tungsten and the rare ores) will not
   budge for the starter drill — and since titanium ore is itself tier 2, your first titanium comes from a
-  wreck, from loot or from **trade**, never from digging.
+  wreck, from loot or from **trade**, never from digging. The reliable road is open from the start: the **trade
+  console** aboard your ship (or any vendor) swaps **5 iron ore for 1 titanium ore**, and a **forge** — a
+  workbench craft that needs no blueprint — smelts **2 titanium ore into a titanium plate**. Six plates (plus
+  cable, energy cells and steel) and the cheap **Titanium Drill** blueprint, researched at the cockpit, get you the
+  drill that opens tier 2. VEGA's tip at the first tier gate names this route.
 - Some powered drills (titanium drill, mining beam) **draw suit energy with every swing**; with an empty
   suit the swing is refused. The basic and diamond drills need no energy, so you can always keep mining.
 - **A full backpack does not stop you.** When neither your inventory nor (while aboard) the cargo hold has
@@ -911,8 +945,8 @@ players.
   menu tab it powers. The Codex guide *Stations & the Tab menu* has the full table.
 - The **workshop** is your everyday bench: it smelts the common ores (iron, copper, gold, silver, …) into
   ingots and fabricates parts, tools, weapons and building blocks.
-- The **refinery** (the *forge* block on a base, or the refinery ship module — both unlocked via Tech) is
-  the high-heat metallurgy station. It alone smelts the **rare Tier-2 metals** (titanium, cobalt, tungsten,
+- The **refinery** (the *forge* block — a workbench craft from stone and iron plates that needs **no blueprint** —
+  or the refinery ship module, which is a blueprint) is the high-heat metallurgy station. It alone smelts the **rare Tier-2 metals** (titanium, cobalt, tungsten,
   platinum, uranium, neodymium) and refines diamond, carbide and reactor fuel. It also offers **higher-yield
   smelts** of the common ores (e.g. iron and copper) than the workshop — handy for bulk metalwork. You can
   never need it before you can build it: its metals are also the ones that need a titanium-tier drill to mine.
@@ -945,7 +979,7 @@ players.
   door places nothing — it only reminds you how that door opens — and nothing can be built into a doorway (no block,
   no second door: *"A door is standing there."*). A door hangs along the wall beside it; flowers or grass in front
   of the doorway don't count as wall.
-- The **transmuter** (the *matter forge* block or ship module, unlocked via Tech) compacts spare terrain
+- The **transmuter** (the *matter forge* block or ship module, both unlocked as a blueprint) compacts spare terrain
   (sand, dirt, stone, …) into *matter dust* and synthesises it back into ore — a sink for surplus digging.
   With the **matter resynth** blueprint it also rebuilds titanium, silver and cobalt ore and lithium from dust
   plus a power cell. The endgame ores (tungsten, platinum, neodymium, uranium, diamond) stay **mining-only**.
@@ -1058,9 +1092,137 @@ players.
   pad**. Repair it through this same flow — restore the hull and refill every missing cell and it can fly again.
 
 ### VEGA — the ship AI
-- **Onboarding (new worlds):** VEGA guides you through an 8-stage chain (mine → craft → scan → unlock a
-  blueprint → launch → dock a station → trade/take a mission → land elsewhere), each stage tracked on the
-  objective chip. **Skippable and restartable** from the Settings tab; veteran saves skip automatically.
+- **Basic training (new players):** VEGA walks you through six short parts — every lesson is *explain → try it →
+  the game checks it*, one at a time, with the current task on the objective chip:
+  1. **First steps** — walking and looking around, jumping and crouching, VEGA and the objective bar, the quick bar
+     (slot 1 drill, slot 2 scanner), the menu and the Codex.
+  2. **Staying alive** — health, air and food, eating, berries from bushes, the suit's ration dispenser, the blue
+     ship marker on the compass and the way back (pause menu → *Back to my ship*), the lamp, cold and heat, and that
+     fainting only wakes you up again.
+  3. **Mining and carrying** — mining, iron ore a few blocks down, rock that is too hard for your drill, the
+     backpack, gear that only works while worn (take the lamp off and put it back on), the cargo hold.
+  4. **Crafting and building** — iron ingots and a plate at the ship's workshop, placing blocks, turning shaped
+     blocks, a campfire.
+  5. **Scanning and research** — scanning, knowledge from new things, your first blueprint at **your** cockpit, data
+     fragments for the bigger ones.
+  6. **Lift-off** — launching from the cockpit, flying and the chart, the ship scanner, docking at a station, trading,
+     a first job from a mission board, landing on a new world, and travelling home via the map.
+  At the end VEGA congratulates you and you earn the achievement **Graduate**. There are no items or knowledge for the
+  lessons — they teach, they don't pay. Three **short courses** (below) then wait in your Journal.
+  - **Cards:** each part opens with a short title card ("Basic training · Part 2 of 6 — Staying alive"; the first one
+    welcomes you right after the prologue) and ends with a small "Part complete!" banner. Your first launch gets a
+    "Lift-off!" title over the climb, your first landing on a new world a short look around your ship with the world's
+    name, and finishing the training a card with your **Graduate** achievement. Cards never stop you — you can keep moving
+    while they show; only the look around after the landing rests the controls for a few seconds — and each one plays only
+    once (skip it with **Esc** or its **Skip** button; the Journal's **Watch again** has the bigger moments).
+  - **No dead ends:** a lesson your world cannot offer is skipped or swapped — with **no station in your system**
+    you trade with a settlement vendor instead of docking; with **space flight switched off** the flight lessons are
+    skipped; without hunger there is no eating lesson; in **Creative** crafting is free and the research lesson is
+    skipped; a lesson like the berries or the campfire is skipped where no bush or tree grows nearby.
+  - **Help when stuck:** after about three minutes on one task VEGA gives a more concrete hint; for "where?" tasks
+    (berries, iron ore) she later marks the nearest spot on your map — only for you; for docking she sets the nearest
+    **station as your flight target**, so the radar and the arrow at the screen edge lead you there (in flight, or
+    already before you launch; a target you set yourself is kept); after ten minutes she offers to skip the step in the
+    Journal. Nothing is ever timed and you can never fail a lesson.
+  - **Skipping and replaying** — all in the **Journal** (Tab menu → Journal → the training): **Skip step** ("I know
+    this"), **Skip part**, **Start part over**, **Replay** for a part you finished, **Skip all — I know the game**,
+    **Restart from the beginning** (runs it again from part 1 — for anyone, experienced players included, and without
+    the opening narration) and **Switch off**. Some lessons you already did early simply tick off by themselves.
+  - **Tutorial: on/off** in the Settings tab switches the training off for you (VEGA stops the lessons and the
+    course offers) and back on — on an *On request* world "on" starts it. Next to it, **Open the Journal**.
+  - **Tutorial on/off for a world:** the world rule *Tutorial* is **Auto** (every new player starts it), **On request**
+    (only on request) or **Off** — chosen on the world-creation **Stories** page (§1), and changed later by the world
+    admin under Tab → Settings → world rules (*Tutorial*, with a line saying what the choice means) or with
+    `/tutorial policy auto|optin|off`.
+  - VEGA's lessons — and the prompts at the ship's cockpit, workshop, cargo hold and console, the crafting
+    stations, the bed, the heal tank, the transporter pad and a factory terminal — name the control of the device
+    you are using: the key you bound, the pad button, or on a tablet the on-screen button (USE, MAP, JUMP, MINE,
+    ◄ ►, ≡ …).
+  - A **new player on someone else's world** gets the full introduction even when that world is already deep
+    into the story. **Players from before** keep what they learnt: lessons from the old nine-step tutorial count
+    as done, a finished old tutorial counts as a finished basic training, and a save that played before VEGA's
+    lessons existed gets a one-line "systems online" instead.
+  - While the basic training runs, VEGA's matching tips wait for their lesson, so you never hear the same thing
+    twice (the flight chart and ship-scanner explanations, for example, come with part 6).
+  - A game version from before the new tutorial still follows the nine old lessons on a new server.
+- **Short courses (after the basic training):** deeper lessons you choose yourself — VEGA offers one when it fits what
+  you are doing (at most one offer every minute and a half, never during the basic training), and the Journal lists them
+  all with **Start** or **Later** (a course you put off stays there; VEGA does not offer it again). Each opens with a short
+  "Short course" card and ends with the "Part complete!" banner; your docking in the stations course ("Docked — …") and your
+  first hyperjump in the navigator course ("New system — …") get a short card of their own, your first base and your first
+  own ship a short look from outside ("Your home", "Your own ship"), your first working circuit and your first tamed
+  animal a banner. You can skip a step or the whole course in the Journal. Like the training they pay nothing. When a
+  course fits the moment, VEGA's offer *is* her tip — she does not explain the data cache, the hard rock or the new Crystal
+  Net first and then offer the course too; and while you take a course, the quick explanations it gives itself (the planet
+  card, climbing, wormholes, the bio lab's tabs, the flight chart …) do not pop up a second time.
+  - **Workshop and titanium** (suggested when you finish the training, and offered when your drill bounces off rock that is
+    too hard): why titanium ore is out of reach at first, swapping iron ore for titanium ore at your ship's trade console
+    (5 for 1), a forge (6 stone, 4 iron plates — no blueprint needed) and your first titanium plate smelted at it.
+  - **Knowledge and research** (offered when a data cache is close by, or when you dig a lot without a terrain scanner):
+    scanning three new things, mining a data cache (two data fragments), what a blueprint costs, a DataQube game, reading
+    a rune stone, the terrain scanner (or, before you have its blueprint, what it needs) and the Achievements tab.
+  - **Pilot** (suggested when you finish the training; needs space flight): setting a waypoint on the chart, scanning a
+    planet before you land, breaking an asteroid with the ship's laser, walking around inside your flying ship and a
+    spacewalk through the hatch — plus target lock where enemies fly, and what to do when you float above a world's air.
+  - **Stations, trade and jobs** (suggested when you finish the training): docking at a station, the vendors and their
+    trades (researchers sell data fragments), taking a job from the mission board, undocking, and handing the job in
+    where you took it. Without a reachable station the course runs at a settlement.
+  - **Navigator** (offered once the pilot course is done): markers and pings on the planet map, map travel between worlds,
+    a forge (no blueprint needed) and lubricant, researching the Radar Array and the Jump Generator, fitting the jump
+    generator, your first hyperjump — and wormholes and wrecks where your world has them.
+  - **Ship builder** (offered when you could build a ship module or your hull is damaged): building a module, repairing
+    the hull at the console, building onto your parked ship — and then a ship of your own: the Shipwright blueprint (it
+    needs titanium plates — without the workshop course the course tells you so and waits for it), a keel, the hull with
+    a helm, an engine and a door, commissioning it at the helm, and switching between your ships.
+  - **Homestead** (offered when you craft or carry a base core, or out on foot at night with no base on that world): a
+    base core, building in its zone, two lights, a wooden door, a sealed room that holds air (on airless worlds; elsewhere
+    only explained), a closed wall ring that keeps animals out, and a bed to wake up in. A friend's base on the same world
+    counts as yours when you are allies or in one crew.
+  - **Station builder** (offered when you have a station core or its materials, or after the ship builder course; needs
+    the pilot course and space flight): deploying a station core on a spacewalk, building its hull with a door as the
+    airlock until it is commissioned, and floating while you build aboard (zero-g building).
+  - **Crystal workshop** (offered once you have researched the comm radio): the Crystal Net blueprint, then VEGA's six
+    workshop jobs from your Missions tab — a switch lights a lamp, a step plate rings a chime, a night light, an airlock
+    door, a machine started by a signal, a secret wall of phase blocks. You take and hand in the jobs in the Missions tab
+    as always, and they pay their usual reward; the course just walks you through them and tells you which blueprint the
+    next one needs. Jobs you handed in before count at once, and VEGA does not offer the course if you did them all.
+    Handing in the first one shows a short "First circuit — It works!" banner.
+  - **Factory and automation** (offered near a factory, or once you have researched the fabricator): crafting in bulk at a
+    factory's terminal (or, where your world has none, what one is good for), what an SPS code does (claiming a factory
+    makes it your base — the course never asks you to spend a code), and a fabricator that crafts by itself on a switch —
+    once you know machine circuits (the workshop's fifth job) and have a forge; until then the course waits and says so.
+    Last, what machines do while you are away.
+  - **Animal friends** (offered when a begging herd comes to you, or a tameable animal is near while you carry the
+    creature translator): scanning an animal (its readout says how it behaves and what it loves), feeding a begging herd
+    with **Feed**, taming one — its favourite food a few times, or the translator — and naming or feeding your companion
+    in the Creatures tab. Your first tamed companion gets a short "Tamed — A new friend!" banner; a companion you already
+    have counts at once. Not listed on a world without animals.
+  - **Gardener and lab** (offered when you carry a seed or a sapling, or once the bio lab is researched): planting a seed
+    or sapling, crafting at a campfire (a hot meal — or torches and water where hunger is off), a sample in your sample
+    case from something you harvest, researching the bio lab and analysing a sample in it.
+  - **Neighbours** (offered when a settlement is close by): talking to a settler (walk up and press **E**), answering in a
+    conversation (kind answers make friends), the "People you know" list in the Settings tab (your character page), and who helps with what.
+    Not listed on a world without settlements.
+  - **Defence** (only on a world whose rules have machines, robbers or hostile ships — a peaceful or family world never
+    lists it, and it is never suggested; offered when a robber stops you or something hostile comes close): it is always
+    your choice to walk away or to fend off what attacks you, what robbers want (pay, or chase them away), and — where
+    hostile ships fly — chasing one away in space.
+  - **On the move** (offered the first time you climb after the training, or once climbing gloves or the glider are
+    researched): climbing a wall 3 m, the rope gun (or what it will do), the jetpack or the glider if you have one, a boat
+    (no blueprint) or a speeder, a train where one runs (or how you build one), beam blocks and lifts.
+  - **Together** (only on a world for more than one player; offered when another player is close by — an invisible
+    admin never counts): chatting (with a worn radio — bigger radios reach the system or the galaxy), trading face to
+    face, becoming allies or joining a crew, pinging a spot for your allies, and muting or `/report`ing someone unkind.
+  - **Creative tools** (offered once the paint tool or the shaping tool is researched): painting a picture on a block,
+    giving a stack a new form and a colour from the quick bar's slot actions, pasting a build copied with the blueprint
+    tool, and where you change your look and find your photos.
+  - **Explorer** (offered near a ruin, a revealed chest or a wreck's signal): emptying a chest or a cache, walking up to
+    a buried ruin or a crashed wreck (or, where your world has none, where else chests hide), settlers' tips and data
+    cubes, and a wreck in space.
+  - What you have already done counts: a forge you crafted before, blueprints you own, a jump drive already fitted, a
+    base on the world, a ship or station you built, a companion at your side tick their step off by themselves; lessons
+    your world cannot offer (no wormholes, no wrecks, no space combat, an undamaged hull, breathable air, no hunger …)
+    are skipped or only explained, and a course your world cannot offer at all is not listed.
 - **Advisor:** one-time contextual hints (full inventory, first nightfall, "ruins detected", world-type
   flavour) plus **context tips** that notice your situation and may come back — rarely: gear you carry
   but aren't using (a suit lamp switched off in the dark, torches underground, food when hungry, a medkit
@@ -1070,6 +1232,8 @@ players.
   ready jump generator. Low oxygen/energy/hunger and temperature warnings repeat with a long cooldown.
   Every tip waits a few seconds, VEGA says at most one every couple of minutes, each repeats at most two
   or three times per save (and stops for good once you react to it). Mute via Settings → **VEGA hints**.
+  A hint VEGA keeps back while the hints are off is **not used up**: switch them on again and it still comes the
+  next time the situation arises (before, a muted hint counted as told and never came back).
 - **AI-core modules:** `ai_core_mk2` adds +6 terrain-scanner radius, hostile-contact callouts in space and
   the **autopilot** (press **P** in flight); `ai_core_mk3` adds a 12 % evasive-manoeuvre damage negation.
 - **Memory fragments:** data terminals in wrecks and vaults drop `ai_memory_fragment`s — VEGA redeems them
@@ -1183,9 +1347,11 @@ gloves' blueprint first, but crafting them does **not** use up your shock gloves
   **E** the ship flies round to the hangar and noses in. The autopilot and a chart target fly you to the space in front
   of the hangar. A station's layout is fixed the first time you see it.
 - **Your start system always has a station** (new and existing worlds): if the system rolled none, one hangs
-  over your start planet. Other systems may have none — VEGA then points you to the star map.
+  over your start planet. Other systems may have none — if the basic training's docking lesson finds no station in
+  your system, VEGA has you trade with a settlement vendor instead of sending you to a star you cannot reach yet.
 - **Build your own**: deploy a **Station Core** on a spacewalk (press **B**), build a hull + an airlock door
-  around it, and it commissions into a boardable station on the star map.
+  around it, and it commissions into a boardable station on the star map. An ally may help and even set the last
+  block — the station, its default name, the "commissioned" message and the achievement stay the owner's.
 - **Air only fills sealed rooms** in a station you built: walls, glass and doors are airtight, a hole in the
   hull means **helmet on** (the suit tank takes over, and you get a warning) until you patch it — a
   **force-field block** seals an opening you want to keep. **Crew** (two civilians) moves in once you build a
@@ -1214,7 +1380,7 @@ gloves' blueprint first, but crafting them does **not** use up your shock gloves
 - **Name it**: rename a station you built from **Tab → Map** (select it → **Rename**), or by pressing **E**
   on the **station core** while standing inside your own station. Only the owner can rename it.
 - **SPS relay** (late game): any commissioned player station can be converted into a relay of the old
-  Stellar Positioning Service — select it on **Tab → Map** and **deliver** the bill of materials in person
+  Scout and Pioneer Service — select it on **Tab → Map** and **deliver** the bill of materials in person
   (bulk metal plates, circuit boards, reactor fuel from the refinery). The meter is shared: friends can chip
   in. Two finished relays in **neighbouring systems** form a **jump lane** — hyperjumps between those two
   systems need **no jump generator**; lane routes carry a **⇄** mark on the Map. The network changes the
@@ -1357,10 +1523,11 @@ gloves' blueprint first, but crafting them does **not** use up your shock gloves
   it), so you can see where the signal comes from and where it goes; when it is OFF the line is dark. A network is
   ON as soon as any one of its **sources** says ON. Think of it as a little bit of redstone, made for kids: no
   strengths, no colours, nothing hidden — you can see the whole state by looking at the wire.
-- **Getting started.** Research **Crystal Net** in the tech tree (Crystal Net tab, after the comm radio) and
+- **Getting started.** Research **Crystal Net** in the Blueprints tab (Crystal Net category, after the comm radio) and
   craft at a workshop — every part needs a **crystal**. The first blueprint gives you the conduit, the
   **switch**, the **button** and the **step plate**; the sensors (together with the **Device Eye**), the logic
-  blocks, the sound devices and each machine have blueprints of their own in the same tab.
+  blocks, the sound devices and each machine have blueprints of their own in the same tab. VEGA's six **Crystal
+  workshop** jobs (Missions tab) — or the short course of the same name in your Journal — teach the net step by step.
 - **Using things.** Everything is the normal **Interact** action — press **Interact (E / X / USE)** while
   looking at the block. A **switch** flips ON/OFF and stays where you left it, even after a reload. A
   **button** gives one half-second pulse. A device with settings opens a small **menu** (pictures to pick a
@@ -1584,7 +1751,7 @@ gloves' blueprint first, but crafting them does **not** use up your shock gloves
   Like every ruin it is not protected — mine whatever you like.
 - **Field records:** ruins, wrecks, buried vaults and data terminals carry **readable texts** — logs,
   notes and plaques that surface while you scavenge them. Each opens in a reader panel, is kept in the
-  Story tab (*Field records*) and the Codex **Lore** chapter, and some only appear once the story has
+  Journal (*Field records*) and the Codex **Lore** chapter, and some only appear once the story has
   come far enough. Data terminals and monument relic caches may also hold a **net fragment** of the
   story itself — VEGA occasionally picks up a **fragment signal** and marks it on your map.
 - **Treasure chests** are standalone lootable caches scattered away from settlements. Each is looted
@@ -1689,7 +1856,9 @@ gloves' blueprint first, but crafting them does **not** use up your shock gloves
 ### Missions & bounties
 - **Mission boards** stand in settlements and aboard space stations; vendors and board givers hand out
   gather/delivery jobs. Accepted missions are tracked in the **Tab → Missions** tab; report back to the
-  giver for the reward.
+  giver for the reward. A short message names the mission and says what happened — **accepted**, **complete**
+  (only when you really hand it in) or **posted** (your own mission) — in your language. Crystal Net jobs name
+  what the circuit must do ("Circuit · a switch turns on a lamp 0/1").
 - **Camp bounty:** a settlement mission board on a planet with an uncleared **bandit camp** offers a
   bounty to drive the bandits out. Accepting it marks the camp on your planet map (key **M**); clear the
   camp — everyone holding the bounty gets credit, so it's co-op friendly — and report back for a reward
@@ -1713,6 +1882,10 @@ gloves' blueprint first, but crafting them does **not** use up your shock gloves
   little later if you wandered off. After **three turn-ins at one board** a quartermaster who knows you
   posts a two-part **big order** — a doubled delivery with the pay to match, then a large build or survey.
   Later parts can't be taken early (the server checks), and they stay where you started them.
+- **VEGA's Crystal workshop:** six circuit jobs VEGA hands out herself (offered anywhere once you have researched the
+  Crystal Net; each waits for the blueprint its circuit needs). When you hand one in, **VEGA** tells you right away in her
+  panel which job comes next — or which blueprint it still needs — no radio needed. The short course **Crystal workshop**
+  in your Journal walks you through the same six jobs (see *Short courses*).
 
 ### NPC professions: doctor, shopkeeper, arms dealer, sage, tamer, blockfarmer, streamer, reporter
 - **Where you meet them.** Newly generated villages and towns may have a **clinic, shop, armory, library, stable, quarry,
@@ -1814,18 +1987,156 @@ gloves' blueprint first, but crafting them does **not** use up your shock gloves
   copper and lead ore for silicate, traders buy crystal, gold and silver, researchers buy refined uranium and
   sell data fragments and circuit boards, settlers trade food.
 
+### The Journal: your stories and the objective display
+The Tab menu's **Journal** (it grew out of the old Story tab) keeps every story you follow — in the game they are
+called **stories**:
+- **On the left:** one entry per story — the **basic training** (*Training*), **VEGA's story** and any other story of
+  the world — then **VEGA's notes** and your own **Notes**. A **★** marks a story you finished by playing it (a skipped
+  training gets no badge), a **•** that something waits there (a short course on offer, a story you can start).
+- **The training's page** shows its status, **What to do now** — the task of the running part ("Step 4 of 8: Dock at
+  a station", with its counter), **Skip step** and **More in the Codex** where there is more to read, and for the part
+  **Skip part** and **Start part over** — then every part with its state (*done*, *skipped*, *now*, *coming up*; short
+  courses *offered* with **Start** / **Later**, *available*, or *locked* with what they still need) and **Replay** for a
+  part you finished. At the top: **Track**, **Skip all — I know the game**, **Restart from the beginning** and
+  **Switch off** (**Switch on** brings it back). Below: the training's scenes to watch again.
+- **VEGA's page** shows the star-network meter (also as a bar), **Track**, **Missions in this chapter** — VEGA's story
+  mission with its steps (**✔** done, **●** now, **○** next) and **Skip mission** — then **Leads in this chapter** — the
+  chapter's tasks: **✔** done, **●** the one on your chip now, **○** still open (see "Story: finding the thread") — the chapter
+  list with the story moments you heard, fragments, memories and field records, **Start the story now** before your story
+  has started, **The story so far**, the crew's chapter on hosted worlds, and the story's scenes to watch again
+  (*Prologue — Awakening* among them).
+- **VEGA's notes** keep everything VEGA told you that is not a story moment: her lessons and tips, the reveal of the
+  Guardian's system, her insights, the relay notes — also after rejoining.
+- **Coming back after a while:** if the world's story moved on by several moments while you were away, VEGA says it once
+  ("I have news for you: 3 new entries in your Journal") instead of reading every one out — they are waiting in the
+  Journal, and its tab shows the badge.
+- **The objective display** (the chip under VEGA's panel) names the story in front of the goal: "Training: Dock at a
+  station", "VEGA: A signal on Kepler-3 b". It shows one goal — the order is: the finale while you are in the Guardian's
+  system, then the story you **track** (pin one in the Journal), the basic training, VEGA's story, a short course or a
+  mission, other stories. VEGA's story goal hides when you switch the **VEGA hints** off; the training, the finale and a
+  mission always show.
+- **Show all objectives** (Settings, also in the pause menu's settings under Comfort): up to three goals — one per story —
+  instead of one; the extra lines hide while you type in the chat.
+
+### Story: how VEGA's story starts
+- **The prologue** is the first thing you see in a new world with VEGA's story: you wake in the pilot's seat of a small
+  ship, the camera moves around it on its own, the console blinks awake — and VEGA speaks her first words in a box on the
+  screen. Her last page is the call to adventure: her memory lies scattered out there, and you can help her find it.
+  Turn the pages with **N**, pad **Back**, the **Continue** button or a tap; skip it with **Esc**, pad **(B)** or the
+  **Skip** button. It plays once — restarting the tutorial never brings it back — and the Journal can show it again
+  any time (**Watch again → Prologue — Awakening**).
+- **Then the basic training**, undisturbed. VEGA's story waits for you meanwhile: whatever the world's story reveals
+  while you train (also when others in a multiplayer world move it on) is kept for you.
+- **The story starts** when you finish or skip the basic training — at once if the tutorial is switched off for the world
+  or for you, if you have played this world's story before, or if you fly to the Guardian's system. Don't want to wait?
+  Open the Journal and press **Start the story now**.
+- **When it starts** you hear what was kept for you in one go: the knowledge of every story moment you missed, a short
+  card **"The story so far"** with the chapters behind you (titles only — the full texts are in the Journal), then the
+  chapter you are in. If the Guardian's system is already on the map, VEGA tells you where it is and that you need a
+  **jump generator**; if the world's story is already finished, the ending plays for you then.
+- **Chapters.** VEGA's story has nine chapters: *Awakening* (the prologue), *A Familiar Signature*, *The Service*,
+  *The Guardian*, *The Verdict*, *What You Are*, *It Still Sleeps*, *The Guardian Core* and *Resolution*. The chapter
+  follows the world's story — everyone on a world is in the same chapter. The Journal lists them: the chapters you have
+  reached with the story moments you heard in each, the ones still ahead as **???**. From chapter 2 on, **The story so
+  far** shows the recap card again.
+- **Chapter scenes.** Every chapter opens on screen: **"Chapter n"** over the chapter's name with a short sound, then
+  VEGA's words in her box. Several chapters are bigger scenes where the camera moves for a few seconds — *The Guardian*
+  shows the sleeping Guardian core (a column of red light in an iron shell), *The Verdict* a calm view of a living world
+  from space, *What You Are* is told at **your own heal tank** in your ship (away from your ship it plays as a card),
+  *It Still Sleeps* drifts across VEGA's memory of the star chart to its edge, and *The Guardian Core* shows the new star
+  on the star map and the way to it. Chapter 2 shows VEGA's memory of the star chart. On the **Low** and **Potato**
+  quality presets the core, the view from space and the memory chart are left out — those chapters then play as cards.
+  Every other story moment is a **card** — "VEGA remembers" with the moment's title, then her words — and you can keep
+  moving while it shows. In multiplayer, *Many minds* shows the star map with the **other players' names** on the stars
+  they are at (alone it is a card like the others). Skip any of them with **Esc**, pad **(B)** or the **Skip** button; the
+  Journal keeps every text, and if you skip *The Guardian Core* before VEGA mentions the **jump generator**, she says it
+  in her panel afterwards. Back after a while away? VEGA says how many moments the Journal now holds, and if the story
+  has moved on a chapter, **The story so far** and the new chapter's scene play.
+- **Hosted and arcade worlds:** on a world many players have passed through, a newcomer starts with their own
+  chapter 1; the Journal says which chapter **the crew of this world** has reached, and **The story so far** fills you
+  in whenever you like.
+- On a world **without a story**, VEGA still teaches and helps — her old memory fragments (data cards you redeem aboard)
+  then read as plain archive entries, with the same knowledge and the same Mk3 parts at the end.
+
 ### Story: finding the thread
-- After the tutorial the **objective chip** keeps a quiet story pointer ("a net fragment is on this
-  world", "search ruins and wrecks", …) with the arc's progress as its counter. It respects the
-  **VEGA hints** setting — turn hints off and the chip clears once the tutorial is done.
+- **Leads.** Once your story has started, the **objective chip** shows the current chapter's **lead** — what VEGA
+  thinks is worth doing next, with the story's progress as its counter: "VEGA: Find the net fragment on Kepler-3 b",
+  "VEGA: Visit the Sealed Observatory on …", "VEGA: Read the runes of a monument on this world", "VEGA: Help a
+  settlement: do a job from its board", "VEGA: Go to the heal tank aboard your ship", "VEGA: Research the blueprint:
+  Radar Array", … Each chapter has one or two; the chip shows the first one you can follow from where you are, and
+  when it has a place, a marker only you see points at it (a ping on this world, or your flight target for a body in
+  this star system; a fragment keeps its signal on the map). Follow it and the chip moves on to the next — the Journal
+  lists the chapter's leads with **✔** for done. When nothing here fits, the chip suggests a fragment or a settlement job
+  on this world, else **"Explore …"**. Leads never hold the story back: the story moments still come with the world's
+  progress, whatever you do.
+- **Story missions.** In each chapter VEGA also gives you a short **story mission** — right after the chapter's scene
+  (never during the basic training), with a few words from her: *Follow the Signal* (find a net fragment), *The Sealed
+  Observatory* (fly there and read the survey post's last log), *What the Stones Remember* (read a monument's runes, then
+  help a settlement), *The Long Quiet* (board the old derelict and find her cargo manifest), *Eyes on Far Stars* and *The
+  Jump Generator* (research them, then build them into your ship) and, after the finale, *Survey Orders* from a station
+  board. While a mission runs, the chip shows its current step instead of the lead ("VEGA: Read the observatory's last
+  log"), and the Journal lists it under **Missions in this chapter** with **Skip mission** if you would rather not. If a
+  world cannot offer what a mission needs (no observatory in reach, every fragment already found …), VEGA picks another
+  one. A mission never holds the story back: when the world reaches the next chapter, an unfinished mission is simply let
+  go and the next chapter brings its own. The finale's chapter has none — the Guardian core is that chapter's mission.
+- **The chapter bonus.** The first time anyone on the world follows one of a chapter's leads — or finishes its story
+  mission — the story moves on a little (once per chapter and world, before the Guardian's system appears). In
+  multiplayer everyone has their own leads and missions.
+- The chip respects the **VEGA hints** setting — turn hints off and the story's chip (and its markers) clear once the
+  tutorial is done. On a world without machines (planet enemies *Off*, no hostile space) it never asks you to drive
+  machines back.
+- **Peaceful worlds.** On a world without machines (the peaceful and family settings) the story needs the same effort as
+  on one with combat — the missing machine share is made up — and there following a lead or reading a monument's runes
+  brings VEGA's personal memories that machines would drop elsewhere. A peaceful world saved with an older version may
+  move on one or two story moments when it is first loaded; you hear them as news in the Journal.
+- **The Crystal workshop** (VEGA's circuit course) is learning, not story: its steps no longer move VEGA's story on.
+- Once the Guardian's system is on the map, the chip says **"Fit a jump generator, then fly to the Core"** while your ship
+  has none, then **"Confront the Guardian core"** — this one is never hidden by the hints setting. A player still in the
+  tutorial keeps their current lesson on the chip and only sees the finale there while actually in the Guardian's system.
+  After the win the chip suggests linking the stars with relays, then clears.
+- The Journal's **Chapters** list shows the story beats you have heard under their chapter — also after rejoining a
+  server. VEGA's other story lines (insights, the reveal of the Guardian's system, relay notes, her old memories) are
+  re-readable under **VEGA's notes**. An entry your game version has no text for reads "needs a newer version".
+- **Joining doesn't move the story.** The star system you start in is not a discovery, so a new player's
+  arrival adds nothing to the world's shared story progress — only mapping systems beyond it does.
+- **Joining late.** A player whose story starts after the Guardian's system has appeared on the star map hears VEGA's
+  reveal (the only line that tells you a **jump generator** gets you there) once, when their story starts.
 - Net fragments, personal memories and field records open in a **reader panel** and stay re-readable in
-  the Story tab (Read buttons) — and they survive rejoining a server.
+  the Journal (Read buttons) — and they survive rejoining a server.
 - Scanning **runes** at a monument now also reveals their inscription. Settlement folk who know you
   (trade with them!) may share what they know — one of them keeps a page of the settler legend.
-- **Finishing the story is a moment now**: winning the finale plays a short **ending** — the resolution,
-  the credits roll, and an epilogue that opens the door to what comes after. It's skippable (**Esc**),
-  plays once on the next join for anyone who was offline at the time, and the Story tab keeps a
-  **"Watch the ending again"** button once you've earned it.
+- **The finale on screen.** Warping into the Guardian's system shows **"Arrival — The Guardian Core"** as the jump
+  clears. Landing on the Guardian Core, the camera flies over the **iron-ringed shaft** while VEGA tells you to walk
+  there instead of digging (the same words stay in her panel if you skip early), then shows what sleeps below. When your
+  hack breaks the core open, the camera moves close to the red column — **"The core wakes"** — and the **argument duel**
+  begins.
+- **The duel.** The core speaks in its own red box at the top ("Argument 2 of 4"); your answers are **big buttons** below
+  it — click them, tap them, or pick one with the pad's stick and **(A)**. The number keys no longer answer (they are
+  your hotbar). A wrong answer is never lost: the core replies (in italics) and asks again. In singleplayer the world
+  waits while the core does. **Esc**, pad **(B)** or **Step back** leaves the duel waiting; walk back to the core and press
+  the **use** key (**E**, the **USE** button) to face it again. Only players **on the Guardian Core** can answer — the
+  others see a short banner that the duel has begun. In multiplayer the duel steps aside if you take damage and comes
+  back once it is safe.
+- **Finishing the story is a moment now**: winning the duel shows the machines **standing down** — VEGA's words over the
+  sleeping core — and then the **ending**: the resolution, the credits roll, and an epilogue that opens the door to what
+  comes after. It's skippable (**Esc**, pad **(B)** or the **Skip** button), it plays its own music every time you watch
+  it, and the Journal keeps a **"Watch the ending again"** button once you've earned it. A player who had heard
+  the story to its last chapter but was offline for the win gets the stand-down and the ending — and the finale
+  achievement — once on their next join; someone who first arrives on an already finished world is not played the ending
+  at the door: it plays when their own story starts after the basic training (on hosted and arcade worlds it stays in
+  the Journal).
+- **When the Guardian falls, every world goes quiet** — the machines on all worlds players are on stand down at once.
+- The hint at the Guardian core ("walk to the marked shaft, don't dig here") shows even with **VEGA hints** off.
+- **Story scenes.** Big story moments can play as short scenes: a **banner** at the top (it never stops you), a
+  **card** with a title or VEGA speaking in a box (you can keep moving), or a **staged scene** where the camera shows your
+  ship, the sky, a view from space or a small memory scene, and the controls rest for a moment (in singleplayer the world
+  waits meanwhile). A scene never starts in
+  a fight, while you fall, swim, drive, fly or have a menu open — it waits for a calm moment. Taking damage ends it, and
+  its text goes back to VEGA's panel ("Story moment saved"). In multiplayer the camera comes back after 30 seconds.
+  - **Skip** a scene with **Esc**, the pad's **(B)** or the **Skip** button (on a card, where you can move, Esc or the
+    button). Turn the text pages with **N**, pad **Back**, the **Continue** button or a tap on the text.
+  - **Watch again:** the Journal lists every scene you have seen under **Watch again** — press **Watch**, close the
+    menu, and it plays again (nothing in the game changes).
 - **After the ending the galaxy is calmer, not empty.** The Guardian's machines don't vanish for good: the
   hunter robots are gone and only a thinned-out remnant of scan-drones keeps roaming (half as many, spawning
   half as often), space stays hostile only where it is dangerous by nature — **pirate havens** and the
@@ -2159,11 +2470,11 @@ gloves' blueprint first, but crafting them does **not** use up your shock gloves
   aggressive ones turn on you; placid grazers forgive mistakes. Exotic (cave/lava/flying), glowing and oversized
   creatures need more steps — and two animals of the same kind can behave differently.
 - A companion **lives on the world you tamed it on**: it follows you there (friendly green-cyan tint + a floating
-  name), re-appears whenever you return, and is hidden elsewhere. Manage them in the **Companions** menu tab
+  name), re-appears whenever you return, and is hidden elsewhere. Manage them in the **Creatures** menu tab
   (rename, **feed**, release — each with a **bond bar**). Companions are peaceful and can't be hurt — nobody can
   attack one, yours or anyone else's (a tamer's pet included).
 - **Feed & bond:** every companion has a **bond** (0–100; a fresh tame starts around 40–60). **Feed** it from the
-  Companions tab — any bait (forage, meat or nectar) will do, one meal a minute, **+5 bond** each. Feeding
+  Creatures tab — any bait (forage, meat or nectar) will do, one meal a minute, **+5 bond** each. Feeding
   happens **in person**: the animal has to be on your world within about six blocks of you, otherwise the
   Feed button is greyed out — and the
   number buys three things: at **50** it **fetches from a wider circle** (half again as far), at **70**
@@ -2928,6 +3239,10 @@ While observing you fly with WASD (in the direction you look), Space/Ctrl for up
 speed, and the mouse wheel to set the cruise speed. You may still **mine** blocks — removing an offensive build
 is the one in-world moderation lever there is, and every removal is written to the server log.
 
+An observer also leaves the **story** alone: a `/goto` to another star maps nothing for the world's story and
+grows no frontier, VEGA stays silent (no tips, no story lines — the lines you missed arrive when you leave observer
+mode), and VEGA's "another pilot is nearby" tip never names you to the players you are watching.
+
 The fleet admin panel's per-world page lists the same players and structures plus **build hotspots** (clusters
 of changed blocks — how you find a house built without a base core), each with a `/goto` line to paste here.
 
@@ -2937,10 +3252,10 @@ boss) without grinding the whole playthrough. Same admin + `CheatsAllowed` gatin
 
 | Command | Effect |
 |---|---|
-| `/story` | Print the story status (fragments, kills, milestones, beats revealed, finale revealed/defeated) |
+| `/story [Player]` | Print the story status (fragments, kills, milestones, beats revealed, finale revealed/defeated, the player's story track and chapter) and the player stories of you or the named player (state, running part, current step) — admin role only, works with cheats off |
 | `/advance [n]` | Advance the shared arc by `n` milestones (default 1), revealing any beats you cross |
 | `/revealfinale` | Drive the arc to completion: reveal all narrator beats **and** place the Guardian finale system on the star map |
-| `/lore` | Reveal **every** story fragment and personal memory to you (fills the Story tab); also completes the readable beats |
+| `/lore` | Reveal **every** story fragment and personal memory to you (fills the Journal); also completes the readable beats |
 | `/jumpdrive` | Fit a **jump generator** (`jump_generator`) to your active ship so you can hyperjump between star systems |
 | `/gotocore` | Reveal the finale (if needed) and drop you straight into the Guardian core chamber — **skips the flight and the orbital gauntlet** |
 
@@ -2951,7 +3266,17 @@ Two ways to test the finale:
 - **Shortcut:** `/lore` (to read everything) → `/gotocore` → hack the core and win the duel.
 
 The duel cannot be lost — wrong rebuttals are dismissed and you stay on the node — so just keep trying each
-option until the core concedes and shuts down.
+option (the answer buttons; only a player on the Guardian Core can answer) until the core concedes and shuts down.
+
+**Tutorial controls** (admin role only — works with cheats off): `/tutorial skip [Player]` skips the basic training of you
+or the named player, `/tutorial restart [Player]` runs it again from part 1, `/tutorial chapter <id> [Player]` jumps to a
+part (e.g. `/tutorial chapter b6` — earlier parts count as skipped, a finished one is replayed), and
+`/tutorial policy auto|optin|off` sets the world's tutorial rule for everyone.
+
+**Story scene preview** (admin role only — works with cheats off, changes nothing): `/cutscene <pack> <id>` plays a story
+pack's scene for you alone, e.g. `/cutscene vega_protocol prologue`; `/cutscene <pack> __recap` shows the "story so far"
+card. Developers can also start the game with `-devSeq` (or use a development build) and press **F9** for a list of every
+scene to play locally.
 
 The client parses these slash-commands and sends an `AdminCommandIntent`; `/bump` is special — the client
 captures a screenshot and sends it as a `BumpReport` (falling back to a plain chat message the server

@@ -24,7 +24,8 @@ namespace BlocksBeyondTheStars.Tests;
 /// </summary>
 public sealed class VegaObjectiveRefreshTests : IDisposable
 {
-    private static readonly string[] OnboardingStages = { "mine", "craft", "eat", "scan", "unlock", "launch", "dock", "trade", "land" };
+    /// <summary>#2469: the official tutorial pack — the basic training a fresh player is in.</summary>
+    private const string Tutorial = SvGameServer.OfficialTutorialPackId;
 
     private readonly string _root;
     private readonly GameContent _content;
@@ -69,7 +70,12 @@ public sealed class VegaObjectiveRefreshTests : IDisposable
     private static void JoinAndDrain(SvGameServer server, LoopbackClientTransport client, string name)
     {
         client.Connect("loopback", 0);
-        client.Send(NetCodec.Encode(new JoinRequest { ContentFingerprint = TestJoin.Fingerprint, PlayerName = name }), DeliveryMode.ReliableOrdered);
+        client.Send(NetCodec.Encode(new JoinRequest
+        {
+            ContentFingerprint = TestJoin.Fingerprint,
+            PlayerName = name,
+            Features = new[] { ClientFeatures.Packs1 },
+        }), DeliveryMode.ReliableOrdered);
         server.Tick(0.1);
         client.Poll();
     }
@@ -108,7 +114,7 @@ public sealed class VegaObjectiveRefreshTests : IDisposable
         var server = new SvGameServer(Config("objective"), _content, serverTransport, repo);
         server.Start();
         JoinAndDrain(server, client, "Pilot");
-        Assert.Equal("vega.obj.mine", lines.Last().ObjectiveKey); // the join sent the tutorial chip
+        Assert.Equal("story.tutorial.b1.walk.chip", lines.Last().ObjectiveKey); // the join sent the tutorial chip (#2469: the pack)
 
         var session = server.Sessions[1];
         string homeId = session.CurrentLocationId;
@@ -116,20 +122,18 @@ public sealed class VegaObjectiveRefreshTests : IDisposable
         Assert.False(string.IsNullOrEmpty(homeName));
         EnsureFragmentOnWorld(server);
 
-        // Finish the onboarding behind VEGA's back: no handler fires, so nothing re-sends the chip — only the
+        // Leave the basic training behind VEGA's back (the opt-out key, no handler): nothing re-sends the chip — only the
         // tick's "differs from the last sent" check can move it on (#1859 staleness).
-        foreach (var stage in OnboardingStages)
-        {
-            session.State.Milestones.Add("vega:stage:" + stage);
-        }
+        session.State.Milestones.Add(Shared.Story.StoryPackKeys.OptOut(Tutorial));
 
         lines.Clear();
         server.Tick(1.1);
         client.Poll();
         var chip = Assert.Single(lines.Where(l => l.LineKey.Length == 0 && l.Text.Length == 0)); // objective-only refresh
-        Assert.Equal("story.obj.fragment_on", chip.ObjectiveKey);
+        // #2475: a current client reads the chapter lead — chapter 1's is the fragment on this world, named after the body.
+        Assert.Equal(Shared.Story.StoryLeads.FragmentOnKey, chip.ObjectiveKey);
         Assert.Equal(homeName, chip.ObjectiveArg);
-        Assert.Equal("story.obj.fragment_on", server.ObjectiveKeyForTest("Pilot"));
+        Assert.Equal(Shared.Story.StoryLeads.FragmentOnKey, server.ObjectiveKeyForTest("Pilot"));
         Assert.Equal(homeName, server.ObjectiveArgForTest("Pilot"));
 
         // The signal is on the map without the tip having fired — the chip says "follow VEGA's signal".
@@ -148,10 +152,10 @@ public sealed class VegaObjectiveRefreshTests : IDisposable
         server.Tick(1.1);
         client.Poll();
         var moved = lines.Last();
-        Assert.NotEqual("story.obj.fragment_here", moved.ObjectiveKey);
+        Assert.NotEqual(Shared.Story.StoryLeads.FragmentHereKey, moved.ObjectiveKey);
+        Assert.StartsWith(Shared.Story.StoryLeads.ObjPrefix, moved.ObjectiveKey); // a stand-in lead or "explore" without a fragment there
         Assert.True(
-            moved.ObjectiveKey == "story.obj.search"
-            || (moved.ObjectiveKey == "story.obj.fragment_on" && moved.ObjectiveArg == other.Name),
+            moved.ObjectiveKey != Shared.Story.StoryLeads.FragmentOnKey || moved.ObjectiveArg == other.Name,
             $"chip after travel: {moved.ObjectiveKey} / '{moved.ObjectiveArg}' — still '{homeName}'?");
         Assert.NotEqual(homeName, moved.ObjectiveArg);
 
@@ -165,13 +169,10 @@ public sealed class VegaObjectiveRefreshTests : IDisposable
         var server = new SvGameServer(Config("pickup"), _content, new LoopbackServerTransport(new LoopbackLink()), repo);
         server.Start();
         var p = server.AddLocalPlayer("Reader");
-        foreach (var stage in OnboardingStages)
-        {
-            p.State.Milestones.Add("vega:stage:" + stage);
-        }
+        server.SkipTutorialForTest(p); // past the basic training (#2469)
 
         EnsureFragmentOnWorld(server);
-        Assert.Equal("story.obj.fragment_on", server.ObjectiveKeyForTest("Reader"));
+        Assert.Equal(Shared.Story.StoryLeads.FragmentOnKey, server.ObjectiveKeyForTest("Reader")); // #2475: chapter 1's lead
 
         foreach (var frag in server.NetFragmentSnapshots.ToList())
         {
@@ -179,7 +180,10 @@ public sealed class VegaObjectiveRefreshTests : IDisposable
         }
 
         Assert.Equal(0, server.NetFragmentCount);
-        Assert.Equal("story.obj.search", server.ObjectiveKeyForTest("Reader")); // no fragment left here
+        string after = server.ObjectiveKeyForTest("Reader")!;
+        Assert.StartsWith(Shared.Story.StoryLeads.ObjPrefix, after);              // no fragment left here: a stand-in or "explore"
+        Assert.NotEqual(Shared.Story.StoryLeads.FragmentOnKey, after);
+        Assert.NotEqual(Shared.Story.StoryLeads.FragmentHereKey, after);
         Assert.Equal(string.Empty, server.ObjectiveArgForTest("Reader"));       // …and no body name to show
         server.Stop();
     }

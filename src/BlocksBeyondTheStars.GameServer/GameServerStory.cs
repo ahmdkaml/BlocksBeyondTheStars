@@ -39,11 +39,84 @@ public sealed partial class GameServer
             _storyState.Milestones, _storyState.BeatsRevealed, _storyState.GuardianDefeated);
 
     /// <summary>Restores the persisted story state at server start (server-wide, like the alliance graph).
-    /// A fresh world starts the default pack; an unknown stored pack also falls back to the default.</summary>
+    /// A fresh world starts the default pack; a save whose only row names a pack this build does not have also
+    /// starts the default — but never over a real row of an installed pack (#2460, B07). The galaxy is built
+    /// before this runs, so a revealed Guardian system is re-appended here (#2460, B06).</summary>
     private void LoadStoryState()
     {
-        var stored = _repo.ListStoryStates().FirstOrDefault();
+        var stored = SelectActiveStoryRow(_repo.ListStoryStates(), Rules.StoryId, _content.DefaultStory.Id, IsUsableStoryRow);
+        if (stored is not null && !IsUsableStoryRow(stored.StoryId))
+        {
+            _log.Warn($"Story pack '{stored.StoryId}' of this save is not installed (or cannot be a world story) — starting the default story; the stored row is kept untouched.");
+        }
 
+        LoadStoryStateFrom(stored);
+
+        // The galaxy is regenerated from the seed before the story loads (BootStage "galaxy" runs first), so the
+        // check at the end of BuildGalaxy always saw an unloaded state and a revealed-but-unwon save lost its
+        // finale system from the star map on every restart (B06). Re-append it now that the flags are known.
+        if (_storyState.GuardianSystemRevealed)
+        {
+            EnsureGuardianSystemInGalaxy();
+        }
+
+        SyncLeadListener(); // #2475: the chapter leads listen on the bus while the story has any
+    }
+
+    /// <summary>Whether a stored row names something this build can run: an installed world-capable pack (#2465: never a
+    /// beat-less or player pack, <see cref="Shared.Content.GameContent.TryGetWorldStory"/>) or the "none" sandbox.</summary>
+    private bool IsUsableStoryRow(string storyId)
+        => string.Equals(storyId, StoryRegistry.NoneStoryId, StringComparison.OrdinalIgnoreCase) || _content.TryGetWorldStory(storyId, out _);
+
+    /// <summary>#2460 (B05/B07): which persisted <c>story_state</c> row is the save's active one. A save holds one
+    /// row per pack it ever ran (an admin switch writes a new row and leaves the old one), and the database lists
+    /// them in no defined order — the first row used to win, so a restart could bring a switched-away pack back
+    /// with all its progress. In order:
+    /// <list type="number">
+    /// <item>rows a current build can run beat a row of an uninstalled pack — that one must never cost real
+    /// progress;</item>
+    /// <item>the row carrying the active marker (<see cref="StoredStoryState.Active"/>);</item>
+    /// <item>the most recently written row (<see cref="StoredStoryState.UpdatedUtc"/>);</item>
+    /// <item>older saves without either: the row of the world's fresh-save choice, else the "none" row (only an
+    /// explicit admin choice ever writes it), else the default pack's row, else the lowest id.</item>
+    /// </list>
+    /// Null when the save has no row yet (a fresh world).</summary>
+    internal static StoredStoryState? SelectActiveStoryRow(IReadOnlyList<StoredStoryState> rows, string rulesStoryId,
+        string defaultStoryId, Func<string, bool> isUsable)
+    {
+        if (rows.Count == 0)
+        {
+            return null;
+        }
+
+        var usable = rows.Where(r => isUsable(r.StoryId)).ToList();
+        var pool = usable.Count > 0 ? usable : rows.ToList();
+
+        var marked = pool.Where(r => r.Active).ToList();
+        if (marked.Count > 0)
+        {
+            pool = marked;
+        }
+
+        var stamped = pool.Where(r => !string.IsNullOrEmpty(r.UpdatedUtc)).ToList();
+        if (stamped.Count > 0)
+        {
+            return stamped
+                .OrderByDescending(r => r.UpdatedUtc, StringComparer.Ordinal)
+                .ThenBy(r => r.StoryId, StringComparer.Ordinal)
+                .First();
+        }
+
+        static bool Is(StoredStoryState r, string id) => !string.IsNullOrEmpty(id) && string.Equals(r.StoryId, id, StringComparison.OrdinalIgnoreCase);
+        return pool.FirstOrDefault(r => Is(r, rulesStoryId))
+            ?? pool.FirstOrDefault(r => Is(r, StoryRegistry.NoneStoryId))
+            ?? pool.FirstOrDefault(r => Is(r, defaultStoryId))
+            ?? pool.OrderBy(r => r.StoryId, StringComparer.Ordinal).First();
+    }
+
+    /// <summary>Applies the chosen row (or the fresh-save choice when there is none) to the runtime story state.</summary>
+    private void LoadStoryStateFrom(StoredStoryState? stored)
+    {
         if (stored is not null && string.Equals(stored.StoryId, StoryRegistry.NoneStoryId, StringComparison.OrdinalIgnoreCase))
         {
             _story = null; // the save chose the sandbox (no story)
@@ -51,7 +124,7 @@ public sealed partial class GameServer
             return;
         }
 
-        if (stored is not null && _content.TryGetStory(stored.StoryId, out var def))
+        if (stored is not null && _content.TryGetWorldStory(stored.StoryId, out var def))
         {
             _story = def;
             _storyState.StoryId = stored.StoryId;
@@ -71,14 +144,16 @@ public sealed partial class GameServer
             _storyState.StoryId = StoryRegistry.NoneStoryId;
             return;
         }
-        else if (stored is null && !string.IsNullOrEmpty(Rules.StoryId) && _content.TryGetStory(Rules.StoryId, out var chosen))
+        else if (stored is null && !string.IsNullOrEmpty(Rules.StoryId) && _content.TryGetWorldStory(Rules.StoryId, out var chosen))
         {
             _story = chosen; // fresh save, world option chose a specific pack
             _storyState.StoryId = chosen.Id;
         }
         else
         {
-            _story = _content.DefaultStory; // fresh save (no choice) or an unknown stored pack → built-in default
+            // Fresh save (no choice), or the save holds nothing but rows of packs this build lacks → the built-in
+            // default. SelectActiveStoryRow already preferred any real row, so this never writes zeros over one.
+            _story = _content.DefaultStory;
             _storyState.StoryId = _story.Id;
         }
 
@@ -88,9 +163,13 @@ public sealed partial class GameServer
         AdvanceStory();
     }
 
+    /// <summary>Writes the active pack's row — stamped and marked active (#2460, B05), so a restart picks it back
+    /// up even when the save holds rows of other packs.</summary>
     private void PersistStoryState()
         => _repo.SaveStoryState(new StoredStoryState
         {
+            Active = true,
+            UpdatedUtc = UtcNowIso(),
             StoryId = _storyState.StoryId,
             FragmentsFound = _storyState.FragmentsFound,
             MachineKills = _storyState.MachineKills,
@@ -174,7 +253,7 @@ public sealed partial class GameServer
             return;
         }
 
-        foreach (var beat in StoryEngine.AdvanceBeats(_story, _storyState, Rules.StoryProgressScale))
+        foreach (var beat in StoryEngine.AdvanceBeats(_story, _storyState, StoryScale)) // #2475: the one scale wrapper
         {
             RevealBeatToAll(beat);
         }
@@ -185,35 +264,73 @@ public sealed partial class GameServer
         BroadcastStoryState();
     }
 
-    private string BeatMilestoneKey(StoryBeat beat) => "story:" + _storyState.StoryId + ":beat:" + beat.Index;
+    private string BeatMilestoneKey(StoryBeat beat) => StoryPackKeys.Beat(_storyState.StoryId, beat.Index);
 
     private void RevealBeatToAll(StoryBeat beat)
     {
-        foreach (var session in _sessions.Values.Where(s => s.Joined))
+        foreach (var session in StoryListeners().ToList())
         {
             RevealBeatTo(session, beat);
         }
     }
 
+    /// <summary>The joined players the story speaks to. An invisible fleet-admin observer is staff, not a pilot
+    /// (#2460, N1): no beats, story lines or finale rewards while observing — the beats catch up when observer
+    /// mode ends (<see cref="CatchUpStoryLines"/>) or on the next join.</summary>
+    private IEnumerable<PlayerSession> StoryListeners() => _sessions.Values.Where(s => s.Joined && !s.Spectating);
+
     /// <summary>Speaks a beat to one player if they haven't heard it (tracked per-player, persisted), granting
-    /// its one-time knowledge reward.</summary>
-    private void RevealBeatTo(PlayerSession session, StoryBeat beat)
+    /// its one-time knowledge reward. Held while the player's story track has not started (#2470, synthesis §4.6): no key,
+    /// no knowledge, no line — the track start hears it and credits its knowledge then. A beat that opens a chapter plays
+    /// the chapter's opening scene first when <paramref name="stage"/> (the join catch-up of several beats stages only the
+    /// current chapter), then the beat's own scene (#2474: the beat cards), then the line — which the scene shows itself
+    /// (<c>replaceLineKeys</c>): the client keeps it out of VEGA's panel, the log still has it.</summary>
+    private void RevealBeatTo(PlayerSession session, StoryBeat beat, bool stage = true)
     {
-        if (!session.State.Milestones.Add(BeatMilestoneKey(beat)))
+        if (!StoryTrackStarted(session) || !MarkBeatHeard(session, beat))
         {
-            return; // this player already heard this beat
+            return; // held until the track starts — or this player already heard this beat
         }
 
-        if (beat.KnowledgeReward > 0)
+        if (stage && _story is not null)
         {
-            session.State.KnowledgePoints += beat.KnowledgeReward;
-            SendInventory(session); // carries the new KnowledgePoints to the client
+            if (beat.Index > 0 && StoryChapters.OpenedByBeat(_story, beat.Index) is { } chapter)
+            {
+                PlayChapterOpening(session, chapter);
+            }
+
+            if (!string.IsNullOrEmpty(beat.Cutscene))
+            {
+                PlayBoundCutscene(session, _story, beat.Cutscene, _story.Id);
+            }
         }
 
         if (!string.IsNullOrEmpty(beat.TextKey))
         {
             SendVegaLine(session, beat.TextKey, 2); // ShipAiLine kind 2 = memory/story
         }
+    }
+
+    /// <summary>Marks a beat heard for a player and credits its knowledge (once; the key is the per-player ledger). Returns
+    /// whether it was new. <paramref name="sendInventory"/> = false lets a caller that marks several beats send the new
+    /// knowledge once.</summary>
+    private bool MarkBeatHeard(PlayerSession session, StoryBeat beat, bool sendInventory = true)
+    {
+        if (!session.State.Milestones.Add(BeatMilestoneKey(beat)))
+        {
+            return false;
+        }
+
+        if (beat.KnowledgeReward > 0)
+        {
+            session.State.KnowledgePoints += beat.KnowledgeReward;
+            if (sendInventory)
+            {
+                SendInventory(session); // carries the new KnowledgePoints to the client
+            }
+        }
+
+        return true;
     }
 
     /// <summary>On join: send the story meter and catch the player up on beats already revealed world-wide
@@ -228,12 +345,113 @@ public sealed partial class GameServer
             return;
         }
 
-        for (int i = 0; i < _storyState.BeatsRevealed && i < _story.Beats.Count; i++)
+        CatchUpStoryLines(session);
+        SendStoryResolvedOnJoinIfMissed(session); // #1124: the ending, for whoever heard the arc out but missed the win
+        SendDuelNodeTo(session); // #2478: a player who relogged mid-duel sees its current node again
+    }
+
+    /// <summary>Catches a player up on the world's story lines they have not heard: every revealed beat and, while
+    /// the finale is open, the Guardian-system reveal (#2460, B10 — the only line that names the jump generator,
+    /// which latecomers never got). Runs on join and when observer mode ends. Only for a player whose story track has
+    /// started (#2470): before that everything is held, and the track start delivers it as one recap. Of the chapters the
+    /// world crossed meanwhile only the CURRENT chapter's opening plays (synthesis §5.3), not one scene per chapter. Since
+    /// #2471 (B09) a client with the Journal that missed <see cref="CatchUpCollapseThreshold"/> or more beats gets them
+    /// silently in its Journal (heard, knowledge credited, the story state re-sent) and ONE line saying so
+    /// (<see cref="StoryNarratorLines.JournalNews"/>) instead of a flood of lines; a single missed beat still speaks (#2474:
+    /// with its beat card). #2474: the current chapter's opening is committed before any line (a line it shows waits with
+    /// it), and a client that plays cutscenes whose missed beats crossed into a later chapter gets "The story so far" first
+    /// (<see cref="PlayCatchUpRecap"/>) — the Journal line stays: it names the count and lights the Journal's badge.</summary>
+    private void CatchUpStoryLines(PlayerSession session)
+    {
+        if (_story is null || session.Spectating || !StoryTrackStarted(session))
         {
-            RevealBeatTo(session, _story.Beats[i]);
+            return;
         }
 
-        SendStoryResolvedOnJoinIfMissed(session); // #1124: the ending, for whoever missed the moment
+        var missed = new List<StoryBeat>();
+        for (int i = 0; i < _storyState.BeatsRevealed && i < _story.Beats.Count; i++)
+        {
+            if (!session.State.Milestones.Contains(BeatMilestoneKey(_story.Beats[i])))
+            {
+                missed.Add(_story.Beats[i]);
+            }
+        }
+
+        bool caughtUp = missed.Count > 0;
+        bool collapse = session.SupportsPacks && missed.Count >= CatchUpCollapseThreshold;
+        var current = caughtUp ? ChapterAt(TrackChapterIndex(session)) : null;
+
+        // #2474: the scenes go first, so a line a queued scene shows (its replaceLineKeys) waits with it and the client never
+        // reads it twice. When the missed beats crossed into a later chapter, "the story so far" (titles only) leads into the
+        // current chapter's opening; a beat card plays for a single missed beat.
+        if (collapse && current is not null)
+        {
+            PlayCatchUpRecap(session, missed);
+        }
+
+        if (current is not null)
+        {
+            PlayChapterOpening(session, current);
+        }
+
+        if (collapse)
+        {
+            foreach (var beat in missed)
+            {
+                MarkBeatHeard(session, beat, sendInventory: false);
+            }
+
+            if (missed.Any(b => b.KnowledgeReward > 0))
+            {
+                SendInventory(session); // the beats' knowledge, credited at once
+            }
+
+            _repo.SavePlayer(session.State);
+            SendStoryState(session); // the Journal's chapter list now holds the missed beats
+            SendVegaLine(session, StoryNarratorLines.JournalNews, 3, missed.Count.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        else
+        {
+            foreach (var beat in missed)
+            {
+                RevealBeatTo(session, beat, stage: missed.Count == 1); // one missed beat: its card (its opening already played)
+            }
+        }
+
+        if (_storyState.GuardianSystemRevealed && !_storyState.GuardianDefeated)
+        {
+            SpeakGuardianRevealedTo(session);
+        }
+    }
+
+    /// <summary>#2474 (B09): a client that plays cutscenes and missed beats that crossed into a later chapter gets "The story
+    /// so far" — the titles of the chapters before its current one, as at a track start — which leads straight into the
+    /// current chapter's opening. Missed beats within the chapter the player was in bring no recap.</summary>
+    private void PlayCatchUpRecap(PlayerSession session, IReadOnlyCollection<StoryBeat> missed)
+    {
+        var def = _story;
+        if (def is null || !session.SupportsCutscenes)
+        {
+            return;
+        }
+
+        int heardUpTo = 0;
+        for (int i = 0; i < _storyState.BeatsRevealed && i < def.Beats.Count; i++)
+        {
+            if (!missed.Contains(def.Beats[i]))
+            {
+                heardUpTo = Math.Max(heardUpTo, def.Beats[i].Index);
+            }
+        }
+
+        int before = StoryChapters.TrackChapterIndex(def, StoryChapters.ChapterIndexOfBeat(def, heardUpTo));
+        int current = TrackChapterIndex(session);
+        if (current < 2 || current <= before)
+        {
+            return;
+        }
+
+        PlayRecap(session, def.Id, def.Chapters.Skip(1).Take(current - 1).Select(c => c.TitleKey).Where(k => !string.IsNullOrEmpty(k)));
     }
 
     private void SendStoryState(PlayerSession session) => Send(session, BuildStoryState(session));
@@ -259,7 +477,7 @@ public sealed partial class GameServer
         {
             StoryId = _storyState.StoryId,
             Active = StoryActive,
-            Progress = _story is null ? 0 : StoryEngine.Progress(_story, _storyState, Rules.StoryProgressScale),
+            Progress = StoryProgressShown(), // #2475: the one scale wrapper, clamped for the meter
             ProgressTarget = target,
             FragmentsFound = _storyState.FragmentsFound,
             MachineKills = _storyState.MachineKills,
@@ -274,7 +492,61 @@ public sealed partial class GameServer
                 .Select(m => m.Substring(MemoryMilestonePrefix.Length)).ToArray(),
             FoundLoreKeys = mine.Where(m => m.StartsWith(LoreMilestonePrefix, StringComparison.Ordinal))
                 .Select(m => m.Substring(LoreMilestonePrefix.Length)).ToArray(),
+            HeardBeats = HeardBeats(session), // #2462 (B08): the Story tab's beat list survives a rejoin
+            SeenCutscenes = SeenCutscenes(session), // #2468: the Story tab's "Watch again" list
+            // #2470: the player's story track — started, their (derived) chapter, the world's chapter, the crew status
+            // line, and the relay insights the save has spoken (the log of a player who joined the story later).
+            Started = StoryTrackStarted(session),
+            Chapter = ChapterAt(TrackChapterIndex(session))?.Id ?? string.Empty,
+            WorldChapter = ChapterAt(WorldChapterIndex())?.Id ?? string.Empty,
+            ShowCrewChapter = ShowCrewChapterFor(session),
+            RelayInsightKeys = StoryTrackStarted(session) ? RelayInsightKeysSpoken() : System.Array.Empty<string>(),
+            NoteKeys = StoryTrackStarted(session) ? StoryNoteKeys(session) : System.Array.Empty<string>(), // #2471: the Journal's notes
         };
+    }
+
+    /// <summary>The cutscenes this player's client confirmed (#2468), every pack, as <c>pack/id</c> (sorted) — from the
+    /// <c>story:&lt;pack&gt;:cut:&lt;id&gt;</c> keys (<see cref="StoryPackKeys.TryParseCutsceneSeen"/>; the <c>:sent</c>
+    /// form is an owed scene, not a seen one). The client orders the list by the packs' own definitions.</summary>
+    private static string[] SeenCutscenes(PlayerSession session)
+    {
+        var seen = new List<string>();
+        foreach (var m in session.State.Milestones)
+        {
+            if (StoryPackKeys.TryParseCutsceneSeen(m, out string packId, out string id))
+            {
+                seen.Add(packId + StoryCutsceneIds.PackSeparator + id);
+            }
+        }
+
+        seen.Sort(StringComparer.Ordinal);
+        return seen.ToArray();
+    }
+
+    /// <summary>The beat indexes this player has heard of the active story (#2462, B08), ascending — read from their
+    /// <c>story:&lt;id&gt;:beat:&lt;n&gt;</c> milestones (<see cref="BeatMilestoneKey"/>). Other <c>story:</c> keys of the same
+    /// pack (<c>:finale:revealed</c>, <c>:resolved</c>, …) do not parse as a number and are skipped.</summary>
+    private int[] HeardBeats(PlayerSession session)
+    {
+        if (_story is null)
+        {
+            return System.Array.Empty<int>();
+        }
+
+        string prefix = "story:" + _storyState.StoryId + ":beat:";
+        var heard = new List<int>();
+        foreach (var m in session.State.Milestones)
+        {
+            if (m.StartsWith(prefix, StringComparison.Ordinal)
+                && int.TryParse(m.Substring(prefix.Length), System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out int index))
+            {
+                heard.Add(index);
+            }
+        }
+
+        heard.Sort();
+        return heard.ToArray();
     }
 
     // ---------------- Active-story selection (admin) ----------------
@@ -291,15 +563,17 @@ public sealed partial class GameServer
     }
 
     /// <summary>Switches the save's active story pack (admin / world option). "none" disables the story; an
-    /// unknown id is ignored. Switching resets the per-save progress to a fresh state for the chosen pack.</summary>
+    /// unknown id — or a pack that cannot be the world story, like the beat-less tutorial (#2465) — is ignored.
+    /// Switching resets the per-save progress to a fresh state for the chosen pack.</summary>
     public void SetActiveStory(string storyId)
     {
+        string previous = _storyState.StoryId;
         if (string.Equals(storyId, StoryRegistry.NoneStoryId, StringComparison.OrdinalIgnoreCase))
         {
             _story = null;
             ResetStoryState(StoryRegistry.NoneStoryId);
         }
-        else if (_content.TryGetStory(storyId, out var def))
+        else if (_content.TryGetWorldStory(storyId, out var def))
         {
             _story = def;
             ResetStoryState(def.Id);
@@ -309,11 +583,34 @@ public sealed partial class GameServer
             return; // unknown pack — leave the active story unchanged
         }
 
+        SyncLeadListener();       // #2475: the new story's chapter leads (or none)
         AdvanceStory();           // persists + broadcasts (and reveals B0 for a real pack)
         if (_story is null)
         {
             PersistStoryState();  // AdvanceStory no-ops when disabled — persist the "none" choice here
             BroadcastStoryState();
+        }
+
+        DeactivateStoryRow(previous);
+        StoryTrackOnStorySwitch(); // #2470: the new story meets the players online now (a "none" world switched to VEGA)
+    }
+
+    /// <summary>#2460 (B05): clears the active marker on the row an admin switch left behind, so a restart can
+    /// never bring the old pack back. The row itself (and its progress) stays, as before.</summary>
+    private void DeactivateStoryRow(string storyId)
+    {
+        if (string.IsNullOrEmpty(storyId) || string.Equals(storyId, _storyState.StoryId, StringComparison.OrdinalIgnoreCase))
+        {
+            return; // re-selecting the active pack resets it in place — its row stays the active one
+        }
+
+        foreach (var row in _repo.ListStoryStates())
+        {
+            if (row.Active && string.Equals(row.StoryId, storyId, StringComparison.OrdinalIgnoreCase))
+            {
+                row.Active = false;
+                _repo.SaveStoryState(row);
+            }
         }
     }
 
@@ -335,7 +632,9 @@ public sealed partial class GameServer
     // ---------------- Finale pacification (P6) ----------------
 
     /// <summary>Finale win: the Guardian core is shut down — pacify the galaxy. One-way per-save: despawns the
-    /// live planet machines on the active world (the dramatic beat), persists, and broadcasts. The game continues
+    /// live planet machines on every loaded world (the dramatic beat — "across every world the machines stand down"; #2478,
+    /// B51: it used to clear only the active world cursor, so the machines of a friend's world kept hunting until the
+    /// Remnant rules thinned them out), persists, and broadcasts. The game continues
     /// afterwards under the Remnant Protocol (#1206, see <c>RemnantEra</c>): the flag no longer switches every
     /// spawn off — the planet cap halves, refills slow down, only scan-drones remain, space waves keep only
     /// pirate havens / the frontier-danger tier, bandit ships keep only their havens.</summary>
@@ -347,8 +646,16 @@ public sealed partial class GameServer
         }
 
         _storyState.GuardianDefeated = true;
-        _planetEnemies.Clear();   // despawn live planet machines on the active world
-        BroadcastPlanetEnemies();
+        foreach (var world in _worlds.Loaded)
+        {
+            if (world.PlanetEnemies.Count > 0)
+            {
+                world.PlanetEnemies.Clear(); // despawn the live planet machines of this world
+                world.EnemyListDirty = true; // its players get the empty list at the end of its next tick (#1530)
+            }
+        }
+
+        BroadcastPlanetEnemies(); // the active world's list goes out either way (as before)
         PersistStoryState();
         BroadcastStoryState();
     }
@@ -413,59 +720,59 @@ public sealed partial class GameServer
 
     // ---------------- Event-driven story insights (taming ward + non-cube shapes) ----------------
     //
-    // Two discrete, action-triggered VEGA memories that tie the taming + block-shape features into the arc.
-    // Unlike the threshold beats (B0–B12) these are NOT progress-gated and must NOT join the Beats list (that
-    // would break the engine's strict beat ordering) — they are spoken directly on their gameplay event, once
-    // per player, tracked with the same per-player milestone mechanism the beats use.
+    // Discrete, action-triggered VEGA memories that tie the taming + block-shape features into the arc. Unlike the
+    // threshold beats (B0–B12) these are NOT progress-ordered and must NOT join the Beats list (that would break the
+    // engine's strict beat ordering) — they are spoken directly on their gameplay event, once per player, tracked with the
+    // same per-player milestone mechanism the beats use. Since #2470 they are pack data (StoryDefinition.Insights: event,
+    // the beat that must be revealed first, the line, the once-key) — the hard-coded "six beats" check is gone.
 
-    /// <summary>Beats spoken once the Guardian's protective mandate is known (beat B5 "The Guardian"): beats
-    /// 0..5 revealed ⇒ BeatsRevealed ≥ 6. Both insights stay silent until then so an early tame or shape can't
-    /// pre-empt the Guardian reveal — they defer to the next eligible trigger (the per-player flag is only
-    /// consumed once a line is actually spoken). Assumes the default vega_protocol arc shape.</summary>
-    private const int GuardianMandateBeatCount = 6;
+    /// <summary>The insight event names of <see cref="StoryInsight.Event"/> the server raises.</summary>
+    internal const string CompanionWardInsightEvent = "companion_ward";
+    internal const string ShapeAnomalyInsightEvent = "shape_noncube";
 
-    /// <summary>True once the shared arc has named the Guardian and its "protect the living worlds" mandate —
-    /// the premise both insights build on. Requires an active story (silent in the "none" sandbox).</summary>
-    private bool GuardianMandateKnown => StoryActive && _storyState.BeatsRevealed >= GuardianMandateBeatCount;
-
-    private const string CompanionWardInsightKey = "story:insight:companion-ward";
-    private const string ShapeAnomalyInsightKey = "story:insight:shape-anomaly";
-
-    /// <summary>VEGA's realisation the first time a present companion makes a Guardian machine stand down: the
-    /// network reads a creature-bonded human as part of the biosphere it guards, not as prey. Once-only per
-    /// player, gated behind the Guardian reveal. Returns true if it spoke this call. Driven from
-    /// <c>TickEnemies</c> (a warded player within hunt range of a machine).</summary>
-    private bool RevealCompanionWardInsight(PlayerSession session)
+    /// <summary>Speaks the active story's insight for <paramref name="insightEvent"/> to one player, once — only after the
+    /// arc revealed the insight's <see cref="StoryInsight.MinBeat"/> (an early tame or shape must not pre-empt the
+    /// Guardian's reveal) and only once the player's story track has started (#2470: held, the once-key is not written,
+    /// so the insight fires at the next occasion). A pack without the insight (or the "none" sandbox) says nothing. Returns
+    /// whether it spoke.</summary>
+    private bool RevealStoryInsight(PlayerSession session, string insightEvent)
     {
-        if (!GuardianMandateKnown || !session.State.Milestones.Add(CompanionWardInsightKey))
+        var insight = _story?.Insights.FirstOrDefault(i => string.Equals(i.Event, insightEvent, StringComparison.Ordinal));
+        if (insight is null || string.IsNullOrEmpty(insight.TextKey) || _storyState.BeatsRevealed <= insight.MinBeat
+            || !StoryTrackStarted(session))
         {
-            return false; // story too early (flag NOT consumed → may fire later), or already heard
+            return false; // no such insight, story too early or held (flag NOT consumed → may fire later)
         }
 
-        SendVegaLine(session, "story.vega.insight.companion_ward", 2); // ShipAiLine kind 2 = memory/story
+        string onceKey = string.IsNullOrEmpty(insight.OnceKey) ? "story:insight:" + insight.Event : insight.OnceKey;
+        if (!session.State.Milestones.Add(onceKey))
+        {
+            return false; // already heard
+        }
+
+        SendVegaLine(session, insight.TextKey, 2); // ShipAiLine kind 2 = memory/story
         return true;
     }
+
+    /// <summary>VEGA's realisation the first time a present companion makes a Guardian machine stand down: the
+    /// network reads a creature-bonded human as part of the biosphere it guards, not as prey (insight
+    /// <see cref="CompanionWardInsightEvent"/>). Returns true if it spoke this call. Driven from <c>TickEnemies</c> (a
+    /// warded player within hunt range of a machine).</summary>
+    private bool RevealCompanionWardInsight(PlayerSession session) => RevealStoryInsight(session, CompanionWardInsightEvent);
 
     /// <summary>VEGA's recovered memory the first time the player forms a non-cube block: the Service always
     /// built in cubes by design — to the Guardian any deliberate curve or edge is a constructed anomaly, the
-    /// mark of a human hand. Narrative only (no mechanic). Once-only per player, gated behind the reveal.
-    /// Returns true if it spoke this call. Driven from <c>HandleShapeCraft</c>.</summary>
-    private bool RevealShapeAnomalyMemory(PlayerSession session)
-    {
-        if (!GuardianMandateKnown || !session.State.Milestones.Add(ShapeAnomalyInsightKey))
-        {
-            return false;
-        }
-
-        SendVegaLine(session, "story.vega.insight.shape_anomaly", 2);
-        return true;
-    }
+    /// mark of a human hand (insight <see cref="ShapeAnomalyInsightEvent"/>). Narrative only (no mechanic). Returns true if
+    /// it spoke this call. Driven from <c>HandleShapeCraft</c>.</summary>
+    private bool RevealShapeAnomalyMemory(PlayerSession session) => RevealStoryInsight(session, ShapeAnomalyInsightEvent);
 
     // ---------------- P7: world knowledge level (NPC flavour gating) ----------------
 
-    /// <summary>The world's story "knowledge level" 0..4 (0 = nothing learned … 4 = the Guardian core is
-    /// known/defeated), derived from how far the shared arc has progressed. Drives which story flavour lines
-    /// settlement/station NPCs are allowed to speak (P7).</summary>
+    /// <summary>The world's story "knowledge level" 0..4 (0 = nothing learned … 3 = the arc is nearly or fully
+    /// told, 4 = the Guardian core is shut down), derived from how far the shared arc has progressed. Drives which
+    /// story flavour lines settlement/station NPCs are allowed to speak (P7). Level 4 is the WIN alone (#2460, B44):
+    /// its lines say "the machines went still … thank you", which read wrong while the machines still hunted
+    /// between the last beat and the duel.</summary>
     public int WorldKnowledgeLevel()
     {
         if (_story is null || _story.Beats.Count == 0)
@@ -484,8 +791,7 @@ public sealed partial class GameServer
             return 0;
         }
 
-        double frac = StoryEngine.Progress(_story, _storyState, Rules.StoryProgressScale) / (double)target;
-        if (frac >= 1.0) return 4;
+        double frac = StoryProgressShown() / (double)target; // #2475: the one scale wrapper, clamped (never drops back)
         if (frac >= 0.66) return 3;
         if (frac >= 0.33) return 2;
         if (frac > 0.0) return 1;
@@ -518,7 +824,7 @@ public sealed partial class GameServer
         }
 
         int target = _story.Beats.Count > 0 ? _story.Beats[_story.Beats.Count - 1].Threshold : 0;
-        double scale = System.Math.Max(0.05, Rules.StoryProgressScale);
+        double scale = System.Math.Max(0.05, StoryScale); // #2475: the one scale wrapper (a peaceful world needs fewer)
         int needed = (int)System.Math.Ceiling(target / (double)System.Math.Max(1, _story.MilestoneWeight) / scale) + 2;
         _storyState.Milestones += needed;
         AdvanceStory(); // reveals every crossed beat + the finale, persists + broadcasts once

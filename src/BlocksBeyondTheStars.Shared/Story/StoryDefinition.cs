@@ -28,6 +28,10 @@ public sealed class StoryBeat
 
     /// <summary>Optional knowledge points granted to the revealing player when this beat first fires.</summary>
     public int KnowledgeReward { get; set; }
+
+    /// <summary>Cutscene played when this beat reveals to a player (#2466 binding; the server API exists since #2467, the
+    /// beat reveal wires it in step 11); empty = the beat speaks as a line only (today's behaviour).</summary>
+    public string Cutscene { get; set; } = string.Empty;
 }
 
 /// <summary>
@@ -230,8 +234,8 @@ public sealed class StoryCharacter
 /// <summary>
 /// A story pack: identity + pacing config + the ordered beat arc. The story engine consumes this and is
 /// completely story-agnostic, so further storylines are added as more packs (see the implementation plan
-/// D2–D4). For P0 a pack is code-defined in <see cref="StoryRegistry"/>; a later phase loads it from
-/// <c>data/stories/&lt;id&gt;/</c>.
+/// D2–D4). Packs load from <c>data/stories/&lt;id&gt;/story.json</c> (ContentLoader); the code-built pack in
+/// <see cref="StoryRegistry"/> is only the fallback when no pack file is installed.
 /// </summary>
 public sealed class StoryDefinition
 {
@@ -240,6 +244,117 @@ public sealed class StoryDefinition
 
     /// <summary>Locale key for the pack's display name (shown in the story-selection world option).</summary>
     public string NameKey { get; set; } = string.Empty;
+
+    /// <summary>What the pack is (#2465): <c>story</c> (a narrative arc, the default), <c>tutorial</c> (teaches the
+    /// game — always player-scoped) or <c>side</c> (a small optional storyline). See <see cref="StoryRegistry.KindStory"/>.</summary>
+    public string Kind { get; set; } = StoryRegistry.KindStory;
+
+    /// <summary>Where the pack's progress lives (#2465): <c>world</c> (shared by everyone in the save — VEGA's arc) or
+    /// <c>player</c> (per player — the tutorial). Empty = derived: <c>world</c> when the pack has beats, else
+    /// <c>player</c> (<see cref="StoryRegistry.EffectiveScope"/>). Only a world-scoped pack with beats can be the
+    /// save's story (<see cref="StoryRegistry.CanBeWorldStory"/>).</summary>
+    public string Scope { get; set; } = string.Empty;
+
+    // ---- Pack manifest (#2466, synthesis §5.4). Every field defaults to today's behaviour. ----
+
+    /// <summary>Journal order and the tie-break between player packs on the objective chip (higher first). Default 0.</summary>
+    public int Priority { get; set; }
+
+    /// <summary>Locale key of the pack's short name (≤ 10 characters EN/DE) — it replaces "Objective:" on the chip when
+    /// this pack's step is on it. Empty = no short name.</summary>
+    public string ShortNameKey { get; set; } = string.Empty;
+
+    /// <summary>Locale key of a one-line description (world creation, Journal). Empty = none.</summary>
+    public string DescriptionKey { get; set; } = string.Empty;
+
+    /// <summary>Who speaks the pack's lines (<c>vega</c> by default).</summary>
+    public StoryNarrator Narrator { get; set; } = new();
+
+    /// <summary>#2478: the pack's other voices — a cutscene caption's <c>speaker</c> (or the finale's duel dialogue) names one
+    /// of them by id: name key, icon, colour and line-start cue like the <see cref="Narrator"/> (VEGA's pack: <c>core</c>,
+    /// the Guardian core). Empty = the narrator only; an unknown speaker id reads as its own name.</summary>
+    public List<StoryNarrator> Speakers { get; set; } = new();
+
+    /// <summary>The speaker with this id — the <see cref="Narrator"/> or one of the <see cref="Speakers"/> — or null.</summary>
+    public StoryNarrator? FindSpeaker(string? id)
+    {
+        if (string.IsNullOrEmpty(id))
+        {
+            return Narrator;
+        }
+
+        if (Narrator is not null && string.Equals(Narrator.Id, id, StringComparison.Ordinal))
+        {
+            return Narrator;
+        }
+
+        foreach (var speaker in Speakers ?? new List<StoryNarrator>())
+        {
+            if (speaker is not null && string.Equals(speaker.Id, id, StringComparison.Ordinal))
+            {
+                return speaker;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Player packs other than a tutorial: whether the pack runs for every player by default (a tutorial follows
+    /// the world's <c>TutorialPolicy</c> instead). Default true.</summary>
+    public bool DefaultEnabled { get; set; } = true;
+
+    /// <summary>Cutscene played when the pack starts for a player (#2467: a player pack's start; the world story's start is
+    /// wired in step 11) — not for a player the pack would complete for silently (a veteran); empty = none.</summary>
+    public string IntroCutscene { get; set; } = string.Empty;
+
+    /// <summary>Tutorial packs: when the global advisor systems open (<see cref="StoryGateNames"/> → condition). A gate the
+    /// pack does not set keeps today's behaviour.</summary>
+    public Dictionary<string, string> Gates { get; set; } = new();
+
+    /// <summary>The pack's help escalation defaults (unset = the built-in 180 / 360 / 600 s).</summary>
+    public StoryEscalation Escalate { get; set; } = new();
+
+    /// <summary>When the pack starts for a player (default: at the first join).</summary>
+    public StoryStartRule Start { get; set; } = new();
+
+    /// <summary>The pack's chapters (player packs: run per player; world packs: reached by the arc). Empty = none.</summary>
+    public List<StoryChapter> Chapters { get; set; } = new();
+
+    /// <summary>Data form of the pack's insights (read from step 16 on). Empty = none.</summary>
+    public List<StoryInsight> Insights { get; set; } = new();
+
+    /// <summary>World packs: the finale's type and cutscene bindings (presentation only in v1).</summary>
+    public StoryFinaleBinding Finale { get; set; } = new();
+
+    /// <summary>Player packs (#2469): what happens when a player finishes the pack's mandatory chapters by playing (not by
+    /// skipping, not by migration evidence) — the closing line, the achievement counter and the suggested deep dives.
+    /// Empty = nothing beyond the done key.</summary>
+    public StoryGraduation Graduation { get; set; } = new();
+
+    /// <summary>The pack's cutscenes (#2467), loaded from its <c>cutscenes.json</c> (or inline). Empty = none; every
+    /// binding above must name one of them (the built-in <c>__recap</c> is never defined here). The built-in VEGA fallback
+    /// carries none — the narrator lines still play.</summary>
+    public List<CutsceneDefinition> Cutscenes { get; set; } = new();
+
+    /// <summary>The cutscene with this id — an instance id (<c>tut.strip@b3</c>) finds its template — or null.</summary>
+    public CutsceneDefinition? FindCutscene(string? id)
+    {
+        if (string.IsNullOrEmpty(id))
+        {
+            return null;
+        }
+
+        string definition = StoryCutsceneIds.DefinitionOf(id!);
+        foreach (var cutscene in Cutscenes)
+        {
+            if (string.Equals(cutscene.Id, definition, StringComparison.Ordinal))
+            {
+                return cutscene;
+            }
+        }
+
+        return null;
+    }
 
     // Pacing weights: progress = FragmentsFound*FragmentWeight
     //                          + min(MachineKills, KillContributionCap)*KillWeight
@@ -256,6 +371,21 @@ public sealed class StoryDefinition
 
     /// <summary>Diminishing-returns cap: machine kills beyond this stop adding to progress (anti-grind).</summary>
     public int KillContributionCap { get; set; } = 40;
+
+    /// <summary>World packs (#2475, synthesis §4.8): milestones the arc gains the first time anyone in the save follows a lead
+    /// of a chapter — once per save and chapter, and only before the arc's last beat (VEGA: 3 = +6 points, at most six chapters
+    /// = 36 points before B12). 0 = no bonus (the default — a pack without leads paces exactly as before).</summary>
+    public int LeadBonusMilestones { get; set; }
+
+    /// <summary>World packs (#2475, synthesis §4.9): on a world whose rules field no machines (peaceful, family,
+    /// peaceful-creative) the kill share of the score can never be earned — scale the score so the arc needs the same work as
+    /// on a world with combat (<see cref="StoryEngine.UnavailableKillNormalisation"/>; VEGA: 204/164 ≈ 1.244). False = the old
+    /// pacing.</summary>
+    public bool NormaliseUnavailableDrivers { get; set; }
+
+    /// <summary>World packs (#2475): what else unlocks a player's next personal memory where no machine can drop one
+    /// (<see cref="StoryMemoryTriggers"/>: <c>lead</c>, <c>monument</c>). Empty = only the kill drop (as before).</summary>
+    public List<string> MemoryTriggers { get; set; } = new();
 
     /// <summary>The ordered beat arc (ascending <see cref="StoryBeat.Index"/> and <see cref="StoryBeat.Threshold"/>).
     /// A concrete list so it deserializes cleanly from a pack's <c>story.json</c>.</summary>
@@ -301,8 +431,13 @@ public sealed class StoryDefinition
     /// titles. Deliberately NOT part of <see cref="Beats"/>: beats reveal by progress score and
     /// all-beats-revealed gates the finale, so a 14th beat there would deadlock the arc. The epilogue
     /// reveals on the finale win instead. Empty = the pack has no authored epilogue (the resolution
-    /// cinematic then plays without one).</summary>
+    /// cinematic then plays without one). Since #2461 only the fallback for <see cref="EpilogueTitleKey"/>: an older
+    /// client shows this raw string, a current one the localized key.</summary>
     public string EpilogueTitle { get; set; } = string.Empty;
+
+    /// <summary>Locale key of the epilogue title (#2461, B22) — the resolution cinematic's last card showed the raw
+    /// English <see cref="EpilogueTitle"/> to every player. Empty = fall back to the raw title.</summary>
+    public string EpilogueTitleKey { get; set; } = string.Empty;
 
     /// <summary>Locale key of the epilogue text (#1124), spoken into the story log and shown by the
     /// resolution cinematic after the finale win — the handover to whatever starts AFTER the story.</summary>

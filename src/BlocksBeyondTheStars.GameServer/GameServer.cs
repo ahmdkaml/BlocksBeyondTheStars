@@ -12,6 +12,7 @@ using BlocksBeyondTheStars.Shared.Definitions;
 using BlocksBeyondTheStars.Shared.Geometry;
 using BlocksBeyondTheStars.Shared.Primitives;
 using BlocksBeyondTheStars.Shared.State;
+using BlocksBeyondTheStars.Shared.Story;
 using BlocksBeyondTheStars.Shared.Weather;
 using BlocksBeyondTheStars.Shared.World;
 using BlocksBeyondTheStars.WorldGeneration;
@@ -272,7 +273,7 @@ public sealed partial class GameServer
 
         var launchRules = _config.Rules.Clone();
         _meta = _repo.LoadMetadata() ?? CreateInitialMetadata();
-        _meta.SaveVersion = WorldMetadata.CurrentSaveVersion; // #2223: this build wrote it from here on (a newer save was refused above)
+        _meta.SaveVersion = WorldMetadata.CurrentSaveVersion; // #2223: this build wrote it from here on (a newer save was refused above; an older one was copied first, #2464)
 
         // World options: once created, the WORLD owns its rules — the save's override replaces the launch
         // config's rules (singleplayer passes creation options only once; dedicated restarts keep the set).
@@ -428,7 +429,13 @@ public sealed partial class GameServer
         // Record the current block-id palette and remap any save written under a different block set BEFORE
         // world load. Block ids are assigned by key sort order, so adding a block shifts them; without this a
         // content update would silently decode every stored edit to the wrong block.
-        BackupBeforePaletteRemap(); // #2223: a copy of the save before its ids are rewritten
+        // #2223: a copy of the save before its ids are rewritten — and #2464: a copy before an older save is
+        // stamped with this build's save version (one copy covers both when they happen together).
+        if (!BackupBeforePaletteRemap())
+        {
+            BackupBeforeSaveVersionStamp();
+        }
+
         _repo.EnsureBlockPalette(_content.BlockPalette());
     }
 
@@ -657,13 +664,10 @@ public sealed partial class GameServer
             _log.Info($"Start system '{homeSystem.Name}' rolled no station — added '{homeStation.Name}' ({homeStation.Id}).");
         }
 
-        // Finale (P6): the galaxy is regenerated from seed each start, so re-append the Guardian system for an
-        // already-revealed save (after start-body selection, so it never affects the spawn world). A fresh
-        // reveal adds it live via RevealGuardianSystemIfReady.
-        if (_storyState.GuardianSystemRevealed)
-        {
-            EnsureGuardianSystemInGalaxy();
-        }
+        // Finale (P6): the galaxy is regenerated from seed each start, so an already-revealed save needs its Guardian
+        // system re-appended — but the story state is not loaded yet at this point (the "registries" boot stage
+        // runs after this one), so LoadStoryState does it (#2460, B06). It still lands after start-body selection,
+        // so it never affects the spawn world. A fresh reveal adds it live via RevealGuardianSystemIfReady.
     }
 
     /// <summary>The archetype a system rolled (#546) — Standard for every system of a pre-variance save.
@@ -1038,6 +1042,7 @@ public sealed partial class GameServer
         {
             OnAchievementHyperjump(session);        // "Jump Pilot" (#1102)
             RecordStoryMilestone("hyperjump:first"); // the save's first jump between stars advances the arc (#1105)
+            RaiseGameEvent(session, GameEventKeys.HyperjumpAny, body.SystemId); // #2465
         }
 
         MarkArrivedOnBody(session, body.Id); // landed here → a quick-travel target + its system now known
@@ -1059,7 +1064,13 @@ public sealed partial class GameServer
         OnPlayerTravelled(session, body.Id, body.Name); // complete any "travel to a place" mission objective (item 31)
         if (!session.Spectating)
         {
+            if (IsGuardianSystemLocation(body.Id))
+            {
+                TryStartStoryTrack(session); // #2470: never leave a player in the finale without its story
+            }
+
             ShipAiOnTravelled(session); // VEGA onboarding: a landing after the first launch + world-type flavour
+            RaiseGameEvent(session, GameEventKeys.TravelLanded, LandingContext(quickTravel, adminBypass)); // #2465
         }
 
         var pad = PlayerPad(session); // the pad claimed above (item 38)
@@ -1118,6 +1129,11 @@ public sealed partial class GameServer
         SendSystemWeather(session); // #2173: the live weather of the system's bodies (sky bodies, maps)
         SendShipRepairStatus(session); // the repair panel follows the ship, not the last console press (#1561)
         SyncAppearance(session); // faces + body paintings both ways — appearance is per-world state (#982)
+        if (body.Id == GuardianCoreBodyId)
+        {
+            SendDuelNodeTo(session); // #2478: a duel running at the core shows its current node to whoever lands there
+        }
+
         Send(session, new ServerMessage
         {
             Text = hyperjump
@@ -1259,7 +1275,18 @@ public sealed partial class GameServer
         ClearTransit(session);
         if (!string.IsNullOrEmpty(destinationBodyId))
         {
-            LandOnBody(playerId, destinationBodyId, padIndex);
+            // #2465: the trip was chosen on the map — its landing is a quick travel for the story steps, although the
+            // ship flies it and sets down through the flight landing.
+            _landingContextOverride = GameEventKeys.TravelQuick;
+            try
+            {
+                LandOnBody(playerId, destinationBodyId, padIndex);
+            }
+            finally
+            {
+                _landingContextOverride = null;
+            }
+
             if (InSpace(playerId))
             {
                 ResendSpaceState(session); // the landing was refused (every pad taken …) — hand the controls back
@@ -1851,6 +1878,8 @@ public sealed partial class GameServer
         // #2173: the worlds whose TickWeather runs this tick — the ambient weather leaves exactly these alone.
         _weatherTicked.Clear();
         _weatherTicked.UnionWith(ticking);
+        _storyTickedWorlds.Clear(); // #2477: their players get the story pass from TickShipAi, the others after the loop
+        _storyTickedWorlds.UnionWith(ticking);
 
         // Decide once per tick whether this is a chunk-sweep tick (throttled), then run the eviction per active
         // world inside the loop so each world's anchors are its own players. See SweepFarChunks.
@@ -1920,6 +1949,9 @@ public sealed partial class GameServer
             }
         }
 
+        Guard("TickStoryOutsideWorlds", deltaSeconds, TickStoryOutsideWorlds); // #2477: the 1 Hz story pass for players no loaded world reaches
+        Guard("TickCutscenes", TickCutscenes); // #2468: queued cutscenes for every joined player, wherever they are (space too)
+        Guard("TickJournal", TickJournal); // #2471: the Journal's coalesced pushes (only players whose stories changed)
         Guard("TickAmbientWeather", deltaSeconds, TickAmbientWeather); // #2173: the weather of every body in an occupied system
         Guard("SampleHistories", deltaSeconds, SampleHistories); // also advances _uptime
         Guard("SilentSessions", SweepSilentSessions); // release names/slots held by dead clients (#964)
@@ -2288,6 +2320,7 @@ public sealed partial class GameServer
             {
                 if (above)
                 {
+                    RaiseGameEvent(session, GameEventKeys.PlayerZeroG); // #2479: the pilot course's react step — before the hint it absorbs
                     ShipAiHintOnce(session, "zero_g"); // first float above a planet: how to get back down (#2276)
                 }
                 else
@@ -2443,9 +2476,11 @@ public sealed partial class GameServer
             if (p.RationStore.Slots[i] is { } stack && !stack.IsEmpty && !IsPreparation(stack.Item)
                 && _content.GetItem(stack.Item) is { Category: ItemCategory.Consumable } food && food.ConsumeHunger > 0f)
             {
-                p.RationStore.Remove(stack.Item, 1);
+                string fed = stack.Item;
+                p.RationStore.Remove(fed, 1);
                 p.Hunger = System.Math.Min(100f, p.Hunger + food.ConsumeHunger);
                 SendInventory(session);
+                RaiseGameEvent(session, GameEventKeys.SuitAutoFeed, fed); // #2469: the tutorial's ration-dispenser reaction
                 return;
             }
         }
@@ -2457,6 +2492,7 @@ public sealed partial class GameServer
             float restore = _content.GetItem("emergency_ration")?.ConsumeHunger ?? 40f;
             p.Hunger = System.Math.Min(100f, p.Hunger + restore);
             SendInventory(session);
+            RaiseGameEvent(session, GameEventKeys.SuitAutoFeed, "emergency_ration"); // #2469
         }
     }
 
@@ -2600,6 +2636,7 @@ public sealed partial class GameServer
     private void CompleteRespawn(PlayerSession session, string reason, bool salvaged, bool sameWorld, bool useCustomSpawn)
     {
         var p = session.State;
+        RaiseGameEvent(session, GameEventKeys.PlayerRespawned); // #2469: the tutorial's "you only fainted" reaction
         p.Health = 100f;
         p.Oxygen = MaxOxygen(p);
         p.SuitEnergy = MaxSuitEnergy(p); // #2297: full means the worn battery's full
@@ -3607,6 +3644,7 @@ public sealed partial class GameServer
 
             string loc = session.CurrentLocationId;
             _sessions.Remove(connectionId);
+            _stepListenersDirty = true; // #2466: the leaver's active steps no longer need the event bus
             ClearAlliancePending(session.State.PlayerId); // drop transient requests; refresh online allies' rosters
             ClearCrewPending(session.State.PlayerId);     // drop crew invites; let mates see the Online flag drop
             OnMarkerOwnerLeftWorld(session, loc, disconnected: true); // pings vanish, shared markers stay indexed (#1293)
@@ -3829,6 +3867,28 @@ public sealed partial class GameServer
         // The crew/marker envelopes (#1216/#1217) carry reads AND writes — only the read passes a pause.
         CrewActionIntent c => c.Kind == "list",
         MarkerActionIntent m => m.Kind == "list",
+        // #2462 (B12): preferences, the tutorial and the story — sent from the Settings (which the pause menu opens),
+        // the Tab menu's Story tab and admin tools. None moves the frozen world: they change this player's own
+        // ledger or re-send state. SetNpcCallsIntent used to be dropped here, so a call preference changed from the
+        // pause menu only took effect at the next join.
+        SetNpcCallsIntent or SkipOnboardingIntent or RequestStoryResolutionIntent or StorySelectIntent => true,
+        // #2466 (synthesis §5.7): the pack controls change only the player's own ledger — "skipPack" is the first tutorial
+        // card's "I know the game", shown during a singleplayer hold; #2467 watching a scene again changes nothing; #2470
+        // "Start the story now" starts the player's own story track. #2471 (issue: "every action is pause-whitelisted"): the
+        // Journal can be reached from the pause menu's settings, so starting, skipping, restarting or replaying a chapter or a
+        // step, and the Journal's state request, are served too — their lines and cards wait for the client like any other;
+        // the frozen world itself does not move. Each action is validated in HandleStoryPackIntent.
+        StoryPackIntent => true,
+        // #2467 (synthesis §5.7): the cutscene director confirms a scene while its own singleplayer hold is still on — the
+        // receipt only stamps the player's own seen ledger.
+        CutsceneSeenIntent => true,
+        // #2469 (synthesis §5.7): the tutorial's UI teaching flags come from the pause menu too ("Codex" there, VEGA's
+        // continue while the menu holds the world) — a flag only ticks off the sender's own lesson.
+        UiTutorialEvent => true,
+        // #2478: the duel dialogue holds a singleplayer world while the core waits for an answer (like any scene that takes
+        // the camera) — the answer itself must get through. It moves the duel and, at the last node, the story (the win
+        // pacifies the machines); nothing of the frozen simulation ticks with it.
+        CoreDialogueChoiceIntent => true,
         _ => false,
     };
 
@@ -3857,8 +3917,14 @@ public sealed partial class GameServer
             case MoveIntent move: HandleMove(session, move); break;
             case FarTerrainTileRequest farTiles: HandleFarTerrainTileRequest(session, farTiles); break; // #1821
             case SelectHotbarIntent hotbar:
+                int previousSlot = session.State.SelectedHotbarSlot;
                 session.State.SelectedHotbarSlot = System.Math.Clamp(hotbar.Slot, 0, HotbarSlots - 1);
                 ClearRopeIfNotHeld(session.State); // #2319: putting the rope gun away drops the rope
+                if (session.State.SelectedHotbarSlot != previousSlot)
+                {
+                    RaiseGameEvent(session, GameEventKeys.HotbarSelect, (session.State.SelectedHotbarSlot + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)); // #2469
+                }
+
                 break;
             case MoveItemIntent moveItem: HandleMoveItem(session, moveItem); break;
             case EquipItemIntent equip: HandleEquipItem(session, equip); break;       // #2110
@@ -4003,6 +4069,9 @@ public sealed partial class GameServer
             case InterviewAnswerIntent interview: HandleInterviewAnswer(session, interview); break; // reporter news (2026-09)
             case CreativeTakeItemIntent take: HandleCreativeTakeItem(session, take); break; // the Sandbox catalog (#1930)
             case StorySelectIntent storySelect: HandleStorySelect(session, storySelect); break;
+            case StoryPackIntent storyPack: HandleStoryPackIntent(session, storyPack); break; // #2466: the player's own pack controls
+            case CutsceneSeenIntent cutsceneSeen: HandleCutsceneSeen(session, cutsceneSeen); break; // #2467: the seen ledger
+            case UiTutorialEvent uiTutorial: HandleUiTutorialEvent(session, uiTutorial); break; // #2469: a UI lesson's teaching flag
             case NetFragmentFoundIntent netFrag: HandleNetFragmentFound(session, netFrag); break;
             case CoreHackIntent coreHack: HandleCoreHack(session, coreHack); break;
             case CoreDialogueChoiceIntent coreChoice: HandleCoreDialogueChoice(session, coreChoice); break;
@@ -4227,9 +4296,22 @@ public sealed partial class GameServer
             InstallId = StripControlChars(join.InstallId).Trim(), // #1222: arcade guest identity, empty otherwise
             IsFleetAdmin = fleetAdmin,
             HeartbeatTracked = true, // joined over the wire → silence is meaningful (#964)
+            InJoinPlacement = true, // #2465: the join's own placement raises no game events (cleared at the end)
+            CutsceneJoinAt = _uptime, // #2467: cutscenes wait until the client is in the world
         };
         session.LastPayloadAt = _uptime; // start the heartbeat clock now (#964) — a client that freezes
                                          // right after joining must age out like any other silent session
+        foreach (string feature in join.Features ?? System.Array.Empty<string>())
+        {
+            if (!string.IsNullOrEmpty(feature) && feature.Length <= 32 && session.ClientFeatures.Count < 16)
+            {
+                session.ClientFeatures.Add(feature); // #2466: what the client understands (packs1 …) — bounded, it is client input
+            }
+        }
+
+        // #2460 (B01): newcomer or veteran is decided HERE, once, before anything below can pay knowledge or
+        // blueprints into the state (the spawn-system mapping, the Creative grants, the story beat catch-up).
+        session.Join = TakeJoinSnapshot(state);
         _sessions[connectionId] = session;
         state.LastSeenUtc = UtcNowIso(); // "last seen" for the admin player list (issue #488)
         SetupPlayerShip(session); // give the player their own ship, stamped into their world
@@ -4309,7 +4391,8 @@ public sealed partial class GameServer
         OnMarkerOwnerJoined(session); // the loaded state is the truth for this player's shared markers (#1293)
         SendMarkers(session);      // own + shared map markers on the join world (#1217)
         SendNotes(session);        // the player's own notes (#1844)
-        SendStoryStateOnJoin(session); // story meter + per-player beat catch-up (P0)
+        CutscenesOnJoin(session); // #2467: scenes committed in an earlier session but never confirmed — before new ones queue
+        StoryOnJoin(session); // #2470: migration, the prologue for a newcomer to the story, then the meter + catch-up (held until the track starts)
         SendRelayNetwork(session); // SPS relay meters + jump lanes (#1125)
         ArmNpcRadioOnJoin(session); // NPC calls (#1119): quiet period first; the join scan then catches up
         BroadcastLandingPads(session); // the join claimed a pad — everyone's map must show it (#1020)
@@ -4319,7 +4402,12 @@ public sealed partial class GameServer
         SendPaintDesigns(session);      // paint-design registry — before any chunk with painted blocks can arrive
         SendCustomShapes(session);      // …and the form registry, for the same reason (#843)
         QueueWorldTextures(session);    // #1958: the world's textures follow in pages, one per tick
-        ShipAiOnJoin(session); // boot VEGA: onboarding intro / veteran skip / resume objective
+        ShipAiOnJoin(session); // VEGA: tips quiet, the chip (#2470: the prologue played in StoryOnJoin; the training is the pack below)
+        StoryPacksOnJoin(session); // #2466: player packs — migrate, start, advance, re-speak the step on the chip
+        TryStartStoryTrack(session); // #2470: the story track starts here when the training is through or off (or for a veteran)
+        StoryMissionsOnJoin(session); // #2476: a running story mission listens again
+        SendVegaJournal(session); // the tips log snapshot — after the tutorial's migration, so it lists the migrated steps
+        PushJournal(session, force: true); // #2471: the Journal's stories and the objective list, once everything above ran
         RestoreStationOnJoin(session, savedLocation, savedPosition); // #1925: quit on a station → back on it
 
         // Hosted worlds: one-time welcome (community rules + beta notice) on the player's FIRST join of
@@ -4338,6 +4426,7 @@ public sealed partial class GameServer
             Send(session, maintenance);
         }
 
+        session.InJoinPlacement = false; // #2465: from here on, what happens is the player's doing
         _log.Info($"Player '{name}' joined (connection {connectionId}).");
     }
 
@@ -4585,7 +4674,10 @@ public sealed partial class GameServer
             IsFleetAdmin = IsFleetAdminName(name), // config-only, like the network join path
             // NOT heartbeat-tracked (#964): a locally-added player drives the server through direct calls
             // and never sends a payload, so silence is normal rather than a sign of a dead client.
+            InJoinPlacement = true, // #2465: like the network join, the placement raises no game events
         };
+        session.ClientFeatures.Add(ClientFeatures.Packs1); // #2466: a local player runs in this build
+        session.Join = TakeJoinSnapshot(state); // #2460: the arrival state, like the network join path
         _sessions[connectionId] = session;
         session.AnnouncedWorldId = WorldIdOf(joinBody); // #2117: joined on this body, like a JoinAccepted would say
         state.LastSeenUtc = UtcNowIso();
@@ -4596,6 +4688,7 @@ public sealed partial class GameServer
         GrantStarterTeleporter(session); // StarterTeleporter world rule (#1056): hand out the device on join
         OnMarkerOwnerJoined(session); // the loaded state is the truth for this player's shared markers (#1293)
         RestoreStationOnJoin(session, savedLocation, savedPosition); // #1925: saved aboard a station → back on it
+        session.InJoinPlacement = false; // #2465
         return session;
     }
 
@@ -4827,6 +4920,7 @@ public sealed partial class GameServer
             session.State.Crouching = move.Crouching; // #2435: pose only, like the climb — the presence shows the squat to the others
             ClearRopeIfNotHeld(session.State); // #2319: a rope nobody can hold any more (boarded, seated, in space, put away)
             TrackVerticalSpeed(session, before.Y, reported.Y); // #2286: "Back to my ship" refuses a falling player
+            TutorialMovementEvents(session, before, reported, onSurface, move.Crouching); // #2469: walk / jump / crouch lessons
             UpdateDrivingSpeeder(session); // if driving a speeder, slave it to this pose + drain its energy cell
             if (onSurface)
             {
@@ -5238,6 +5332,7 @@ public sealed partial class GameServer
         foreach (var drop in yield.Take(fixedDrops))
         {
             if (pool is not null) { pool.Add(drop.Item, drop.Count + bloomBonus); } else { bank?.Invoke(drop.Item, drop.Count + bloomBonus); }
+            RaiseGameEvent(session, GameEventKeys.ItemGained, ItemKey.Base(drop.Item), drop.Count + bloomBonus); // #2469: e.g. the berry lesson
         }
 
         // #2201: what a player breaks also yields a sample of its species (a plant, a tree) or of its deposit (an ore).
@@ -5280,7 +5375,7 @@ public sealed partial class GameServer
 
         OnBlockMined(session, def.Key);
         OnCrystalBlockMinedHint(session, def.Key); // #2257: the first crystal tells what crystal can do
-        ShipAiOnMine(session); // VEGA onboarding: the "mine a few blocks" stage counts every break
+        RaiseGameEvent(session, GameEventKeys.MineAny, def.Key); // #2465: the story-pack steps
         ShipAiOnBlockBroken(session, def.Key); // VEGA context tips (#1077): digging score, by-hand streak, rare-ore learned
         CreaturesOnBlockBroken(session, pos); // #1760: a flowerling that SEES this turns on the miner
     }
@@ -5876,6 +5971,11 @@ public sealed partial class GameServer
             ScheduleSaplingGrowth(pos); // #1774: a planted sapling starts its clock
         }
 
+        if (IsFlora(blockDef.NumericId.Value))
+        {
+            RaiseGameEvent(session, GameEventKeys.PlantAny, blockDef.Key); // #2482: the gardener course
+        }
+
         if (plantedSeed != 0)
         {
             RememberBredPlant(pos, plantedSeed); // #2209: which species stands here
@@ -5942,6 +6042,17 @@ public sealed partial class GameServer
 
         SendInventory(session);
         OnAchievementBuild(session);
+        RaiseGameEvent(session, GameEventKeys.BuildAny, blockDef.Key); // #2465
+        if (blockDef.Key != BaseCoreBlock && HasGameEventListener(GameEventKeys.BaseBuilt) && InOwnOrAlliedBaseZone(session.State.PlayerId, pos))
+        {
+            RaiseGameEvent(session, GameEventKeys.BaseBuilt, blockDef.Key); // #2480: built at home (the homestead course)
+        }
+
+        if (ShapeCode.ShapeOf(placeShape) != 0 && (place.Yaw is >= 0 and <= 3 || ShapeCode.IsValidUpFace(place.UpFace)))
+        {
+            RaiseGameEvent(session, GameEventKeys.BuildRotated, blockDef.Key); // a form/prop turned with the rotate key
+        }
+
         OnBlockPlaced(session, blockDef, pos); // #1116: advance any matching Build mission objectives
     }
 
@@ -5978,6 +6089,8 @@ public sealed partial class GameServer
 
             Send(session, new CraftResult { Success = true, RecipeKey = recipe.Key });
             SendInventory(session);
+            RaiseGameEvent(session, GameEventKeys.CraftAny, recipe.Key, count); // #2465: a free craft is still a craft
+            RaiseGameEvent(session, GameEventKeys.CraftStation, CraftStationArg(recipe.Station), count); // #2481: by station
             return;
         }
 
@@ -6070,15 +6183,21 @@ public sealed partial class GameServer
         {
             RecordVendorTrade(session.State);
             SendNpcStandings(session); // #1118: the vendor's nameplate stage may just have risen
-            ShipAiOnTradeOrMission(session); // VEGA onboarding: a vendor barter counts as the first trade
+            RaiseGameEvent(session, GameEventKeys.TradeBarter, recipe.Key, count); // #2465
         }
 
         Send(session, new CraftResult { Success = true, RecipeKey = recipe.Key });
         SendInventory(session);
         WarnIfPoolOverflowed(session, pool); // #600: outputs that found no room are gone — say so
-        ShipAiOnCraft(session); // VEGA onboarding: first successful craft
         OnAchievementCraft(session, recipe.Key);
+        RaiseGameEvent(session, GameEventKeys.CraftAny, recipe.Key, count); // #2465: amount = the batch count
+        RaiseGameEvent(session, GameEventKeys.CraftStation, CraftStationArg(recipe.Station), count); // #2481: a factory's craft …
     }
+
+    /// <summary>The argument of <see cref="GameEventKeys.CraftStation"/>: the station's name in lower case (#2481) — only
+    /// built while a step listens (with no listener a raise is one compare, the string would be wasted).</summary>
+    private string CraftStationArg(Shared.Definitions.CraftingStation station)
+        => HasGameEventListener(GameEventKeys.CraftStation) ? station.ToString().ToLowerInvariant() : string.Empty;
 
     /// <summary>
     /// The always-available "Dye"/"Glow" action: turn a held building material into a coloured (and/or
@@ -6125,6 +6244,7 @@ public sealed partial class GameServer
             Send(session, new CraftResult { Success = true, RecipeKey = "tint" });
             SendInventory(session);
             WarnIfPoolOverflowed(session, freeTintPool); // #600
+            RaiseGameEvent(session, GameEventKeys.CraftTint, baseKey, count); // #2465
             return;
         }
 
@@ -6157,7 +6277,7 @@ public sealed partial class GameServer
         SendInventory(session);
         // #600: dyeing PART of a stack needs a fresh slot for the new key, so a full inventory can still lose it.
         WarnIfPoolOverflowed(session, pool);
-        ShipAiOnCraft(session);
+        RaiseGameEvent(session, GameEventKeys.CraftTint, baseKey, count); // #2465
     }
 
     /// <summary>
@@ -6282,6 +6402,7 @@ public sealed partial class GameServer
             SendInventory(session);
             WarnIfPoolOverflowed(session, freeShapePool); // #600
             if (shape != 0) RevealShapeAnomalyMemory(session); // forming a non-cube → VEGA's "why we built blocky" memory
+            RaiseShapeCrafted(session, baseKey, shape, count);
             return;
         }
 
@@ -6307,8 +6428,19 @@ public sealed partial class GameServer
         Send(session, new CraftResult { Success = true, RecipeKey = tag });
         SendInventory(session);
         WarnIfPoolOverflowed(session, pool); // #600: same partial-stack trap as dyeing
-        ShipAiOnCraft(session);
         if (shape != 0) RevealShapeAnomalyMemory(session); // forming a non-cube → VEGA's "why we built blocky" memory
+        RaiseShapeCrafted(session, baseKey, shape, count);
+    }
+
+    /// <summary>#2465: the game events of a form craft — <c>craft:shape</c> for every re-form (a free Creative one
+    /// included), and <c>insight:shape_noncube</c> when the result is not a cube (the trigger of VEGA's shape memory).</summary>
+    private void RaiseShapeCrafted(PlayerSession session, string baseKey, int shape, int count)
+    {
+        RaiseGameEvent(session, GameEventKeys.CraftShape, baseKey, count);
+        if (shape != 0)
+        {
+            RaiseGameEvent(session, GameEventKeys.InsightShapeNoncube, baseKey);
+        }
     }
 
     /// <summary>The N:1 / 1:N branch of <see cref="ApplyShapeExchange"/> for forms over several blocks (#1961).
@@ -6367,7 +6499,6 @@ public sealed partial class GameServer
 
             pool.Remove(inputs);
             AddCraftOutput(session, pool, output, produced, slot);
-            ShipAiOnCraft(session);
         }
 
         Send(session, new CraftResult { Success = true, RecipeKey = tag });
@@ -6377,6 +6508,8 @@ public sealed partial class GameServer
         {
             RevealShapeAnomalyMemory(session);
         }
+
+        RaiseShapeCrafted(session, ItemKey.Base(sourceItemKey), shape, produced);
     }
 
     /// <summary>Fraction of a crafted item's recipe inputs recovered when it is disassembled.</summary>
@@ -6535,7 +6668,7 @@ public sealed partial class GameServer
                 .Replace("{name}", LocalizedName(session.Locale, bp.NameKey, bp.Key)),
         });
         SendInventory(session);
-        ShipAiOnBlueprint(session); // VEGA onboarding: first blueprint researched
+        RaiseGameEvent(session, GameEventKeys.ResearchAny, bp.Key); // #2465
         OnCrystalBlueprintUnlockedHint(session, bp.Key); // #2257: the comm radio opens the Crystal Net tab, the conduit the net
 
         // #2249: the bio lab's blueprints open things no recipe list shows — where the lab is built, and the Change tab.
@@ -6710,6 +6843,22 @@ public sealed partial class GameServer
             // The whole world's mode (#1927) — the same kind of world management as set_mode above.
             case "set_world_mode":
                 AdminSetWorldMode(session, cmd.StringArg);
+                return;
+
+            // Tutorial controls (#2466): skip / restart / a chapter for a player, the world's tutorial rule. Self-service
+            // world management, not a cheat (d3 §6.8) — family worlds keep cheats off. The role is the gate.
+            case "tutorial":
+                HandleTutorialAdmin(session, cmd);
+                return;
+
+            // The story report (#2466: now with the player packs) — read-only, like the reports above.
+            case "story_status":
+                AdminStoryStatus(session, cmd.TargetPlayer);
+                return;
+
+            // Cutscene preview (#2468): plays a scene for the asking admin only, changes nothing — the role is the gate.
+            case "cutscene":
+                AdminPreviewCutscene(session, cmd.StringArg);
                 return;
 
             // Observer mode + its jump command are fleet-admin only: they reach into worlds other people own,
@@ -6922,18 +7071,6 @@ public sealed partial class GameServer
                 });
                 CheatLog(p, "revealed the Guardian finale system");
                 break;
-
-            case "story_status":
-                {
-                    var snap = StorySnapshot;
-                    Send(session, new ServerMessage
-                    {
-                        Text = $"Story '{snap.StoryId}': fragments={snap.Fragments}, kills={snap.Kills}, " +
-                               $"milestones={snap.Milestones}, beats={snap.BeatsRevealed}/{(_story?.Beats.Count ?? 0)}, " +
-                               $"finaleRevealed={_storyState.GuardianSystemRevealed}, defeated={snap.Defeated}",
-                    });
-                    break;
-                }
 
             // ---- Finale QA: fit a ship module (e.g. the jump generator), reveal all lore, or drop into the core ----
             case "grant_module":
@@ -7439,6 +7576,7 @@ public sealed partial class GameServer
             session,
             new ChatMessage { Sender = sender, SenderId = session.State.PlayerId, Text = text }, // #1209: mute keys on the id
             DeliveryMode.ReliableOrdered);
+        RaiseGameEvent(session, GameEventKeys.ChatSent); // #2482: the "Together" course
     }
 
     /// <summary>Live voice relay (opt-in). A thin, opaque forwarder: the server never decodes the Opus payload —
@@ -7630,19 +7768,37 @@ public sealed partial class GameServer
             return;
         }
 
+        // An invisible observer (#2460, N1) is booked as having been there — so a later rejoin on this body counts
+        // nothing either — but leaves no trace in the shared world: no story points, no frontier growth, no
+        // achievements, no knowledge.
+        if (session.Spectating)
+        {
+            session.State.LandedBodies.Add(body.Id);
+            if (!string.IsNullOrEmpty(body.SystemId))
+            {
+                session.State.KnownSystems.Add(body.SystemId);
+            }
+
+            SendExploredMap(session, body.Id);
+            return;
+        }
+
         // Only the FIRST arrival on a body counts toward the explorer achievements — hopping back and forth
         // between two planets must not farm them.
         if (session.State.LandedBodies.Add(body.Id))
         {
             OnAchievementVisit(session);
             RecordPlaceDiscovery(session, body); // #1113: a "Places" Codex entry + the knowledge grant
+            RaiseGameEvent(session, GameEventKeys.VisitBody, body.Id); // #2465 (the join's spawn body raises nothing)
+            if (body.Kind is CelestialKind.Planet or CelestialKind.Moon or CelestialKind.AsteroidField)
+            {
+                RaiseGameEvent(session, GameEventKeys.VisitWorld, body.Id); // #2469: the landing lesson (a station is no world)
+            }
         }
 
         if (!string.IsNullOrEmpty(body.SystemId) && session.State.KnownSystems.Add(body.SystemId))
         {
-            OnAchievementVisitSystem(session); // "System Hopper" / "Starfarer" (#1102)
-            RecordStoryMilestone(); // a new star system mapped → story milestone (P3)
-            MaybeGrowGalaxy(session, body.SystemId); // #1123: reaching the edge pushes the frontier out
+            OnSystemMapped(session, body.SystemId);
         }
 
         SendExploredMap(session, body.Id); // #1113: the remembered fog for this body's planet map
@@ -7654,10 +7810,30 @@ public sealed partial class GameServer
     {
         if (!string.IsNullOrEmpty(systemId) && session.State.KnownSystems.Add(systemId))
         {
-            OnAchievementVisitSystem(session); // "System Hopper" / "Starfarer" (#1102)
-            RecordStoryMilestone(); // a new star system mapped → story milestone (P3)
-            MaybeGrowGalaxy(session, systemId); // #1123: reaching the edge pushes the frontier out
+            if (session.Spectating)
+            {
+                return; // booked, nothing more — see MarkArrivedOnBody (#2460, N1)
+            }
+
+            OnSystemMapped(session, systemId);
         }
+    }
+
+    /// <summary>A player's first arrival in a star system: the explorer achievements, a story milestone and the
+    /// frontier check. The very first system a player knows is their spawn system and maps nothing new — like the
+    /// spawn world in <c>RecordPlaceDiscovery</c>, it pays no story points (#2460, N4): every fresh identity used to
+    /// add +2 to the shared arc on joining, so on an arcade world the third guest already revealed a beat, and the
+    /// beat's knowledge read the newcomer as a veteran.</summary>
+    private void OnSystemMapped(PlayerSession session, string systemId)
+    {
+        OnAchievementVisitSystem(session); // "System Hopper" / "Starfarer" (#1102)
+        if (session.State.KnownSystems.Count > 1)
+        {
+            RecordStoryMilestone(); // a new star system mapped → story milestone (P3)
+            RaiseGameEvent(session, GameEventKeys.VisitSystem, systemId); // #2465: never the spawn system
+        }
+
+        MaybeGrowGalaxy(session, systemId); // #1123: reaching the edge pushes the frontier out
     }
 
     /// <summary>Projects a galaxy body to its network form, including its fixed-landing-pad capacity + how many
@@ -7728,6 +7904,8 @@ public sealed partial class GameServer
             WorldTextures = r.WorldTextures ? "Admins" : "Off",
             FrontierDanger = r.FrontierDanger,
             BaseVisitors = r.BaseVisitors,
+            TutorialPolicy = r.TutorialPolicy.ToString(), // #2466
+            StoryDensity = r.StoryDensity.ToString(), // #2472 (empty = a server without the live edit)
             VoiceChatEnabled = _config.VoiceChatEnabled,
             ChatMode = EffectiveChatMode.ToString(),
             PlayerModeNames = modeNames,
@@ -7754,6 +7932,7 @@ public sealed partial class GameServer
             }
         }
 
+        float storyScaleBefore = StoryScale; // #2475: hostiles switched off make up the kill share at once (and back)
         Apply(intent.CreatureAbundance, v => Rules.CreatureAbundance = v);
         Apply(intent.PlanetEnemies, v => Rules.PlanetEnemies = v);
         Apply(intent.SpaceNpcEnemies, v => Rules.SpaceNpcEnemies = v);
@@ -7818,6 +7997,22 @@ public sealed partial class GameServer
             Rules.BaseVisitors = intent.BaseVisitors.Equals("On", System.StringComparison.OrdinalIgnoreCase);
         }
 
+        bool tutorialPolicyChanged = false;
+        if (ServerConfig.TryParseTutorialPolicy(intent.TutorialPolicy, out var tutorialPolicy) && tutorialPolicy != Rules.TutorialPolicy)
+        {
+            Rules.TutorialPolicy = tutorialPolicy; // #2466: the tutorial's world rule, live
+            tutorialPolicyChanged = true;
+        }
+
+        // #2472: the story pace, live (was creation-only). A faster pace may already cover the next beats — they are
+        // revealed right away by AdvanceStory below; a slower one only stretches what is still ahead (heard beats stay).
+        bool storyDensityChanged = false;
+        if (ServerConfig.TryParseStoryDensity(intent.StoryDensity, out var storyDensity) && storyDensity != Rules.StoryDensity)
+        {
+            Rules.StoryDensity = storyDensity;
+            storyDensityChanged = true;
+        }
+
         _meta.RulesOverride = Rules.Clone(); // the world owns its rules — persist the edit
         _repo.SaveMetadata(_meta);
 
@@ -7827,6 +8022,11 @@ public sealed partial class GameServer
             {
                 SendRules(s);
                 if (GrantStarterTeleporter(s)) { SendInventory(s); } // #1056: flipping the rule on hands the device to everyone online now
+                if (tutorialPolicyChanged)
+                {
+                    AdvancePlayer(s); // #2466: Auto starts the tutorial for whoever has not seen it; Off stops it
+                    SendVegaObjective(s);
+                }
             }
         }
 
@@ -7835,10 +8035,18 @@ public sealed partial class GameServer
             ResendWorldTexturesToAll(); // #1958: switched off → every client drops them; on → they come back
         }
 
+        if (storyDensityChanged || System.Math.Abs(StoryScale - storyScaleBefore) > 0.0001f)
+        {
+            // #2472: reveal what the new pace already covers, persist, re-send the meter (no-op without a story). #2475: also
+            // when the enemy rules changed the peaceful-world factor — beats never go back, the meter is clamped.
+            AdvanceStory();
+        }
+
         _log.Info($"World rules updated by '{session.State.Name}': creatures={Rules.CreatureAbundance}, " +
                   $"planet={Rules.PlanetEnemies}, space={Rules.SpaceNpcEnemies}, ufos={Rules.AlienUfos}, " +
                   $"bandits={Rules.Bandits}, instantTravel={Rules.InstantTravel}, hazards={Rules.EnvironmentalHazards}, " +
-                  $"autoAim={Rules.AutoAim}, starterTeleporter={Rules.StarterTeleporter}, returnToShip={Rules.ReturnToShip}.");
+                  $"autoAim={Rules.AutoAim}, starterTeleporter={Rules.StarterTeleporter}, returnToShip={Rules.ReturnToShip}, " +
+                  $"tutorial={Rules.TutorialPolicy}, storyDensity={Rules.StoryDensity}.");
     }
 
     /// <summary>Rearranges the player's personal inventory by swapping two slots (B58 — customising the quick-bar,
@@ -7874,6 +8082,7 @@ public sealed partial class GameServer
 
         inv.Swap(from, to);
         SendInventory(session);
+        RaiseGameEvent(session, GameEventKeys.ItemMoved); // #2469: the tutorial's backpack lesson
     }
 
     /// <summary>Test seam: drives a quick-bar move/swap for a player (B58).</summary>

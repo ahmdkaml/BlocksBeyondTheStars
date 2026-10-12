@@ -360,7 +360,7 @@ sensor cap.
 
 A cell over a cap registers **inert**: it exists, it is listed, it does nothing, and the player is told
 (`vega.sys.crystal_cap`); mining something frees the slot. The first conduit a player ever places triggers
-`vega.sys.crystal_first`.
+`vega.hint.crystal_first` (a once-per-player system line).
 
 ## 9. Intents and permissions
 
@@ -469,7 +469,7 @@ taps the buttons directly. Everything rides the existing **Interact** action —
   Device Eye is 1 crystal + 1 glass + 1 circuit board, blueprint `crystal_sensors`).
 - **Locales**: `block.<key>.name`, `item.<key>.name/.desc`, `blueprint.<key>.name/.desc`, the server lines
   `srv.crystal.*` (rejections incl. `clone_price.<bait>`, the six announcer presets, `announce_custom` = `{name}`)
-  and `vega.sys.crystal_first/_cap/_planet_only` — EN + DE mandatory, the twelve community locales by the
+  and `vega.hint.crystal_first` + `vega.sys.crystal_cap/_planet_only` — EN + DE mandatory, the twelve community locales by the
   machine pass.
 - **Art**: 24 block tiles (`tools/ai-assets/gen_textures.py`) + 24 inventory icons (`gen_item_icons.py`), OpenAI —
   the 23 of #2058 plus `device_eye` / `item_device_eye` (#2092); the unlit lamp twins have no asset — the atlas
@@ -683,9 +683,25 @@ first conduit, the first own network ON, the first door on a wire, the first arr
 refusal, the first old world circuit, each new blueprint family, the night-light tip for a dark base; a settler hands
 eight conduits to a player they know (`settler_crystal_gift`). The radio chain `crystal_workshop_1..6` (first light,
 doorbell, night light, airlock, little factory, secret passage) uses the new `MissionObjectiveType.Circuit` with
-`CircuitEvents` the net reports, gated by `MissionDefinition.RequiresBlueprint`; nine achievements count
+`CircuitEvents` the net reports, gated by `MissionDefinition.RequiresBlueprint`; since #2475 its steps carry
+`"countsForStory": false` (a course, not story progress — no VEGA story milestone on turn-in); nine achievements count
 `crystal:<event>` (first circuit, ding dong, night watch, logician, assembly line, deep driller, secret passage, going
 up, safecracker).
+
+**VEGA hands the chain out, and the tutorial bridges onto it (#2481).** The six jobs carry `"giverRole": "vega"`
+(`MissionChains.GiverVega`; the content validator allows it only with the radio surface): accepting one records no NPC
+relationship, and after a turn-in `OnChainStepTurnedIn` → `VegaChainFollowUp` has VEGA say in her own panel that the next
+job waits in the Missions tab (`vega.chain.next`, {0} = its name) or which blueprint it still needs
+(`vega.chain.next_research`, {1}) — at once, no radio item, no NPC-calls setting, never muted with the hints (B55: before,
+a coined quartermaster radioed "that job you did for me" 90 s later, only with a radio worn). The tutorial's short course
+**Crystal workshop** (C8, [TUTORIAL_PACK.md](TUTORIAL_PACK.md#the-deep-dives-crystal-net-c8-c14-2481)) is a bridge onto
+these same jobs — mission-bridge steps that complete when a job is turned in; the jobs are not copied, keep their rewards and
+work unchanged for anyone not taking the course (a job done before the course counts silently). While the course runs, its
+next step's line is the follow-up and VEGA's own line stays quiet (`MissionBridgedByRunningStep`). Its first hand-in shows the
+banner `tut.first_circuit` ("First circuit · It works!"). The course **Factory and automation** (C14) follows: a factory
+terminal's bulk craft (`craft:station` `factory`), the SPS-code claim (`factory:claimed`, explained, never asked for) and a
+fabricator crafting by itself (`crystal:craft`), after a machine circuit (the fifth job, or `world:machine_circuit` = the
+`crystal:machine_job` counter) and a forge's goods.
 
 ### 17.10 Client
 

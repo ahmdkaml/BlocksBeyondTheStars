@@ -82,13 +82,15 @@ public sealed class StoryResolutionTests : IDisposable
         client.Connect("loopback", 0);
         client.Send(NetCodec.Encode(new JoinRequest { ContentFingerprint = TestJoin.Fingerprint, PlayerName = "Pilot" }), DeliveryMode.ReliableOrdered);
         server.Tick(0.1);
+        server.StartStoryTrackForTest(server.Sessions[1]); // #2470: a player in the story (the newcomer would train first)
 
         WinTheFinale(server, server.Sessions[1], "Pilot");
         client.Poll();
 
         Assert.NotNull(resolved);
         Assert.Equal("story.vega_protocol.name", resolved!.StoryNameKey);
-        Assert.Equal("The relay network", resolved.EpilogueTitle);
+        Assert.Equal("The relay network", resolved.EpilogueTitle); // still sent: older clients show the raw title
+        Assert.Equal("story.vega.epilogue.title", resolved.EpilogueTitleKey); // #2461: current clients localize it
         Assert.Equal("story.vega.beat13", resolved.EpilogueTextKey);
         // The epilogue also entered the story log (a kind-2 VEGA line), right after the resolution line.
         Assert.Contains("story.vega.finale_resolved", vegaKeys);
@@ -97,6 +99,9 @@ public sealed class StoryResolutionTests : IDisposable
         Assert.Contains("story:vega_protocol:resolved", server.Sessions[1].State.Milestones);
     }
 
+    /// <summary>"Late" heard the whole arc (B12 included) but was offline for the win. Since #2460 (N4) only such a
+    /// player gets the ending at the door — a stranger who first arrives on a won world does not (see
+    /// <c>StoryServerFixesTests.TheEndingAtTheDoor_GoesOnlyToThoseWhoHeardTheArcOut</c>).</summary>
     [Fact]
     public void A_latecomer_catches_up_exactly_once()
     {
@@ -106,6 +111,14 @@ public sealed class StoryResolutionTests : IDisposable
             var server = new SvGameServer(Config(), _content, st, repo);
             server.Start();
             var pilot = server.AddLocalPlayer("Winner");
+            server.StartStoryTrackForTest(pilot); // #2470: both are in the story
+            server.StartStoryTrackForTest(server.AddLocalPlayer("Late"));
+            for (int i = 0; i < 300 && !server.IsGuardianSystemRevealedForTest; i++)
+            {
+                server.RecordStoryMilestoneForTest(); // the whole arc, B12 included, for both of them
+            }
+
+            server.DisconnectLocalPlayerForTest("Late"); // … and "Late" is offline for the win
             WinTheFinale(server, pilot, "Winner");
             Assert.True(server.StorySnapshot.Defeated);
             repo.Flush();
@@ -152,6 +165,7 @@ public sealed class StoryResolutionTests : IDisposable
         client.Connect("loopback", 0);
         client.Send(NetCodec.Encode(new JoinRequest { ContentFingerprint = TestJoin.Fingerprint, PlayerName = "Pilot" }), DeliveryMode.ReliableOrdered);
         server.Tick(0.1);
+        server.StartStoryTrackForTest(server.Sessions[1]); // #2470: a player in the story
 
         // Unresolved story: the request must stay silent (the button cannot spoil anything).
         client.Send(NetCodec.Encode(new RequestStoryResolutionIntent()), DeliveryMode.ReliableOrdered);
@@ -178,6 +192,40 @@ public sealed class StoryResolutionTests : IDisposable
         var de = _content.CreateLocalizer(GameLocale.German);
         Assert.False(en.Get(story.EpilogueTextKey).StartsWith("["), "EN missing the epilogue text");
         Assert.False(de.Get(story.EpilogueTextKey).StartsWith("["), "DE missing the epilogue text");
+    }
+
+    /// <summary>#2461 (B22): the epilogue card's title is a locale key now — German players read German.</summary>
+    [Fact]
+    public void Epilogue_title_is_a_locale_key_in_both_languages()
+    {
+        var story = _content.DefaultStory;
+        Assert.False(string.IsNullOrEmpty(story.EpilogueTitleKey));
+        var en = _content.CreateLocalizer(GameLocale.English);
+        var de = _content.CreateLocalizer(GameLocale.German);
+        Assert.True(en.Has(story.EpilogueTitleKey), "EN missing the epilogue title");
+        Assert.True(de.Has(story.EpilogueTitleKey), "DE missing the epilogue title");
+        Assert.Equal(story.EpilogueTitle, en.Get(story.EpilogueTitleKey)); // the raw fallback says the same thing
+        Assert.NotEqual(en.Get(story.EpilogueTitleKey), de.Get(story.EpilogueTitleKey));
+    }
+
+    /// <summary>#2461: the title key rides as an additive field on the existing contractless message — an older
+    /// server's message reads as "no key" (the client then shows the raw title), and the field survives the wire.</summary>
+    [Fact]
+    public void StoryResolved_EpilogueTitleKey_round_trips_and_defaults_to_empty()
+    {
+        Assert.Equal(string.Empty, new StoryResolved().EpilogueTitleKey);
+
+        var msg = new StoryResolved
+        {
+            StoryNameKey = "story.vega_protocol.name",
+            EpilogueTitle = "The relay network",
+            EpilogueTitleKey = "story.vega.epilogue.title",
+            EpilogueTextKey = "story.vega.beat13",
+        };
+        var decoded = Assert.IsType<StoryResolved>(NetCodec.Decode(NetCodec.Encode(msg)));
+        Assert.Equal("story.vega.epilogue.title", decoded.EpilogueTitleKey);
+        Assert.Equal("The relay network", decoded.EpilogueTitle);
+        Assert.Equal("story.vega.beat13", decoded.EpilogueTextKey);
     }
 
     public void Dispose()

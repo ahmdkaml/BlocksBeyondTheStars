@@ -4,6 +4,7 @@
 using System.Linq;
 using BlocksBeyondTheStars.Networking.Messages;
 using BlocksBeyondTheStars.Shared.State;
+using BlocksBeyondTheStars.Shared.Story;
 
 namespace BlocksBeyondTheStars.GameServer;
 
@@ -153,6 +154,7 @@ public sealed partial class GameServer
         }
 
         p.Jetpacking = true;
+        RaiseGameEvent(session, GameEventKeys.MoveAirborne, GameEventKeys.AirborneJetpack); // #2482: the "On the move" course
     }
 
     private const string GliderItem = "glider";
@@ -177,6 +179,7 @@ public sealed partial class GameServer
         }
 
         p.Gliding = true;
+        RaiseGameEvent(session, GameEventKeys.MoveAirborne, GameEventKeys.AirborneGlider); // #2482: the "On the move" course
     }
 
     /// <summary>Test seam (#2296): the glide intent as if the client had sent it.</summary>
@@ -300,6 +303,7 @@ public sealed partial class GameServer
         }
 
         AfterEquipmentChanged(session);
+        RaiseGameEvent(session, GameEventKeys.GearEquipped, def.Key); // #2469: the tutorial's "gear only works when worn"
     }
 
     /// <summary>Takes gear off into a backpack slot (−1 = the first free slot past the quick-bar, then any); a target slot

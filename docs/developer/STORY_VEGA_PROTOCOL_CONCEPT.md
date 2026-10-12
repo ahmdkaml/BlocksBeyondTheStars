@@ -100,6 +100,99 @@ The arc ends at the dormant **Guardian core** (§7).
    proposes a **decentralised** net, and the only way to end the killing is to **reach the dormant Guardian
    core** before reactivated net-tech wakes it. The finale follows (§7).
 
+### 3.1 Chapters and the player's start (#2470)
+
+Since #2470 VEGA is its own story pack with **nine chapters** that follow the beats — the score engine is untouched, a
+chapter is simply where the arc stands. The chapter titles are what players see (Story tab, recap card, chapter cards):
+
+| # | Chapter | Beats | The three acts |
+|---|---|---|---|
+| 0 | **Awakening** / Erwachen | the prologue + B0 | act 1 |
+| 1 | **A Familiar Signature** / Eine vertraute Signatur | B1 | act 1 |
+| 2 | **The Service** / Der Dienst | B2–B4 | act 2 |
+| 3 | **The Guardian** / Der Wächter | B5 | act 2 |
+| 4 | **The Verdict** / Das Urteil | B6–B8 | act 2 |
+| 5 | **What You Are** / Was du bist | B9–B10 (the clone reveal) | act 2 |
+| 6 | **It Still Sleeps** / Er schläft noch | B11 | act 3 |
+| 7 | **The Guardian Core** / Der Wächterkern | B12, the reveal and the finale | act 3 |
+| 8 | **Resolution** / Auflösung | the win and the epilogue | — |
+
+**When the story starts for a player (S2).** The prologue is the cold open of the game: the player wakes in the pilot's
+seat, VEGA boots, and her last page is the call to adventure ("My memory lies scattered out there … help me find the
+pieces, and we will learn who we were"). Then the basic training runs undisturbed; the story's own track starts after
+it (or at once when the tutorial is off, for a returning veteran, on "Start the story now", or in the finale system).
+Whatever the shared arc revealed meanwhile is held for that player and arrives as one recap card plus the current
+chapter — in multiplayer a latecomer catches up with the crew this way; on hosted and arcade worlds a newcomer gets a
+personal chapter 1 and sees the crew's chapter as a status line. VEGA's older memory arc belongs to this pack: a world
+without the VEGA story hears neutral archive lines instead. Mechanics: [STORY_IMPLEMENTATION.md](STORY_IMPLEMENTATION.md).
+
+### 3.2 How the story is presented (#2474)
+
+VEGA no longer speaks her memories only from the side panel. Every chapter **opens with its scene** in the frame — a
+"Chapter n" title over the chapter's name with a short sting, and VEGA's beat in her speaker box (her portrait and colour).
+The three turning points are staged: **"The Guardian"** (B5) looks up into the sky while the anomaly hums; **"What You
+Are"** (B9) is told warm and gently at the player's **own heal tank** — the cradle, as the line says; **"The Guardian
+Core"** (B12) draws the line on the star map from where the player stands to the violet star that has just woken, while
+VEGA names the jump generator. Chapter 2 shows her memory of the star chart in sepia ("It mapped these stars"). Every other
+beat is a **beat card** in the frame — "VEGA remembers" over the beat's title, then her words — and the controls stay free:
+memories never lock the player in place. Only the big scenes take the camera (a singleplayer world waits meanwhile;
+multiplayer never stops). The words are the beats' own texts, the Journal keeps them all, and a skipped scene never takes
+the jump-generator line away. The scene list and the rules: [CUTSCENES.md](CUTSCENES.md#vegas-chapter-scenes-and-beat-cards-2474).
+
+### 3.3 Guidance: chapter leads (#2475)
+
+The hidden score stays the clock; **leads are the compass** (synthesis option O2). Each chapter names one or two things
+worth doing next — VEGA's chip shows the first one the player can follow from where they are ("VEGA: Visit the Sealed
+Observatory on Kepler-3 b"), the map marks it when it has a place, and the Journal lists the chapter's leads as tasks
+(✔ followed, ● on the chip, ○ open). A lead never holds a beat back, so a world that lacks a site never blocks the story:
+
+| Chapter | Leads |
+|---|---|
+| 1 A Familiar Signature | find the net fragment on this world |
+| 2 The Service | visit the Sealed Observatory · find a net fragment |
+| 3 The Guardian | read a monument's runes · help a settlement |
+| 4 The Verdict | board the derelict *The Long Quiet* · go to the heal tank aboard your ship |
+| 5 What You Are | research the radar array · help a settlement |
+| 6 It Still Sleeps | research the jump generator · fit it to your ship |
+| 7 The Guardian Core | confront the Core (first: fit a jump generator) — never muted |
+| 8 Resolution | link the stars with relays |
+
+When none of a chapter's leads can be followed here, the chip falls back to a fragment on this world, then a settlement
+job, then "explore" (worded for the world's rules — no "drive back the machines" on a peaceful world). In multiplayer every
+player follows their own leads; the **first** lead anyone follows in a chapter pays a once-per-save bonus (+6 points, at
+most six chapters = 36 points before B12) — a deliberate second credit next to the action's own points.
+
+**Peaceful worlds** (no machines: the peaceful, family and peaceful-creative presets) could never earn the kill share of
+the score (93 instead of 73 milestones, and the four personal memories never dropped). The score is now made up for it
+(× 204/164 ≈ 1.244, computed from the pack), and there a followed lead or a monument reading unlocks the next personal
+memory. The **Crystal workshop** teaches circuits — its turn-ins no longer count as story progress; the lead bonus
+balances the points. Mechanics: [STORY_IMPLEMENTATION.md](STORY_IMPLEMENTATION.md#chapter-leads-the-chapter-bonus-and-peaceful-world-pacing-2475).
+
+### 3.4 Story missions per chapter (#2476)
+
+So that VEGA feels like a mission pack (synthesis option O3, on top of the leads): when a player reaches a chapter, VEGA hands
+them that chapter's **story mission** — after the chapter's scene, never during the basic training — with a short briefing
+in her voice. A mission is a small titled task list built from the chapter's own drivers; the Journal's VEGA page shows it
+under "Missions in this chapter" (✔ done, ● now, ○ next) and the chip shows its current step in the lead's place. It
+**never holds a beat back** — the score keeps revealing the story; when the chapter moves on, an unfinished mission is let go.
+What a world cannot offer is skipped and a stand-in takes its place, so there is no dead end. Finishing a mission counts as
+following a lead for the chapter bonus (still once per save and chapter); there is no other reward. In multiplayer every
+player does their own. The texts reuse the canon — the beats, the call, the lore the world already carries (the
+observatory's last log, the vault plaque, the derelict's manifest); no new lore.
+
+| Chapter | Mission | Steps (stand-in) |
+|---|---|---|
+| 1 A Familiar Signature | **Follow the Signal** | find a net fragment (help a settlement, once every fragment is found) |
+| 2 The Service | **The Sealed Observatory** | visit it → read the survey post's last log (**The Deep Archive**: read the notes in a buried vault, when the observatory cannot be reached) |
+| 3 The Guardian | **What the Stones Remember** | read a monument's runes → help a settlement |
+| 4 The Verdict | **The Long Quiet** | board the derelict → find her cargo manifest (**Ships That Remember**: scan a drifting wreck) |
+| 5 What You Are | **Eyes on Far Stars** | research the radar array → build it into the ship |
+| 6 It Still Sleeps | **The Jump Generator** | research the jump generator → build it into the ship |
+| 7 The Guardian Core | — | the finale is this chapter's mission |
+| 8 Resolution | **Survey Orders** | do the first survey order from a station board (link the stars with relays, without stations) |
+
+Mechanics: [STORY_IMPLEMENTATION.md](STORY_IMPLEMENTATION.md#story-missions-per-chapter-2476).
+
 ---
 
 ## 4. Evaluation
@@ -159,8 +252,9 @@ one new entity; the finale is the one large new piece.
 keeping the engine **story-agnostic** (the active **story pack** supplies content + config; see the plan).
 
 ### Layer A — CONTENT as pure data (the "What") **[proposed]**
-A per-pack catalog `data/stories/<id>/lore.json`, one row per story atom (beat / net fragment / player memory
-/ flavour / mission / finale argument). Beats are an **ordered list** decoupled from which fragment was found.
+A per-pack catalog, one row per story atom (beat / net fragment / player memory / flavour / mission / finale
+argument) — as built, `data/stories/<id>/story.json` (site texts in `lore_sites.json`); there is no separate
+`lore.json`. Beats are an **ordered list** decoupled from which fragment was found.
 The canonical, generation-ready structure is [LORE_STRUCTURE.md](LORE_STRUCTURE.md).
 → **New story content = JSON rows + translation. No code.** Adding a whole new storyline = a new pack.
 
@@ -196,7 +290,8 @@ The canonical, generation-ready structure is [LORE_STRUCTURE.md](LORE_STRUCTURE.
 | ↓ | the dormant Guardian core; reactivation risk |
 | high | VEGA locates the Guardian system; the finale opens |
 
-(The existing 10 `ai_memory_fragment` beats map onto category `vega`.)
+(As built, the older 10-line `ai_memory_fragment` arc stays a separate per-player arc beside these beats; its
+texts were reconciled with the canon in #2463 — see [LORE_STRUCTURE.md](LORE_STRUCTURE.md) §D.)
 
 ---
 
@@ -264,7 +359,10 @@ spawn position + an in-radius aggression modifier in `GameServerEnemies` / `Game
 ## 11. World options / tuning
 Pacing (thresholds), density (weights), combat weighting and on/off are pure numbers — expose a
 **story-selection** control (pick the active pack, or **"None / Sandbox"**) + a **"Story density"** slider in
-world creation, admin live-editable. Reuses the existing world-rules model.
+world creation. Reuses the existing world-rules model. *As built:* both are creation-time options baked into the
+save's rules, chosen on the world-creation **Stories** page (#2472, with the tutorial rule); the density is live-editable
+by the world admin since #2472 (in-game world rules), the active pack is switched by an admin (`StorySelectIntent`). Since
+#2475 the pack's `leadBonusMilestones`, `normaliseUnavailableDrivers` and `memoryTriggers` are data too (§3.3).
 
 ## 12. Recommended first slice (MVP)
 1. **Generic story engine + state + threshold beats** (Layer C) on top of `ai_memory_fragment`; a

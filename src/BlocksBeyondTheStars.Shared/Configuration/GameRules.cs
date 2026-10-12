@@ -105,6 +105,13 @@ public enum LandingZoneProtection { Off, StartZoneOnly, All }
 /// authored pacing.</summary>
 public enum StoryDensity { Sparse, Normal, Dense }
 
+/// <summary>Whether the tutorial pack runs in this world (#2466, synthesis §5.3 "Weltregel"): <see cref="Auto"/> (default)
+/// starts it for every new player, who can skip or switch it off at any time; <see cref="OptIn"/> lists it and starts it
+/// only on the player's request (veteran servers); <see cref="Off"/> does not offer it. Nothing forces it — every step,
+/// chapter and the pack stay skippable. Governs packs of kind <c>tutorial</c> only; the world story is
+/// <see cref="GameRules.StoryId"/>.</summary>
+public enum TutorialPolicy { Auto, OptIn, Off }
+
 /// <summary>How the server screens text chat (#1207, kid safety). <see cref="Filtered"/> masks profanity, drops
 /// slurs/hate terms and masks personal data (phone numbers, e-mails, links); <see cref="Safe"/> additionally drops
 /// any line carrying personal data; <see cref="Open"/> relays everything as typed. The operator's
@@ -207,8 +214,17 @@ public sealed class GameRules
     /// save has no persisted story state yet; thereafter the admin switches packs live (resets progress).</summary>
     public string StoryId { get; set; } = string.Empty;
 
-    /// <summary>Story pacing speed (P8 world option): how fast beats + the finale unfold. Live-editable.</summary>
+    /// <summary>Story pacing speed (P8 world option): how fast beats + the finale unfold. Set at world creation
+    /// (<c>--story-density</c>, the world-creation "Stories" page) and baked into the save's rules; the world admin changes
+    /// it live since #2472 (<c>SetWorldRulesIntent.StoryDensity</c>, the in-game world rules) — a denser pace reveals the
+    /// beats its score has crossed at once, a slower one never takes a heard beat back.</summary>
     public StoryDensity StoryDensity { get; set; } = StoryDensity.Normal;
+
+    /// <summary>Whether the tutorial pack runs in this world (#2466). Set at world creation (the <c>tutorial</c> option,
+    /// <c>--tutorial auto|optin|off</c>) and baked into the save's rules; the admin changes it live
+    /// (<c>/tutorial policy</c>, <c>SetWorldRulesIntent.TutorialPolicy</c>). An older save without the field reads
+    /// <see cref="TutorialPolicy.Auto"/> — the safe default; an older build that re-saves drops it back to Auto.</summary>
+    public TutorialPolicy TutorialPolicy { get; set; } = TutorialPolicy.Auto;
 
     /// <summary>Multiplier applied to the story-progress score from <see cref="StoryDensity"/> (Dense reveals
     /// the arc sooner, Sparse later). Normal is 1.0 — the pack's authored pacing.</summary>

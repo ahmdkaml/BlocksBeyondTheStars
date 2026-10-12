@@ -340,6 +340,12 @@ public sealed class NetCodecTests
         [292] = typeof(OpenContainerIntent),     // #2436
         [293] = typeof(MoveContainerItemIntent), // #2436
         [294] = typeof(ContainerContents),       // #2436
+        [295] = typeof(CutscenePlay),            // #2467
+        [296] = typeof(CutsceneSeenIntent),      // #2467
+        [297] = typeof(StoryPackIntent),         // #2466
+        [298] = typeof(UiTutorialEvent),         // #2469
+        [299] = typeof(ObjectiveList),           // #2471
+        [300] = typeof(StoryPackStates),         // #2471
 
     };
 

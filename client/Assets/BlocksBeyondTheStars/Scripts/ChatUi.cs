@@ -251,8 +251,9 @@ namespace BlocksBeyondTheStars.Client
             // own overlay and the left lane belongs to it; EVA keeps the chat (you are still "on foot").
             // Typing overrides — the input must never vanish mid-sentence, however the state flips. The
             // /bump capture guard: that path blanks the canvas itself for its end-of-frame screenshot, and
-            // this toggle must not fight it within the frame.
-            bool hideForContext = Game.SpaceViewActive && !Game.InEva && !_typing;
+            // this toggle must not fight it within the frame. A cutscene hides it too (#2461) — new lines keep arriving
+            // in the scrollback and show again afterwards.
+            bool hideForContext = ((Game.SpaceViewActive && !Game.InEva) || GameBootstrap.CutsceneActive) && !_typing;
             if (_canvas != null && !_capturing && _canvas.enabled == hideForContext)
             {
                 _canvas.enabled = !hideForContext;
@@ -293,7 +294,8 @@ namespace BlocksBeyondTheStars.Client
             // Open the input with Enter — or, on a pad, with d-pad up: the chat box was the last thing on
             // the HUD a controller could not reach at all (#1211/#1220). KeypadEnter stays a raw second key
             // rather than a binding: it is the SAME key to a player, not a second one to configure.
-            if (!_typing && !Game.MenuOpen && (InputMap.Down(InputAction.OpenChat) || Input.GetKeyDown(KeyCode.KeypadEnter)))
+            if (!_typing && !Game.MenuOpen && !GameBootstrap.CutsceneActive
+                && (InputMap.Down(InputAction.OpenChat) || Input.GetKeyDown(KeyCode.KeypadEnter)))
             {
                 OpenInput();
             }
@@ -876,7 +878,19 @@ namespace BlocksBeyondTheStars.Client
                     return true;
 
                 // ---- Story finale QA ----
-                case "/story": net.SendAdminCommand("story_status"); return true;
+                // #2471: "/story [player]" — the world story, the player's track and the player packs (the caller's, or the
+                // named player's: the whole rest of the line is the name).
+                case "/story": net.SendAdminCommand("story_status", targetPlayer: AdminChatCommand.PlayerArgument(t)); return true;
+
+                // #2471: tutorial controls — "/tutorial skip|restart [player]", "/tutorial chapter <id> [player]",
+                // "/tutorial policy auto|optin|off". The server owns the checks and answers with its usage line.
+                case "/tutorial":
+                    {
+                        var (verb, tutorialTarget) = AdminChatCommand.Tutorial(t);
+                        net.SendAdminCommand("tutorial", stringArg: verb,
+                            targetPlayer: tutorialTarget.Length > 0 ? tutorialTarget : null);
+                        return true;
+                    }
                 case "/advance":
                     net.SendAdminCommand("advance_story",
                         intArg: p.Length >= 2 && int.TryParse(p[1], out var steps) ? steps : 1);
@@ -885,6 +899,12 @@ namespace BlocksBeyondTheStars.Client
                 case "/lore": net.SendAdminCommand("reveal_lore"); return true;
                 case "/jumpdrive": net.SendAdminCommand("grant_module", stringArg: "jump_generator"); return true;
                 case "/gotocore": net.SendAdminCommand("goto_core"); return true;
+
+                // Cutscene preview (#2468): "/cutscene <pack> <id>" plays a story scene for this admin only (the server
+                // checks the role and answers with the usage line when the words are missing).
+                case "/cutscene":
+                    net.SendAdminCommand("cutscene", stringArg: t.Substring(p[0].Length).Trim());
+                    return true;
 
                 case "/ai":
                 case "/ai_mission":
@@ -1009,6 +1029,8 @@ namespace BlocksBeyondTheStars.Client
             LocalLine(L("ui.admin.help_inspect"));
             LocalLine(L("ui.admin.help_fleet"));
             LocalLine(L("ui.admin.help_story"));
+            LocalLine(L("ui.admin.help_tutorial"));
+            LocalLine(L("ui.admin.help_cutscene"));
             LocalLine(L("ui.admin.help_maintenance"));
             LocalLine(L("ui.admin.help_moderation"));
         }

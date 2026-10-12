@@ -6,6 +6,7 @@ using BlocksBeyondTheStars.Shared.Configuration;
 using BlocksBeyondTheStars.Shared.Definitions;
 using BlocksBeyondTheStars.Shared.Geometry;
 using BlocksBeyondTheStars.Shared.Primitives;
+using BlocksBeyondTheStars.Shared.Story;
 using BlocksBeyondTheStars.Shared.World;
 using BlocksBeyondTheStars.WorldGeneration;
 
@@ -583,6 +584,7 @@ public sealed partial class GameServer
         SendPlayerState(session); // AiCoreTier may have changed (gates the client autopilot)
         BroadcastOwnedShips(); // the fleet message carries each ship's fit (#1268)
         ShipAiOnModuleBuilt(session, module.Key); // VEGA welcomes her new core
+        RaiseGameEvent(session, GameEventKeys.ModuleBuilt, module.Key); // #2465
     }
 
     // ---------------- Enter / leave space ----------------
@@ -724,7 +726,7 @@ public sealed partial class GameServer
 
         if (session is not null)
         {
-            ShipAiOnEnterSpace(session); // VEGA onboarding: first launch into space
+            RaiseGameEvent(session, GameEventKeys.SpaceEnter, SpaceEntryContext(skipLaunch, hyperjump, wormhole)); // #2465
             ShipAiBanditSectorWarning(session, instance); // pirate space? warn BEFORE any raider appears
             // #1677: the star map goes FIRST. The flight view builds its scene — star, planets, landables —
             // from the map the moment it sees the space state, so a map arriving after it (a big message, a
@@ -785,7 +787,12 @@ public sealed partial class GameServer
         {
             if (Rules.FreeSpaceFlight && InSpace(p.PlayerId))
             {
+                bool started = !p.InEva;
                 p.InEva = true;
+                if (started)
+                {
+                    RaiseGameEvent(session, GameEventKeys.EvaStarted, GameEventKeys.EvaFlight); // #2479: the spacewalk lesson
+                }
             }
         }
         else
@@ -1253,6 +1260,7 @@ public sealed partial class GameServer
             if (session is not null)
             {
                 OnMissionDefeat(session, DefeatTargetShip); // #731: the raider bounty counts the drive-off
+                RaiseGameEvent(session, GameEventKeys.DefeatAny, GameEventKeys.DefeatRaider); // #2465
             }
         }
         else if (target.Hostile)
@@ -1263,6 +1271,7 @@ public sealed partial class GameServer
             {
                 OnMachineDefeated(session); // #1213: post-win only — the survey orders' Defeat step
                 TryDropPlayerMemory(session); // a chance to release a personal memory (P4)
+                RaiseGameEvent(session, GameEventKeys.DefeatAny, GameEventKeys.DefeatSpaceMachine); // #2465
             }
         }
 
@@ -1288,6 +1297,11 @@ public sealed partial class GameServer
         else
         {
             PayEntityLoot(instance, target, session);
+        }
+
+        if (target.Kind == CombatEntityKind.Asteroid && session is not null)
+        {
+            RaiseGameEvent(session, GameEventKeys.AsteroidDestroyed); // #2479: the pilot course's asteroid lesson
         }
 
         BroadcastToInstance(instance, new SpaceEntityDestroyed { Id = target.Id });
@@ -1682,6 +1696,11 @@ public sealed partial class GameServer
             instance.Entities.Remove(drop);
             if (drop.Kind == CombatEntityKind.SalvageCapsule)
             {
+                if (collector is not null)
+                {
+                    RaiseGameEvent(collector, GameEventKeys.SalvageFound, GameEventKeys.SalvageCapsule); // #2479: the salvage lesson
+                }
+
                 OnSalvageCapsuleCollected(drop); // #2354: paid once per galaxy
             }
         }
@@ -1843,11 +1862,16 @@ public sealed partial class GameServer
         instance.ShipPosition = pos; // shared, for collision (the acting player's ship)
 
         // Per-player pose for visibility — so the others in this instance can render this ship / EVA suit.
-        bool eva = FindSessionByPlayerId(playerId)?.State.InEva ?? false;
+        var pilot = FindSessionByPlayerId(playerId);
+        bool eva = pilot?.State.InEva ?? false;
         instance.PlayerPoses[playerId] = new SpacePlayerPose(pos, yaw, eva);
         if (!eva)
         {
             instance.ShipPoses[playerId] = new SpacePlayerPose(pos, yaw, false); // #2118: the ship itself
+            if (pilot is not null)
+            {
+                TutorialFlightEvents(pilot, pos); // #2469: the tutorial's "fly a little way"
+            }
         }
 
         CheckSpaceWreckApproach(instance, playerId, pos); // #1664: flying up to a derelict "visits" it
@@ -2962,8 +2986,24 @@ public sealed partial class GameServer
             _finaleReturn[playerId] = origin.Id;
         }
 
+        if (system.Id == GuardianFinaleSystemId)
+        {
+            TryStartStoryTrack(session); // #2470: never leave a player in the finale without its story
+        }
+
         EnterSpace(playerId, skipLaunch: true, hyperjump: true); // warp in; a parked ship took off before (#1614)
         SendStarMap(session); // refresh the travel screen with the now-known system
+
+        // #2465; #2479: raised once the flight state of the new system went out, so a card a step plays for it (the
+        // navigator course's "New system", tut.first_jump) lands on the warp-in — like the finale's arrival card below.
+        RaiseGameEvent(session, GameEventKeys.HyperjumpAny, system.Id);
+
+        // #2478: the finale's arrival card — once per player, while the core still waits (the flight state went out first,
+        // so the card lands on the warp-in).
+        if (system.Id == GuardianFinaleSystemId && FinaleOpen && !session.Spectating)
+        {
+            PlayFinaleCutscene(session, StoryFinaleStages.Arrival);
+        }
     }
 
     /// <summary>#1614: re-sends the flight state of a pilot whose automatic transit ended without leaving the flight
@@ -3038,6 +3078,9 @@ public sealed partial class GameServer
 
             LeaveSpace(session.State.PlayerId);
             RelocateToAssignedPad(session); // set the player + their ship down on the claimed pad
+            // #2465: setting down on the body you launched from is a landing too (VEGA's old "land" lesson only
+            // counted a landing elsewhere; the tutorial's "any landing after a launch" includes this one).
+            RaiseGameEvent(session, GameEventKeys.TravelLanded, LandingContext(quickTravel: false, adminBypass: false));
             CheckpointSave("landed (returned to surface)"); // auto-save on landing
             return;
         }

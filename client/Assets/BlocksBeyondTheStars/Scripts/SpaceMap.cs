@@ -199,6 +199,7 @@ namespace BlocksBeyondTheStars.Client
             _openedFrame = Time.frameCount;
             _tab = Tab.System;
             _selectedSystemId = null;
+            Game.Network?.SendUiTutorialEvent(BlocksBeyondTheStars.Shared.Story.GameEventKeys.UiMapOpenId); // #2469: the flight lesson
             Game.SetMenuOwner(this, true); // frees the cursor; UpdateCruise holds the ship while set (#413)
             Game.StarChartOpen = true;     // the music director switches to the star-map bed (#1174)
             if (!_hyperjumpSubscribed)
@@ -214,13 +215,13 @@ namespace BlocksBeyondTheStars.Client
 
             // #1663: the first time the chart ever opens, VEGA says what it is for — nothing else in the game
             // told a new pilot that clicking a disc here sets the waypoint the radar and autopilot follow.
-            // A client-side one-shot (a UI lesson, not world progress), remembered in the client settings.
+            // A client-side one-shot (a UI lesson, not world progress), remembered in the client settings — once it
+            // really went out (#2462, B31: with the hints muted it waits for a later opening).
             var settings = Game.Settings;
-            if (settings != null && !settings.ChartWaypointHintShown)
+            if (settings != null && !settings.ChartWaypointHintShown && VegaPanel.Instance?.SayLocal("vega.hint.chart_waypoint") == true)
             {
                 settings.ChartWaypointHintShown = true;
                 settings.Save();
-                VegaPanel.Instance?.SayLocal("vega.hint.chart_waypoint");
             }
         }
 
@@ -729,6 +730,7 @@ namespace BlocksBeyondTheStars.Client
             }
 
             _ = snapName; // name shows via RefreshInfo's resolution
+            Game.Network?.SendUiTutorialEvent(BlocksBeyondTheStars.Shared.Story.GameEventKeys.UiWaypointSetId); // #2469
             RefreshInfo();
         }
 

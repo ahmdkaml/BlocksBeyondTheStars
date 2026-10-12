@@ -238,10 +238,30 @@ public sealed class PlayerState
     /// <summary>Accepted missions and their progress.</summary>
     public List<MissionProgress> Missions { get; set; } = new();
 
-    /// <summary>One-time progression milestones the ship AI (VEGA) has seen this player reach — onboarding
-    /// stages ("vega:stage:N"), advisor once-hints ("vega:hint:&lt;key&gt;") and restored memory fragments
-    /// ("vega:mem:N"). Server-authoritative, persisted; never removed once set.</summary>
+    /// <summary>One-time progression milestones the ship AI (VEGA) has seen this player reach — the legacy onboarding
+    /// stages ("vega:stage:N", since #2469 only double-written by the tutorial pack for older builds), advisor once-hints
+    /// ("vega:hint:&lt;key&gt;") and restored memory fragments ("vega:mem:N"), and the story keys (<c>story:&lt;pack&gt;:…</c>,
+    /// e.g. the tutorial's steps and chapters). Server-authoritative, persisted; append-only except a pack chapter's
+    /// replay keys, which go when the replay ends.</summary>
     public HashSet<string> Milestones { get; set; } = new();
+
+    /// <summary>The running counters of this player's ACTIVE story-pack steps (#2466, synthesis §5.6): key
+    /// <c>&lt;pack&gt;:&lt;step&gt;</c> (<c>StoryPackKeys.ProgressKey</c>), value = events counted since the step activated.
+    /// An entry exists exactly while the step is active (an armed react step or an open extra included) and is removed
+    /// when it completes, so the map holds a handful of entries at most. Done/skipped states live in
+    /// <see cref="Milestones"/>. Persisted additively: an older build drops it on re-save — a running count restarts,
+    /// nothing else is lost.</summary>
+    public Dictionary<string, int> StepProgress { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>The story the player pinned to the objective chip (#2466): a pack id, or empty = automatic (the chip
+    /// order of synthesis §5.3). Persisted additively like <see cref="StepProgress"/>.</summary>
+    public string TrackedStoryId { get; set; } = string.Empty;
+
+    /// <summary>The <c>custom</c> anchors of the cutscenes committed to this player but not confirmed yet (#2459): key
+    /// <c>&lt;pack&gt;/&lt;id&gt;</c> (the ledger's id, an instance id for a template). A scene re-offered at the next join
+    /// frames the same place again; the entry goes when the scene is confirmed. Persisted additively like
+    /// <see cref="StepProgress"/>.</summary>
+    public Dictionary<string, CutsceneAnchor> CutsceneAnchors { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>Celestial bodies this player has physically arrived ON (landed via manual flight, hyperjump
     /// or quick-travel). With the Instant Travel world rule OFF, the menu's quick-travel is limited to these

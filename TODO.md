@@ -24,6 +24,489 @@ envelope at the WebSocket edge; deterministic seed world-gen; SQLite default per
 
 ---
 
+### ★ Story packs 2026-10 (#2459)
+
+Tutorial as its own pack, VEGA as its own pack, cutscenes, several storylines — one integration branch
+`feat/story-packs`, one PR at the end. One line per step:
+
+- ✅ **Step 1 — story server fixes (#2460)**, 2026-10-11: the newcomer/veteran decision is a snapshot at the top of
+  the join (`PlayerSession.Join`), so a fresh player on a progressed world gets the prologue and the lessons again;
+  "restart tutorial" really restarts (without the prologue); Creative reads the save; the active `story_state` row
+  is marked + stamped (pack switches and unknown packs survive a restart, no save-version bump); the Guardian system
+  survives a restart; latecomers hear the Guardian reveal; knowledge level 4 only after the win; the mission-thread
+  fragment opens the reader; only board jobs/chain steps tick the trade lesson; observers leave no story trace and
+  are never named by `player_near`; a station commissioned by an ally credits the owner; the spawn system pays no
+  story points and the ending at the door goes only to players who heard B12 (plus the finale achievement);
+  `vega:mem:mk3parts` is no memory; peaceful worlds get `story.obj.help_peaceful`; the `guardian_core` hint is never
+  muted; impossible onboarding lessons (no flight, no station) are skipped. Tests: `StoryServerFixesTests`.
+- ✅ **Step 2 — cinematics fixes (#2461)**, 2026-10-11: the prologue, the ending and the intro skip on every device
+  (Esc, pad B / the *Close* binding, an on-screen Skip button; the label names the control in hand); one shared
+  cutscene state (`GameBootstrap.Cutscenes`, `CutsceneGate`) hides the HUD (crosshair), touch controls, chat,
+  nameplates, IMGUI overlays and VEGA's panel/chip and freezes the controls — the ending now does all of that too;
+  flashback and VEGA's typing pause under the ending and its epilogue no longer types twice; the ending music plays
+  on every start of the scene (replays included) instead of at every session start of a won save; `CinematicFrame`
+  flashes follow Reduce flashes and its subtitles the UI size; the prologue retries its staging for ~4 s, scales
+  the shot to the ship and keeps the camera out of the hull; the epilogue title is a locale key
+  (`story.vega.epilogue.title`, additive `StoryResolved.EpilogueTitleKey`); a client-side `WorldHoldArbiter` lets
+  the pause menu, the F1/F2 dialog and its reply hold the world together; pad glyphs no longer flicker on WASD, a
+  tap counts as touch (also at join), the pad controls line follows glyph set / rebinds / triggers, and pad Y no
+  longer also jumps. Tests: `CinematicsFixesTests`, `WorldHoldArbiterTests`, `InputDeviceRulesTests` (Client.Tests),
+  `StoryResolutionTests`, `StoryPackLoadTests`.
+- ✅ **Step 3 — story UI fixes (#2462)**, 2026-10-11: the objective chip names its source
+  (`ShipAiLine.ObjectiveSource` = `tutorial|story|finale|mission`, plus `TutorialActive`), so the Settings button
+  offers "Skip tutorial" while the lessons run even with the finale on the chip, and the hints mute hides only story
+  coaching (never the finale); the finale outranks a running tutorial only in the Guardian system, not world-wide;
+  the Story tab's beat list is rebuilt from `StoryStateMessage.HeardBeats` (survives a rejoin) and holds only the
+  pack's beats (other narrator lines go to the VEGA log); mission toasts are localized, name the mission and say
+  "accepted"/"complete"/"posted" (`MissionResult.Outcome/Title/FreeText`); circuit objectives read in words; a muted
+  hint (server once-hints, context tips, the bandit briefing, the client-side one-shot lessons) waits instead of
+  burning its once-flag (`SetNpcCallsIntent.VegaHintsMuted`); the Story tab never shows a raw `[key]`; the pause
+  whitelist serves `SetNpcCallsIntent`, `SkipOnboardingIntent`, `RequestStoryResolutionIntent`, `StorySelectIntent`;
+  the WebGL fallback file list is generated at build time (`Resources/streaming_data_files.txt`) and the built-in
+  copy is complete and checked against `data/`. All wire changes additive. Tests: `StoryUiFixesTests`,
+  `StoryUiFixesClientTests` (Client.Tests), `GameServerFinaleTests`.
+- ✅ **Step 4 — text fixes (#2463)**, 2026-10-11: VEGA's lessons and tips, the cockpit/station/bed/heal-tank/
+  transporter/factory prompts and the ship stations' server messages name keys as `{key:Action}` tokens (one
+  resolver, `HudUi.KeyTokenGlyph`, also applied to every `@srv.*` message; a tablet reads its own button — USE, MAP,
+  ≡ — via `VegaText.TouchControlLabel`); the launch lesson names the cockpit and the use
+  key; eight over-long VEGA lines (up to three pages) are cut to one page and `VegaLineBudgetTests` holds every VEGA line to 220 shown
+  characters (DE 264); the tier-gate tip names the blueprint and the titanium route (trade console + forge); manual
+  and Codex: 9 lessons, the real tab names (Blueprints, Crafting/Herstellung, Creatures), the forge needs no
+  blueprint, an access code claims factories only, one SPS long form (Scout and Pioneer Service); the canon package
+  (`vega.mem.1/3/6/7/8/10`, `vega.relay.first`, `mem_the_order` "you were in the room", B1 "a signal out there");
+  stale story docs and code comments fixed. EN+DE only — the changed keys are listed for the final translation pass
+  (keys whose tokens changed are dropped from the twelve community tables until then). Open: ~~the dead
+  `vega.sys.crystal_first` stays in all 14 tables until that pass removes it~~ — kept for good by the translation pass
+  (servers up to v2026.10.4 still send it to a new client); item descriptions, the other `srv.*`
+  messages, space prompts and "(E)" buttons still name keys (step 10's resolver sweep).
+- ✅ **Step 5 — WorldHost save safety (#2464)**, 2026-10-11: an uploaded save from a newer game build is refused
+  up front (`save_too_new`, `SavePaths.ValidateUploadedSave` reads the stored `SaveVersion`); a wake whose game
+  server exits with code 3 (save too new) answers "this world needs a newer server" (`world_needs_newer_server`)
+  instead of a wake timeout, marks the world with the refusing image (registry `save_too_new_image/_unix`) and is
+  not restarted on that image — joins, the arcade keep-awake pass and the arcade picker skip it until the image
+  changes, a new save is uploaded, the operator presses wake or 30 min pass; the portal card shows "needs a server
+  update", `/admin` "needs newer server", the reaper logs it once; the game server writes
+  `backups/pre-upgrade_<UTC>` before it stamps an older save with its save version (the `pre-remap_` copy covers
+  both). Portal texts in all 14 languages, client `ui.portal.err_*` en+de. Tests: `WorldHostSaveVersionTests`,
+  `SaveCompatibilityTests` (+4), `GlitchGatewayTests` (+1). ⚠ After the final merge the **WorldHost image** must be
+  built and deployed (`deploy.yml`, 7-char sha tag) — and the game-server image of the next release carries the
+  pre-upgrade copy. Open (ops, no code): check N5 (pool-world owner id `glitch` → first joiner WorldAdmin) on the
+  two live pool worlds.
+- ✅ **Step 6 — game-event bus and beat-less pack guard (#2465)**, 2026-10-11 (invisible to players): one server entry
+  point `RaiseGameEvent(actor, key, arg, amount)` next to the achievement/VEGA/story hooks at ~35 gameplay sites
+  (`mine:any`, `build:any`/`build:rotated`, `craft:any|tint|shape|paint`, `eat:any`, `scan:performed|any`,
+  `research:any`, `space:enter`, `station:boarded`, `trade:barter|player`, `mission:accepted|turned_in`,
+  `travel:landed` + `flight|quick|admin` (a parked ship's map trip = `quick`, landing back on the launch body =
+  `flight`), `visit:body|system`, `hyperjump:any`, `module:built`, `ship|station:commissioned`, `base:founded`,
+  `tame:any`, `loot:any`, `defeat:any`, `wormhole:any`, `relay:commissioned`, `lane:linked`, `crystal:<event>`,
+  `story:fragment`, `insight:*`); persists nothing, costs one compare with no listener, never fires for observers or
+  during the join's own placement; listener API `IGameEventListener` + `AddGameEventListener` (exact or `prefix*`). A
+  condition grammar (`StoryConditionParser`: `step:`/`chapter:`/`pack:`/`blueprint:`/`world:` + `all:[…]`/`any:[…]`/
+  `not:`) with a 20-predicate `world:` registry on the server. Guard: the built-in VEGA pack is always installed, a
+  beat-less or player-scoped pack (`kind`/`scope`, new optional pack fields) never becomes the world story
+  (`GameContent.TryGetWorldStory`), pack folders load in ordinal order with a warning for overwritten locale keys and
+  reserved ids, `CommunityLocaleTests` covers every pack's locales. Tests: `GameEventBusTests`, `StoryConditionTests`,
+  `StoryPackGuardTests`, `CommunityLocaleTests` (+4). Vocabulary table: STORY_IMPLEMENTATION "Game events".
+- ✅ **Step 7 — player-pack runtime (#2466)**, 2026-10-11 (invisible to players until a pack ships): the pack manifest on
+  `StoryDefinition` (`kind`, `scope`, `priority`, `shortNameKey`, `narrator`, `introCutscene`, `gates`, `escalate`,
+  `start`, `chapters[]` with `steps[]` — `do|read|react`, `must|core|opt`, event or mission-bridge objectives,
+  `requires`, `feasibleIf` + `alternative`, `alreadyDoneIf`, `variants`, `legacyKey`, `onStart.reveal` — `insights`,
+  `finale`; every field defaults to today, VEGA's pack and the built-in copy unchanged, no-drift test extended); a
+  per-player step runtime (`GameServerStoryPacks.cs`) on the event bus (registered only for active steps' keys) with
+  milestone states (§5.6 + `:active` for a started deep dive), running counters in `PlayerState.StepProgress` and the pin
+  in `TrackedStoryId` (both additive in the player snapshot), chapter order, open extras, react arming, offers, skip
+  step/chapter/pack, replay with the evidence off (done keys stay), opt-out, legacy-key double-write + one-time migration
+  marker, help escalation on play time (hint → a private 30 s marker ping for that session only, never `RevealPoi` →
+  skip offer); the world rule `GameRules.TutorialPolicy` (`Auto|OptIn|Off`, `--tutorial`, baked, live via
+  `SetWorldRulesIntent`/admin); the full chip order (finale in system → pin → basic training → VEGA finale → VEGA lead
+  → deep dive/mission → other packs) with `ShipAiLine.ObjectivePackId`/`PackId`/`Speaker`; `JoinRequest.Features`
+  (`packs1` announced by the client) and the legacy tutorial mode for older clients (old keys without text, other lines
+  server-composed via the shared `LineText` with `ui.vega.act.*` bracket words); tag 297 `StoryPackIntent` (pause
+  whitelist for track/untrack/optOut/optIn/skipPack); admin `tutorial skip|restart|chapter|policy` and `/story` listing
+  the player packs; `tools/validate_story_pack.py` (replaces `merge_story.py`) + `StoryPackValidator`. Tests:
+  `StoryPackRuntimeTests`, `StoryPackValidationTests`, `LegacyLineTextTests`, `StoryPackLoadTests` (+2),
+  `StoryPackClientTests` (Client.Tests). Docs: STORY_IMPLEMENTATION "The player-pack runtime", new TUTORIAL_PACK.md.
+- ✅ **Step 8 — cutscene data model, wire messages, seen ledger (#2467)**, 2026-10-11 (invisible to players until the
+  client director, step 9): `data/stories/<pack>/cutscenes.json` loaded into `StoryDefinition.Cutscenes`
+  (`CutsceneDefinition`: id, tier 1 banner / 2 card / 3 scene / 4 set piece, chapter, `template`, `replaceLineKeys`,
+  music, shots with camera type + anchor, duration, captions `subtitle|title_card|speaker|reading_frame|credits` with
+  `at`/`hold`, grade `none|memory|flashback`, sfx; options `holdWorld`, `hideHud`, `lockInput` (derived from the tier),
+  `skippable`, `minDisplay`, `chainNext`, `cooldownExempt`, `replayable`); the first file `vega_protocol/cutscenes.json`
+  with the `prologue` (mirrors today's three pages, not bound yet) + new key `ui.story.prologue` (en+de); the validator
+  (C# + `tools/validate_story_pack.py`) now requires every binding to resolve and checks tiers, cameras, anchors, styles,
+  grades, budgets, chains, chapters, music and sounds. Wire: tag 295 `CutscenePlay` (only to `cutscenes1` clients), 296
+  `CutsceneSeenIntent` (pause whitelist), `StoryPackIntent{replayCutscene, CutsceneId}`. Server
+  (`GameServerCutscenes.cs`): `PlayCutscene` / `PlayCutsceneForListeners` / `PlayRecap`, ledger
+  `story:<pack>:cut:<id>:sent` (committed) + `story:<pack>:cut:<id>` (confirmed), older clients = line only + seen at
+  once, join catch-up (a world story's backlog of ≥ 3 chapter scenes → one `__recap` card), nothing before the client is
+  in the world, 90 s cooldown with chains / "now or never" / banners exempt, replays without ledger change, observers
+  never; the player-pack runtime plays `introCutscene` (not for veterans or `skipPack`), chapter open/close (template
+  instances `id@chapter`, chapter title as argument) and step `onStart`/`onComplete`. Tests: `CutsceneContentTests`,
+  `CutsceneLedgerTests`, `StoryPackValidationTests`, `NetCodecTests`. Docs: new CUTSCENES.md, STORY_IMPLEMENTATION,
+  TUTORIAL_PACK.
+- ✅ **Step 9 — client cutscene director, tiers, skip everywhere, dev palette (#2468)**, 2026-10-11 (needs the local
+  Unity + WebGL build): Client.Core `Cutscenes/` — `CutscenePlan` (shots, captions resolved with the one key-token
+  resolver, arg-as-locale-key, `__recap` card, pages via `CaptionPager`, "Story text: wait for me" page-gating vs reading
+  floors `max(3 s, 1.2 s + chars/12)`, title cards always timed, `AsCard` downgrade), `CutscenePlayback`,
+  `SafeMomentGate` (menu/veil/scene/observer, danger, movement, prefer-at-home 300 s, now-or-never abort, give-up
+  600/1200 s, danger interrupt, MP 30 s camera cap), `CutsceneQueue` (dedupe, requests first, 90 s cooldown from the end,
+  chains), `CutsceneStaging` (orbit → crane → sky → player view), `CutsceneCatalog` ("Watch again" rows + labels);
+  `NetworkClient.CutscenePlayReceived` / `PlaysCutscenes` (announces `cutscenes1`) / `SendCutsceneSeen` /
+  `SendReplayCutscene`. Unity: `CutsceneDirector` (+ `CutsceneScreen`, `CutsceneCameraRig`, `CutsceneDevPalette`): T1 banner,
+  T2 card with free input, T3/T4 camera scenes (HUD hidden, controls frozen, SP hold only while the camera is taken, never
+  in MP), caption styles subtitle/title card/speaker box from the pack narrator/reading frame/credits, chart via
+  `GalaxyChartWidget`, memory/flashback grades, scene music (`ClientMusic.CutsceneTrack`), skip (Esc / pad B / button),
+  continue (N / pad Back / button / tap), `replaceLineKeys` kept out of VEGA's panel and given back on interrupt;
+  setting "Story text: wait for me" (Comfort); Story tab **Watch again**; dev palette (`-devSeq` or dev build, F9);
+  `ClipSpec.cutscene`. Server: `TickCutscenes` for every joined player (space too — step 8's gap), admin preview
+  `/cutscene <pack> <id>`, `StoryStateMessage.SeenCutscenes`. Keys en+de: `ui.story.so_far(_hint)`, `ui.story.replay(_button)`,
+  `ui.settings.story_text_wait(_hint)`, `ui.cutscene.saved`, `ui.devseq.title/close`, `ui.admin.help_cutscene`,
+  `srv.admin.cutscene_usage/unknown/unsupported/preview`. Tests: Client.Tests `CutscenePlanTests`, `SafeMomentGateTests`,
+  `CutsceneStagingTests`, `CutsceneClientTests`, `StoryPackClientTests`; server `CutsceneLedgerTests` (+5). Docs:
+  CUTSCENES.md "The client director" + dev tools, STORY_IMPLEMENTATION, USER_MANUAL.
+- ✅ **Step 10 — basic training as its own tutorial pack (#2469)**, 2026-10-11 (needs the local Unity build): the
+  hard-coded nine-stage VEGA onboarding (`VegaStages`, `VegaIsVeteran`, the client's stage list) is gone — the basic
+  training is `data/stories/tutorial/` (six parts B1–B6, 40 steps incl. three stand-ins, explain → try → server-verified,
+  neutral VEGA voice with premise variants only under the VEGA story, world-rule variants and `feasibleIf` /
+  alternatives so no step is impossible: trader instead of docking without a station, any landing when the system has
+  no unvisited world, flight steps skipped without free flight, research skipped in Creative); 18 new teaching verbs
+  at existing handlers (`move:walked` … `visit:world`, measured only while a step listens); tag 298
+  `UiTutorialEvent` (menu, Codex, map, waypoint, VEGA continue — teaching only, pause-whitelisted); pseudo key tokens
+  (`{key:Move}` …) in the one resolver; the gates wired (opportunity tips after eat + mine + craft, banter after the
+  training, `station_near` while docking is open); `hintRefs` hold VEGA's matching hints and the tutorial-covered
+  client lessons (E11); graduation line + achievement **Graduate**; the one-time migration of old onboarding state
+  (mid-chain evidence, finished chain silently with one E30 refresher offer on thin evidence, pre-lessons veterans);
+  legacy keys double-written; older clients keep the nine old lessons; Settings skip/restart drive the pack (restart
+  never the prologue). Docs: TUTORIAL_PACK.md (content, events, gates, migration, adding a chapter), USER_MANUAL.
+  Tests: `TutorialPackTests` (walkthroughs per preset and start world, skip/replay/policy, legacy client, migration,
+  hint hold, UI flags, handler events) + rewritten ShipAi/StoryServerFixes/StoryUiFixes/VegaObjectiveRefresh/
+  GameServerFinale/StoryFindability/StoryPackRuntime tests; Client.Tests VegaText/VegaLineBudget/StoryPackClient.
+- ✅ **Step 11 — the VEGA story as its own pack (#2470)**, 2026-10-12 (needs the local Unity build): VEGA's manifest
+  (kind story, scope world, short name, narrator, `introCutscene: prologue`, `start: chapter:tutorial:b6` + early opt-in,
+  nine chapters Awakening … Resolution reached by beats / `guardian_defeated`, `insights[]` replacing the "six beats"
+  check; all mirrored in `StoryRegistry`). The **prologue** is a real director scene (captions in the frame, orbit →
+  push-in → pilot's seat, VEGA's box glitches in, B0 as her page and heard with it, the new call to adventure
+  `story.vega.call` as the last page), once per newcomer to the story (also a "none" world switched to VEGA), never on a
+  tutorial restart, replayable from the Story tab; older clients keep five full-screen pages; prologue keys moved to the
+  pack locale (names kept). The **story track** (`story:vega_protocol:started`) starts after the basic training, at once
+  without a tutorial, for veterans / players who heard a beat, on **Start the story now** (`startPack`, pause-whitelisted)
+  or in the finale system; until then beats + knowledge, the Guardian reveal, resolution/epilogue lines, insights, relay
+  insights, hack/duel broadcasts and the live ending are **held**; the track start credits them, plays the recap
+  (titles), only the current chapter's opening (its scene since step 15), the reveal line, the ending. Hosted/arcade
+  newcomers: personal chapter 1 + crew status line. Lazy migration P1–P9 (`migrated:v1`). VEGA's old memory arc reads as
+  neutral archive lines without the VEGA story; relay insights and the core hint are silent without a story; the chip's
+  story ranks wait for the track (fixes the chip flashing on prologue pages / read steps). Story tab: chapter list
+  ("???" ahead), start button, crew line, "The story so far" on demand. Wire: additive `StoryStateMessage.Started /
+  Chapter / WorldChapter / ShowCrewChapter / RelayInsightKeys`. Tests: `VegaStoryPackTests`, Client.Tests
+  `StoryChapterListTests` + rewritten story tests. Docs: STORY_IMPLEMENTATION, STORY_VEGA_PROTOCOL_CONCEPT, CUTSCENES,
+  USER_MANUAL.
+- ✅ **Step 12 — journal + objective tracker (#2471)**, 2026-10-12 (needs the local Unity build): the Story tab is the
+  **Journal** — one page per story (the tutorial: status, "What to do now" with "Step i of n" + live counter, Skip step,
+  More in the Codex, Skip part, Start part over; every part with its state, Start/Later for offers, Replay; Track, Skip
+  all, Restart from the beginning, Switch off/on; its scenes to watch again), VEGA's page (meter + bar, Track, chapters,
+  beats, fragments, memories, field records, Start the story now, its scenes), **VEGA's notes** (tips + the world story's
+  non-beat lines, now rejoin-proof via `StoryStateMessage.NoteKeys`), the player's notes; a ★ badge per story finished by
+  playing. The chip reads "Training: …" / "VEGA: …" (story short name instead of "Objective"); pin from the Journal;
+  optional **Show all objectives** (up to 3 lines, hidden while chatting). Settings: **Tutorial: on/off** + **Open the
+  Journal** (the old skip/restart button stays for older servers). Wire: tag 299 `ObjectiveList`, tag 300
+  `StoryPackStates` (join, own action, request, else coalesced ≤ 1/s; progress never re-sends the states), additive
+  `ShipAiLine.SpaceWaypointId`; every `StoryPackIntent` action validated + pause-whitelisted (new `restartPack`,
+  `replayChapter`, `requestStates`; restarting a running part walks it again without losing progress). Admin chat
+  `/tutorial …`, `/story [player]`. Gaps closed: B09 (several missed beats at a join → one "N new entries in your
+  Journal" line), B6.4 (the dock lesson sets the nearest station as the flight target, `nearest_station`), card skip
+  button under the touch layer (taps forwarded), `vega.step.offer_skip` wording. Tests: `StoryJournalTests`, Client.Tests
+  `JournalViewTests`. Docs: USER_MANUAL, STORY_IMPLEMENTATION, TUTORIAL_PACK.
+- ✅ **Step 13 — world creation "Stories" page (#2472)**, 2026-10-12 (needs the local Unity build): the world options'
+  storyline + pace sliders are ONE row **"Stories: VEGA · Tutorial Auto ›"** opening a **Stories** sub-page — main story
+  (every installed world story from the content, "None (sandbox)" last, the chosen one's description), story pace, and the
+  tutorial rule **Auto / On request / Off** with one line each; creation emits only non-defaults (`--story <id>`,
+  `--story-density`, `--tutorial`), baked into the save. The world admin changes the **story pace live** now (new additive
+  `SetWorldRulesIntent.StoryDensity` / `ServerRules.StoryDensity`; a faster pace reveals the beats its score covers at once)
+  and the tutorial rule from the in-game world rules (Settings tab). Presets keep Auto (server `family` says so); hosted /
+  glitch worlds keep VEGA + Auto (no portal option); old saves read Normal / Auto. Model in Client.Core
+  (`WorldStoryOptions`); VEGA got `descriptionKey` `story.vega.desc`. Tests: `WorldStoriesRulesTests`, Client.Tests
+  `WorldStoryOptionsTests` + `WorldOptionsLayoutTests` (link rows counted, Stories page fits). Docs: USER_MANUAL,
+  SELF_HOSTING, STORY_IMPLEMENTATION, TUTORIAL_PACK.
+- ✅ **Step 14 — tutorial cards (#2473)**, 2026-10-12 (needs the local Unity build): `data/stories/tutorial/cutscenes.json`
+  — `tut.welcome` (part 1's opener, chained straight after VEGA's prologue), `tut.strip` (part card "Basic training · Part n
+  of 6" for parts 2–6, template), `tut.done` (part banner), `tut.course` (deep-dive card, bound by steps 18–21),
+  `tut.first_launch` (T3 overlay on the launch rise, now or never), `tut.first_landing` (orbit around the ship, the world's
+  name as the title, SP hold), `tut.graduation` (achievement + VEGA's closing line, chains to the recap); at most 8 heavier
+  moments in the six parts. The part number moved from the parts' first lines onto the cards (G12). Engine: chapter
+  bindings play with title key + place + count (`{1}`/`{2}`, `CutsceneArgs`, shared by server and client), new cutscene
+  field `arg` (`body`/`system`) and pack field `graduation.cutscene`, `LineText.Compose` fills later slots, a queued
+  chapter opener whose part is over is dropped, a line a waiting scene shows is held with it, an overlay scene does not
+  open from black. Tests: `TutorialCardsTests`, Client.Tests `TutorialCardsClientTests`. Docs: CUTSCENES, TUTORIAL_PACK,
+  USER_MANUAL.
+- ✅ **Step 15 — VEGA chapter scenes and beat cards (#2474)**, 2026-10-12 (needs the local Unity build): every chapter of
+  the arc opens with its scene in `data/stories/vega_protocol/cutscenes.json` — title cards (T2: "Chapter n" over the
+  title, a sting, VEGA's beat in her speaker box, free input) for chapters 1, 4, 6; chapter 2 as VEGA's sepia memory of
+  the star chart (T3); the big scenes **"The Guardian"** (B5, T3, the sky + the anomaly's hum), **"What You Are"** (B9,
+  T3, a close framing of the player's real heal tank inside the medbay — a card where this world has no own tank) and
+  **"The Guardian Core"** (B12 + reveal, T4: the live star chart with a violet route to the new Guardian system while VEGA
+  names the jump generator; the line comes back to the panel when skipped early — new option `returnOnSkip`); beat cards
+  `b01 b03 b04 b07 b08 b10` ("VEGA remembers" + the beat's title, then the beat; free input). Captions are the beats' own
+  texts, kept out of VEGA's panel (`replaceLineKeys`). Track start: recap → only the current chapter's scene (chapter 1's
+  card is followed by B1's card); the prologue and the graduation chain into `ch1.open`. B09 catch-up: the scenes are
+  committed before the lines, a recap when the missed beats crossed into a later chapter, one card for one missed beat
+  (the Journal line stays). Chapter numbers follow the Story tab (`CutsceneArgs`: a world story's arc chapters count from
+  the prologue = 0). Three ElevenLabs stingers `chapter_sting`, `chapter_sting_memory`, `chapter_sting_reveal` (NOTICES).
+  Tests: `VegaChapterScenesTests`, Client.Tests `VegaChapterScenesClientTests` + updated VEGA/tutorial/cutscene tests.
+  Docs: CUTSCENES, STORY_IMPLEMENTATION, STORY_VEGA_PROTOCOL_CONCEPT, SOUND_DESIGN, USER_MANUAL, NOTICES.
+- ✅ **Step 16 — VEGA chapter leads, chapter bonus, peaceful-world pacing (#2475)**, 2026-10-12 (needs the local Unity
+  build — one Journal block): every VEGA chapter lists its leads in `story.json` (vocabulary v1 `StoryLeadTypes`:
+  `fragment`, `unique_site:observatory|shrine|derelict` with a feasibility check, `monument`, `settlement_help`,
+  `machines`, `heal_tank`, `research:*`, `module:*`, `finale`/`finale_jump`, `relay`, `explore`); resolved per player only
+  when the chapter, the place or a relevant count changed (`StoryLeadSignature`, cached in `PlayerSession.StoryLeads` — no
+  per-tick galaxy scans), followed through the event bus or evidence (`story:<id>:lead:<chapter>:<n>`, per player); the
+  chip shows the first feasible open lead (rank "VEGA lead", `story.vega.obj.*`, 16 en+de keys; older clients keep
+  `story.obj.*`), a private ping or the space waypoint marks its place, the Journal's VEGA page lists the chapter's leads
+  (`NetStoryPack.Leads`, additive); the first lead anyone follows in a chapter pays +3 milestones once per save (keys
+  `lead:<chapter>:1..3`, only before B12 → ≤ 36 points); ONE scale wrapper `StoryScale` (density × the peaceful-world
+  factor 204/164 from the pack) at all five score readers, the meter clamped to the last revealed beat; an existing
+  peaceful save crosses 1–2 beats at its first start (the catch-up absorbs them); on a world without machines a followed
+  lead or a monument reading unlocks the next memory; the Crystal workshop's turn-ins leave the score
+  (`MissionDefinition.CountsForStory`). Tests: `VegaChapterLeadsTests` (37), Client.Tests `JournalViewTests` + updated
+  chip tests. Docs: STORY_IMPLEMENTATION, STORY_VEGA_PROTOCOL_CONCEPT, USER_MANUAL, CRYSTAL_NET.
+- ✅ **Step 16b — VEGA story missions per chapter (#2476)**, 2026-10-12 (needs the local Unity build — one Journal block
+  + the Journal badge): VEGA's chapters carry `missions[]` in `story.json` (*Follow the Signal*, *The Sealed Observatory* /
+  stand-in *The Deep Archive*, *What the Stones Remember*, *The Long Quiet* / stand-in *Ships That Remember*, *Eyes on Far
+  Stars*, *The Jump Generator*, epilogue *Survey Orders*; none in the finale's chapter), compiled as a per-player sub-track
+  of the world story and run by the step runtime (`GameServerStoryMissions.cs`): handed out after the chapter's scene and
+  never during the basic training, one at a time, with VEGA's briefing; the running step takes the lead's place on the
+  chip (never over the open finale); lead bridges (`objective.type: Lead`) follow a step like a chapter lead (events,
+  evidence, placed text, marker); infeasible missions/steps give way to stand-ins; an unfinished mission is let go when
+  the chapter moves on (no beat ever waits); finishing one pays the chapter bonus once per save and chapter (shared with
+  the leads); Journal `NetStoryPack.Missions` (additive) + "Skip mission"; older clients get none. New: event `lore:read`,
+  condition atom `lore:<key>`, predicates `fragments_left`, `observatory_reachable`, `derelict_reachable`, `settlements`,
+  `vaults`, `space_wrecks`, marker provider `unique_site:<site>`; validators (C# + Python) check missions and lead
+  bridges. 62 pack keys + 2 core keys (en+de). Tests: `VegaStoryMissionsTests` (21), Client.Tests `JournalViewTests` +1.
+  Docs: STORY_IMPLEMENTATION, STORY_VEGA_PROTOCOL_CONCEPT, USER_MANUAL.
+- ✅ **Step 17a — dolly, pan, flyover, space-vista and diorama shots (#2477)**, 2026-10-12 (needs the local Unity build
+  AND a WebGL compile check — 1 new Unity file `CutsceneStage.cs` + 6 edited): new cutscene cameras `dolly` (a straight,
+  eased push-in checked along its whole path), `pan` (turning in place above the player's head or across the anchor where
+  the view stays open), `flyover` (a high arc rising in the middle), each falling back to the still framing of the same
+  place; the synthetic stages `space_vista` (the menu's attract-scene recipe in-game: stars, nebula, sun, a living world;
+  at `ship` the player's own ship) and `diorama` (`core`: the sleeping Guardian core — a column of red light in an iron
+  shell, 130 blocks, breathing at 0.4 Hz; `star_map`: VEGA's memory chart drifting to its rim and a faint red pulse beyond
+  it), shown far above the world with their own camera over the emptied world camera — existing shaders only, no light,
+  skipped on Potato/Low (a scene made only of them plays as a card). Chapters 3 (diorama), 4 (vista) and 6 (memory chart)
+  use them — 4 and 6 are T3 now (synthesis §6.5), captions unchanged. Server: the 1 Hz story pass (player packs, start
+  rule, leads, missions, chip) also reaches players no loaded world reaches (`TickStoryOutsideWorlds` — a pilot after an
+  in-flight hyperjump). Client.Core `CutsceneMoves`, `SyntheticStages`; validators (C# + Python) know the cameras and the
+  diorama anchors. Tests: Client.Tests `CutsceneCameraModesTests` (30) + updated `VegaChapterScenesClientTests`;
+  `CutsceneContentTests`, `VegaChapterScenesTests`, `VegaChapterLeadsTests` (+ the space pass). Docs: CUTSCENES (camera
+  reference), STORY_IMPLEMENTATION (the 1 Hz story pass).
+- ✅ **Step 17b — finale set pieces, beat moment b10, duel dialogue, the ending on the director (#2478)**, 2026-10-12
+  (needs the local Unity build — 2 new Unity files `DuelDialogueScreen.cs`, `CutsceneDirectorDuel.cs` (+ `.meta`) and 4
+  edited): VEGA's `finale.cutscenes` (`arrival`, `descent`, `breach`, `duel`, `standdown`, `resolution`; mirrored in
+  `StoryRegistry`) — the arrival card when the flight warps into the Guardian system, the descent over the iron-ringed shaft
+  showing the `guardian_core` hint, the breach close on the red column for the core world's players (a banner for the
+  others), the stand-down over the sleeping core and the ending (card → credits → epilogue) on the director, each once per
+  started player with the catch-up for whoever missed the win; an older client keeps `StoryResolved` (never both). The duel
+  is the director's dialogue mode on the core world — the core's box ("Argument n of 4", its reply in italics), the answers
+  as its own buttons (mouse/pad/touch), never the hotbar digits (E28); step back with Esc / (B), face the core again with
+  the use key; SP holds the world, MP never. Server: answers only from the core world (B50), the current node for whoever
+  lands or relogs mid-duel, `CoreDialogueChoiceIntent` passes a held world, the machines of every loaded world stand down
+  (B51), the finale achievement once — also for an observer who had heard B12 (E23), the recap never folds the ending.
+  b10 "Many minds" became the one beat moment (the live chart with the other players' names; alone the card); the other
+  beat cards stay cards (decision (a)). Pack `speakers` (VEGA: `core`) and the anchor `players`; validators (C# + Python)
+  check finale stages, speakers, the players anchor (and allow a reading frame's kicker). Drive-by: `FinaleView`'s breach
+  hint and gauntlet banner never drew since the on-demand IMGUI (#1553). Keys en+de: pack `story.vega.cut.arrival`,
+  `story.vega.cut.breach`; core `ui.finale.duel_begun`, `ui.finale.duel_progress`, `ui.finale.duel_leave_key/_pad/_touch`,
+  `ui.finale.duel_resume`. Tests: `VegaFinaleSetPiecesTests` (16), Client.Tests `FinaleSetPiecesClientTests`; updated
+  `CutsceneContentTests`, `VegaChapterScenesTests`, `VegaStoryPackTests`, `StoryPackLoadTests`. Docs: CUTSCENES (VEGA's
+  finale), STORY_IMPLEMENTATION (finale flow), USER_MANUAL (finale scenes, duel buttons).
+- ✅ **Step 18 — tutorial deep dives "Research" and "Flying": C2 Knowledge and research, C3 Pilot, C4 Stations, trade
+  and jobs, C5 Navigator (#2479)**, 2026-10-12 (needs the local Unity build — one edited file, `GameMenu.cs`: the
+  Achievements tab reports `progress_open`): four optional chapters of the tutorial pack (29 steps + 2 stand-ins, §3.4) with
+  their prerequisites (C5 after C3; C3 needs free flight), offered at the moment of need (C2 when VEGA's tip pass finds a
+  data cache in reach or digging without the terrain scanner, C5 once C3 is through) or suggested at the graduation (C3,
+  C4 — the third place stays for C1); offers never during the training and at least 90 s apart (the graduation counts as
+  one); "Later" keeps a course startable. Every step is a real handler: ten new verbs (`minigame:played`, `gadget:used`,
+  `planet:scanned`, `asteroid:destroyed`, `interior:entered`, `eva:started`, `player:zero_g`, `station:left`,
+  `marker:set`, `salvage:found`), the UI flag `progress_open`, eleven new `world:` predicates (`data_cache_near`,
+  `scanner_unknown`, `jump_ready`, `arcade_ready`, `monument_unread`, `asteroid_mining`, `docked`, `job_active`,
+  `forge_ready`, `wormhole_known`, `debris_fields`); world rules skip a step or put a stand-in in (no blueprint → the
+  scanner read step, no station → the settlement, no wormholes/wrecks/space combat → skipped), evidence ticks a known
+  forge, blueprint or jump drive off. Cards: `tut.course` bound to every course; new `tut.first_dock` (the docking of C4)
+  and `tut.first_jump` (the first hyperjump, on the warp-in — `hyperjump:any` is raised after the flight state now);
+  hintRefs absorb `data_cache_near`, `blueprint_affordable`, `scanner_idle/_unknown`, `asteroid_near`, `zero_g`,
+  `trader_near`, `jump_ready`, `wreck_signal`, `debris_signal`. The graduation line now points at the Journal's courses.
+  Keys en+de: 92 new pack keys `story.tutorial.c2…c5.*`, `story.tutorial.ch.c2…c5(.sum)`, `story.tutorial.cut.dock.*`,
+  `story.tutorial.cut.jump.*`; core `ui.vega.act.FlightEnterInterior|Disembark|PingMarker`. Tests: `TutorialDeepDivesTests`
+  (19: shape, offers, the Journal path, every verb by its handler, a real-handler walk per course incl. docking, the market,
+  a board job taken and handed in, the ship scanner, an asteroid, the interior and a spacewalk, a hyperjump with a fitted
+  jump generator, the world-rule variants), Client.Tests `TutorialDeepDivesClientTests` (the Journal's buttons from a real
+  client); updated `TutorialPackTests`, `TutorialCardsTests`, `CutsceneContentTests`. Docs: TUTORIAL_PACK (the courses),
+  CUTSCENES (the two firsts), STORY_IMPLEMENTATION (events, predicates, offers), USER_MANUAL (short courses).
+- ✅ **Step 19 — tutorial deep dives "Ship building" and "Base building": C1 Workshop and titanium, C6 Ship builder, C7
+  Homestead, C17 Station builder (#2480)**, 2026-10-12 (server + data only, no Unity file): four optional chapters (24 steps
+  + 2 stand-ins, §3.4) — C1 the tool-tier wall, iron ore → titanium ore at the ship's trade console, a forge (no blueprint,
+  E7), the first titanium plate; C6 a module, the repair, building onto the parked ship, then an own ship (Shipwright
+  blueprint, keel, commissioning, switching); C7 a base core, building in its zone, lights, a door, a sealed room, a wall
+  ring, a bed; C17 a station core on a spacewalk, its hull and airlock, zero-g building. Offers: C1 at a refused swing
+  (`world:tier_gate`, within a minute) and suggested at the graduation (`suggest` = c3, c4, c1); C6 at an affordable module
+  or a damaged hull; C7 at a base core crafted/carried or a night outside without a base; C17 at a station core (or after
+  C6). Hard prerequisites: C6 waits at the blueprint (c6.4 says why) until C1 is through; C17 needs C3 and free flight. E32:
+  an ally's or a crewmate's base on the world counts (evidence, the zone, the sealed room, the wall ring). Eleven new verbs
+  (`ship:repaired|edited|keel_placed|switched`, `base:built|sealed|walled`, `door:opened`, `spawn:set`,
+  `station:core_deployed|zero_g`; sealed/walled are 1 Hz state checks only while the player's own step waits) and ten
+  predicates (`tier_gate`, `module_affordable`, `hull_damaged`, `keel_laid`, `ship_built`, `base_here`, `base_core_ready`,
+  `night_outside`, `station_core_ready`, `station_owned`); world rules: undamaged hull / breathable air → read stand-ins,
+  no oxygen / no visitors → skipped, Creative → "crafting is free" variant + evidence. Cards (T3): `tut.first_base`
+  (c7.1) and `tut.ship_commissioned` (c6.7). hintRefs absorb `tier_gate`, `hull_low`, `base_walls`, `base_airless`. C2's
+  terrain-scanner step now also runs once C1 is through (variant line). Keys en+de: 80 pack keys, core
+  `ui.vega.act.EvaDeployStation|ToggleStationZeroG`. Tests: `TutorialBuildingCoursesTests` (15); updated `TutorialPackTests`,
+  `TutorialCardsTests`, `TutorialDeepDivesTests`, `CutsceneContentTests`. Docs: TUTORIAL_PACK, CUTSCENES,
+  STORY_IMPLEMENTATION, USER_MANUAL.
+- ✅ **Step 20 — tutorial deep dives "Crystal net": C8 Crystal workshop, C14 Factory and automation (#2481)**, 2026-10-12
+  (server + data only, no Unity file): C8 is a **bridge** onto VEGA's six radio jobs `crystal_workshop_1..6` — c8.0 the
+  Crystal Net blueprint, c8.1–c8.6 mission bridges that complete when a job is turned in (the jobs stay in
+  `data/missions.json`, keep their rewards, work unchanged without the course; a job handed in before counts silently, so a
+  running chain is adopted; a job whose blueprint is missing says so in a variant line and chip). Offered once the comm
+  radio is researched; the offer (and a graduation suggestion) now skips any course whose steps are all through by evidence
+  (`ChapterThroughByEvidence` — never the workshop course to someone who did every job). Banner `tut.first_circuit` (T1) on
+  the first job's hand-in. C14: a factory terminal's bulk craft (new verb `craft:station`, read stand-in without a factory),
+  the SPS-code claim explained and only reacted to (`factory:claimed`, a react step — the course never asks to spend a code),
+  a fabricator crafting twice by itself (`crystal:craft`) after the hard prerequisites C8.5 and C1 (or a machine circuit /
+  forge already known; c14.4 says why it waits), and what machines do while you are away (variant when the catch-up rule is
+  0). Offered at VEGA's `factory_near` moment or with the fabricator blueprint. Six predicates (`factory_near`,
+  `factory_here`, `access_code`, `factory_owned`, `machine_circuit`, `machine_catchup`). **B55:** the six jobs carry
+  `giverRole: "vega"` (new giver role, radio only — validated): no NPC relationship on accept, and after a turn-in VEGA says
+  in her panel which job is next or which blueprint it needs (`vega.chain.next`, `vega.chain.next_research`; no radio item,
+  never muted, composed for older clients) instead of a coined quartermaster on the radio; quiet while the course runs (its
+  next line is the follow-up). hintRefs absorb `crystal_researched`, `crystal_first`, `crystal_door`, `crystal_mechanics`,
+  `crystal_phase`, `factory_near`. Keys en+de: 44 pack keys, core `vega.chain.next|next_research`; changed text (re-translate)
+  `vega.hint.crystal_researched` (no "on the radio"). Tests: `TutorialCrystalCoursesTests` (9: shape, offers, the real chain
+  with a real first circuit, rewards, the banner once, adopting a running chain, a declined course with VEGA's follow-up and
+  an older client, C14 through the real terminal/claim/fabricator, world rules and evidence, the new verbs);
+  `StoryPackValidationTests` +1 (a bridged mission keeps its rewards); updated `TutorialDeepDivesTests`, `TutorialCardsTests`.
+  Docs: TUTORIAL_PACK, CRYSTAL_NET, STORY_IMPLEMENTATION, CUTSCENES, USER_MANUAL.
+- ✅ **Step 21 — tutorial deep dives "More to discover": C9–C13, C15, C16, C18 (#2482)**, 2026-10-12 (server + data
+  only, no Unity file): C9 Animal friends (scan an animal, feed a begging herd — new verb `creature:fed`, tame one —
+  banner `tut.first_tame` (T1, synthesis §6.4), name or feed the companion — `companion:cared`), C10 Gardener and lab
+  (`plant:any`, a campfire craft, `sample:taken`, the bio lab researched, `biolab:used`), C11 Neighbours (`npc:talked`,
+  `npc:answered`, the People list `npc:people`, who helps with what), C12 Defence (E9: opt-in, never suggested, worded
+  "fend off / chase away"; robbers explained, `defeat:any` on foot, a hostile ship where space combat is on), C13 On the
+  move (`move:climbed` metres in the climbing pose, the rope gun or a "later" line, jetpack/glider `move:airborne`, a boat
+  or speeder and a train `vehicle:boarded`, beam blocks and lifts), C15 Together (`chat:sent`, a player trade, allies or a
+  crew `ally:joined`, a ping, mute and `/report`), C16 Creative tools (`paint:block`, a form and a colour from the slot
+  actions, a pasted copy, your look), C18 Explorer (`loot:any`, a vault or crashed wreck in reach `poi:reached`, settlers'
+  tips and data cubes, a wreck in space). Offers at the synthesis' moments (VEGA's `tameable_near`, `settlement_near`,
+  `ruin_near`/`treasure_near`/`wreck_signal` tips, a herd begging, a seed carried, a robber's hold-up or a hostile close by,
+  the first climb, another player near — observers never count, researched tools); 16 new predicates. **New chapter field
+  `visibleIf`** (C# + Python validator, runtime, Journal): a course the world rules out — Defence without hostiles, Together
+  on a singleplayer world, Animal friends without animals, Neighbours without settlements — is left out of the Journal and
+  never offered, suggested or started (one the player runs or finished stays listed). hintRefs absorb `feed_herd`,
+  `favourite_food`, `tameable_near`, `plant_refused`, `first_sample`, `bio_lab_unlocked`, `first_analysis`,
+  `settlement_near`, `rope_gun` (its how-to is the step's done line), `player_near`, `treasure_near`, `poi`, `ruin_near` and
+  the wreck/debris tips; safety and reactive hints (`sample_case_full`, `companion_fetch`, `hull_low` …) stay VEGA's.
+  Graduation suggestions unchanged (C3, C4, C1). Keys en+de: 124 pack keys (pack now 459), core bracket words
+  `ui.vega.act.PrimaryFire|LootContainer|OpenChat|RequestTrade|HotbarAction|StowVehicle`. Tests: `TutorialMoreCoursesTests`
+  (15: shape and wording, rule-gated courses left out and coming back live, the offers, every course walked through the real
+  handlers — a real herd fed and tamed with the banner once, a robber chased off, a settler talked to, a wall climbed, a
+  glider, a boat, a train, two players and an observer, a painted block, a looted chest, a ruin — and the new verbs);
+  updated `TutorialDeepDivesTests`, `TutorialCardsTests`, `CutsceneContentTests`, the building/crystal course tests (their
+  players stand together). Docs: TUTORIAL_PACK, STORY_IMPLEMENTATION, CUTSCENES, USER_MANUAL.
+- ✅ **Step 22 — data-only side-story test pack + authoring guide (#2483)**, 2026-10-12 (tests + docs; no game logic, no
+  Unity file, no wire/save change). The pilot side story `side_pilot` ("The Beacon Keeper", narrator Juno — a **test pack**,
+  never shipped: `tests/BlocksBeyondTheStars.Tests/Fixtures/story_packs/side_pilot/`, maintainer decision): kind `side`,
+  scope `player`, two chapters of existing events (`lamp:toggled`, `mine:any`, `hotbar:select`, `move:walked`), a start rule
+  (after part 1 of the basic training, at once without one, early from the Journal), a world-rule variant, a template T2
+  chapter card and a T1 banner, en+de texts. `SideStoryPilotTests`: dropped into a copy of `data/` it loads through the
+  real loader, localizes, validates with 0 issues; alone it starts by itself and plays through real handlers (cards
+  ledgered `pilot.part@p1/@p2`, banner, Journal done + badge); together with the basic training and VEGA's story it keeps
+  one chip in the binding order (training → pin → VEGA's lead above the side story) and one Journal (tutorial, VEGA, side
+  story); a second player's side story starts by itself after part 1. `SideStoryPilotClientTests`: a real client builds
+  the three Journal categories and the pinned chip "Beacon: …". **Authoring guide** `docs/developer/STORY_PACK_AUTHORING.md`
+  + **generated** `docs/developer/STORY_VOCABULARY.md` (events, UI flags, condition forms, pack states, world predicates,
+  marker providers, gates, step kinds/tiers, objective types, cutscene tiers/cameras/anchors/caption styles/grades/arg
+  sources, text budgets, lead types, chapter events, finale stages, memory triggers — from the code constants and their
+  `<summary>` doc comments); `StoryVocabularyDocTests` fails when the file drifts or a listed constant lacks a summary
+  (regenerate: `BBTS_UPDATE_STORY_VOCABULARY=1 dotnet test … --filter …StoryVocabularyDocTests`). Doc-comment-only edits:
+  the seven achievement-only `CircuitEvents`, the `StoryRegistry` kinds/scopes. Links: docs index, root README,
+  STORY_IMPLEMENTATION, TUTORIAL_PACK, CUTSCENES.
+- ✅ **Gap closure before the PR (#2459)**, 2026-10-12 (server + Shared + Persistence + Client.Core + 1 Unity file
+  `VegaPanel.cs`, data; no wire change, no save/protocol bump — one additive save field). A cutscene's `custom` anchor is
+  saved with the promise (`PlayerState.CutsceneAnchors`, `<pack>/<id>` → body + position) and frames the same place when the
+  scene is re-offered at the join, on that body only (the finale's recomputed place stays the fallback for older saves, on
+  the core world); the join catch-up queues the world story's scenes first (the prologue no longer waits behind the welcome
+  card). One teaching voice for the client-only lessons: the course steps name them in `hintRefs` (c3.1 chart, c3.2 planet
+  card + ship scanner, c3.6 target lock, c5.9 wormhole, c10.5 bio lab tabs, c13.1 climbing) and `VegaPanel.SayLocal` keeps a
+  lesson quiet (counted as given) while that chapter runs with the step active or ahead (`VegaText.LessonCoveredByStoryStep`).
+  "The tip becomes the offer": a hint or tip a course teaches is not spoken when that course's offer is due at the same
+  moment or was made a moment ago — the offer books it as told and takes the tips' cadence slot (data cache, factory,
+  settlement, animal, ruin, treasure, wreck, tool-tier wall, bio lab, the comm radio's Crystal Net line via c8.0's new
+  `crystal_researchable` ref; never a safety tip). A replayed course passes a research step whose blueprint is known (C5,
+  C6, C8, C10 replays no longer hang until "Skip step"). Tests: `StoryGapClosureTests` (12: the anchor through a save and a
+  rejoin, the join order, `suit:climate` / `mission:board_accepted` / `companion:cared` fed from their handlers, the jetpack
+  and the speeder inside C13, the tier wall / data cache / comm radio offers vs. a player who still hears the tip, the
+  absorb rule, the replay), `StoryGapClosureClientTests` (12, incl. a guard that every `SayLocal` lesson is taught by a
+  tutorial step). Docs: CUTSCENES, TUTORIAL_PACK, STORY_IMPLEMENTATION, USER_MANUAL.
+- ✅ **Translation pass (#2459)**, 2026-10-12 (data + tool + docs; no code change except the WebGL fallback list): the
+  package's texts in all 14 languages — per community language 215 base keys (165 new, the 28 token-changed keys step 4
+  had dropped, 22 re-translated because their English meaning changed: the canon package `vega.mem.*`, `vega.relay.first`,
+  `item.access_code.desc`, `vega.intro.1`, the shortened hints …), 106 VEGA-pack keys (100 new, 6 re-translated incl. the
+  SPS name) and the whole tutorial pack (459 keys, twelve new `data/stories/tutorial/locales/<code>.json`, added to the
+  WebGL `FallbackManifest`); machine pass with `translate_locale.py`, then a full hand review per language (~5,000 values
+  corrected: names left in English → the table's item/tab/job names, VEGA's feminine forms and one register, chip forms,
+  docking/lead/short-course/commission traps, over-long lines). "Scout and Pioneer Service"/"SPS" and "The Long Quiet" stay
+  English everywhere; "Journal" got a word per language. Coverage 100 % in all 14. Deleted from all 14 (unused, client-only):
+  `ui.hud.hint_pad`, `ui.intro.skip`, `ui.vega.prologue.skip`, `ui.story.vega`, `ui.story.cat_log`, `ui.worldopt.col_story`,
+  `ui.worldopt.story`; kept on purpose: `vega.resume`, `vega.s.dock.start_far` (EN/DE text back to its original: only an older
+  server sends it), `vega.sys.crystal_first` — line keys a released server still sends to a new client. EN/DE fix: two lines
+  still said "Story tab" (now "your Journal"). Tool: `translate_locale.py` carries each language's own tab/term words and
+  the names found in each chunk (`GLOSSARY_KEYS`, `NAME_KEY`), rejects an unchanged English sentence and writes LF.
+  Reviewers' table fixes outside the pass: Guardian words aligned in it/ko/uk/nl/ru, es "Hiperespacio", ja
+  `ui.vega.restart`, pl workbench typo + observatory, uk campfire ("Вогнище"), it crystal daylight modes. Open (pre-existing
+  table inconsistencies, listed in the review notes): blueprint vs module names (Radar Array, Jump Generator) in fr/pl/ru/uk,
+  "Guardian" still English in a few older tr/it pack lines, masculine VEGA in some older pt/ru/pl lines, uk finale UI
+  "Страж" vs "Охоронець", nl `ui.dock.undock_hint`; and the menu tab of the Character page is labelled `ui.tab.settings`
+  ("Settings") while the tutorial (c11, c16) and the manual say "Character tab" — decide which one changes.
+- ~~Open from step 1: the 12 community locales still carry the old `vega.s.dock.start_far` text and lack
+  `story.obj.help_peaceful`~~ — done in the translation pass (`vega.s.dock.start_far` is back to its original "hyperjump"
+  text in EN/DE: only an older server still sends it, at its dock stage).
+- Open from step 2: ~~the community locales lack `ui.cutscene.skip_key/_pad/_touch`, `ui.hud.hint_pad_glyphs`,
+  `story.vega.epilogue.title`; drop `ui.hud.hint_pad`, `ui.intro.skip`, `ui.vega.prologue.skip`~~ — done in the
+  translation pass. Needs an on-device check: the touch Skip button and VEGA's pills with the touch layer hidden (phone/tablet, WebGL),
+  and pad Y on non-XInput pads.
+- Open from step 9: ~~the community locales lack the step-9 keys~~ — done in the translation pass.
+  Playtest/on-device checks: the dev-palette prologue on desktop **and** WebGL (orbit staging, fallbacks, hold), a card's
+  skip button on touch (the touch layer stays up under a card and may cover the bottom-right button), pad paging of
+  cards, the MP camera cap. Deferred to later steps: hold-to-skip / pause-then-skip, ambience ducking, music prefetch,
+  `ctx:` variants, vocoder chatter under the speaker box (synthetic stages: done in 17a).
+- Open from step 15: ~~the 12 community VEGA pack locales lack the seven `story.vega.cut.*` keys~~ — done in the
+  translation pass. Playtest/on-device checks: listen to the three stingers (generated unheard; regenerate one with
+  `gen_sound.py` if it jars), the heal-tank close-up in the starter ship and in a self-built ship (camera inside the
+  medbay, never in a wall), chapter 7's chart route + ring on desktop and WebGL, the sepia memory chart in chapter 2, a
+  card's speaker box while walking, an early skip of chapter 7 bringing the jump-generator line back; a parent watching
+  B6/B9 (synthesis §6.6). ~~Deferred: the B10 multiplayer variant~~ — done in 17b; ~~dioramas / the drifting memory chart
+  for chapters 3, 4 and 6~~ — done in 17a.
+- Open from step 17b: ~~the community locales lack the eight new keys~~ — done in the translation pass.
+  Playtest/on-device checks: the whole finale in SP and two-player MP (arrival card on the warp-in,
+  the descent's flyover from the first pad and the sky fallback from a far pad, the breach close-up in the chamber, the duel
+  dialogue — buttons by mouse, pad (UiNav + its hint strip next to "Step back") and touch, step back + E to face the core
+  again, the banner for a player elsewhere, the stand-down and the ending with the credits on the dark stage, "Watch the
+  ending again"), b10 with two players (the names on the chart), the breach hint and gauntlet banner now drawing. Not
+  built: a client-side "red light fades to warm" in the real chamber, the arrival's gauntlet variant.
+- Open from step 17a: playtest/on-device checks — chapter 3's core diorama (the red column, the halo, the rising camera),
+  chapter 4's vista and chapter 6's memory chart on desktop **and** WebGL at Medium, the same three as cards on Low, a
+  `space_vista` at `ship` after a first flight (the own ship's design), the world camera back to normal after each
+  synthetic shot (HUD, visor, far terrain), and a parent watching the chapter 4 vista with B6. Not built: d4's
+  data-defined diorama `stages` (the two dioramas are built in), the clip recorder filming a synthetic shot.
+- Open from step 16: ~~the 12 community VEGA pack locales lack the 16 `story.vega.obj.*` lead texts and
+  `ui.journal.leads`~~ — done in the translation pass. Playtest checks: the lead chip and its private
+  ping/flight target on desktop and WebGL, the Journal's "Leads in this chapter" block (DE fits), a peaceful save from an
+  older build jumping 1–2 beats at its first start, the memory a lead brings on a peaceful world. Not in v1 (need a galaxy
+  index): leads to fragments or monuments on other worlds, the nearest data terminal, an unknown neighbouring system.
+- Open from step 19: ~~the community locales lack the core bracket words; the tutorial pack has no community files~~ —
+  done in the translation pass. Playtest checks: the base card's crane over a fresh base
+  and the commissioning card circling a self-built ship (size-scaled, from outside), the C7 night offer, the C6 wait for C1
+  in the Journal. Not built (the synthesis' C1.4–C1.7: crates, taking things apart, a workbench, "upgrades use up the old
+  tool" — the last is not true for the drills) — data-only additions later; "two nights outside" is approximated by the
+  first night out after the training.
+
 ### ⚙️ CI long poles: world-gen caches no longer build under a shared lock (#2455), the settlement sweeps split up (#2456) (2026-10-10, branch fix/ci-shard-long-poles) — ✅ done
 
 Found while shipping v2026.10.12: the PR gate's shard 7 tripped the 120 s guard three times in a row (520/520 passed,
@@ -6810,7 +7293,9 @@ the intro pattern): resolution card (story name + stand-down line) → credits r
 player may be mid-walk when it starts), queued while a menu is open; the Story tab gained "Watch the ending
 again" (closes the menu and requests). `CinematicFrame.Root` exposed for the roll text; the IMGUI finale
 banner yields while the cinematic plays (IMGUI draws above every canvas). Music: the existing
-`FinaleResolution` window keys off GuardianDefeated and covers replays/catch-up unchanged.
+`FinaleResolution` window keys off GuardianDefeated and covers replays/catch-up unchanged. *(Corrected
+2026-10-11, #2461: that was true for the join catch-up only — the window latched once per session, so a replay
+got no music, and a won save played it at every session start. The track now follows the cinematic's starts.)*
 Codex wiki deliberately untouched — the ending is a spoiler, not a feature to document in-game.
 Tests: `StoryResolutionTests` (4) — win broadcast + epilogue in the log + milestone, latecomer catch-up
 exactly once (restart round-trip), replay request silent-until-resolved then answers, epilogue text EN+DE;

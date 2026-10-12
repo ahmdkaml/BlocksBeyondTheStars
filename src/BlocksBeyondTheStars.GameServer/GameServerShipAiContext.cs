@@ -8,6 +8,7 @@ using BlocksBeyondTheStars.Shared.Content;
 using BlocksBeyondTheStars.Shared.Definitions;
 using BlocksBeyondTheStars.Shared.Geometry;
 using BlocksBeyondTheStars.Shared.State;
+using BlocksBeyondTheStars.Shared.Story;
 using BlocksBeyondTheStars.Shared.World;
 
 namespace BlocksBeyondTheStars.GameServer;
@@ -268,6 +269,8 @@ public sealed partial class GameServer
         {
             ShipAiTipLearned(session, "lamp_off");
         }
+
+        RaiseGameEvent(session, GameEventKeys.LampToggled, intent.On ? "on" : "off"); // #2469: the tutorial's lamp lesson
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -305,6 +308,13 @@ public sealed partial class GameServer
         var candidates = new List<(VegaTipSpec Spec, string Arg, string Mention)>();
         CollectVegaTipCandidates(session, candidates);
 
+        // #2469: a data cache in reach is the tutorial's "data fragments" moment — raised whatever the hints switch says
+        // (a step line is no hint), and only while a step waits for it.
+        if (HasGameEventListener(GameEventKeys.DataFound) && candidates.Any(c => c.Spec.Id == "data_cache_near"))
+        {
+            RaiseGameEvent(session, GameEventKeys.DataFound, "cache");
+        }
+
         // Dwell bookkeeping: remember when each candidate first appeared; forget the ones that went away.
         var seen = new HashSet<string>();
         foreach (var c in candidates)
@@ -324,15 +334,33 @@ public sealed partial class GameServer
             }
         }
 
+        session.VegaTipLive = seen; // #2479: the moment a deep dive is offered at (world:data_cache_near …), whatever the hints say
+
+        // #2462 (B31): with the hints muted no tip goes out — each one counts its tellings in the save, so a tip sent to
+        // a muted panel was spent unseen. The dwell bookkeeping above keeps running, so a tip whose situation still
+        // holds speaks up once the hints are on again. A refused swing's tier-gate arming is dropped rather than kept
+        // for later: that tip is only worth hearing at the wall.
+        if (session.VegaHintsMuted)
+        {
+            session.VegaTierGateBlock = string.Empty;
+            session.VegaTierGateTool = string.Empty;
+            return;
+        }
+
         bool gapOpen = _uptime >= session.VegaTipReadyAt; // cadence: has VEGA been quiet long enough?
-        int stage = VegaStageIndex(p);
+        bool opportunityOpen = OpportunityTipsOpen(session);
         (VegaTipSpec Spec, string Arg, string Mention)? best = null;
         foreach (var c in candidates)
         {
             var s = c.Spec;
-            if (s.AfterScanStage && stage < 3)
+            if (s.AfterScanStage && !opportunityOpen)
             {
-                continue; // opportunity tips wait until mine/craft/eat are done (the "scan" stage)
+                continue; // opportunity tips wait until eating, mining and crafting are taught (#2469: the tutorial's gate)
+            }
+
+            if (HintHeldByTutorial(session, s.Id))
+            {
+                continue; // a tutorial step teaches this topic itself (#2469, G12: one teaching voice)
             }
 
             if (_uptime - session.VegaTipSince[s.Id] < s.Dwell)
@@ -351,6 +379,15 @@ public sealed partial class GameServer
                 continue;
             }
 
+            if (s.Priority != VegaTipPriority.Safety && RecentOfferTeaches(session, s.Id))
+            {
+                // #2459: the course VEGA offered a moment ago teaches this — the offer was its telling (the tool-tier tip is
+                // armed by the very swing that made the workshop course due, and the offer pass runs before this one).
+                BookHintAsTold(session, s.Id);
+                session.VegaTipReadyAt = System.Math.Max(session.VegaTipReadyAt, _uptime + VegaTipGap);
+                continue;
+            }
+
             // The FIRST safety hint (low O2, freezing …) is the old teaching moment and never waits for
             // the cadence — everything else queues behind whatever VEGA said last.
             if (!gapOpen && !(s.Priority == VegaTipPriority.Safety && count == 0))
@@ -366,6 +403,11 @@ public sealed partial class GameServer
 
         if (best is { } pick)
         {
+            if (pick.Spec.Priority != VegaTipPriority.Safety && OfferAbsorbsHint(session, pick.Spec.Id))
+            {
+                return; // #2459: a course that teaches this is due here — its offer speaks next second and books the tip as told
+            }
+
             FireVegaTip(session, pick.Spec, pick.Arg, pick.Mention);
         }
     }
@@ -583,7 +625,7 @@ public sealed partial class GameServer
         }
 
         // --- Progression (#1079) — a recipe/blueprint sweep, so only when a tip could actually go out ---
-        if (_uptime >= session.VegaTipReadyAt && VegaStageIndex(p) >= 3)
+        if (_uptime >= session.VegaTipReadyAt && OpportunityTipsOpen(session))
         {
             if (CraftableNow(session) is { } recipe)
             {
@@ -682,7 +724,9 @@ public sealed partial class GameServer
             }
         }
 
-        if (StoryActive && _netFragments.Count > 0)
+        // A VEGA tip (#2470, synthesis §4.5 "VEGA-Tipps hängen am VEGA-Start"): only once the player's story track has
+        // started — a newcomer in the basic training is not pointed at story finds (a fragment they pick up still reads).
+        if (StoryActive && _netFragments.Count > 0 && StoryTrackStarted(session))
         {
             GameServer.ServerNetFragment? nearest = null;
             double bestSq = double.MaxValue;
@@ -729,7 +773,8 @@ public sealed partial class GameServer
 
         foreach (var other in JoinedInActiveWorld())
         {
-            if (ReferenceEquals(other, session) || other.State.AboardShip || InSpace(other.State.PlayerId)
+            // An invisible fleet-admin observer is never "a pilot nearby" (#2460, N2) — naming them would out them.
+            if (ReferenceEquals(other, session) || other.Spectating || other.State.AboardShip || InSpace(other.State.PlayerId)
                 || WrapDistSq(p.Position, other.State.Position) > 60.0 * 60.0)
             {
                 continue;
@@ -802,7 +847,7 @@ public sealed partial class GameServer
             add(ShipCanMineAsteroids(ship) ? "asteroid_near" : "asteroid_no_tool", "", "asteroids:" + instanceId);
         }
 
-        if (stationNear && !p.Milestones.Contains(VegaStageKey("dock")))
+        if (stationNear && (TutorialGate(session, StoryGateNames.StationNear) ?? true)) // #2469: while the docking step is open
         {
             add("station_near", "", "station:" + instanceId);
         }
@@ -938,7 +983,14 @@ public sealed partial class GameServer
 
         session.VegaTierGateBlock = LocalizedName(session.Locale, block.NameKey, block.Key);
         session.VegaTierGateTool = LocalizedName(session.Locale, wanted.NameKey, wanted.Key);
+        session.TierGateRefusedAt = _uptime; // #2480: the "Workshop and titanium" course's moment (world:tier_gate)
+        RaiseGameEvent(session, GameEventKeys.MineRefused, block.Key); // #2469: the tutorial's tool-tier reaction (it absorbs the tip's first telling)
     }
+
+    /// <summary>#2469: whether the opportunity and progression tips may speak — the tutorial pack's <c>opportunityTips</c>
+    /// gate (synthesis §5.3: eating, mining and crafting taught or skipped, or the tutorial off — today's moment), open when
+    /// no tutorial pack has a say.</summary>
+    private bool OpportunityTipsOpen(PlayerSession session) => TutorialGate(session, StoryGateNames.OpportunityTips) ?? true;
 
     /// <summary>The name of something the player could make or unlock if only they had more of this ore:
     /// a known recipe using it directly (player short of the amount) or an unlockable blueprint whose

@@ -1,6 +1,7 @@
 // Blocks Beyond the Stars — Copyright (c) 2026 Justus Dütscher & Marcel Dütscher (JuMaVe Games)
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
+using BlocksBeyondTheStars.Networking.Messages;
 using BlocksBeyondTheStars.Networking.Transport;
 using BlocksBeyondTheStars.Persistence;
 using BlocksBeyondTheStars.Shared.Configuration;
@@ -319,11 +320,18 @@ public sealed class GameServerFinaleTests : IDisposable
         var server = Started(out var repo);
         using (repo)
         {
-            server.AddLocalPlayer("Pilot");
-            Assert.StartsWith("vega.obj.", server.ObjectiveKeyForTest("Pilot")); // a fresh player is in VEGA's onboarding
+            var pilot = server.AddLocalPlayer("Pilot");
+            server.TickStoryPacksForTest(pilot); // #2469: the basic training (the tutorial pack) starts for the fresh player
+            Assert.StartsWith("story.tutorial.", server.ObjectiveKeyForTest("Pilot")); // a fresh player is in the basic training
+            Assert.Equal(ObjectiveSources.Tutorial, server.ObjectiveSourceForTest("Pilot"));
 
             CompleteTheArc(server);
-            Assert.Equal("story.obj.finale", server.ObjectiveKeyForTest("Pilot")); // …until the finale is on the map
+            // #2462 (B11): only in the Guardian system does the finale outrank the running lessons — at home the
+            // newcomer keeps the lesson the panel is talking about …
+            Assert.StartsWith("story.tutorial.", server.ObjectiveKeyForTest("Pilot"));
+
+            pilot.CurrentLocationId = SvGameServer.GuardianCoreBodyId; // … standing on the core world, the finale is it
+            Assert.Equal(BlocksBeyondTheStars.Shared.Story.StoryLeads.FinaleKey, server.ObjectiveKeyForTest("Pilot")); // #2475: a current client's key
         }
     }
 

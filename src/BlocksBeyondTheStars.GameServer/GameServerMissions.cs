@@ -7,6 +7,7 @@ using BlocksBeyondTheStars.Shared.Definitions;
 using BlocksBeyondTheStars.Shared.Geometry;
 using BlocksBeyondTheStars.Shared.Missions;
 using BlocksBeyondTheStars.Shared.State;
+using BlocksBeyondTheStars.Shared.Story;
 using BlocksBeyondTheStars.WorldGeneration;
 
 namespace BlocksBeyondTheStars.GameServer;
@@ -192,6 +193,10 @@ public sealed partial class GameServer
     /// <summary>Test hook: a mission definition's first objective, or null for an unknown mission.</summary>
     public MissionObjective? FirstObjectiveForTest(string missionId) => GetMissionDef(missionId)?.Objectives.FirstOrDefault();
 
+    /// <summary>Test seam (#2479): every objective of a mission (a board job's whole list), or none for an unknown id.</summary>
+    internal IReadOnlyList<MissionObjective> ObjectivesForTest(string missionId)
+        => GetMissionDef(missionId)?.Objectives ?? (IReadOnlyList<MissionObjective>)System.Array.Empty<MissionObjective>();
+
     private void HandleAcceptMission(PlayerSession session, string missionId)
     {
         var def = GetMissionDef(missionId);
@@ -251,10 +256,23 @@ public sealed partial class GameServer
 
         OnBountyAccepted(session, def); // #730/#731: persist the def + reveal a camp bounty's camp on the map
 
-        Send(session, new MissionResult { Success = true, MissionId = missionId });
+        Send(session, MissionSucceeded(session, def, MissionOutcomes.Accepted));
         SendMissionList(session);
-        ShipAiOnTradeOrMission(session); // VEGA onboarding: taking a board job counts like a first trade
+        if (MissionAcceptCountsAsTrade(def))
+        {
+            RaiseGameEvent(session, GameEventKeys.MissionBoardAccepted, missionId); // #2469: the tutorial's board-job lesson (B58: board and chain ids only)
+        }
+
+        RaiseGameEvent(session, GameEventKeys.MissionAccepted, missionId); // #2465: the mission bridge
     }
+
+    /// <summary>Whether accepting this mission is a job the player picked (#2460, B58; since #2469 it raises
+    /// <c>mission:board_accepted</c>, the tutorial's board-job lesson): a job from a mission board or a chain step — the
+    /// dealing with people the lesson is about. The two starter jobs can be accepted anywhere from minute one, so accepting
+    /// one used to tick the old "trade" lesson off silently before the player ever met a trader; a story character's
+    /// mission is not a job either.</summary>
+    internal static bool MissionAcceptCountsAsTrade(MissionDefinition def)
+        => IsBoardMissionId(def.Id) || IsChainMission(def);
 
     private void HandleTurnInMission(PlayerSession session, string missionId)
     {
@@ -362,14 +380,21 @@ public sealed partial class GameServer
         }
 
         _repo.SavePlayer(session.State);
-        Send(session, new MissionResult { Success = true, MissionId = missionId });
+        Send(session, MissionSucceeded(session, def, MissionOutcomes.Completed));
         OnAchievementMissionCompleted(session); // "Helping Hand" / "Quartermaster's Friend" (#1102)
+        RaiseGameEvent(session, GameEventKeys.MissionTurnedIn, missionId); // #2465: the mission bridge
         if (IsBoardMissionId(missionId))
         {
             NpcRadioOnBoardTurnIn(session, missionId, def.GiverName); // #1119: "something new on my board"
         }
-        RecordStoryMilestone();   // settlement helped (mission completed) → story milestone (P3)
-        TryThreadMission(def);    // P7: a matching mission thread also yields a story fragment
+
+        // #2475 (E21): a teaching chain (the Crystal workshop) is not story progress — the chapter-lead bonus balances it.
+        if (def.CountsForStory)
+        {
+            RecordStoryMilestone();   // settlement helped (mission completed) → story milestone (P3)
+            TryThreadMission(session, def); // P7: a matching mission thread also yields a story fragment
+        }
+
         if (IsChainMission(def))
         {
             OnChainStepTurnedIn(session, def, pr); // #1212: the giver calls about the next step a little later
@@ -382,8 +407,11 @@ public sealed partial class GameServer
 
     /// <summary>P7 mission threading: if the completed mission matches one of the active story's threads, award
     /// its story fragment (deduped by key like any net-fragment find, so it lands at most once + advances the
-    /// arc). Silently does nothing with no story / no matching thread.</summary>
-    private void TryThreadMission(BlocksBeyondTheStars.Shared.Missions.MissionDefinition def)
+    /// arc). Silently does nothing with no story / no matching thread. The player who turned the mission in gets
+    /// the fragment the way every other source hands one over (#2460, B45): the reader opens with its archive text
+    /// and the Story tab marks it new — before, the find was recorded silently. Only a NEW find opens the reader;
+    /// the thread matches every settlement job, and a re-read on each turn-in would be noise.</summary>
+    private void TryThreadMission(PlayerSession? session, BlocksBeyondTheStars.Shared.Missions.MissionDefinition def)
     {
         if (_story is null || def is null)
         {
@@ -401,16 +429,34 @@ public sealed partial class GameServer
             bool match = needle.Length == 0
                 || (def.NameKey?.IndexOf(needle, System.StringComparison.OrdinalIgnoreCase) >= 0)
                 || (def.Id?.IndexOf(needle, System.StringComparison.OrdinalIgnoreCase) >= 0);
-            if (match)
+            if (!match)
             {
-                RecordStoryFragment(thread.FragmentKey); // deduped + advances the arc + broadcasts the meter
+                continue;
             }
+
+            bool newFind = !_storyState.FoundFragmentKeys.Contains(thread.FragmentKey);
+            if (newFind && session is not null && _story.Fragments.FirstOrDefault(f => f.Key == thread.FragmentKey) is { } frag)
+            {
+                Send(session, new NetFragmentRevealed { Category = frag.Category, TextKey = frag.TextKey });
+            }
+
+            RaiseGameEvent(session, GameEventKeys.StoryFragment, thread.FragmentKey); // #2465 (null session: nothing; #2475: first)
+            RecordStoryFragment(thread.FragmentKey); // deduped + advances the arc + broadcasts the meter
         }
     }
 
     /// <summary>Test hook: thread a completed mission by its type key (mirrors a turn-in).</summary>
     public void TryThreadMissionForTest(string nameKey)
-        => TryThreadMission(new BlocksBeyondTheStars.Shared.Missions.MissionDefinition { Id = nameKey, NameKey = nameKey });
+        => TryThreadMission(null, new BlocksBeyondTheStars.Shared.Missions.MissionDefinition { Id = nameKey, NameKey = nameKey });
+
+    /// <summary>Test hook: thread a mission as turned in by this player (mirrors a turn-in, reader included).</summary>
+    public void TryThreadMissionForTest(string playerId, string nameKey)
+    {
+        if (FindSessionByPlayerId(playerId) is { } session)
+        {
+            TryThreadMission(session, new BlocksBeyondTheStars.Shared.Missions.MissionDefinition { Id = nameKey, NameKey = nameKey });
+        }
+    }
 
     // Player mission titles/descriptions are broadcast verbatim to other players, so strip control
     // characters (CR/LF/ANSI) before truncating — same treatment as chat and labels (audit 2026-07-05).
@@ -529,7 +575,7 @@ public sealed partial class GameServer
         _repo.SaveMission(def);
         _missionDefs[id] = def;
 
-        Send(session, new MissionResult { Success = true, MissionId = id });
+        Send(session, MissionSucceeded(session, def, MissionOutcomes.Posted));
         SendInventory(session);
         SendMissionList(session);
         _log.Info($"Player '{session.State.Name}' created mission '{id}'.");
@@ -1048,6 +1094,24 @@ public sealed partial class GameServer
 
     private void MissionFail(PlayerSession session, string missionId, string reason)
         => Send(session, new MissionResult { Success = false, MissionId = missionId, Reason = reason });
+
+    /// <summary>A success result for the client's toast (#2462, B24): what happened — accepted, turned in, posted —
+    /// and the mission's title by the same rule as the mission list (a locale key, or display text for player
+    /// missions and generated board texts). The toast used to read "Mission '&lt;raw id&gt;' complete!" in English for
+    /// all three, the accept included.</summary>
+    private MissionResult MissionSucceeded(PlayerSession session, MissionDefinition def, string outcome)
+    {
+        bool isPlayer = def.Source == MissionSource.Player;
+        var llmText = IsBoardMissionId(def.Id) ? BoardMissionText(def.Id, session.Locale) : null;
+        return new MissionResult
+        {
+            Success = true,
+            MissionId = def.Id,
+            Outcome = outcome,
+            Title = llmText?.Title ?? (isPlayer ? def.Title : def.NameKey),
+            FreeText = isPlayer || llmText is not null,
+        };
+    }
 
     /// <summary>The board (giver) mission ids currently available to a player — runs the giver window so it
     /// reflects the never-run-dry refill (test/inspection).</summary>

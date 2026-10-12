@@ -171,6 +171,9 @@ namespace BlocksBeyondTheStars.Client
         public event Action<CoreHackProgress>? CoreHackProgressReceived;             // core-hack channel progress
         public event Action<CoreDialogueMessage>? CoreDialogueReceived;              // argument-duel node / win
         public event Action<StoryResolved>? StoryResolvedReceived;                   // #1124: play the resolution cinematic
+        public event Action<CutscenePlay>? CutscenePlayReceived;                     // #2468: play a story pack's cutscene (tag 295)
+        public event Action<ObjectiveList>? ObjectiveListReceived;                   // #2471: the objectives in the chip order (tag 299)
+        public event Action<StoryPackStates>? StoryPackStatesReceived;               // #2471: the Journal's stories (tag 300)
         public event Action<RelayNetworkState>? RelayNetworkReceived;                // #1125: SPS relay meters + jump lanes
         public event Action<NpcDialogState>? NpcDialogReceived;                      // #1127: NPC dialogue step (resolved text)
 
@@ -434,8 +437,34 @@ namespace BlocksBeyondTheStars.Client
                 ? ContentFingerprint!
                 : BlocksBeyondTheStars.Shared.Content.GameContent.LastBuiltBlockFingerprint ?? string.Empty;
 
+        /// <summary>What this client announces in <see cref="JoinRequest.Features"/> (#2466): it understands story packs
+        /// (<c>packs1</c>). <c>cutscenes1</c> is added only by a host that can play cutscenes (<see cref="PlaysCutscenes"/>:
+        /// the Unity client with its cutscene director, #2468) — a headless client without one keeps receiving the narrator
+        /// lines alone, and the server stamps the scenes seen for it. A host may replace the list — a test that plays an
+        /// older client sends none.</summary>
+        public string[] Features { get; set; } = { ClientFeatures.Packs1 };
+
+        /// <summary>Whether this client announces <c>cutscenes1</c> (#2468): set by the Unity client when its cutscene
+        /// director exists, before the join goes out; a headless test opts in or out the same way. Toggles the word in
+        /// <see cref="Features"/>, keeping the rest of the list as it is.</summary>
+        public bool PlaysCutscenes
+        {
+            get => Array.IndexOf(Features ?? Array.Empty<string>(), ClientFeatures.Cutscenes1) >= 0;
+            set
+            {
+                var list = new List<string>(Features ?? Array.Empty<string>());
+                list.RemoveAll(f => f == ClientFeatures.Cutscenes1);
+                if (value)
+                {
+                    list.Add(ClientFeatures.Cutscenes1);
+                }
+
+                Features = list.ToArray();
+            }
+        }
+
         public void Join(string playerName, string? password = null, string locale = "en", string? token = null, int viewDistanceChunks = 0, string? hostedToken = null, string? installId = null)
-            => Send(new JoinRequest { PlayerName = playerName, Password = password, Locale = locale, Token = token, ViewDistanceChunks = viewDistanceChunks, HostedToken = hostedToken, InstallId = installId, ContentFingerprint = EffectiveContentFingerprint });
+            => Send(new JoinRequest { PlayerName = playerName, Password = password, Locale = locale, Token = token, ViewDistanceChunks = viewDistanceChunks, HostedToken = hostedToken, InstallId = installId, ContentFingerprint = EffectiveContentFingerprint, Features = Features ?? System.Array.Empty<string>() });
 
         /// <summary>#2222: set once this client refused the server it is connected to. Until the next
         /// <see cref="Connect"/>, <see cref="Poll"/> hands nothing on — a transport may still deliver what was on
@@ -471,17 +500,69 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>Takes an item from the Sandbox "All items" catalog (#1930; the server checks the mode).</summary>
         public void SendCreativeTakeItem(string itemKey, int count) => Send(new CreativeTakeItemIntent { ItemKey = itemKey ?? string.Empty, Count = count });
 
-        /// <summary>Skips the VEGA onboarding (grants the whole stage chain server-side) — or restarts it
-        /// from the intro when <paramref name="restart"/> is set (the way back after a skip).</summary>
+        /// <summary>The Settings button: skips the basic training (#2469: the tutorial pack's mandatory chapters) — or
+        /// replays it from part 1 when <paramref name="restart"/> is set (the way back after a skip; never the prologue).</summary>
         public void SendSkipOnboarding(bool restart = false) => Send(new SkipOnboardingIntent { Restart = restart });
+
+        /// <summary>Shortest gap between two reports of the same teaching flag (seconds): a held key or a menu toggled
+        /// back and forth sends one, the server's own limit stays a backstop.</summary>
+        public const double UiTutorialEventGapSeconds = 0.5;
+
+        private readonly System.Collections.Generic.Dictionary<string, long> _uiTutorialSentAt = new(StringComparer.Ordinal);
+        private readonly System.Diagnostics.Stopwatch _uiTutorialClock = System.Diagnostics.Stopwatch.StartNew();
+
+        /// <summary>#2469: reports a UI moment a tutorial step may teach (tag 298, <see cref="UiTutorialEvent"/>; the ids are
+        /// <c>GameEventKeys.UiEvents</c>). Cheap and safe to send always: the server raises it only for a step that waits for
+        /// it, an older server drops the tag. The same flag is sent at most every <see cref="UiTutorialEventGapSeconds"/>.
+        /// Returns whether it went out.</summary>
+        public bool SendUiTutorialEvent(string id)
+        {
+            if (string.IsNullOrEmpty(id))
+            {
+                return false;
+            }
+
+            long now = _uiTutorialClock.ElapsedMilliseconds;
+            if (_uiTutorialSentAt.TryGetValue(id, out long at) && now - at < (long)(UiTutorialEventGapSeconds * 1000))
+            {
+                return false;
+            }
+
+            _uiTutorialSentAt[id] = now;
+            Send(new UiTutorialEvent { Id = id });
+            return true;
+        }
+
+        /// <summary>#2466: the player's control of a player story pack (<see cref="StoryPackActions"/>: track, opt out,
+        /// start/skip/replay a chapter, skip a step; #2471: restart the pack, replay a chapter).</summary>
+        public void SendStoryPack(string packId, string action, string chapterId = "", string stepId = "")
+            => Send(new StoryPackIntent { PackId = packId ?? string.Empty, Action = action ?? string.Empty, ChapterId = chapterId ?? string.Empty, StepId = stepId ?? string.Empty });
+
+        /// <summary>#2471: the Journal opened — the server answers with <see cref="StoryPackStates"/> and <see cref="ObjectiveList"/>
+        /// at once (an older server drops the unknown word).</summary>
+        public void SendJournalRequest()
+            => Send(new StoryPackIntent { Action = StoryPackActions.RequestStates });
+
+        /// <summary>#2468: "Watch again" from the Story tab — the server re-sends a scene this player has seen
+        /// (<see cref="CutscenePlay.Replay"/> = true).</summary>
+        public void SendReplayCutscene(string packId, string cutsceneId)
+            => Send(new StoryPackIntent { PackId = packId ?? string.Empty, Action = StoryPackActions.ReplayCutscene, CutsceneId = cutsceneId ?? string.Empty });
+
+        /// <summary>#2468: the cutscene director is through with these scenes of one pack (tag 296) — watched, skipped
+        /// (<paramref name="skipped"/>), downgraded or not playable by this build (<paramref name="unsupported"/>).</summary>
+        public void SendCutsceneSeen(string packId, string[] ids, bool skipped = false, bool unsupported = false)
+            => Send(new CutsceneSeenIntent { PackId = packId ?? string.Empty, Ids = ids ?? Array.Empty<string>(), Skipped = skipped, Unsupported = unsupported });
 
         /// <summary>World admin: live-edits the gameplay world options (empty fields = unchanged).</summary>
         public void SendSetWorldRules(string creatures = "", string planetEnemies = "", string spaceNpcs = "", string ufos = "",
             string bandits = "", string instantTravel = "", string keepInventory = "", string keepShip = "", string hazards = "",
             string autoAim = "", string starterTeleporter = "", string frontierDanger = "", string baseVisitors = "",
-            string worldTextures = "", int machineCatchUpMinutes = -1, string returnToShip = "")
+            string worldTextures = "", int machineCatchUpMinutes = -1, string returnToShip = "",
+            string tutorialPolicy = "", string storyDensity = "")
             => Send(new SetWorldRulesIntent
             {
+                TutorialPolicy = tutorialPolicy, // #2466/#2472: "Auto" | "OptIn" | "Off", empty = unchanged
+                StoryDensity = storyDensity,     // #2472: "Sparse" | "Normal" | "Dense", empty = unchanged
                 MachineCatchUpMinutes = machineCatchUpMinutes, // #2269: -1 = unchanged
                 WorldTextures = worldTextures,
                 ReturnToShip = returnToShip, // #2286
@@ -743,7 +824,11 @@ namespace BlocksBeyondTheStars.Client
 
         public void SendRequestKnownNpcs() => Send(new RequestKnownNpcsIntent());
 
-        public void SendSetNpcCalls(int mode) => Send(new SetNpcCallsIntent { Mode = mode });
+        /// <summary>The preferences the server must know because it initiates what they silence: the NPC radio calls
+        /// (#1119) and — since #2462 (B31) — VEGA's hints mute, so a muted hint is held back instead of burned unseen.
+        /// Both on every call: send it at join and whenever either setting changes.</summary>
+        public void SendSetNpcCalls(int mode, bool vegaHintsMuted)
+            => Send(new SetNpcCallsIntent { Mode = mode, VegaHintsMuted = vegaHintsMuted });
 
         public void SendCopyBuild(int x1, int y1, int z1, int x2, int y2, int z2, string name)
             => Send(new CopyBuildIntent { X1 = x1, Y1 = y1, Z1 = z1, X2 = x2, Y2 = y2, Z2 = z2, Name = name });
@@ -1286,6 +1371,9 @@ namespace BlocksBeyondTheStars.Client
                 case CoreHackProgress m: CoreHackProgressReceived?.Invoke(m); break;
                 case CoreDialogueMessage m: CoreDialogueReceived?.Invoke(m); break;
                 case StoryResolved m: StoryResolvedReceived?.Invoke(m); break;
+                case CutscenePlay m: CutscenePlayReceived?.Invoke(m); break;
+                case ObjectiveList m: ObjectiveListReceived?.Invoke(m); break;
+                case StoryPackStates m: StoryPackStatesReceived?.Invoke(m); break;
                 case RelayNetworkState m: RelayNetworkReceived?.Invoke(m); break;
                 case NpcDialogState m: NpcDialogReceived?.Invoke(m); break;
                 case BanditDemand m: BanditDemandReceived?.Invoke(m); break;

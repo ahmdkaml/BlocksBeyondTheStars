@@ -278,8 +278,116 @@ public sealed class PlayerSession
 
     // --- Ship AI companion "VEGA" session bookkeeping (persisted progress lives in State.Milestones) ---
 
-    /// <summary>Blocks mined toward the onboarding "mine" stage (session-scoped; the target is tiny).</summary>
-    public int VegaMineCount { get; set; }
+    /// <summary>#2460 (B01): the player as they arrived — the newcomer-vs-veteran decision and the story keys
+    /// they carried — taken once at the very top of the join, before anything in the join pays knowledge or
+    /// blueprints. Session-scoped; see <see cref="JoinSnapshot"/>.</summary>
+    public JoinSnapshot Join { get; set; } = JoinSnapshot.Empty;
+
+    /// <summary>#2465: true while the join itself places the player (ship setup, the spawn body counted as visited, a
+    /// station re-boarded, a flight resumed). Game events (<c>GameServer.RaiseGameEvent</c>) raise nothing until the
+    /// join is through — being put somewhere is not something the player did.</summary>
+    public bool InJoinPlacement { get; set; }
+
+    /// <summary>#2465: server uptime of the last <c>insight:companion_ward</c> game event — the ward holds on every enemy
+    /// tick, so the event is raised at most once per <c>GameServer.InsightEventCooldownSeconds</c>.</summary>
+    public double CompanionWardEventAt { get; set; } = double.NegativeInfinity;
+
+    /// <summary>#2466: the <c>JoinRequest.Features</c> words of this client (<c>packs1</c>, <c>cutscenes1</c>). A local
+    /// player (<c>AddLocalPlayer</c>) runs in this build and gets <c>packs1</c>. Session-scoped.</summary>
+    public HashSet<string> ClientFeatures { get; } = new(System.StringComparer.Ordinal);
+
+    /// <summary>#2466: the client understands story packs (<c>packs1</c>); without it the legacy tutorial mode applies
+    /// (old keys, server-composed text, no pack chips).</summary>
+    public bool SupportsPacks => ClientFeatures.Contains(Networking.Messages.ClientFeatures.Packs1);
+
+    /// <summary>#2466: the help-escalation clock of each active story-pack step (<c>&lt;pack&gt;:&lt;step&gt;</c> → state).
+    /// RAM only and per session ("one session"): a rejoin starts the clocks again.</summary>
+    public Dictionary<string, StepEscalationState> StepEscalation { get; } = new(System.StringComparer.Ordinal);
+
+    /// <summary>#2466: active play seconds counted by the story-pack tick (the escalation clocks read it).</summary>
+    public double StoryPackPlaySeconds { get; set; }
+
+    /// <summary>#2466: <see cref="StoryPackPlaySeconds"/> of the last chapter offer — offers are spaced out.</summary>
+    public double LastChapterOfferAt { get; set; } = double.NegativeInfinity;
+
+    /// <summary>#2459: the chapter VEGA offered last at its moment (<c>&lt;pack&gt;:&lt;chapter&gt;</c>, empty = none) and the
+    /// <see cref="StoryPackPlaySeconds"/> of that offer — a tip the course teaches that comes up right after is told by the
+    /// offer ("the tip becomes the offer"). The graduation's suggestions are no such offer.</summary>
+    public string RecentChapterOfferKey { get; set; } = string.Empty;
+
+    public double RecentChapterOfferAt { get; set; } = double.NegativeInfinity;
+
+    /// <summary>#2466: the join hook of the story packs ran for this session (re-speaks the active step once).</summary>
+    public bool StoryPacksJoined { get; set; }
+
+    /// <summary>#2471: something the Journal shows changed (a step, a chapter, an offer, the chip) since its last push —
+    /// <c>GameServer.TickJournal</c> sends the Journal messages that differ, at most once per
+    /// <c>GameServer.JournalPushGapSeconds</c>. RAM only.</summary>
+    public bool JournalDirty { get; set; }
+
+    /// <summary>#2475: this player's resolved leads of their current world-story chapter (re-resolved only when what they
+    /// depend on changed), and the lead the last marker went up for. RAM only.</summary>
+    internal StoryLeadCache StoryLeads { get; } = new();
+
+    /// <summary>#2471: server uptime of the last Journal push (the coalescing clock).</summary>
+    public double JournalPushedAt { get; set; } = double.NegativeInfinity;
+
+    /// <summary>#2471: the encoded <c>StoryPackStates</c> last sent (progress counters zeroed — a progress tick alone never
+    /// re-sends it), to send only a change. RAM only.</summary>
+    public byte[]? JournalStatesSent { get; set; }
+
+    /// <summary>#2471: the encoded <c>ObjectiveList</c> last sent. RAM only.</summary>
+    public byte[]? JournalObjectivesSent { get; set; }
+
+    /// <summary>#2467: the client plays data-driven cutscenes (<c>cutscenes1</c>); without it a scene counts as seen at
+    /// once and the narrator line alone carries it.</summary>
+    public bool SupportsCutscenes => ClientFeatures.Contains(Networking.Messages.ClientFeatures.Cutscenes1);
+
+    /// <summary>#2467: server uptime of the network join — no cutscene goes out until the client is in the world (its first
+    /// position report, or <c>GameServer.CutsceneJoinSettleSeconds</c> later). Negative infinity = not a network join.</summary>
+    public double CutsceneJoinAt { get; set; } = double.NegativeInfinity;
+
+    /// <summary>#2467: cutscenes committed to this player but not sent yet (waiting for the client to be in the world or for
+    /// the 90 s cooldown). RAM only — the <c>:sent</c> ledger key re-offers them at the next join.</summary>
+    public List<PendingCutscene> CutsceneQueue { get; } = new();
+
+    /// <summary>#2467: server uptime of the last unrequested T2+ cutscene sent (the cooldown clock).</summary>
+    public double CutsceneLastSentAt { get; set; } = double.NegativeInfinity;
+
+    /// <summary>#2467: the scenes (<c>&lt;pack&gt;/&lt;id&gt;</c>) that may follow the last sent one at once — its
+    /// <c>chainNext</c>.</summary>
+    public HashSet<string> CutsceneChain { get; } = new(System.StringComparer.Ordinal);
+
+    /// <summary>#2467: the pack chapters (<c>&lt;pack&gt;:&lt;chapter&gt;</c>) this session presented — a step of them
+    /// activated with its line, or one was running at the join. A chapter's close cutscene plays only for these, so a
+    /// chapter completed silently by evidence (a veteran) gets none. RAM only.</summary>
+    public HashSet<string> PresentedPackChapters { get; } = new(System.StringComparer.Ordinal);
+
+    /// <summary>#2469: metres walked on foot not yet reported as <c>move:walked</c> (only counted while a step listens). RAM only.</summary>
+    public double TutorialWalkAccum { get; set; }
+
+    /// <summary>#2469: flight units flown not yet reported as <c>flight:flown</c> (only counted while a step listens). RAM only.</summary>
+    public double TutorialFlightAccum { get; set; }
+
+    /// <summary>#2469: the last ship position the flight counter measured from; null after a jump or a fresh entry. RAM only.</summary>
+    public BlocksBeyondTheStars.Shared.Geometry.Vector3f? TutorialFlightLast { get; set; }
+
+    /// <summary>#2469: server uptime of the last <c>move:jump</c> (one a second at most). RAM only.</summary>
+    public double TutorialJumpAt { get; set; } = double.NegativeInfinity;
+
+    /// <summary>#2469: whether the last move report was crouched (a crouch is reported on the change). RAM only.</summary>
+    public bool TutorialWasCrouching { get; set; }
+
+    /// <summary>#2469: the player has been far from the landed ship (the "walk back" check of <c>ship:returned</c>). RAM only.</summary>
+    public bool TutorialFarFromShip { get; set; }
+
+    /// <summary>#2469: per teaching-flag id, the server uptime of the last <c>UiTutorialEvent</c> accepted (rate limit). RAM only.</summary>
+    public Dictionary<string, double> UiTutorialEventAt { get; } = new(System.StringComparer.Ordinal);
+
+    /// <summary>#2462 (B31): the client has VEGA's hints switched off (<c>SetNpcCallsIntent.VegaHintsMuted</c>, sent at
+    /// every join and from the settings). The advisor hints and context tips are then held back instead of being sent
+    /// to a muted panel — sending burned their once-flags, so they never came back. Session-scoped, starts "on".</summary>
+    public bool VegaHintsMuted { get; set; }
 
     /// <summary>Accumulator for the 1 Hz advisor poll.</summary>
     public double VegaAdvisorAccum { get; set; }
@@ -326,6 +434,10 @@ public sealed class PlayerSession
 
     /// <summary>Per tip id: uptime the condition first became true in the current run (dwell / hysteresis).</summary>
     public Dictionary<string, double> VegaTipSince { get; } = new();
+
+    /// <summary>#2479: the tip ids whose situation held in the last 1 Hz tip pass (before the hints switch, the gates, the
+    /// dwell and the cooldowns) — the "moment of need" a tutorial deep dive is offered at (<c>world:data_cache_near</c> …).</summary>
+    public IReadOnlyCollection<string> VegaTipLive { get; set; } = System.Array.Empty<string>();
 
     /// <summary>Per tip id: uptime before which the same tip does not repeat.</summary>
     public Dictionary<string, double> VegaTipCooldownUntil { get; } = new();
@@ -390,6 +502,20 @@ public sealed class PlayerSession
     public string VegaTierGateBlock { get; set; } = string.Empty;
 
     public string VegaTierGateTool { get; set; } = string.Empty;
+
+    /// <summary>#2480: server uptime of the last swing a tool-tier gate turned away (a better tool exists) — the moment the
+    /// tutorial's "Workshop and titanium" course is offered at (<c>world:tier_gate</c>), independent of the tip's pacing and
+    /// the hints switch. Session-only; the default lies far in the past.</summary>
+    public double TierGateRefusedAt { get; set; } = double.NegativeInfinity;
+
+    /// <summary>#2482: server uptime when an animal of a begging herd last came to beg this player — the moment the tutorial's
+    /// "Animal friends" course is offered at (<c>world:herd_begging</c>), whatever VEGA's once-hint about it says.
+    /// Session-only; the default lies far in the past.</summary>
+    public double HerdBeggedAt { get; set; } = double.NegativeInfinity;
+
+    /// <summary>#2482: metres climbed on a wall not yet reported as <c>move:climbed</c> (only counted while a step listens).
+    /// RAM only.</summary>
+    public double TutorialClimbAccum { get; set; }
 
     // --- Deferred death respawn (choice between ship and home spawn, issue #462) ---
 

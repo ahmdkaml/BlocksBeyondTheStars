@@ -81,6 +81,21 @@ when it is landed on the same body, never in a fight or while falling, once ever
 `--return-to-ship true|false`, world admins toggle it in-game under the world rules — on by default and **off on the
 `dangerous` preset**, so a hard world keeps the walk back.
 
+**Tutorial (#2466).** Whether the tutorial story pack runs: `rules.tutorialPolicy` = `Auto` (default — every new player
+starts it and can skip it at any time), `OptIn` (offered, starts only on the player's request — veteran servers) or `Off`;
+CLI `--tutorial auto|optin|off` for a fresh world (the save keeps its rule afterwards). An admin changes it on a running
+world in the in-game world rules (Tab → Settings, *Tutorial*) or with the chat command `/tutorial policy <value>`. The
+story choice (`--story none`) never switches the tutorial off. No preset switches it off (`family` = `Auto`).
+
+**Main story and story pace (#2472).** `--story <id>` picks the world's main story for a fresh world (an installed
+world-story pack; `none` = no story, sandbox; empty = the default VEGA story) and `--story-density sparse|normal|dense`
+how fast it unfolds — both are what the game's world-creation **Stories** page emits (together with `--tutorial`, only
+values that differ from the defaults), and both are baked into the save like every world option. The pace is
+live-editable by a world admin (in-game world rules, *Story pace*; `SetWorldRulesIntent.StoryDensity`): a faster pace
+reveals the beats its score already covers at once, a slower one never takes a heard beat back. Hosted worlds (WorldHost,
+glitch) pass no story flag, so they run VEGA with the tutorial on `Auto`; an uploaded singleplayer save keeps the rules it
+was created with.
+
 ### Environment-variable overrides (containers)
 
 Every key above can also be set with a `BBS_*` environment variable, which is the natural way to
@@ -243,9 +258,16 @@ See §9 for distributing the client this way.
   block set changed) the server writes `backups/pre-remap_<UTC time>` first. If the update would *remove*
   block types from the world and that copy cannot be written, the server refuses to start and leaves the
   world unchanged; an update that only moves ids starts with a warning.
+- **Before a newer server stamps an older save with its save version** (#2464) it writes
+  `backups/pre-upgrade_<UTC time>` — after the stamp the older version refuses to open the world, so this
+  copy is the way back if you roll the server back. One copy per upgrade (the `pre-remap_…` copy stands in
+  when a remap runs at the same time), bounded by `backupKeepCount`; a copy that cannot be written only
+  logs a warning — the stamp itself changes nothing else.
 - **A save from a newer build is not opened by an older one**: the server exits with code `3` and one log
   line containing `[fatal] save-too-new` (the logger puts the UTC time and `[ERROR]` in front); the save is
-  untouched. Update the server.
+  untouched. Update the server — or, after a rollback, restore the world's `pre-upgrade_…` copy. A hosted
+  fleet (WorldHost) refuses such a save already at upload and shows a world whose save its server image
+  refused as "needs a server update" instead of retrying it (HOSTED_WORLDS.md).
 - **Client and server must have the same block set.** The join carries a content fingerprint; a mismatch is
   refused in both directions with "This server runs a different version of the game". During a fleet roll a
   world still running the old image refuses clients of the new build until it restarts on the matching image.

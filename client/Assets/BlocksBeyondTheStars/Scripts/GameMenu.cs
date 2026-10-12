@@ -20,7 +20,8 @@ namespace BlocksBeyondTheStars.Client
         public ClientSettings Settings;   // for in-game character customization
         public PlayerAvatar Avatar;       // local avatar, recoloured live
 
-        private enum Tab { Inventory, Crafting, Tech, Ship, Map, Missions, Character, Alliances, Story, Companions, Photos }
+        // Values match CraftingTechShipUI.Mode (the uGUI screen passes its mode index through SwitchFromUi).
+        private enum Tab { Inventory, Crafting, Tech, Ship, Map, Missions, Character, Alliances, Story, Companions, Photos, Achievements }
 
         /// <summary>Which full-screen browser sub-screen (if any) replaces the tab view while the menu is open.
         /// The Wiki ("Codex") and Arcade are reached from buttons in the menu header.</summary>
@@ -96,9 +97,10 @@ namespace BlocksBeyondTheStars.Client
                 // naming, dock request …): stacking the crafting menu on top of those was the root of a
                 // family of cursor-fights (#413) — the modal's own Esc/Tab handling closes it instead.
                 // UiMenu toggles the menu: Tab on the keyboard, Start on the pad (#1198).
+                // Nor under a cutscene (#2461): the menu (order 50) would open invisibly behind the cinematic's frame.
                 if (InputMap.Down(InputAction.UiMenu)
                     && !Game.AwaitingRespawnConfirm && !Game.ChatTyping && !typingRecent
-                    && !Game.MenuInputHandledThisFrame && (_open || !Game.MenuOpen))
+                    && !Game.MenuInputHandledThisFrame && (_open || (!Game.MenuOpen && !GameBootstrap.CutsceneActive)))
                 {
                     Game.MarkMenuInputHandled();
                     SetOpen(!_open);
@@ -168,7 +170,13 @@ namespace BlocksBeyondTheStars.Client
 
         /// <summary>Opens the in-game Wiki ("Codex") screen — an always-available menu point.
         /// <paramref name="chapter"/> deep-links to a chapter id ("discoveries"); null keeps the last one.</summary>
-        public void OpenWiki(string chapter = null) { _wikiChapter = chapter; _browser = BrowserScreen.Wiki; SetOpen(true); }
+        public void OpenWiki(string chapter = null)
+        {
+            _wikiChapter = chapter;
+            _browser = BrowserScreen.Wiki;
+            SetOpen(true);
+            Game?.Network?.SendUiTutorialEvent(BlocksBeyondTheStars.Shared.Story.GameEventKeys.UiCodexOpenId); // #2469: the Codex lesson
+        }
 
         /// <summary>Opens the Arcade collection screen — an always-available menu point.</summary>
         public void OpenArcade() { Game?.MarkArcadeSeen(); _browser = BrowserScreen.Arcade; SetOpen(true); }
@@ -213,8 +221,14 @@ namespace BlocksBeyondTheStars.Client
                 _vendorUi?.Close(); // the vendor trade screen + the crafting menu are mutually exclusive
             }
 
+            bool opening = open && !_open;
             _open = open;
             Game.SetMenuOwner(this, _open); // the cursor arbiter frees/locks from the owner set (#413)
+            if (opening)
+            {
+                Game.Network?.SendUiTutorialEvent(BlocksBeyondTheStars.Shared.Story.GameEventKeys.UiMenuOpenId); // #2469: the menu lesson
+            }
+
             if (_open)
             {
                 // No UiNav here (#1198): this GameObject holds no uGUI controls at all. Every screen the menu
@@ -247,6 +261,7 @@ namespace BlocksBeyondTheStars.Client
             if (tab == Tab.Map)
             {
                 Game.Network?.SendRequestStarMap();
+                Game.Network?.SendUiTutorialEvent(BlocksBeyondTheStars.Shared.Story.GameEventKeys.UiMapOpenId); // #2469
             }
             else if (tab == Tab.Missions)
             {
@@ -259,12 +274,17 @@ namespace BlocksBeyondTheStars.Client
             }
             else if (tab == Tab.Story)
             {
-                Game?.MarkStorySeen(); // opening the Story tab clears its "new content" badge
+                Game?.MarkStorySeen(); // opening the Journal clears its "new content" badge
+                Game?.Network?.SendJournalRequest(); // #2471: the stories and live progress, fresh (an older server drops it)
             }
             else if (tab == Tab.Companions)
             {
                 Game.Network?.SendRequestCompanions(); // refresh the companion roster on open
                 Game?.MarkCompanionsSeen();            // clear the "new companion" badge
+            }
+            else if (tab == Tab.Achievements)
+            {
+                Game?.Network?.SendUiTutorialEvent(BlocksBeyondTheStars.Shared.Story.GameEventKeys.UiProgressOpenId); // #2479: the research course
             }
         }
 

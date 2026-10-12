@@ -201,19 +201,18 @@ public sealed class StoryFindabilityTests : IDisposable
         using (repo)
         {
             var p = server.AddLocalPlayer("Pilot");
-            foreach (var stage in new[] { "mine", "craft", "eat", "scan", "unlock", "launch", "dock", "trade", "land" })
-            {
-                p.State.Milestones.Add("vega:stage:" + stage);
-            }
+            server.TickStoryPacksForTest(p); // the basic training starts …
+            Assert.StartsWith("story.tutorial.", server.ObjectiveKeyForTest(p.State.PlayerId));
+            server.SkipTutorialForTest(p);   // … and once it is through (#2469: the tutorial pack), the story takes the chip
 
             string? key = server.ObjectiveKeyForTest(p.State.PlayerId);
             Assert.NotNull(key);
-            Assert.StartsWith("story.obj.", key, StringComparison.Ordinal);
+            Assert.StartsWith(BlocksBeyondTheStars.Shared.Story.StoryLeads.ObjPrefix, key, StringComparison.Ordinal); // #2475: the chapter lead (a current client)
 
-            // Both possible pre-finale objectives are real, translated keys.
+            // Both possible pre-finale objectives are real, translated keys (the old ones stay for older clients).
             var en = _content.CreateLocalizer(GameLocale.English);
             var de = _content.CreateLocalizer(GameLocale.German);
-            foreach (var k in new[] { "story.obj.fragment_here", "story.obj.search", "story.obj.help", "story.obj.finale" })
+            foreach (var k in new[] { "story.obj.fragment_here", "story.obj.search", "story.obj.help", "story.obj.help_peaceful", "story.obj.finale" })
             {
                 Assert.True(en.Has(k), $"missing '{k}' in en");
                 Assert.True(de.Has(k), $"missing '{k}' in de");
@@ -271,8 +270,9 @@ public sealed class StoryFindabilityTests : IDisposable
             var p = server.AddLocalPlayer("Scholar");
 
             // Only texts at or below the CURRENT knowledge level can surface — and each exactly once.
-            // (A fresh world with a joined player already sits at level 1: the join's mapped-system
-            // milestone puts the first points on the arc.)
+            // (One milestone puts the first points on the arc: level 1. The join's own spawn-system mapping
+            // used to do that; since #2460 (N4) the spawn system counts nothing.)
+            server.RecordStoryMilestoneForTest();
             int level = server.WorldKnowledgeLevel();
             Assert.True(level < 3, $"fresh world at knowledge {level} — the gate below would be meaningless");
             var openNow = pack.LoreSites.Where(l => l.Site == "monument" && l.MinKnowledge <= level).Select(l => l.Key).ToHashSet();

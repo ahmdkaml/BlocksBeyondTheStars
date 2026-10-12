@@ -597,6 +597,25 @@ public static class NetCodec
         Register(292, typeof(OpenContainerIntent));          // Client -> Server
         Register(293, typeof(MoveContainerItemIntent));      // Client -> Server
         Register(294, typeof(ContainerContents));            // Server -> Client
+
+        // #2467 cutscenes: the server plays a pack's cutscene for one player, the client confirms what it showed. No
+        // protocol bump — an older client drops the play (it still gets the narrator line), an older server the receipt.
+        Register(295, typeof(CutscenePlay));                 // Server -> Client
+        Register(296, typeof(CutsceneSeenIntent));           // Client -> Server
+
+        // #2466 story packs: the player's control of a player pack (track, opt out, start/skip/replay a chapter, skip a
+        // step; #2467 replay a cutscene). No protocol bump — an older server drops it.
+        Register(297, typeof(StoryPackIntent));              // Client -> Server
+
+        // #2469 the tutorial's UI-only lessons: the client reports a UI moment (menu, Codex, map, waypoint, VEGA continue)
+        // that a step teaches. Teaching only, never a reward. No protocol bump — an older server drops it.
+        Register(298, typeof(UiTutorialEvent));              // Client -> Server
+
+        // #2471 the Journal: the player's objectives in the chip order (live progress, "show all objectives") and every
+        // story's chapters, steps and switches. No protocol bump — an older client drops both (it keeps the chip on
+        // ShipAiLine and the tutorial button).
+        Register(299, typeof(ObjectiveList));                // Server -> Client
+        Register(300, typeof(StoryPackStates));              // Server -> Client
     }
 
     /// <summary>True for an id a message may be registered under: a one-byte tag below the two framing bytes,

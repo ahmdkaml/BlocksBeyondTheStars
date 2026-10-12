@@ -295,10 +295,10 @@ namespace BlocksBeyondTheStars.Client
             EnsureBuilt();
             UpdateDamageFeedback(); // always, so the health baseline tracks even while a menu is open
 
-            // Hidden while a menu is open — and during the prologue cinematic (#760): vitals/hotbar/
-            // crosshair in the frame break the letterboxed shot. The VEGA speech panel and the
-            // CinematicFrame chrome live on their own canvases, so the story text stays visible.
-            bool show = !Game.MenuOpen && !Game.VegaPrologueActive && !Game.CinematicCameraActive;
+            // Hidden while a menu is open — and during every cutscene (#760, #2461: the ending used to play over
+            // the full HUD): vitals/hotbar/crosshair in the frame break the letterboxed shot. The VEGA speech panel
+            // and the CinematicFrame chrome live on their own canvases, so the story text stays visible.
+            bool show = !Game.MenuOpen && !Game.VegaPrologueActive && !Game.CinematicCameraActive && !GameBootstrap.CutsceneActive;
             if (_canvas.enabled != show)
             {
                 _canvas.enabled = show;
@@ -592,9 +592,9 @@ namespace BlocksBeyondTheStars.Client
         {
             var cam = Camera.main;
             var def = Game?.Content?.BlockById(block);
-            if (cam == null || def == null || Game.Atlas == null)
+            if (cam == null || def == null || Game.Atlas == null || GameBootstrap.CutsceneActive)
             {
-                return;
+                return; // #2461: no icon flies across a cutscene (its canvas sits above every frame)
             }
 
             Vector3 sp = cam.WorldToScreenPoint(worldPos);
@@ -1200,7 +1200,7 @@ namespace BlocksBeyondTheStars.Client
             {
                 // On touch the on-screen buttons are self-labelling, so the text hint just adds clutter.
                 InputDeviceKind.Touch => string.Empty,
-                InputDeviceKind.Gamepad => loc.Get("ui.hud.hint_pad"),
+                InputDeviceKind.Gamepad => PadHint(loc), // #2461 (N9): glyph set, bindings and triggers, not a fixed string
                 _ => loc.Get("ui.hud.hint").Replace("{feedback_key}", FeedbackUi.HotkeyName),
             };
 
@@ -1250,7 +1250,7 @@ namespace BlocksBeyondTheStars.Client
                     string stationKey = (Game.NearbyStation == "cockpit" && Game.LoadingPlanetType == "ship_interior")
                         ? "ui.station.helm"
                         : $"ui.station.{Game.NearbyStation}";
-                    prompt = $"{loc.Get("ui.hud.use")}: {loc.Get(stationKey)}";
+                    prompt = $"{ExpandKeyTokens(loc, loc.Get("ui.hud.use"))}: {loc.Get(stationKey)}"; // "Press {key:Interact}" (#2463)
                     if (Game.NearbyStation == "cargo")
                     {
                         prompt += $"  ·  {loc.Get("ui.hud.stow_cargo")} ({InputMap.Glyph(InputAction.DepositToCrate)})";
@@ -1286,11 +1286,12 @@ namespace BlocksBeyondTheStars.Client
                 }
                 else if (!string.IsNullOrEmpty(Game.AimedStationBlock))
                 {
-                    // #1073: "Workbench — crafting: menu (Tab) → Crafting" — the block names the tab it powers.
+                    // #1073: "Workbench — crafting: menu (Tab) → Crafting" — the block names the tab it powers; the menu
+                    // and use keys are {key:Action} tokens since #2463, so a pad or a tablet reads its own button.
                     // #2203: the bio lab has a panel of its own, so its prompt names the Interact glyph instead.
                     prompt = Game.AimedStationBlock == BlocksBeyondTheStars.Shared.Bio.BioItems.Lab
                         ? string.Format(loc.Get("ui.bio.prompt"), InteractGlyph(loc))
-                        : loc.Get("ui.station.block." + Game.AimedStationBlock);
+                        : ExpandKeyTokens(loc, loc.Get("ui.station.block." + Game.AimedStationBlock));
                 }
                 else if (Game.AimedCrystalDevice is { } crystalDev)
                 {
@@ -1303,7 +1304,7 @@ namespace BlocksBeyondTheStars.Client
                 {
                     // Standing on / beside an own or allied teleporter pad: the same reach PlayerController
                     // uses for the E press. The pad never announced itself before (#1560).
-                    prompt = loc.Get("ui.beam.use_hint");
+                    prompt = ExpandKeyTokens(loc, loc.Get("ui.beam.use_hint")); // "Press {key:Interact}: Transporter" (#2463)
                 }
                 else if (HoldingScanner() && Game.ScanTargetInView)
                 {
@@ -2202,6 +2203,77 @@ namespace BlocksBeyondTheStars.Client
             return GlyphText(loc, action);
         }
 
+        /// <summary>What a <c>{key:Action}</c> token in a locale string reads as (#2463) — one rule for VEGA's lines
+        /// (<see cref="VegaPanel"/>) and the HUD prompts: on a tablet the touch layout's own button for the action (USE,
+        /// MAP, ≡ …, <see cref="VegaText.TouchControlLabel"/>) or else the on-screen action menu; on a pad and the
+        /// keyboard <see cref="ActionGlyph"/> (the pad button or the Actions list, the bound key, mouse buttons by their
+        /// short names). A name that is no <see cref="InputAction"/> reads as itself, so a stale locale never shows
+        /// braces.</summary>
+        internal static string KeyTokenGlyph(BlocksBeyondTheStars.Shared.Localization.Localizer loc, string action)
+        {
+            if (VegaText.IsPseudoAction(action))
+            {
+                return PseudoActionGlyph(loc, action); // #2469: move, look, jump, crouch, mine, place, scan, the quick bar
+            }
+
+            if (!System.Enum.TryParse<InputAction>(action, out var a))
+            {
+                return action;
+            }
+
+            if (InputMap.ActiveDevice == InputDeviceKind.Touch)
+            {
+                string touch = VegaText.TouchControlLabel(action, key => loc != null ? loc.Get(key) : key);
+                return touch ?? (loc != null ? loc.Get("ui.vega.key_touch") : action);
+            }
+
+            return loc != null ? ActionGlyph(loc, a) : InputMap.Glyph(a);
+        }
+
+        /// <summary>What a pseudo-action token (<see cref="VegaText.PseudoActions"/>, #2469) reads as: the continuous controls
+        /// are no rebindable <see cref="InputAction"/>, so each device names them its own way — the keyboard by its fixed keys
+        /// (WASD, the mouse, Space, Ctrl/C, LMB/RMB, 1–9), the pad by its sticks and fixed buttons (RB mines, LB places, the
+        /// bottom face button jumps, B crouches, the d-pad cycles the quick bar), the tablet by the layout's buttons, stick
+        /// and look pad (<see cref="VegaText.TouchControlLabel"/>).</summary>
+        private static string PseudoActionGlyph(BlocksBeyondTheStars.Shared.Localization.Localizer loc, string action)
+        {
+            string L(string key) => loc != null ? loc.Get(key) : key;
+            switch (InputMap.ActiveDevice)
+            {
+                case InputDeviceKind.Touch:
+                    return VegaText.TouchControlLabel(action, L) ?? (loc != null ? loc.Get("ui.vega.key_touch") : action);
+                case InputDeviceKind.Gamepad:
+                    return action switch
+                    {
+                        "Move" => L("ui.key.pad_left_stick"),
+                        "Look" => L("ui.key.pad_right_stick"),
+                        "Jump" => InputMap.PadGlyph(KeyCode.JoystickButton0) ?? L("ui.touch.jump"),
+                        "Crouch" => InputMap.PadGlyph(KeyCode.JoystickButton1) ?? L("ui.touch.down"),
+                        "Mine" or "Scan" => InputMap.PadGlyph(KeyCode.JoystickButton5) ?? L("ui.touch.mine"),
+                        "Place" => InputMap.PadGlyph(KeyCode.JoystickButton4) ?? L("ui.touch.place"),
+                        "Hotbar" => L("ui.key.pad_dpad") + " " + VegaText.TouchHotbarLabel,
+                        _ => action,
+                    };
+                default:
+                    return action switch
+                    {
+                        "Move" => L("ui.key.move_keys"),
+                        "Look" => L("ui.key.look_mouse"),
+                        "Jump" => L("ui.key.jump_keys"),
+                        "Crouch" => L("ui.key.crouch_keys"),
+                        "Mine" or "Scan" => L("ui.key.mouse_left"),
+                        "Place" => L("ui.key.mouse_right"),
+                        "Hotbar" => L("ui.key.hotbar_keys"),
+                        _ => action,
+                    };
+            }
+        }
+
+        /// <summary>A HUD prompt with its <c>{key:Action}</c> tokens resolved by <see cref="KeyTokenGlyph"/> (#2463) —
+        /// "menu ({key:UiMenu})" reads "menu (Tab)", "menu (Menu)" on a pad and "menu (≡)" on a tablet.</summary>
+        internal static string ExpandKeyTokens(BlocksBeyondTheStars.Shared.Localization.Localizer loc, string text)
+            => VegaText.ExpandKeyTokens(text, action => KeyTokenGlyph(loc, action));
+
         /// <summary>The jump control's name for a hint (#2290): the pad's bottom face button, the tablet's JUMP button or the
         /// keyboard's space bar. Jump is no rebindable action (the legacy "Jump" axis), so <see cref="InputMap.Glyph"/>
         /// cannot name it.</summary>
@@ -2211,6 +2283,47 @@ namespace BlocksBeyondTheStars.Client
             InputDeviceKind.Touch => loc.Get("ui.touch.jump"),
             _ => loc.Get("ui.hud.jump_key"),
         };
+
+        // #2461 (N9): the pad's controls line used to be one fixed string ("(A) jump · (Y) view …") — wrong for a
+        // PlayStation or Nintendo glyph set, for a rebound pad button, and silent about the triggers once the player
+        // switched them on. It is composed from the live glyphs now, and cached: rebuilt only when the language, a
+        // binding or one of the pad settings changes.
+        private static string _padHint;
+        private static (string Template, int Bindings, PadGlyphSet Glyphs, bool Triggers) _padHintKey;
+
+        /// <summary>The on-foot controls line for a gamepad, in the player's glyph set and bindings (#2461, N9).</summary>
+        internal static string PadHint(BlocksBeyondTheStars.Shared.Localization.Localizer loc)
+        {
+            var settings = GamepadInputSource.Settings;
+            string template = loc.Get("ui.hud.hint_pad_glyphs");
+            bool triggers = settings != null && settings.PadTriggersMinePlace;
+            var key = (template, settings != null ? settings.BindingsVersion : -1,
+                settings != null ? settings.PadGlyphs : PadGlyphSet.Xbox, triggers);
+            if (_padHint != null && key.Equals(_padHintKey))
+            {
+                return _padHint;
+            }
+
+            // Mine / place / jump / crouch are fixed pad buttons (the shoulder and the bottom face buttons); the triggers
+            // join mine/place only while the player has them switched on.
+            string mine = InputMap.PadGlyph(KeyCode.JoystickButton5) + (triggers ? "/" + InputMap.PadTriggerGlyph(right: true) : string.Empty);
+            string place = InputMap.PadGlyph(KeyCode.JoystickButton4) + (triggers ? "/" + InputMap.PadTriggerGlyph(right: false) : string.Empty);
+            _padHint = template
+                .Replace("{mine}", mine)
+                .Replace("{place}", place)
+                .Replace("{jump}", InputMap.PadGlyph(KeyCode.JoystickButton0))
+                .Replace("{crouch}", InputMap.PadGlyph(KeyCode.JoystickButton1))
+                .Replace("{use}", PadGlyphOf(InputAction.Interact))
+                .Replace("{view}", PadGlyphOf(InputAction.ToggleThirdPerson))
+                .Replace("{actions}", PadGlyphOf(InputAction.ContextActions))
+                .Replace("{vega}", PadGlyphOf(InputAction.VegaContinue))
+                .Replace("{menu}", PadGlyphOf(InputAction.UiMenu));
+            _padHintKey = key;
+            return _padHint;
+        }
+
+        /// <summary>The pad button bound to an action, by name — "—" when the player unbound it.</summary>
+        private static string PadGlyphOf(InputAction action) => InputMap.PadGlyph(GamepadInputSource.ButtonFor(action)) ?? "—";
 
         // --- pickup feed (#745) ---
 

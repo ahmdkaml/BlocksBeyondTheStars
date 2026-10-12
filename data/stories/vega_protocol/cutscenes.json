@@ -1,0 +1,502 @@
+{
+  // VEGA's cutscenes (#2467; format: docs/developer/CUTSCENES.md, design: synthesis §6.3/§6.5). Ids follow synthesis §5.3
+  // (StoryCutsceneIds.Vega); the finale set pieces and the ending close the list (#2478). Listed in arc order — the Story
+  // tab's "Watch again" keeps this order.
+  //
+  // The prologue "Awakening" (#2470) is the cold open of the game, bound as the pack's introCutscene: it plays once per
+  // player (ledger story:vega_protocol:cut:prologue) for a newcomer to the story, never on a tutorial restart, and again
+  // only from the Story tab. Captions sit in the frame — the narration as subtitles, VEGA in her speaker box — page by page
+  // when "Story text: wait for me" is on; the camera moves on its own (a terrain-aware orbit around the player's ship, then
+  // in close), cuts to the pilot's seat as the console wakes, and VEGA's box glitches in for her first words. B0 is her
+  // speaker page (it counts as heard with the prologue, so VEGA never wakes twice) and the call to adventure is the last
+  // page. replaceLineKeys keeps these lines out of the side panel while the scene is owed; a client without cutscenes1 gets
+  // the same five pages as the old full-screen prologue (Kind 4). chainNext: when the story track starts in the same join
+  // (no tutorial for the player, a veteran) "the story so far" or chapter 1's card follows at once; when the basic training
+  // starts, its welcome card (tutorial/tut.welcome, #2473) follows at once — whichever the join queued next.
+  //
+  // The chapter scenes and beat cards (#2474, maintainer decision (a) "more and more prominent VEGA"): every chapter of the
+  // arc opens with its scene — at the beat that starts the chapter, and once for the player's CURRENT chapter at their
+  // story-track start (after "the story so far"). Chapter 1 is a title card (T2: thin letterbox, "Chapter n" over the
+  // chapter's title and a sting — free input, nothing held); chapter 2 shows VEGA's memory of the star chart (T3: "It mapped
+  // these stars"); the key moments are staged: B5 "The Guardian" in the sleeping-core diorama — a red glowing column in an
+  // iron shell, the camera rising along it, with the anomaly's hum (T3, #2477; it was the open sky before), B9 "What You
+  // Are" at the player's REAL heal tank (T3 — a client that finds no tank on this world plays it as a card), and B12 with
+  // the Guardian system revealed on the star map (T4: the line from here to the violet star and VEGA's jump-generator line,
+  // then the chapter title; a singleplayer world holds while the camera is taken, never in multiplayer). #2477 staged the
+  // two former chapter cards too (synthesis §6.5 lists them as T3): chapter 4 "The Verdict" keeps the darkest line as words
+  // on a calm picture — a living world in a space vista, in VEGA's memory tones — and chapter 6 "It Still Sleeps" drifts
+  // across VEGA's memory of the star chart out to its rim, where something faint and red pulses (no marker, no name). On
+  // the low quality presets the synthetic stages are skipped and those three scenes play as cards again. Chapter 1's card
+  // shows no beat: when a track starts the world may not have crossed B1 yet — its beat card (b01) follows it at once when
+  // it has. The other beats are beat cards: "VEGA remembers" over the beat's title, then VEGA's speaker box with the beat —
+  // free input, the memory grade. Beats fire on score, not on a place, so every shot is place-neutral (the player's view,
+  // the sky, the chart, a synthetic stage) or anchored to the player's own ship. Every caption reuses the beat's own text
+  // (replaceLineKeys keeps it out of VEGA's panel; the Journal holds it either way) — no new lore. The Guardian reveal's
+  // line comes back to the panel when the player skips before it showed (returnOnSkip): it is the one line that names the
+  // jump generator.
+  "cutscenes": [
+    {
+      "id": "prologue",
+      "tier": 3,
+      "chapter": "awakening",
+      "replaceLineKeys": [ "vega.prologue.1", "vega.prologue.2", "vega.prologue.3", "story.vega.beat00", "story.vega.call" ],
+      "music": "music_mystery_signal",
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 3,
+          "captions": [ { "style": "title_card", "kickerKey": "ui.story.prologue", "key": "story.vega.ch.awakening", "at": 0.6 } ]
+        },
+        {
+          "camera": { "type": "orbit", "anchor": "ship" },
+          "duration": 12,
+          "captions": [ { "style": "subtitle", "key": "vega.prologue.1" } ]
+        },
+        {
+          "camera": { "type": "static", "anchor": "ship" },
+          "duration": 12,
+          "captions": [ { "style": "subtitle", "key": "vega.prologue.2" } ]
+        },
+        {
+          "camera": { "type": "player_view" },
+          "duration": 9,
+          "captions": [ { "style": "subtitle", "key": "vega.prologue.3" } ],
+          "sfx": [ { "cue": "ai_blip", "at": 0 } ]
+        },
+        {
+          "camera": { "type": "player_view" },
+          "duration": 8,
+          "captions": [ { "style": "speaker", "key": "story.vega.beat00" } ]
+        },
+        {
+          "camera": { "type": "player_view" },
+          "duration": 7,
+          "captions": [ { "style": "speaker", "key": "story.vega.call" } ]
+        }
+      ],
+      "options": { "holdWorld": true, "lockInput": true, "skippable": true, "chainNext": [ "__recap", "ch1.open", "tutorial/tut.welcome" ] }
+    },
+    {
+      // Chapter 1 "A Familiar Signature" — a title card at the player's track start (the chapter has no earlier start: a
+      // track begins in chapter 1 at the earliest). No beat on it (B1 may still lie ahead); its beat card follows at once
+      // when B1 was already crossed.
+      "id": "ch1.open",
+      "tier": 2,
+      "chapter": "signature",
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4.5,
+          "captions": [ { "style": "title_card", "kickerKey": "story.vega.cut.chapter", "key": "story.vega.ch.signature", "at": 0.4 } ],
+          "sfx": [ { "cue": "chapter_sting", "at": 0 } ]
+        }
+      ],
+      "options": { "skippable": true, "chainNext": [ "b01" ] }
+    },
+    {
+      // B1 — chapter 1's beat. No title of its own: at a track start it follows the chapter card, whose title it is.
+      "id": "b01",
+      "tier": 2,
+      "chapter": "signature",
+      "replaceLineKeys": [ "story.vega.beat01" ],
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 7,
+          "grade": "memory",
+          "captions": [ { "style": "speaker", "key": "story.vega.beat01", "at": 0.4 } ],
+          "sfx": [ { "cue": "chapter_sting_memory", "at": 0 } ]
+        }
+      ],
+      "options": { "skippable": true }
+    },
+    {
+      // Chapter 2 "The Service" (B2) — VEGA's memory of the star chart, sepia: "It mapped these stars."
+      "id": "ch2.open",
+      "tier": 3,
+      "chapter": "service",
+      "replaceLineKeys": [ "story.vega.beat02" ],
+      "music": "music_mystery_signal",
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4,
+          "captions": [ { "style": "title_card", "kickerKey": "story.vega.cut.chapter", "key": "story.vega.ch.service", "at": 0.8 } ],
+          "sfx": [ { "cue": "chapter_sting_memory", "at": 0.3 } ]
+        },
+        {
+          "camera": { "type": "chart", "anchor": "star_map" },
+          "duration": 10,
+          "grade": "memory",
+          "captions": [ { "style": "speaker", "key": "story.vega.beat02", "at": 0.8 } ]
+        }
+      ],
+      "options": { "skippable": true }
+    },
+    {
+      "id": "b03",
+      "tier": 2,
+      "chapter": "service",
+      "replaceLineKeys": [ "story.vega.beat03" ],
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 8,
+          "grade": "memory",
+          "captions": [
+            { "style": "title_card", "kickerKey": "story.vega.cut.remembers", "key": "story.vega.cut.b03.title", "at": 0.3, "hold": 3.5 },
+            { "style": "speaker", "key": "story.vega.beat03", "at": 1.2 }
+          ],
+          "sfx": [ { "cue": "chapter_sting_memory", "at": 0 } ]
+        }
+      ],
+      "options": { "skippable": true }
+    },
+    {
+      "id": "b04",
+      "tier": 2,
+      "chapter": "service",
+      "replaceLineKeys": [ "story.vega.beat04" ],
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 8,
+          "grade": "memory",
+          "captions": [
+            { "style": "title_card", "kickerKey": "story.vega.cut.remembers", "key": "story.vega.cut.b04.title", "at": 0.3, "hold": 3.5 },
+            { "style": "speaker", "key": "story.vega.beat04", "at": 1.2 }
+          ],
+          "sfx": [ { "cue": "chapter_sting_memory", "at": 0 } ]
+        }
+      ],
+      "options": { "skippable": true }
+    },
+    {
+      // Chapter 3 "The Guardian" (B5, the middle of the arc) — staged: out of black onto the chapter title, then the
+      // sleeping-core diorama (#2477): the camera rises along the red column in its iron shell, the glow breathing slowly,
+      // with the anomaly's hum while VEGA speaks of the Guardian core. No grade — the red must read. Without the diorama
+      // (it could not be built) the shot looks up into the open sky; on the low presets the scene is a card.
+      "id": "ch3.open",
+      "tier": 3,
+      "chapter": "guardian",
+      "replaceLineKeys": [ "story.vega.beat05" ],
+      "music": "music_mystery_signal",
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4,
+          "captions": [ { "style": "title_card", "kickerKey": "story.vega.cut.chapter", "key": "story.vega.ch.guardian", "at": 0.8 } ],
+          "sfx": [ { "cue": "chapter_sting_reveal", "at": 0.3 } ]
+        },
+        {
+          "camera": { "type": "diorama", "anchor": "core" },
+          "duration": 12,
+          "captions": [ { "style": "speaker", "key": "story.vega.beat05", "at": 0.8 } ],
+          "sfx": [ { "cue": "anomaly_hum", "at": 0.2 } ]
+        }
+      ],
+      "options": { "skippable": true }
+    },
+    {
+      // Chapter 4 "The Verdict" (B6) — the darkest line of the arc stays words on a calm picture (#2477: staged): out of
+      // black onto the chapter title, then a space vista of a living world in VEGA's memory tones while she says it.
+      "id": "ch4.open",
+      "tier": 3,
+      "chapter": "verdict",
+      "replaceLineKeys": [ "story.vega.beat06" ],
+      "music": "music_mystery_signal",
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4,
+          "captions": [ { "style": "title_card", "kickerKey": "story.vega.cut.chapter", "key": "story.vega.ch.verdict", "at": 0.8 } ],
+          "sfx": [ { "cue": "chapter_sting", "at": 0.3 } ]
+        },
+        {
+          "camera": { "type": "space_vista", "anchor": "planet" },
+          "duration": 11,
+          "grade": "memory",
+          "captions": [ { "style": "speaker", "key": "story.vega.beat06", "at": 0.8 } ]
+        }
+      ],
+      "options": { "skippable": true }
+    },
+    {
+      "id": "b07",
+      "tier": 2,
+      "chapter": "verdict",
+      "replaceLineKeys": [ "story.vega.beat07" ],
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 8,
+          "grade": "memory",
+          "captions": [
+            { "style": "title_card", "kickerKey": "story.vega.cut.remembers", "key": "story.vega.cut.b07.title", "at": 0.3, "hold": 3.5 },
+            { "style": "speaker", "key": "story.vega.beat07", "at": 1.2 }
+          ],
+          "sfx": [ { "cue": "chapter_sting_memory", "at": 0 } ]
+        }
+      ],
+      "options": { "skippable": true }
+    },
+    {
+      "id": "b08",
+      "tier": 2,
+      "chapter": "verdict",
+      "replaceLineKeys": [ "story.vega.beat08" ],
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 8,
+          "grade": "memory",
+          "captions": [
+            { "style": "title_card", "kickerKey": "story.vega.cut.remembers", "key": "story.vega.cut.b08.title", "at": 0.3, "hold": 3.5 },
+            { "style": "speaker", "key": "story.vega.beat08", "at": 1.2 }
+          ],
+          "sfx": [ { "cue": "chapter_sting_memory", "at": 0 } ]
+        }
+      ],
+      "options": { "skippable": true }
+    },
+    {
+      // Chapter 5 "What You Are" (B9, the clone reveal) — staged warm and gentle at the player's REAL heal tank: a close
+      // framing with a slow push-in and the tank's bubbling while VEGA tells the player what they are. A client that finds
+      // no heal tank on this world (no own ship here) plays it as a card instead.
+      "id": "ch5.open",
+      "tier": 3,
+      "chapter": "what_you_are",
+      "replaceLineKeys": [ "story.vega.beat09" ],
+      "music": "music_deep_space_lonely",
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4,
+          "captions": [ { "style": "title_card", "kickerKey": "story.vega.cut.chapter", "key": "story.vega.ch.what_you_are", "at": 0.8 } ],
+          "sfx": [ { "cue": "chapter_sting_reveal", "at": 0.3 } ]
+        },
+        {
+          "camera": { "type": "static", "anchor": "heal_tank" },
+          "duration": 16,
+          "captions": [ { "style": "speaker", "key": "story.vega.beat09", "at": 1.0 } ],
+          "sfx": [ { "cue": "clone_tank_bubble", "at": 0.5 } ]
+        }
+      ],
+      "options": { "skippable": true }
+    },
+    {
+      // B10 "Many minds" — the one beat moment (#2478, synthesis §6.5 "T2; in MP T3"): with other players on the star map the
+      // LIVE chart names where they are while VEGA says every other spacefarer is another imprint (a short T3 on the chart:
+      // the camera is the chart, the world never holds in multiplayer, after 30 s it goes on as a card). Alone — nobody else
+      // on the map — it plays as the beat card it always was (the players anchor needs another player, like the heal tank).
+      // The other beat cards stay cards (maintainer decision (a): free input; upgrades after the playtest).
+      "id": "b10",
+      "tier": 3,
+      "chapter": "what_you_are",
+      "replaceLineKeys": [ "story.vega.beat10" ],
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 3.5,
+          "grade": "memory",
+          "captions": [ { "style": "title_card", "kickerKey": "story.vega.cut.remembers", "key": "story.vega.cut.b10.title", "at": 0.3 } ],
+          "sfx": [ { "cue": "chapter_sting_memory", "at": 0 } ]
+        },
+        {
+          "camera": { "type": "chart", "anchor": "players" },
+          "duration": 8,
+          "grade": "memory",
+          "captions": [ { "style": "speaker", "key": "story.vega.beat10", "at": 0.4 } ]
+        }
+      ],
+      "options": { "skippable": true }
+    },
+    {
+      // Chapter 6 "It Still Sleeps" (B11) — no marker, no place — the core only sleeps (#2477: staged): out of black onto the
+      // chapter title, then VEGA's memory of the star chart drifting from the player's system out to its rim, where
+      // something faint and red pulses beyond the last star — never named, never marked.
+      "id": "ch6.open",
+      "tier": 3,
+      "chapter": "sleeps",
+      "replaceLineKeys": [ "story.vega.beat11" ],
+      "music": "music_mystery_signal",
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4,
+          "captions": [ { "style": "title_card", "kickerKey": "story.vega.cut.chapter", "key": "story.vega.ch.sleeps", "at": 0.8 } ],
+          "sfx": [ { "cue": "chapter_sting", "at": 0.3 } ]
+        },
+        {
+          "camera": { "type": "diorama", "anchor": "star_map" },
+          "duration": 11,
+          "grade": "memory",
+          "captions": [ { "style": "speaker", "key": "story.vega.beat11", "at": 0.8 } ]
+        }
+      ],
+      "options": { "skippable": true }
+    },
+    {
+      // Chapter 7 "The Guardian Core" (B12 + the Guardian system revealed, one server call) — the set piece: the sky while
+      // VEGA says the choice is the player's, then the LIVE star chart with a line from here to the new violet star while
+      // she names the jump generator, then the chapter title. The reveal line comes back to the panel on an early skip.
+      "id": "ch7.open",
+      "tier": 4,
+      "chapter": "core",
+      "replaceLineKeys": [ "story.vega.beat12", "story.vega.guardian_revealed" ],
+      "music": "music_boss_approach",
+      "shots": [
+        {
+          "camera": { "type": "sky" },
+          "duration": 10,
+          "captions": [ { "style": "speaker", "key": "story.vega.beat12", "at": 1.0 } ]
+        },
+        {
+          "camera": { "type": "chart", "anchor": "core" },
+          "duration": 12,
+          "captions": [ { "style": "speaker", "key": "story.vega.guardian_revealed", "at": 0.8 } ],
+          "sfx": [ { "cue": "chapter_sting_reveal", "at": 0.2 } ]
+        },
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4.5,
+          "captions": [ { "style": "title_card", "kickerKey": "story.vega.cut.chapter", "key": "story.vega.ch.core", "at": 0.3 } ]
+        }
+      ],
+      "options": { "skippable": true, "returnOnSkip": [ "story.vega.guardian_revealed" ] }
+    },
+    {
+      // The finale set pieces (#2478, synthesis §6.5; bound in story.json's finale.cutscenes, played once per player whose
+      // story track started, never to an observer). The arrival: the flight warps into the Guardian system — a "now or never"
+      // card (no camera, free input) whose title lands as the warp clears; with danger near it is simply dropped. It chains
+      // to the descent, so landing soon after does not wait for the cooldown.
+      "id": "fin.arrival",
+      "tier": 2,
+      "chapter": "core",
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 6.5,
+          "captions": [ { "style": "title_card", "kickerKey": "story.vega.cut.arrival", "key": "story.vega.ch.core", "at": 2.8 } ],
+          "sfx": [ { "cue": "chapter_sting_reveal", "at": 2.7 } ]
+        }
+      ],
+      "options": { "skippable": true, "cooldownExempt": true, "chainNext": [ "fin.descent" ] }
+    },
+    {
+      // The descent: landing on the core world. The camera rises from the ship and flies over the one iron-ringed shaft (the
+      // server sends the shaft mouth as the core anchor; a shaft too far away to be streamed in yet shows the sky instead)
+      // while VEGA says where the chamber is — the guardian_core hint itself ("walk there, do not dig here"), kept out of
+      // the panel; a skip before it showed gives it back. Last, what sleeps below: the core diorama of chapter 3.
+      "id": "fin.descent",
+      "tier": 3,
+      "chapter": "core",
+      "replaceLineKeys": [ "vega.hint.guardian_core" ],
+      "music": "music_boss_approach",
+      "shots": [
+        {
+          "camera": { "type": "crane", "anchor": "ship" },
+          "duration": 5,
+          "sfx": [ { "cue": "anomaly_hum", "at": 0.5 } ]
+        },
+        {
+          "camera": { "type": "flyover", "anchor": "core" },
+          "duration": 10,
+          "captions": [ { "style": "speaker", "key": "vega.hint.guardian_core", "at": 0.6 } ]
+        },
+        {
+          "camera": { "type": "diorama", "anchor": "core" },
+          "duration": 5,
+          "sfx": [ { "cue": "anomaly_hum", "at": 0.3 } ]
+        }
+      ],
+      "options": { "skippable": true, "returnOnSkip": [ "vega.hint.guardian_core" ] }
+    },
+    {
+      // The breach: the hack is complete and the core wakes — for the players on the core world, a close framing of the red
+      // column in its chamber (the server sends the column as the core anchor), then the duel dialogue takes over. "Now or
+      // never": it never waits for the cooldown (the dialogue follows at once).
+      "id": "fin.breach",
+      "tier": 3,
+      "chapter": "core",
+      "music": "music_boss_dialogue",
+      "shots": [
+        {
+          "camera": { "type": "static", "anchor": "core" },
+          "duration": 7,
+          "captions": [ { "style": "title_card", "kickerKey": "story.vega.cut.breach", "key": "ui.finale.duel_title", "at": 1.2 } ],
+          "sfx": [ { "cue": "anomaly_hum", "at": 0.2 }, { "cue": "chapter_sting_reveal", "at": 1.0 } ]
+        }
+      ],
+      "options": { "skippable": true, "cooldownExempt": true }
+    },
+    {
+      // The duel elsewhere: the dialogue shows only on the core world (E28) — everyone else of the finale gets this banner.
+      "id": "fin.duel",
+      "tier": 1,
+      "chapter": "core",
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4,
+          "captions": [ { "style": "title_card", "kickerKey": "ui.finale.duel_title", "key": "ui.finale.duel_begun" } ]
+        }
+      ],
+      "options": { "replayable": false }
+    },
+    {
+      // The stand-down: the duel is won. The sleeping core (the diorama) while VEGA says the machines are standing down —
+      // her line, kept out of the panel — then the own ship before a living world. Every started player gets it (at the win
+      // or, when away, at their next join), followed at once by the ending.
+      "id": "fin.standdown",
+      "tier": 4,
+      "chapter": "resolution",
+      "replaceLineKeys": [ "story.vega.finale_resolved" ],
+      "music": "music_boss_resolution",
+      "shots": [
+        {
+          "camera": { "type": "diorama", "anchor": "core" },
+          "duration": 9,
+          "captions": [ { "style": "speaker", "key": "story.vega.finale_resolved", "at": 0.8 } ],
+          "sfx": [ { "cue": "chapter_sting_reveal", "at": 0.3 } ]
+        },
+        {
+          "camera": { "type": "space_vista", "anchor": "ship" },
+          "duration": 6,
+          "captions": [ { "style": "subtitle", "key": "ui.finale.resolved", "at": 0.5 } ]
+        }
+      ],
+      "options": { "skippable": true, "chainNext": [ "resolution" ] }
+    },
+    {
+      // The ending on the director (#1124's card, credits and epilogue): the open sky under "Resolution — The VEGA Protocol",
+      // the credits rolling over a calm space vista (dimmed for reading), the epilogue in a reading frame before the own
+      // ship. Replayable from the Journal; an older client (or the built-in pack) gets the old StoryResolved ending instead —
+      // never both.
+      "id": "resolution",
+      "tier": 4,
+      "chapter": "resolution",
+      "replaceLineKeys": [ "story.vega.beat13" ],
+      "music": "music_boss_resolution",
+      "shots": [
+        {
+          "camera": { "type": "sky" },
+          "duration": 6,
+          "captions": [ { "style": "title_card", "kickerKey": "story.vega.ch.resolution", "key": "story.vega_protocol.name", "at": 0.8 } ],
+          "sfx": [ { "cue": "chapter_sting_reveal", "at": 0.5 } ]
+        },
+        {
+          "camera": { "type": "space_vista", "anchor": "planet" },
+          "duration": 26,
+          "captions": [ { "style": "credits", "key": "ui.credits.body", "at": 0.5 } ]
+        },
+        {
+          "camera": { "type": "space_vista", "anchor": "ship" },
+          "duration": 12,
+          "captions": [ { "style": "reading_frame", "kickerKey": "story.vega.epilogue.title", "key": "story.vega.beat13", "at": 0.6 } ]
+        }
+      ],
+      "options": { "skippable": true }
+    }
+  ]
+}

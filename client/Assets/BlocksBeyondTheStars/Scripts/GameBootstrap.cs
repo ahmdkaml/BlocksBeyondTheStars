@@ -174,8 +174,9 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>AI-core tier of the active ship (1 = bare VEGA, 2 = Mk2, 3 = Mk3) — gates the autopilot.</summary>
         public int AiCoreTier { get; private set; } = 1;
 
-        /// <summary>True while the VEGA onboarding chain is active (an objective chip is showing) — the
-        /// Settings tab offers "skip tutorial" then, "restart tutorial" otherwise.</summary>
+        /// <summary>True while the basic training runs (#2469: the tutorial pack) — the Settings tab offers "skip tutorial" then,
+        /// "restart tutorial" otherwise. Since #2462 the server reports it on every VEGA line
+        /// (<c>ShipAiLine.TutorialActive</c>), whatever the chip shows; an older server is read from the chip's key.</summary>
         public bool OnboardingActive { get; private set; }
 
         // Per-species flora tints for the current world (seed + location → one colour per flora block),
@@ -667,6 +668,33 @@ namespace BlocksBeyondTheStars.Client
         public StarMapData StarMap { get; private set; }
         public MissionList Missions { get; private set; }
         public ServerRules Rules { get; private set; }
+
+        /// <summary>The mission with this id from the last mission list (active first, then available), or null.</summary>
+        private NetMission FindMission(string missionId)
+        {
+            if (Missions == null || string.IsNullOrEmpty(missionId))
+            {
+                return null;
+            }
+
+            foreach (var list in new[] { Missions.Active, Missions.Available })
+            {
+                if (list == null)
+                {
+                    continue;
+                }
+
+                foreach (var mission in list)
+                {
+                    if (mission != null && mission.Id == missionId)
+                    {
+                        return mission;
+                    }
+                }
+            }
+
+            return null;
+        }
 
         /// <summary>Frame marker used when the in-game menu consumes Esc/Tab, so the app shell
         /// does not also open the quit prompt on the same key press.</summary>
@@ -1407,8 +1435,94 @@ namespace BlocksBeyondTheStars.Client
         /// inscriptions, wreck logs, ruin notes. Per player; re-readable in the Story tab + Codex.</summary>
         public readonly System.Collections.Generic.List<(string Site, string TextKey)> StoryLogLore = new();
 
-        /// <summary>Story Log: the VEGA story-beat lines heard so far (locale keys, ShipAiLine kind 2 = memory/story).</summary>
-        public readonly System.Collections.Generic.List<string> StoryLogBeats = new();
+        /// <summary>Story Log: the story's beats this player has heard (locale keys, in arc order). Rebuilt from the server's
+        /// <c>StoryStateMessage.HeardBeats</c>, so it survives a rejoin, plus the beats heard live (#2462, B08). Holds only
+        /// the pack's beats — other narrator lines (insights, the Guardian reveal, relay lines, old memories) go to the
+        /// VEGA log.</summary>
+        public System.Collections.Generic.List<string> StoryLogBeats => _storyBeats.Keys;
+
+        private readonly BlocksBeyondTheStars.Client.Core.StoryBeatLog _storyBeats = new();
+
+        /// <summary>The beat indexes this player has heard (the server's snapshot plus this session's), ascending — the Story
+        /// tab groups them under their chapters (#2470).</summary>
+        public System.Collections.Generic.List<int> StoryHeardBeats => _storyBeats.Heard;
+
+        /// <summary>The definition of the save's active story, or null (#2470: the Story tab's chapter list reads it).</summary>
+        public BlocksBeyondTheStars.Shared.Story.StoryDefinition StoryPack => ActiveStoryPack();
+
+        /// <summary>The definition of the save's active story, or null — no story state yet, the "none" sandbox, or a pack
+        /// this client does not have.</summary>
+        private BlocksBeyondTheStars.Shared.Story.StoryDefinition ActiveStoryPack()
+            => Story != null && Content != null && Content.TryGetStory(Story.StoryId, out var pack) ? pack : null;
+
+        /// <summary>Adds the relay insights the save has spoken (#2470, <c>StoryStateMessage.RelayInsightKeys</c>) and the world
+        /// story's other narrator lines this player heard (#2471, <c>NoteKeys</c>: the Guardian reveal, the insights, the
+        /// resolution line) to the VEGA log — the Journal's "VEGA's notes" — so they survive a rejoin.</summary>
+        private void MergeRelayInsightsIntoLog()
+        {
+            AddToVegaLog(Story?.RelayInsightKeys);
+            AddToVegaLog(Story?.NoteKeys);
+        }
+
+        private void AddToVegaLog(string[] keys)
+        {
+            foreach (string key in keys ?? System.Array.Empty<string>())
+            {
+                if (!string.IsNullOrEmpty(key) && !VegaLogKeys.Contains(key))
+                {
+                    VegaLogKeys.Add(key);
+                }
+            }
+        }
+
+        /// <summary>#2471: the Journal's stories as last sent by the server (tag 300) — null until a current server sent them
+        /// (an older one never does; the Journal then falls back to the story state and the old tutorial button).</summary>
+        public StoryPackStates StoryPackStates { get; private set; }
+
+        /// <summary>#2471: the player's objectives in the chip order (tag 299) — the Journal's live progress and the optional
+        /// "Show all objectives" lines. Null until a current server sent it.</summary>
+        public ObjectiveList Objectives { get; private set; }
+
+        /// <summary>#2471: bumped whenever the stories or the objective list arrive — the open Journal redraws on a change.</summary>
+        public int JournalVersion { get; private set; }
+
+        /// <summary>#2471: the offered chapters (<c>pack/chapter</c>) seen in this session — a new offer badges the Journal.</summary>
+        private readonly System.Collections.Generic.HashSet<string> _journalOffers = new System.Collections.Generic.HashSet<string>();
+        private bool _journalOffersSeeded;
+
+        /// <summary>#2471: takes a new story list; a chapter offered since the last one badges the Journal tab.</summary>
+        private void OnStoryPackStates(StoryPackStates m)
+        {
+            StoryPackStates = m;
+            JournalVersion++;
+            bool fresh = false;
+            foreach (var pack in m?.Packs ?? System.Array.Empty<NetStoryPack>())
+            {
+                foreach (var chapter in pack.Chapters)
+                {
+                    if (chapter.State == StoryChapterStates.Offered && _journalOffers.Add(pack.Id + "/" + chapter.Id))
+                    {
+                        fresh = true;
+                    }
+                }
+
+                // #2476: a story mission VEGA just handed out lights the Journal tab too.
+                foreach (var mission in pack.Missions ?? System.Array.Empty<NetStoryMission>())
+                {
+                    if (mission.State == StoryChapterStates.Active && _journalOffers.Add(pack.Id + "/mission/" + mission.Id))
+                    {
+                        fresh = true;
+                    }
+                }
+            }
+
+            if (fresh && _journalOffersSeeded)
+            {
+                NewStoryUnseen = true;
+            }
+
+            _journalOffersSeeded = true;
+        }
 
         /// <summary>Re-readable VEGA tips (locale keys, #737): rebuilt from the server's milestone snapshot on
         /// join (canonical order) and appended live as onboarding/advisor/system lines arrive this session.</summary>
@@ -1421,6 +1535,27 @@ namespace BlocksBeyondTheStars.Client
         /// <summary>True while a client-side cinematic (the staged prologue, #760) owns the camera — the
         /// on-foot controller freezes movement/look like an open menu, but the cursor stays locked.</summary>
         public bool CinematicCameraActive { get; set; }
+
+        /// <summary>The one shared "a cutscene owns the screen" state (#2461). The staged prologue, the ending and the
+        /// shell intro each open a reason while they play (<see cref="CutsceneGate.Begin"/>/<see cref="CutsceneGate.End"/>);
+        /// every overlay reads <see cref="CutsceneActive"/> — the HUD (crosshair included), VEGA's panel and objective chip,
+        /// the touch controls, the chat, the nameplates, the IMGUI overlays — and the controls freeze. Static because the
+        /// shell intro runs before any world exists; the world's own reasons are cleared when the world goes.</summary>
+        public static readonly CutsceneGate Cutscenes = new CutsceneGate();
+
+        /// <summary>True while any cutscene owns the screen — see <see cref="Cutscenes"/>.</summary>
+        public static bool CutsceneActive => Cutscenes.Active;
+
+        /// <summary>A fresh process (or an Editor play session without a domain reload) starts with no cutscene.</summary>
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetCutscenesOnLoad() => Cutscenes.Clear();
+
+        /// <summary>Every reason this client has to hold the world — the pause menu, the feedback dialog, its reply and
+        /// later a held cutscene — combined into the one pause intent the server knows (#2461). Before, each panel sent
+        /// its own hold/release into the server's single flag, and closing one released the other's hold.</summary>
+        public WorldHoldArbiter WorldHold => _worldHold ??= new WorldHoldArbiter(paused => Network?.SendPause(paused));
+
+        private WorldHoldArbiter _worldHold;
 
         /// <summary>Pre-built JSON of the player's discovered systems/worlds + language for the in-game wiki's
         /// discovery-gated chapters. Built on the main thread (so the loopback content server can read this
@@ -1626,8 +1761,9 @@ namespace BlocksBeyondTheStars.Client
         public string ServerTokenText(string text) => ResolveServerToken(text) ?? text;
 
         /// <summary>Generic resolution for "@srv.*" tokens: the token (minus '@') IS the locale key, an
-        /// optional ":arg" tail fills the template's {name} placeholder. New server messages use this
-        /// instead of growing the hand-written token maps below; returns null for anything else.</summary>
+        /// optional ":arg" tail fills the template's {name} placeholder, and <c>{key:Action}</c> tokens name the
+        /// player's own control (#2463 — the ship stations' "Cockpit — {key:Interact}: launch"). New server messages use
+        /// this instead of growing the hand-written token maps below; returns null for anything else.</summary>
         private string ResolveServerToken(string text)
         {
             if (string.IsNullOrEmpty(text) || !text.StartsWith("@srv.", System.StringComparison.Ordinal))
@@ -1650,6 +1786,7 @@ namespace BlocksBeyondTheStars.Client
                 return text;
             }
 
+            template = HudUi.ExpandKeyTokens(Localizer, template); // before the arg: a player-chosen name stays verbatim
             return arg != null ? template.Replace("{name}", arg) : template;
         }
 
@@ -2869,23 +3006,53 @@ namespace BlocksBeyondTheStars.Client
             Network.WorldResetReceived += OnWorldReset;
             Network.ShipAiLineReceived += m =>
             {
-                // The post-tutorial story objective (#1110) rides the same chip — it must not read as an
-                // active tutorial (the settings button offers "restart" only while truly onboarding).
-                OnboardingActive = !string.IsNullOrEmpty(m.ObjectiveKey)
-                    && !m.ObjectiveKey.StartsWith("story.obj.", System.StringComparison.Ordinal);
-                if (m.Kind == 2 && !string.IsNullOrEmpty(m.LineKey)) { StoryLogBeats.Add(m.LineKey); NewStoryUnseen = true; } // a story beat
+                // The settings button offers "skip" while the tutorial runs and "restart" after it (#2462, B03): the server
+                // says so outright, whatever the chip shows — the finale may sit on it in the Guardian system while the
+                // lessons are unfinished. An older server is read from the chip's key prefix as before.
+                OnboardingActive = ObjectiveSourceRules.TutorialRunning(m.ObjectiveSource, m.ObjectiveKey, m.TutorialActive);
+                bool storyLine = m.Kind == 2 && !string.IsNullOrEmpty(m.LineKey);
+                if (storyLine)
+                {
+                    NewStoryUnseen = true;
+                    // Only the pack's beats go to the beat list (#2462, B08); the other narrator lines (insights, the
+                    // Guardian reveal, relay lines, old memories) stay re-readable in the VEGA log below.
+                    storyLine = _storyBeats.OnStoryLine(ActiveStoryPack(), m.LineKey);
+                }
+
                 // Tips log (#737): onboarding (0), advisor (1) and system (3) lines become re-readable the
-                // moment they arrive. Kind 2 is the story log's, Kind 4 (prologue) is intro-only by design.
-                if (m.Kind is 0 or 1 or 3 or 5 && !string.IsNullOrEmpty(m.LineKey) && !VegaLogKeys.Contains(m.LineKey))
+                // moment they arrive, and so do the narrator lines that are not beats. Kind 4 (prologue) is
+                // intro-only by design. #2471: a line that only points at the Journal (or sets a flight target) is not kept.
+                bool logged = (m.Kind is 0 or 1 or 3 or 5 || (m.Kind == 2 && !storyLine)) && !VegaText.IsTransientLine(m.LineKey);
+                if (logged && !string.IsNullOrEmpty(m.LineKey) && !VegaLogKeys.Contains(m.LineKey))
                 {
                     VegaLogKeys.Add(m.LineKey);
                 }
+
+                // #2471 (B09): "N new entries in your Journal" — the beats went to the Journal silently; badge its tab.
+                if (m.LineKey == BlocksBeyondTheStars.Shared.Story.StoryNarratorLines.JournalNews)
+                {
+                    NewStoryUnseen = true;
+                }
+
+                // #2471 (B6.4): the dock lesson's help sets the station as the flight target — unless the player set one.
+                if (ObjectiveTracker.WaypointToAdopt(SpaceWaypointId, SpaceWaypointPos.HasValue, m.SpaceWaypointId) is { } waypoint)
+                {
+                    SpaceWaypointId = waypoint;
+                }
+            };
+            Network.StoryPackStatesReceived += OnStoryPackStates; // #2471: the Journal's stories
+            Network.ObjectiveListReceived += m =>
+            {
+                Objectives = m; // #2471: the objectives in the chip order (live progress, "show all objectives")
+                JournalVersion++;
             };
             Network.VegaJournalReceived += m =>
             {
-                // The persisted snapshot replaces any live-collected keys — it is the authoritative set.
+                // The persisted snapshot replaces any live-collected keys — it is the authoritative set. The basic training's
+                // lessons come from the tutorial pack's own steps (#2469; the client's copy of the old stage list is gone).
                 VegaLogKeys.Clear();
-                VegaLogKeys.AddRange(VegaText.JournalKeys(m.Milestones));
+                VegaLogKeys.AddRange(VegaText.JournalKeys(m.Milestones, Content?.Stories.Values));
+                MergeRelayInsightsIntoLog(); // #2470: the snapshot does not carry the save's relay insights
             };
             Network.RelayNetworkReceived += m => RelayNetwork = m; // #1125: server-authoritative, render-only
             Network.StoryStateReceived += m =>
@@ -2893,7 +3060,8 @@ namespace BlocksBeyondTheStars.Client
                 Story = m;
                 // Rejoin-proof logs (#1110/#1111): the snapshot carries the found KEYS; texts resolve from
                 // the pack. Replaces the live-collected lists — the server is authoritative.
-                if (Content is not null && Content.TryGetStory(m.StoryId, out var pack))
+                var pack = ActiveStoryPack();
+                if (pack != null)
                 {
                     StoryLogFragments.Clear();
                     StoryLogFragments.AddRange(BlocksBeyondTheStars.Client.Core.StoryLog.Fragments(pack, m.FoundFragmentKeys));
@@ -2902,6 +3070,10 @@ namespace BlocksBeyondTheStars.Client
                     StoryLogLore.Clear();
                     StoryLogLore.AddRange(BlocksBeyondTheStars.Client.Core.StoryLog.Lore(pack, m.FoundLoreKeys));
                 }
+
+                // The beats this player heard (#2462, B08) — the beat list survives a rejoin now.
+                _storyBeats.OnStoryState(pack, m.StoryId, m.HeardBeats);
+                MergeRelayInsightsIntoLog(); // #2470: relay insights spoken before this player's story track started
             };
             Network.NetFragmentsReceived += m => NetFragments = m.Fragments;
             Network.NetFragmentRevealedReceived += m =>
@@ -2954,12 +3126,13 @@ namespace BlocksBeyondTheStars.Client
                 {
                     OpenOverviewOnNextPlanetScan = false;
                     PlanetOverviewCard.Show(this, m); // #2239: the flight scanner read a planet — what awaits there
-                    if (Settings != null && !Settings.PlanetCardHintShown && m.Rows != null && m.Rows.Length > 0)
+                    // #2247: the first card says once what the colours mean and where the report lives on — "once"
+                    // counting only a line that went out (#2462, B31: muted, it waits for a later card).
+                    if (Settings != null && !Settings.PlanetCardHintShown && m.Rows != null && m.Rows.Length > 0
+                        && VegaPanel.Instance?.SayLocal("vega.hint.planet_card") == true)
                     {
-                        // #2247: the first card says once what the colours mean and where the report lives on.
                         Settings.PlanetCardHintShown = true;
                         Settings.Save();
-                        VegaPanel.Instance?.SayLocal("vega.hint.planet_card");
                     }
                 }
             };
@@ -3053,7 +3226,10 @@ namespace BlocksBeyondTheStars.Client
                 LastMessage = m.Docked ? $"Docked with {m.Partner}" : ServerMessageText(m.Reason);
             };
             // #1071: rejections arrive as @srv.mission.* tokens — localize them instead of pushing the raw token at the player.
-            Network.MissionResultReceived += m => LastMessage = m.Success ? $"Mission '{m.MissionId}' complete!" : ServerMessageText(m.Reason);
+            // #2462 (B24): localized, named after the mission, and "complete" only on a real turn-in.
+            Network.MissionResultReceived += m => LastMessage = m.Success
+                ? MissionToast.Text(m, FindMission(m.MissionId), key => Localizer?.Get(key) ?? key, key => Localizer?.Has(key) ?? false)
+                : ServerMessageText(m.Reason);
             Network.RespawnNoticeReceived += m =>
             {
                 LastMessage = ServerMessageText(m.Reason);
@@ -3106,6 +3282,7 @@ namespace BlocksBeyondTheStars.Client
         private void Update()
         {
             Network?.Poll();
+            _worldHold?.Tick(Time.realtimeSinceStartup); // #2461: one keep-alive for every holder (menu, feedback, …)
             _worldClock.Advance(Time.deltaTime); // after Poll, so a PauseState that just landed takes effect now
             Bio.Tick(Time.deltaTime); // #2202: the effect seconds run between two server updates
             BioSenses.Ensure(this);   // #2202: night sight and perception — the component arrives with the first such effect
@@ -3129,12 +3306,17 @@ namespace BlocksBeyondTheStars.Client
                         // The arcade install id travels with the join (#1222): a glitch.fun guest has no
                         // portal account, so it is the only identity their /report can carry. Empty everywhere else.
                         string installId = GlitchIntegration.ArcadeInstallId;
+                        // #2468: this client plays story-pack cutscenes when its world rig has the director — the server then
+                        // sends CutscenePlay (tag 295) instead of stamping every scene seen at once.
+                        Network.PlaysCutscenes = CutsceneDirector.Instance != null;
                         Network.Join(PlayerName, string.IsNullOrEmpty(Password) ? null : Password, Locale.Code(),
                             string.IsNullOrEmpty(Token) ? null : Token, ViewDistanceChunks,
                             string.IsNullOrEmpty(HostedToken) ? null : HostedToken,
                             string.IsNullOrEmpty(installId) ? null : installId);
                         Network.SendAppearance(SkinRgb, TorsoRgb, ArmRgb, LegRgb, HullRgb);
-                        Network.SendSetNpcCalls(Settings?.NpcCalls ?? 0); // #1119: the server initiates NPC calls, so it must know the preference
+                        // #1119: the server initiates NPC calls, so it must know the preference — and VEGA's hints mute
+                        // (#2462, B31), so a muted hint waits instead of burning its once-flag unseen.
+                        Network.SendSetNpcCalls(Settings?.NpcCalls ?? 0, Settings != null && !Settings.VegaHints);
                         if (!string.IsNullOrEmpty(FacePixels))
                         {
                             Network.SendFace(FacePixels); // tell others our custom face (server persists + relays)
@@ -4500,6 +4682,8 @@ namespace BlocksBeyondTheStars.Client
         private void OnDestroy()
         {
             Network?.Dispose();
+            _worldHold?.Forget(); // the world is gone — nothing left to hold or to tell (#2461)
+            Cutscenes.Clear();    // #2461: a cinematic torn down with its world must not keep the next one's HUD hidden
 
             // The atlas and the texture source are shared with the menu and its editors — a world's textures
             // must not outlive the world (#1959).

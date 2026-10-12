@@ -1,0 +1,234 @@
+{
+  // The basic training's cards (#2473; format: docs/developer/CUTSCENES.md, design: synthesis §6.4). Ids follow synthesis
+  // §5.3 (StoryCutsceneIds.Tutorial). Cards, not cinema: every card keeps the controls free and never holds the world, and
+  // a card shows titles only — never the VEGA line the panel says next (G12); only the graduation shows VEGA's closing line
+  // itself (replaceLineKeys keeps it out of the panel while the card is owed). Cards use title captions only, so they never
+  // stop and wait for "continue" while the player walks on; the graduation's speaker page is the one exception.
+  //
+  // tut.welcome     — part 1's opener (bound as b1's openCutscene): "Basic training · six short parts", then "Part 1 of 6 ·
+  //                   First steps". Right after VEGA's prologue it plays at once (the prologue chains to it).
+  // tut.strip       — template: the opener of parts 2–6, "Basic training · Part n of 6" + the part's title ({0} = the title,
+  //                   {1}/{2} = place and count, CutsceneArgs). A card still waiting when its part is over is dropped.
+  // tut.done        — template: the closer of every part, a short banner "Part complete!" + the part's title.
+  // tut.course      — template: the opener of an accepted deep-dive chapter, "Short course" + its title (c2–c5 since #2479).
+  // tut.first_launch  — the first launch (b6.1 done): a letterbox over the launch rise, the camera untouched; now or never.
+  // tut.first_dock  — #2479: the stations course's docking (c4.1 done): "Docked" + the station's name ("arg": "body"), then
+  //                   what waits inside. It waits for the station's loading veil, so it is no "now or never".
+  // tut.first_jump  — #2479: the navigator course's first hyperjump (c5.8 done): "New system" + its name ("arg": "system"),
+  //                   on the warp-in like the finale's arrival card (the title after the warp); now or never.
+  // tut.first_landing — the first landing on a new world (b6.7 done): the camera circles the ship, the world's name as the
+  //                   title ({0} = the body, "arg": "body"); a singleplayer world holds while the camera is away.
+  // tut.first_base  — #2480: the homestead course's base founded (c7.1 done): a crane rising over the player standing at the
+  //                   new base core and its zone, "Your home", then what walls and sealed rooms do (synthesis §6.4).
+  // tut.ship_commissioned — #2480: the ship builder course's own ship commissioned (c6.7 done): the camera circles the NEW
+  //                   ship (the parked ship is the active one now, scaled to its size), "Your own ship".
+  // tut.first_circuit — #2481: the crystal workshop course's first job handed in (c8.1 done — a switch lit a lamp): a short
+  //                   banner "First circuit · It works!" with a chime; the camera and the controls stay the player's.
+  // tut.first_tame — #2482: the animal friends course's first companion (c9.3 done — a tame through the real taming): a short
+  //                   banner "Tamed · A new friend!" with a chime (synthesis §6.4: T1, 4 s); the camera and the controls stay the
+  //                   player's — the new companion is right there in front of them.
+  // tut.graduation  — the graduation: the achievement, then VEGA's closing line in her speaker box; chains to VEGA's recap
+  //                   or, when the world is still in chapter 1, straight to VEGA's chapter 1 card (#2474, §5.3).
+  "cutscenes": [
+    {
+      "id": "tut.welcome",
+      "tier": 2,
+      "chapter": "b1",
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4.5,
+          "captions": [ { "style": "title_card", "kickerKey": "story.tutorial.cut.welcome.kicker", "key": "story.tutorial.name", "at": 0.3 } ]
+        },
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4,
+          "captions": [ { "style": "title_card", "kickerKey": "story.tutorial.cut.welcome.part", "key": "story.tutorial.cut.title_arg" } ]
+        }
+      ]
+    },
+    {
+      "id": "tut.strip",
+      "tier": 2,
+      "template": true,
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4,
+          "captions": [ { "style": "title_card", "kickerKey": "story.tutorial.cut.part.kicker", "key": "story.tutorial.cut.title_arg", "at": 0.3 } ]
+        }
+      ],
+      "options": { "replayable": false }
+    },
+    {
+      "id": "tut.done",
+      "tier": 1,
+      "template": true,
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 3,
+          "captions": [ { "style": "title_card", "kickerKey": "story.tutorial.cut.done.kicker", "key": "story.tutorial.cut.title_arg" } ]
+        }
+      ],
+      "options": { "replayable": false }
+    },
+    {
+      "id": "tut.course",
+      "tier": 2,
+      "template": true,
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4,
+          "captions": [ { "style": "title_card", "kickerKey": "story.tutorial.cut.course.kicker", "key": "story.tutorial.cut.title_arg", "at": 0.3 } ]
+        }
+      ],
+      "options": { "replayable": false }
+    },
+    {
+      "id": "tut.first_launch",
+      "tier": 3,
+      "shots": [
+        {
+          "camera": { "type": "overlay" },
+          "duration": 3,
+          "captions": [ { "style": "title_card", "kickerKey": "story.tutorial.cut.launch.kicker", "key": "story.tutorial.cut.launch.title", "at": 0.2 } ]
+        },
+        {
+          "camera": { "type": "overlay" },
+          "duration": 3.5,
+          "captions": [ { "style": "title_card", "key": "story.tutorial.cut.launch.space" } ]
+        }
+      ],
+      "options": { "cooldownExempt": true }
+    },
+    {
+      "id": "tut.first_dock",
+      "tier": 2,
+      "arg": "body",
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4,
+          "captions": [ { "style": "title_card", "kickerKey": "story.tutorial.cut.dock.kicker", "key": "story.tutorial.cut.title_arg", "at": 0.3 } ]
+        },
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4,
+          "captions": [ { "style": "title_card", "key": "story.tutorial.cut.dock.inside" } ]
+        }
+      ]
+    },
+    {
+      "id": "tut.first_landing",
+      "tier": 3,
+      "arg": "body",
+      "shots": [
+        {
+          "camera": { "type": "orbit", "anchor": "ship" },
+          "duration": 7,
+          "captions": [ { "style": "title_card", "kickerKey": "story.tutorial.cut.landing.kicker", "key": "story.tutorial.cut.title_arg", "at": 0.8 } ]
+        },
+        {
+          "camera": { "type": "static", "anchor": "ship" },
+          "duration": 4.5,
+          "captions": [ { "style": "subtitle", "key": "story.tutorial.cut.landing.sub" } ]
+        }
+      ],
+      "options": { "chainNext": [ "tut.graduation" ] }
+    },
+    {
+      "id": "tut.first_jump",
+      "tier": 2,
+      "arg": "system",
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 6.5,
+          "captions": [ { "style": "title_card", "kickerKey": "story.tutorial.cut.jump.kicker", "key": "story.tutorial.cut.title_arg", "at": 2.8 } ]
+        },
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4,
+          "captions": [ { "style": "title_card", "key": "story.tutorial.cut.jump.unknown" } ]
+        }
+      ],
+      "options": { "cooldownExempt": true }
+    },
+    {
+      "id": "tut.first_base",
+      "tier": 3,
+      "shots": [
+        {
+          "camera": { "type": "crane" },
+          "duration": 6,
+          "captions": [ { "style": "title_card", "kickerKey": "story.tutorial.cut.base.kicker", "key": "story.tutorial.cut.base.title", "at": 0.8 } ]
+        },
+        {
+          "camera": { "type": "orbit" },
+          "duration": 4.5,
+          "captions": [ { "style": "subtitle", "key": "story.tutorial.cut.base.sub" } ]
+        }
+      ]
+    },
+    {
+      "id": "tut.ship_commissioned",
+      "tier": 3,
+      "shots": [
+        {
+          "camera": { "type": "orbit", "anchor": "ship" },
+          "duration": 7,
+          "captions": [ { "style": "title_card", "kickerKey": "story.tutorial.cut.ship.kicker", "key": "story.tutorial.cut.ship.title", "at": 0.8 } ]
+        },
+        {
+          "camera": { "type": "static", "anchor": "ship" },
+          "duration": 4.5,
+          "captions": [ { "style": "subtitle", "key": "story.tutorial.cut.ship.sub" } ]
+        }
+      ]
+    },
+    {
+      "id": "tut.first_circuit",
+      "tier": 1,
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4,
+          "captions": [ { "style": "title_card", "kickerKey": "story.tutorial.cut.circuit.kicker", "key": "story.tutorial.cut.circuit.title" } ],
+          "sfx": [ { "cue": "chime_1", "at": 0.2 } ]
+        }
+      ]
+    },
+    {
+      "id": "tut.first_tame",
+      "tier": 1,
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4,
+          "captions": [ { "style": "title_card", "kickerKey": "story.tutorial.cut.tame.kicker", "key": "story.tutorial.cut.tame.title" } ],
+          "sfx": [ { "cue": "chime_1", "at": 0.2 } ]
+        }
+      ]
+    },
+    {
+      "id": "tut.graduation",
+      "tier": 2,
+      "replaceLineKeys": [ "story.tutorial.graduated" ],
+      "shots": [
+        {
+          "camera": { "type": "player_view" },
+          "duration": 4,
+          "captions": [ { "style": "title_card", "kickerKey": "story.tutorial.cut.graduation.kicker", "key": "achv.graduate.name", "at": 0.3 } ]
+        },
+        {
+          "camera": { "type": "player_view" },
+          "duration": 7,
+          "captions": [ { "style": "speaker", "key": "story.tutorial.graduated" } ]
+        }
+      ],
+      "options": { "chainNext": [ "__recap", "vega_protocol/ch1.open" ] }
+    }
+  ]
+}

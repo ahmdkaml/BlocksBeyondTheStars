@@ -8,6 +8,7 @@ using BlocksBeyondTheStars.Networking.Messages;
 using BlocksBeyondTheStars.Shared.Definitions;
 using BlocksBeyondTheStars.Shared.Missions;
 using BlocksBeyondTheStars.Shared.State;
+using BlocksBeyondTheStars.Shared.Story;
 
 namespace BlocksBeyondTheStars.GameServer;
 
@@ -30,18 +31,51 @@ public sealed partial class GameServer
     /// traffic level reads one step busier there. Derived alongside the lanes, never persisted.</summary>
     private readonly HashSet<string> _relaySystems = new();
 
+    /// <summary>VEGA's relay-network insight line per rebuild stage (F-2), in the order the stages happen.</summary>
+    private static readonly (string Stage, string TextKey)[] RelayInsightLines =
+    {
+        ("relay", "vega.relay.first"),
+        ("lane", "vega.relay.lane"),
+        ("growth", "vega.relay.growth"),
+    };
+
     /// <summary>Speaks one of VEGA's relay-network insights (F-2) exactly once per save — the epilogue's
     /// promise made audible as each stage of the rebuild actually happens. The once-guard persists in
-    /// <see cref="WorldMetadata.RelayInsights"/> (the caller saves metadata); kind 2 lands in the story log.</summary>
-    private void SpeakRelayInsightOnce(string stage, string textKey)
+    /// <see cref="WorldMetadata.RelayInsights"/> (the caller saves metadata); kind 2 lands in the story log. Since #2470 it
+    /// is the VEGA pack's line (the Service's relays): silent while the VEGA story does not run (the once-guard stays
+    /// unspent, so a world switched to VEGA later still hears it at the next stage), and spoken only to players whose story
+    /// track has started — the others find it in their log silently when their track starts (<see cref="RelayInsightKeysSpoken"/>).</summary>
+    private void SpeakRelayInsightOnce(string stage)
     {
-        if (_meta.RelayInsights.Contains(stage))
+        if (!VegaStoryActive || _meta.RelayInsights.Contains(stage))
         {
             return;
         }
 
         _meta.RelayInsights.Add(stage);
-        SpeakVegaLineToAll(textKey);
+        foreach (var (s, key) in RelayInsightLines)
+        {
+            if (s == stage)
+            {
+                SpeakStoryLineToStarted(key);
+            }
+        }
+    }
+
+    /// <summary>The relay insights this save has spoken, as their line keys in stage order (#2470) — the Story log of a player
+    /// whose track started after them (<c>StoryStateMessage.RelayInsightKeys</c>).</summary>
+    private string[] RelayInsightKeysSpoken()
+    {
+        var keys = new List<string>();
+        foreach (var (stage, key) in RelayInsightLines)
+        {
+            if (_meta.RelayInsights.Contains(stage))
+            {
+                keys.Add(key);
+            }
+        }
+
+        return keys.ToArray();
     }
 
     /// <summary>The relay meter for a station, creating the record on first touch (additive metadata).</summary>
@@ -169,6 +203,7 @@ public sealed partial class GameServer
         {
             OnAchievementRelayCommissioned(session);  // "Relay Engineer" (#1125)
             RecordStoryMilestone("relay:first");      // the save's first relay advances the arc
+            RaiseGameEvent(session, GameEventKeys.RelayCommissioned, station.Id); // #2465
             foreach (var s in _sessions.Values.Where(x => x.Joined))
             {
                 Send(s, new ServerMessage
@@ -177,7 +212,7 @@ public sealed partial class GameServer
                 });
             }
 
-            SpeakRelayInsightOnce("relay", "vega.relay.first");
+            SpeakRelayInsightOnce("relay");
             RecomputeRelayLanes(announce: true, source: session);
             _repo.SaveMetadata(_meta); // the insight/lane once-guards changed above — persist them too
             _log.Info($"Station '{station.Name}' ({station.Id}) is now an SPS relay.");
@@ -255,10 +290,11 @@ public sealed partial class GameServer
         foreach (var lane in _relayLanes.Where(l => !before.Contains(l)))
         {
             RecordStoryMilestone("relay:lane"); // the save's FIRST lane advances the arc (once-key dedupes)
-            SpeakRelayInsightOnce("lane", "vega.relay.lane");
+            SpeakRelayInsightOnce("lane");
             if (source is not null)
             {
                 OnAchievementLaneLinked(source); // "Network Weaver" — credited to the completing contributor
+                RaiseGameEvent(source, GameEventKeys.LaneLinked, lane.A + "|" + lane.B); // #2465
             }
 
             string nameA = _galaxy.Systems.FirstOrDefault(s => s.Id == lane.A)?.Name ?? lane.A;
@@ -283,7 +319,7 @@ public sealed partial class GameServer
                 MaybeGrowGalaxy(source, lane.B);
                 if (_galaxy.Systems.Count > beforeGrowth)
                 {
-                    SpeakRelayInsightOnce("growth", "vega.relay.growth");
+                    SpeakRelayInsightOnce("growth");
                 }
             }
         }

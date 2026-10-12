@@ -67,6 +67,15 @@ namespace BlocksBeyondTheStars.Client
 
         private const string SynthPrefix = "synth:";
 
+        // A story-pack cutscene's own track (#2468): "cutscene:<track>" loops that one library track while the scene plays.
+        private const string CutscenePrefix = "cutscene:";
+
+        /// <summary>The music track of the cutscene playing now (a file in <c>client/Music</c> without extension), or null —
+        /// set by <see cref="CutsceneDirector"/> while a scene with a <c>music</c> entry plays. It outranks every context
+        /// but the ending's resolution track; a track that is still downloading leaves the current music playing until it
+        /// arrives (a scene is never delayed for music), and a missing file falls back to the normal context.</summary>
+        public static string CutsceneTrack { get; set; }
+
         private const float CrossfadeRate = 0.4f;   // volume units / s → ~2.5 s for a full fade
         private const float RerollLead = 3.0f;       // re-roll this many seconds before a piece ends
         private const float PrefetchLead = 45f;      // plan + fetch the successor this early (browser bandwidth)
@@ -131,8 +140,13 @@ namespace BlocksBeyondTheStars.Client
         private float _duck = 1f;             // smoothed ducking multiplier (weather / hostile nearby)
         private bool _tension;
 
-        // Finale: a one-shot resolution window after the Guardian core falls (then normal music resumes).
-        private bool _finaleResolved;
+        // Finale: the resolution track follows the ending SCENE (#2461, B17) — armed on every start of the resolution
+        // cinematic (the live win, the join catch-up, a Story-tab replay), held while it plays and for a window from
+        // its start, then normal music resumes. It used to key off the first sighting of GuardianDefeated in a
+        // session: a won save played it at every session start, and a replay later in the session got none.
+        private const float ResolutionSeconds = 32f;
+        private ResolutionCinematic _resolutionSeenOn; // the world's cinematic whose starts are being counted
+        private int _resolutionPlaysSeen;
         private float _resolutionUntil;
 
         private void Awake()
@@ -302,6 +316,13 @@ namespace BlocksBeyondTheStars.Client
                 _lastIntegrity = integrity;
             }
 
+            // A story-pack cutscene brings its own track (#2468). The director never plays one under the ending.
+            string cutsceneTrack = CutsceneTrack;
+            if (!string.IsNullOrEmpty(cutsceneTrack) && !_missingTracks.Contains(cutsceneTrack))
+            {
+                return CutscenePrefix + cutsceneTrack;
+            }
+
             // Finale set-piece overrides everything once the player is engaging the Guardian core.
             string finale = FinaleContext(game, inSpace);
             if (finale != null)
@@ -403,41 +424,69 @@ namespace BlocksBeyondTheStars.Client
             return surface;
         }
 
+        /// <summary>The resolution track while the ending scene plays and for <see cref="ResolutionSeconds"/> from each of
+        /// its starts (#2461, B17), else null. Counted per world: a new world's cinematic starts the count afresh.</summary>
+        private string ResolutionContext()
+        {
+            var ending = ResolutionCinematic.Instance;
+            if (!ReferenceEquals(ending, _resolutionSeenOn))
+            {
+                _resolutionSeenOn = ending;
+                _resolutionPlaysSeen = 0;
+                _resolutionUntil = 0f; // a window from the last world does not carry into this one
+            }
+
+            if (ending == null)
+            {
+                return null;
+            }
+
+            if (ending.Plays != _resolutionPlaysSeen)
+            {
+                _resolutionPlaysSeen = ending.Plays;
+                if (ending.Playing)
+                {
+                    _resolutionUntil = Time.time + ResolutionSeconds;
+                }
+            }
+
+            return ending.Playing || Time.time < _resolutionUntil ? FinaleResolution : null;
+        }
+
         /// <summary>The finale music phase, or null when the player is not engaging the Guardian core. Priority:
-        /// resolution sting (just won) → dialogue duel → core hack → space gauntlet → approach. Resolved from the
+        /// resolution (the ending scene plays) → dialogue duel → core hack → space gauntlet → approach. Resolved from the
         /// shared story flags (<see cref="GameBootstrap.Story"/>), the current location id (the finale system is
         /// <c>guardian_finale*</c>) and the live <see cref="FinaleView"/> phase.</summary>
         private string FinaleContext(GameBootstrap game, bool inSpace)
         {
+            // The resolution track belongs to the ending scene, whenever it plays (#2461, B17).
+            string resolution = ResolutionContext();
+            if (resolution != null)
+            {
+                return resolution;
+            }
+
             var story = game.Story;
             if (story == null || !story.Active)
             {
-                _finaleResolved = false;
                 return null;
             }
 
-            // Resolution sting right after the core falls — then normal music resumes for good.
+            // The core has fallen: the galaxy is at peace and normal music plays (the ending scene brings its own).
             if (story.GuardianDefeated)
             {
-                if (!_finaleResolved)
-                {
-                    _finaleResolved = true;
-                    _resolutionUntil = Time.time + 32f;
-                }
-
-                return Time.time < _resolutionUntil ? FinaleResolution : null;
+                return null;
             }
 
-            _finaleResolved = false;
             if (!story.GuardianSystemRevealed)
             {
                 return null;
             }
 
             var fv = FinaleView.Instance;
-            if (fv != null && fv.DuelActive)
+            if (fv != null && fv.DuelActive && fv.OnCoreWorld)
             {
-                return FinaleDialogue;
+                return FinaleDialogue; // #2478: the duel's track plays where its dialogue does — on the core world
             }
 
             if (fv != null && fv.Hacking)
@@ -629,6 +678,16 @@ namespace BlocksBeyondTheStars.Client
                 if (!_missingTracks.Contains(trackName))
                 {
                     return (trackName, true); // single looping track for the phase
+                }
+            }
+
+            // A cutscene's track (#2468) loops in place for as long as the scene plays, in either music mode.
+            if (want.StartsWith(CutscenePrefix, StringComparison.Ordinal))
+            {
+                string trackName = want.Substring(CutscenePrefix.Length);
+                if (!_missingTracks.Contains(trackName))
+                {
+                    return (trackName, true);
                 }
             }
 
