@@ -955,7 +955,11 @@ public sealed partial class GameServer
         }
 
         var body = _galaxy?.FindBody(intent.DestinationBodyId);
-        if (body is null)
+        // #2506: no way into the Guardian system while the story is off — but a pilot already flying there may still land on
+        // the body they are at (the leave-space path), so nobody is stranded.
+        bool landingWhereTheyAre = allowCurrentBody
+            && string.Equals(intent.DestinationBodyId, session.CurrentLocationId, StringComparison.Ordinal);
+        if (body is null || (GuardianSystemHidden(body.SystemId) && !landingWhereTheyAre))
         {
             Reject(session, "travel", "@srv.travel.no_destination");
             return false;
@@ -7233,7 +7237,7 @@ public sealed partial class GameServer
         CheatLog(session.State, $"set {target.State.Name}'s mode override to {over.Value}");
 
         // The target's client re-reads its effective rules (mode label, O2 bar, flight) right away; every
-        // admin's Settings tab re-renders its player-mode rows from the re-broadcast roster.
+        // admin's Character tab re-renders its player-mode rows from the re-broadcast roster.
         foreach (var s in _sessions.Values)
         {
             if (s.Joined && (s == target || s.State.IsAdmin))
@@ -7751,7 +7755,7 @@ public sealed partial class GameServer
 
     private void SendStarMap(PlayerSession session)
     {
-        var systems = _galaxy.Systems.Select(sys => new NetStarSystem
+        var systems = _galaxy.Systems.Where(sys => !GuardianSystemHidden(sys.Id)).Select(sys => new NetStarSystem // #2506
         {
             Id = sys.Id,
             Name = sys.Name,
@@ -7919,7 +7923,7 @@ public sealed partial class GameServer
         // The mode + its derived switches are the receiver's EFFECTIVE ones (#1121): a per-player override
         // makes the kid's client read "Creative" (and hide the O2 bar) while the world stays Survival.
         var over = session.State.ModeOverride;
-        // World admins additionally get the online players' overrides, feeding the Settings-tab rows.
+        // World admins additionally get the online players' overrides, feeding the Character-tab rows.
         string[] modeNames = System.Array.Empty<string>();
         string[] modeValues = System.Array.Empty<string>();
         if (session.State.IsAdmin)
@@ -7955,6 +7959,7 @@ public sealed partial class GameServer
             BaseVisitors = r.BaseVisitors,
             TutorialPolicy = r.TutorialPolicy.ToString(), // #2466
             StoryDensity = r.StoryDensity.ToString(), // #2472 (empty = a server without the live edit)
+            MainStory = session.State.IsAdmin ? _storyState.StoryId : string.Empty, // #2506: the admins' "Main story" row
             VoiceChatEnabled = _config.VoiceChatEnabled,
             ChatMode = EffectiveChatMode.ToString(),
             PlayerModeNames = modeNames,

@@ -89,7 +89,7 @@ training keeps it), `OptIn` (offered, starts only on the player's request — ve
 courses); CLI `--tutorial auto|courses|optin|off` for a fresh world (the save keeps its rule afterwards). The save stores
 the rule as a number and `Courses` is the appended 3: a server older than #2498 reads such a save as `Auto`; in a
 `config/server.json` write `Courses` only for a server that knows it. An admin changes it on a running
-world in the in-game world rules (Tab → Settings, *Tutorial*) or with the chat command `/tutorial policy <value>`. The
+world in the in-game world rules (Tab → Character, *Tutorial*) or with the chat command `/tutorial policy <value>`. The
 story choice (`--story none`) never switches the tutorial off. No preset switches it off (`family` = `Auto`).
 
 **Main story and story pace (#2472).** `--story <id>` picks the world's main story for a fresh world (an installed
@@ -97,7 +97,9 @@ world-story pack; `none` = no story, sandbox; empty = the default VEGA story) an
 how fast it unfolds — both are what the game's world-creation **Stories** page emits (together with `--tutorial`, only
 values that differ from the defaults), and both are baked into the save like every world option. The pace is
 live-editable by a world admin (in-game world rules, *Story pace*; `SetWorldRulesIntent.StoryDensity`): a faster pace
-reveals the beats its score already covers at once, a slower one never takes a heard beat back. Hosted worlds (WorldHost,
+reveals the beats its score already covers at once, a slower one never takes a heard beat back. The main story is
+switchable live too (#2506, in-game world rules, *Main story*): switching VEGA off and on again keeps the world's and the
+players' progress, and on a restart the save's last choice wins over `--story`. Hosted worlds (WorldHost,
 glitch) pass no story flag, so they run VEGA with the tutorial on `Auto`; an uploaded singleplayer save keeps the rules it
 was created with.
 

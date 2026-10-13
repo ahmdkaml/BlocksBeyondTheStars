@@ -116,6 +116,33 @@ progress (1 > 0 %, 2 ≥ 33 %, 3 ≥ 66 %); **4 is the win alone** (#2460) — i
   and `SelectActiveStoryRow` picks: rows of installed packs (or `none`) over unknown ones → the active marker →
   the newest stamp → for older saves the fresh-save choice, else `none`, else the default pack. A row of an
   uninstalled pack never costs real progress. Additive JSON fields — no save-version bump.
+- **Switching the main story keeps progress (#2506).** `SetActiveStory` (the admin's `StorySelectIntent`, the in-game
+  "Main story" row) no longer starts the chosen pack over: the story being left is persisted one last time and steps back
+  (`DeactivateStoryRow`); a pack the save already ran is **restored** from its row (`ApplyStoryRow` — fragments, kills,
+  milestones, revealed beats, once-keys, the Guardian flags), marked active and stamped by the next persist; a pack the
+  save never ran starts fresh (B0) as before; `none` works as before. Re-selecting the running story is a no-op (it used
+  to reset in place) — except while the save's own pack failed to load (#2489), where choosing the running fallback adopts
+  it. Restoring a pack that only the built-in stand-in can run re-activates its row without writing the stand-in over it
+  (the hold stays). The switch also writes `GameRules.StoryId` into the save's rules (like a live rule edit), so rules
+  and active row agree; at a restart the active row still decides. Players' own keys (`story:<id>:*`, step progress,
+  owed `:sent` scenes) are never touched, so on switch-back `StoryTrackOnStorySwitch` meets the online players: the
+  migration and prologue for newcomers, the start rule, and for a player whose track had started before the catch-up
+  (`CatchUpStoryLines`, the missed ending) and a fresh help clock for the story's running mission steps. A restored
+  revealed-but-unwon finale puts the Guardian system back (`EnsureGuardianSystemInGalaxy`). Everyone online gets a
+  system line (`srv.story.switched_off` / `srv.story.switched_on`, server-localized).
+- **While no story runs (`none`)** nothing of the left story runs: the beat/insight/relay/Guardian lines, the lead
+  listener (`SyncLeadListener`), the chip's story objective, story missions (`StoryPackEnabledFor` is false for the world
+  pack), chapter offers, the Journal's world-story part, NPC story flavour (knowledge level 0). The world's traces of the
+  story are hidden, not removed: net fragments are not sent or pickable (`SendNetFragments`, `HandleNetFragmentFound`,
+  the `fragment_signal` POI, `world:fragment_on_world`); the Guardian system stays in the galaxy (no one is stranded)
+  but is off the star map and no travel or hyperjump leads there (`GuardianSystemHidden`), its gauntlet does not spawn
+  and the `guardian_core` POI is off; a scene of the story still waiting in a player's cutscene queue stays there with
+  the lines it holds (`WaitsForItsWorldStory`) and plays when the story is back. The Remnant era follows the restored
+  `GuardianDefeated` flag, so a won world's calmer machines return with the story. Known limits: fragments are not
+  stamped on worlds first loaded while `none` ran (they roll at the next load), and an owed scene of a player who joined
+  while `none` ran waits for their next join. The client shows the "Main story" row only when the admin's
+  `ServerRules.MainStory` is filled (sent to world admins only, by a server with this behaviour) — an older server would
+  reset the story on `StorySelectIntent`.
 - **A pack that fails to load (#2489).** `ContentLoader.LoadStoryPacks` reads each pack folder under its own
   error handling: a `JsonException`/`IOException` in `story.json`, `lore_sites.json` or `cutscenes.json` is reported
   through the loader's `error` callback (the dedicated server logs it as an ERROR naming the pack folder and the file)
@@ -124,7 +151,8 @@ progress (1 > 0 %, 2 ≥ 33 %, 3 ≥ 66 %); **4 is the win alone** (#2460) — i
   own story is such a pack (the row `SelectActiveStoryRow` would pick with it installed, or a fresh save's rule), the
   server runs the default story for the session but `PersistStoryState` writes nothing (`_storyRowHeldFor`), so a
   restart with the pack repaired carries on with the save's own row; an admin's story switch ends the hold (and
-  deactivates the held row like any switched-away one). A pack that is simply not installed keeps the old rule.
+  deactivates the held row like any switched-away one) — unless it switches back to a pack only the stand-in can run,
+  which re-holds that pack's restored row (#2506). A pack that is simply not installed keeps the old rule.
 - **Observers.** A fleet admin in observer mode (`/spectate`) is not a story listener (`StoryListeners()`): no
   beats, story lines, finale rewards or VEGA tick while observing; `MarkArrivedOnBody` books a `/goto` arrival
   silently (no milestone, no frontier growth, no knowledge); `player_near` never names them. `ExitSpectate`
@@ -868,7 +896,7 @@ unknown fields). The checks are listed in [TUTORIAL_PACK.md](TUTORIAL_PACK.md#va
 | 144 | `CoreDialogueMessage` | S→C | the core's claim + rebuttals (duel); additive `NodeCount`, `HasAnchor` + `AnchorX/Y/Z` (the column) since #2478 |
 | 145 | `CoreDialogueChoiceIntent` | C→S | the player's chosen rebuttal — only from the core world (#2478, B50); passes a held SP world |
 | 146 | `CoreHackIntent` | C→S | channel one hack tick |
-| 147 | `StorySelectIntent` | C→S | admin sets the active story |
+| 147 | `StorySelectIntent` | C→S | admin sets the active story (#2506: a story switched back comes back with its progress; re-selecting the running one is a no-op) |
 | 148 | `NetFragmentList` | S→C | fragments on the current world |
 | 149 | `CoreHackProgress` | S→C | hack channel progress + complete |
 | 220 | `StoryResolved` | S→C | play the resolution cinematic (win, join catch-up, replay) (#1124); additive `EpilogueTitleKey` since #2461; since #2478 only to a client that plays no cutscenes (the others get the `resolution` scene) |
@@ -890,7 +918,7 @@ default) — no `Protocol.Version` bump.
 | Field | Meaning | Older peer |
 |---|---|---|
 | `ShipAiLine.ObjectiveSource` | where the chip's objective comes from — `ObjectiveSources.Tutorial` / `Story` / `Finale` / `Mission`, empty = no objective. Set in ONE place, `SendVegaWithObjective` (every VEGA line carries the chip; the 1 Hz refresh compares the whole `VegaChip`) | an older client keeps its `story.obj.` prefix guess; a new client facing an older server uses the same guess (`ObjectiveSourceRules.Effective`, which now also treats `story.obj.finale` as finale) |
-| `ShipAiLine.TutorialActive` | this player's tutorial still runs, whatever the chip shows — the Settings button offers *Skip* then, *Restart* otherwise (B03) | read only when `ObjectiveSource` is set |
+| `ShipAiLine.TutorialActive` | this player's tutorial still runs, whatever the chip shows — the Character tab's button offers *Skip* then, *Restart* otherwise (B03) | read only when `ObjectiveSource` is set |
 | `StoryStateMessage.HeardBeats` | the beat indexes this player has heard (`story:<id>:beat:<n>` milestones), ascending | empty — the client keeps the beats heard live this session |
 | `StoryStateMessage.SeenCutscenes` | #2468: this player's confirmed cutscenes of every pack, `<pack>/<id>` sorted (`story:<pack>:cut:<id>` milestones, not the `:sent` form) — the Story tab's "Watch again" list ([CUTSCENES.md](CUTSCENES.md)) | empty — the client lists what it confirmed this session |
 | `StoryStateMessage.Started` / `Chapter` / `WorldChapter` | #2470: this player's story track started; their (derived) chapter id; the world's chapter id — filled by every current server, so an empty `WorldChapter` means an older server | the client treats the track as started and lists chapters from the heard beats |
@@ -960,7 +988,7 @@ all objectives"), `GameBootstrap` (`StoryPackStates`, `Objectives`, `JournalVers
   `JournalPushGapSeconds` = 1 s, and only the message whose bytes differ from the last send. The states are compared with
   every step counter zeroed, so a progress tick never re-sends them — the objective list carries live progress.
 - **Actions** (`StoryPackActions`, all validated, all pause-whitelisted): `track`, `untrack`, `optOut`, `optIn` (starts a
-  pack that would not start by itself — an opt-in world's tutorial: the Settings' "Tutorial: on"), `startPack`,
+  pack that would not start by itself — an opt-in world's tutorial: the Character tab's "Tutorial: on"), `startPack`,
   `skipPack`, `restartPack` (`RestartPack`, refused while the world's tutorial is off), `startChapter`, `declineChapter`
   ("Later"; optional, not running, not through), `skipChapter` (only a running chapter now), `restartChapter` (a done
   chapter is replayed; since #2471 a RUNNING chapter, or a running replay, starts over from its first step the same way),
@@ -972,7 +1000,7 @@ all objectives"), `GameBootstrap` (`StoryPackStates`, `Objectives`, `JournalVers
   local packs)` (server list first, the client's own copy of the pack second, else `ui.vega.objective`). The mute stays
   with `ObjectiveSource` (only `story` follows the VEGA hints switch; synthesis E22's "speech only once 'don't track'
   exists" is not active — there is no per-story "don't show" switch for the world story yet).
-- **"Show all objectives"** (`ClientSettings.ShowAllObjectives`, default off; Tab settings + pause-menu Comfort): the
+- **"Show all objectives"** (`ClientSettings.ShowAllObjectives`, default off; Character tab + pause-menu Settings → Comfort): the
   list's rows after the chip's in up to two strips under the chip, hidden while the chat is open; a story row follows
   the hints switch like the chip (`ObjectiveTracker.ExtraRows`).
 - **Notes.** "VEGA's notes" = the VEGA log (`GameBootstrap.VegaLogKeys`): the `VegaJournal` snapshot + `RelayInsightKeys`
@@ -1068,8 +1096,11 @@ its whole shot scales with the player's ship (`PrologueOrbit.Scale`), and the ca
   "Stories" / "Geschichten", never "pack". Live edits: the density (#2472, `SetWorldRulesIntent.StoryDensity`, re-sent in
   `ServerRules.StoryDensity`; a change runs `AdvanceStory`, so a faster pace reveals what its score covers at once and a
   slower one never takes a beat back) and the tutorial rule (`SetWorldRulesIntent.TutorialPolicy`, admin
-  `tutorial policy …`) — both rows in the in-game world rules (Settings tab, admin). The active pack can only be switched by
-  an admin intent (`StorySelectIntent`, see "Active story row" above; no client UI). Hosted/glitch worlds pass no story
+  `tutorial policy …`) — both rows in the in-game world rules (Character tab, admin). The main story is switched live by the
+  admin's `StorySelectIntent` (#2506, see "Switching the main story keeps progress" above) from the **Main story** row above
+  them: the choices are `WorldStoryOptions.SwitchChoices` (the client's world stories plus the server's running one, "None"
+  last), shown only when `ServerRules.MainStory` is filled (`ShowsMainStoryRow`), and leaving a running story asks first
+  (`SwitchNeedsConfirm` → `CraftingTechShipUI.ShowStorySwitchDialog`). Hosted/glitch worlds pass no story
   flag (VEGA + `Auto`). Admin QA cmds: `advance_story`, `reveal_finale`, `story_status`, `reveal_lore`, `goto_core`,
   `tutorial`.
 

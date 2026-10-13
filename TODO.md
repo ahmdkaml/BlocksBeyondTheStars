@@ -24,6 +24,82 @@ envelope at the WebSocket edge; deterministic seed world-gen; SQLite default per
 
 ---
 
+### ★ Character tab, story switch, pad lines, Codex (2026-10)
+
+Issues #2505–#2508 (label `package: codex & story switch 2026-10`) — one integration branch `feat/codex-story-switch`,
+one PR at the end. One line per step:
+
+- ✅ **S1 — the Settings tab is now the Character tab (#2505)**, 2026-10-13: the menu tab with the character page,
+  "People you know" and the in-world options (world rules, VEGA hints, tutorial switch, save) reads **Character** /
+  **Charakter** — in the 12 community languages the same word as each table's own `ui.settings.character` (es
+  Personaje, fr Personnage, it Personaggio, ja キャラクター, ko 캐릭터, nl Personage, pl Postać, pt Personagem, ru/uk
+  Персонаж, tr Karakter, zh 角色). The key stays `ui.tab.settings`. Every text naming the tab follows in all 14
+  languages: the tutorial lines `story.tutorial.c11.people.start`/`.hint` and `c16.look.start` (ja/ko `.hint` also lost
+  their leftover English "People you know"), the Codex (game modes, EN+DE), USER_MANUAL, PARENTS (EN+DE), the developer
+  docs and code comments. The **Settings** screen (main menu / pause menu: graphics, sound, controls, comfort,
+  language) keeps its name; the manual's "Window mode / Language / VSync (Settings tab)" lines were wrong and now point
+  there. Every new label is shorter than the old one and fits the 150 px tab (`UiKit.FitLabel`); only it "Personaggio"
+  is the longest Italian tab label (one letter longer than "Inventario", one shorter than "Impostazioni").
+- ✅ **S2 — the world admin switches the main story in-game, progress kept (#2506)**, 2026-10-13: a **Main story** row
+  (VEGA / None) above *Tutorial* and *Story pace* in the Character tab's world rules; leaving a running story asks first
+  ("takes a break … nothing is lost"), everyone online reads a system line. Server: `SetActiveStory` restores a pack's
+  saved row instead of resetting it, re-selecting is a no-op, the #2489 stand-in hold survives a switch back, the rules'
+  `StoryId` follows. While "none" runs, nothing of VEGA does — besides the guarded lines/leads/missions also the net
+  fragments (hidden, not pickable), the Guardian system (off the map, no jump, no gauntlet) and queued VEGA scenes (they
+  wait). Capability: `ServerRules.MainStory`, sent to world admins only — an older server gets no row. 7 keys × 14
+  languages (`ui.worldopt.story_switch_*`, `srv.story.switched_*`, `ui.worldopt.stories_note` now says "all three").
+  Pre-push review fixes: a pilot flying in the Guardian system when the story goes off can still land on the body they
+  are at; a save without its own rules (older than world options) is not given a baked rule set by a switch; the map
+  markers of players on other loaded worlds follow the switch too; `translate_locale.py`'s markup check counts only
+  real tag names (usage placeholders like `<name>` may be localized).
+  New `StorySwitchTests`. Open: fragments on worlds first loaded under "none" roll at their next load; a player who
+  joined under "none" with an owed VEGA scene sees it at the next join.
+- ✅ **S3 — the pad's flight and spacewalk lines name the real buttons (#2507)**, 2026-10-13: `ui.space.controls_pad` /
+  `eva_controls_pad` were fixed Xbox text; they are `{key:Action}` templates now (14 languages), composed by
+  `HudUi.PadLine` → Client.Core `PadControlNames` from the bindings, the glyph set (Xbox / PlayStation / Nintendo) and
+  the triggers switch ("RB/RT fire"). An unbound control drops its segment. The button-name table moved to Client.Core
+  (`PadGlyphTable`, with the `PadGlyphSet` enum) — `InputMap.PadGlyph`/`PadTriggerGlyph` read it; `HudUi.GlyphStamp`
+  now includes the triggers switch, and VEGA's pad pseudo-actions read "RB/RT" too once the triggers mine. Tests:
+  `PadControlNamesTests`, `VegaLineBudgetTests` (pad controls written in). nl's keyboard flight line now docks with
+  the canonical "aanmeren" like the pad line. Open: a real-pad check of the three glyph sets.
+- ✅ **S4 — Codex articles: key placeholders, texts in per-language tables (#2508, part 1)**, 2026-10-13: the 40 article
+  texts moved out of `data/wiki/articles.json` (now only the list: ids + order) into flat tables
+  `data/wiki/locales/<code>.json` (`wiki.<id>.title` / `.body`, EN + DE now) — the locale-table format, so
+  `translate_locale.py --source data/wiki/locales/en.json --file data/wiki/locales/<code>.json --chunk 4` translates them
+  as they are (the tool now also rejects a value whose markup tags differ from English). Client.Core `WikiArticleText`
+  reads list + English + the player's table for all 14 languages, English per article (title and body together; an
+  article added later reads English too). `WikiUI` fills `{key:Action}` tokens in titles and bodies
+  (`HudUi.ExpandKeyTokens`, prompt form; bodies after `WikiMarkup.ToUnityRichText`, so a glyph is never taken for a
+  tag). EN/DE: 17 articles (18 texts), 28 places per language rewritten ("press E", Tab menu, G/H, "(M)", M, Q, right-click, middle mouse,
+  "hold Jump", "Crouch", the action key, "the mine button" → `{key:Interact}`, `UiMenu`, `DepositToCrate`,
+  `LootContainer`, `PlanetMap`, `FlightMap`, `FeedCreature`, `Place`, `HotbarAction`, `Jump`, `Crouch`, `Mine`; no new
+  act words needed); the article *Stations & the Tab menu* is *Stations & menu tabs*; "hold the fire button" (scanner)
+  stays — the flight fire control has no token of its own; DE *Das Biolabor* lost one extra `<b>` so its markup matches
+  English. Guards: `CodexTextGuardTests` (EN/DE name no key, tokens real
+  + bracket words in 14 tables, list = EN/DE tables, every table: English keys/tokens/markup — block order, inline tags
+  per block, nesting), `WikiArticleTextTests`, `WikiMarkupTests`; `CommunityLocaleTests` scans the Codex tables too.
+  Open: S5 translates the 12 community languages (and adds their files to the `FallbackManifest`).
+- ✅ **S5 — the Codex in all 14 languages (#2508, part 2)**, 2026-10-13: all 40 articles (title + body) in fr, es, it,
+  pt, nl, pl, ru, uk, tr, ja, ko, zh — machine pass with `translate_locale.py --chunk 4` (failed bodies retried or written
+  by hand), then every value reviewed by hand against each core table (item/block/module names, `ui.tab.*` incl. the new
+  Character tab, `ui.wiki.*` chapter names, canonical terms, VEGA feminine, informal address, no player gender in
+  pl/ru/uk); 60–73 of 80 values per language rewritten in review (English leftovers, wrong game terms, meaning errors,
+  stiff tone, ko particles / tr suffixes glued to tokens). Tokens and markup kept (guards above). The 12 tables are in the
+  WebGL `FallbackManifest`. EN *base-air* lost a stray German "(Grundstein)".
+- ✅ **S6 — one name per thing in the community tables (#2508 follow-up)**, 2026-10-13: defects the Codex translators
+  found in the 12 core tables, fixed by hand with every value naming the same thing (names, descriptions, VEGA,
+  tutorial, Codex; case/gender follow) — 266 values. zh arches 拱廊 (not an arcade machine), 跳跃发生器, Detoxifier
+  解毒器 (the station no longer shares the Decontaminator's 净化器), 水晶网络; tr Madde Ocağı (was three names, one
+  meaning "fight"), Enerji Geçidi, bitki yemi; ko 자동 굴착기, 콜러, 에너지 게이트 vs 에너지 도어, 단축바; ja マター送信機/受信機,
+  クリーチャー翻訳機, シェイプツール, ramp スロープ; nl Tonen, Wachtpost; pl crafting station Kuźnia (EN "Forge"), Promień
+  wydobywczy / ściągający, Nadajnik radiowy, Projektor stazy, Toksyczny gruczoł, pamięć danych; ru Гидропонный лоток,
+  Излив водопада, Призыватель, Резервуар с водорослями; uk бур (titanium, basic, diamond), Видобувний промінь, свіже,
+  Титанова пластина, гіперстрибок, and the matter forge/dust no longer read "матерний" (Кузня/Пил матерії); fr
+  préleveur, Cuve à Clones; es Portón de energía (the gate, apart from the door), punto de reaparición; it Falò (also the
+  two station labels); pt Bagas (berries, apart from tree fruit; also 12 flora texts that said "berry" in English),
+  Descontaminador. No canonical term changed. Open (listed in the report): the G.D.S. city guards' name in ja/ko/tr,
+  the monument "arcade" in other languages, more item/blueprint/module name splits per language.
+
 ### ★ Story-pack follow-ups 2026-10 (#2485)
 
 Fixes and polish after the story-pack release — one integration branch `fix/story-followups`, one PR at the end. One
@@ -149,8 +225,8 @@ line per step:
   table's own "stow key"/"Interact" words), 16 restructured keys re-translated and reviewed; a few broken values fixed
   on the way (it beam pad desc + block name, pt/ru/uk beam pad, ko doors, uk "Сканер Терну"). Guard:
   `VegaLineBudgetTests.ItemBlockBlueprintAndModuleDescriptions_NameNoKeyLiterally` (EN/DE). Docs: TRANSLATION_GUIDE,
-  INPUT_AND_CONTROLLER, USER_MANUAL. Open: the Codex articles (`data/wiki/articles.json`) still name keys (later
-  item). ⚠ Unity: CraftingTechShipUI.cs + WikiUI.cs — check a description on keyboard (rebound Interact), pad, touch.
+  INPUT_AND_CONTROLLER, USER_MANUAL. The Codex articles followed in #2508 (package "Character tab, story switch, pad
+  lines, Codex", S4). ⚠ Unity: CraftingTechShipUI.cs + WikiUI.cs — check a description on keyboard (rebound Interact), pad, touch.
 - ✅ **Step 11 — translation pass for steps 2–7, docs pass**, 2026-10-13 (text + docs only): the keys steps 2–7 added or
   changed in all twelve community languages — 14 new base keys (the "Plays when you land." banner, "Short courses only"
   + its hint, "Start basic training", the course offer with buttons, the five `ui.vega.choice.*` keys, "done — nothing
@@ -606,8 +682,9 @@ Tutorial as its own pack, VEGA as its own pack, cutscenes, several storylines �
   `ui.vega.restart`, pl workbench typo + observatory, uk campfire ("Вогнище"), it crystal daylight modes. ~~Open (pre-existing
   table inconsistencies, listed in the review notes): blueprint vs module names (Radar Array, Jump Generator) in fr/pl/ru/uk,
   "Guardian" still English in a few older tr/it pack lines, masculine VEGA in some older pt/ru/pl lines, uk finale UI
-  "Страж" vs "Охоронець", nl `ui.dock.undock_hint`~~ — fixed in the follow-ups' step 8 (#2501). Still open: the menu tab of the Character page is labelled `ui.tab.settings`
-  ("Settings") while the tutorial (c11, c16) and the manual say "Character tab" — decide which one changes.
+  "Страж" vs "Охоронець", nl `ui.dock.undock_hint`~~ — fixed in the follow-ups' step 8 (#2501). ~~Still open: the menu tab of the Character page is labelled `ui.tab.settings`
+  ("Settings") while the tutorial (c11, c16) and the manual say "Character tab" — decide which one changes.~~ — the tab
+  is now labelled "Character" in all 14 languages (#2505, 2026-10-13).
 - ~~Open from step 1: the 12 community locales still carry the old `vega.s.dock.start_far` text and lack
   `story.obj.help_peaceful`~~ — done in the translation pass (`vega.s.dock.start_far` is back to its original "hyperjump"
   text in EN/DE: only an older server still sends it, at its dock stage).

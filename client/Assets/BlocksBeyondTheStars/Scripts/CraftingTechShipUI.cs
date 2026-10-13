@@ -36,7 +36,8 @@ namespace BlocksBeyondTheStars.Client
         // Tab bar display order (left→right), decoupled from the Mode enum value so tabs can be reordered without
         // renumbering the modes: each entry carries its Mode (used for activation, routing and badges) and label
         // key. Core build/travel loop first, then the world/social cluster (Story/Creatures/Alliances), with
-        // Settings pinned far right (config convention). Note Mode.Character is labelled "Settings".
+        // Character pinned far right. Mode.Character is labelled "Character" (#2505; "Settings" before — the key is still
+        // ui.tab.settings): it holds the character page, the people you know and the in-world options.
         private static readonly (Mode Mode, string Loc)[] Tabs =
         {
             (Mode.Inventory, "ui.inventory.title"),
@@ -86,7 +87,7 @@ namespace BlocksBeyondTheStars.Client
         private bool _built;
         // The page (mode+category / selection) last rendered into each scroll view. A rebuild that changes
         // the page scrolls back to the top; an in-place refresh (live data, volume/colour cycling) keeps the
-        // player's scroll position. Without this, switching from a scrolled-down page (e.g. Settings) to a
+        // player's scroll position. Without this, switching from a scrolled-down page (e.g. Character) to a
         // short one (e.g. Space) leaves it scrolled past the top, hiding the first rows (the launch button).
         private string _listPage, _detailPage;
         private AvatarPreviewRig _avatarPreview; // live faced-avatar preview for the colour menu (B25)
@@ -247,6 +248,7 @@ namespace BlocksBeyondTheStars.Client
 
             CloseDiscardGearDialog(); // #1484: a half-answered "throw away the helmet lamp?" dies with the menu
             CloseSlotPicker();        // #2289: and so does an open slot picker
+            CloseStorySwitchDialog(); // #2506: and the "change the main story?" question
             _avatarPreview?.SetActive(false); // stop rendering the preview camera while the menu is closed
             _shipPreview?.SetActive(false);
         }
@@ -731,7 +733,7 @@ namespace BlocksBeyondTheStars.Client
                     }
                 }
 
-                // Auto-fit the label so a long localized tab (e.g. German "Einstellungen") shrinks to fit the
+                // Auto-fit the label so a long localized tab (e.g. Polish "Osiągnięcia") shrinks to fit the
                 // fixed-width button instead of spilling over its graphic (B28); short labels keep full size.
                 UiKit.FitLabel(b.GetComponentInChildren<Text>(), 12, 22);
 
@@ -3398,6 +3400,30 @@ namespace BlocksBeyondTheStars.Client
                 });
             }
 
+            // #2506: the main story, live — the world stories this client knows and None (today VEGA / None). Only a server
+            // whose switch keeps progress names the running story (ServerRules.MainStory, sent to world admins only); an older
+            // server would start the story over, so without the field the row is not there. Leaving a running story asks first
+            // (ShowStorySwitchDialog); switching one on does not. The row follows the re-sent rules.
+            string mainStory = rules?.MainStory;
+            if (WorldStoryOptions.ShowsMainStoryRow(mainStory))
+            {
+                var storyChoices = WorldStoryOptions.SwitchChoices(Game?.Content?.Stories?.Values, mainStory);
+                int storyIdx = WorldStoryOptions.ChoiceIndex(storyChoices, mainStory);
+                UiKit.AddText(_listContent, 16, y, 360, 56, L("ui.worldopt.main_story"), 20, UiKit.TextCol, TextAnchor.MiddleLeft);
+                var storyName = UiKit.AddText(_listContent, 380, y, 180, 56,
+                    WorldStoryOptions.StoryShortName(mainStory, Game?.Content?.Stories, L, HasLoc), 20, UiKit.Cyan, TextAnchor.MiddleCenter);
+                UiKit.FitLabel(storyName, 12, 20);
+                UiKit.AddButton(_listContent, 570, y + 6, 80, 44, "−", () =>
+                {
+                    if (storyIdx > 0) { RequestStorySwitch(mainStory, storyChoices[storyIdx - 1]); }
+                });
+                UiKit.AddButton(_listContent, 660, y + 6, 80, 44, "+", () =>
+                {
+                    if (storyIdx < storyChoices.Count - 1) { RequestStorySwitch(mainStory, storyChoices[storyIdx + 1]); }
+                });
+                y += 62f;
+            }
+
             int tutorialIdx = WorldStoryOptions.TutorialIndex(rules?.TutorialPolicy);
             if (tutorialIdx >= 0)
             {
@@ -6059,6 +6085,66 @@ namespace BlocksBeyondTheStars.Client
             {
                 Destroy(_discardDialog);
                 _discardDialog = null;
+            }
+        }
+
+        private GameObject _storySwitchDialog; // #2506: the "change the main story?" confirm, one at a time
+
+        /// <summary>#2506: the "Main story" row's −/+ — switching a story on goes straight to the server; leaving a running
+        /// story asks first (<see cref="ShowStorySwitchDialog"/>). The server checks the admin role and keeps every story's
+        /// progress; the row re-renders from the re-sent rules.</summary>
+        private void RequestStorySwitch(string current, string target)
+        {
+            if (WorldStoryOptions.SwitchNeedsConfirm(current, target))
+            {
+                ShowStorySwitchDialog(current, target);
+                return;
+            }
+
+            SendStorySwitch(target);
+        }
+
+        private void SendStorySwitch(string target)
+        {
+            Game?.Network?.SendStorySelect(target);
+            Invoke(nameof(RebuildList), 0.35f);
+        }
+
+        /// <summary>#2506: the confirm before leaving a running story — it takes a break for everyone, nothing is lost, its
+        /// progress comes back when it is switched on again. Keep it running / Change; closing the menu drops it.</summary>
+        private void ShowStorySwitchDialog(string current, string target)
+        {
+            CloseStorySwitchDialog();
+            var canvas = UiKit.CreateCanvas("Story Switch");
+            canvas.sortingOrder = 61; // above the Tab menu — the discard confirm's tier
+            _storySwitchDialog = canvas.gameObject;
+            UiNav.Enable(canvas.gameObject); // pad: stick walks Keep / Change, A picks
+
+            string storyTitle = WorldStoryOptions.StoryName(current, Game?.Content?.Stories, L, HasLoc);
+            var (_, panel) = UiKit.AddModalOverlay(canvas.transform, 660f, 360f, 600f, 340f);
+            var title = UiKit.AddText(panel.transform, 24f, 24f, 552f, 44f,
+                L("ui.worldopt.story_switch_title"), 26, UiKit.TextCol, TextAnchor.MiddleCenter);
+            UiKit.FitLabel(title, 16, 26);
+            var body = UiKit.AddText(panel.transform, 24f, 76f, 552f, 140f,
+                L("ui.worldopt.story_switch_text").Replace("{story}", storyTitle), 18, UiKit.CyanDim, TextAnchor.UpperCenter);
+            body.horizontalOverflow = HorizontalWrapMode.Wrap;
+            UiKit.FitLabel(body, 12, 18);
+            var keep = UiKit.AddButton(panel.transform, 40f, 240f, 240f, 56f, L("ui.worldopt.story_switch_keep"), CloseStorySwitchDialog);
+            UiKit.FitLabel(keep.GetComponentInChildren<Text>(), 12, 20);
+            var change = UiKit.AddButton(panel.transform, 320f, 240f, 240f, 56f, L("ui.worldopt.story_switch_yes"), () =>
+            {
+                CloseStorySwitchDialog();
+                SendStorySwitch(target);
+            });
+            UiKit.FitLabel(change.GetComponentInChildren<Text>(), 12, 20);
+        }
+
+        private void CloseStorySwitchDialog()
+        {
+            if (_storySwitchDialog != null)
+            {
+                Destroy(_storySwitchDialog);
+                _storySwitchDialog = null;
             }
         }
 

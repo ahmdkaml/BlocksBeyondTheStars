@@ -55,6 +55,8 @@ public sealed class VegaLineBudgetTests
         "ui.save.creative_flight", "ui.photos.empty", "ui.wiki.discoveries.empty",
         // #2502 — the flight and EVA lines (SpaceView)
         "ui.space.controls", "ui.space.eva_controls", "ui.vega.autopilot.hint", "ui.spacemap.key_hint",
+        // #2507 — the pad's flight and EVA lines (HudUi.PadLine): no "(X)", "RB", "LS" or "Left stick" written in
+        "ui.space.controls_pad", "ui.space.eva_controls_pad",
         // #2502 — rewritten without a key
         "npc.streamer.ask", "ui.chat.hint",
     };
@@ -67,7 +69,7 @@ public sealed class VegaLineBudgetTests
 
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(2);
 
-    private static readonly Regex KeyToken = new(
+    internal static readonly Regex KeyToken = new(
         @"\{key:(?<action>[A-Za-z0-9_]+)\}", RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture, RegexTimeout);
 
     private static readonly Regex Slot = new(@"\{[0-9]\}", RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture, RegexTimeout);
@@ -75,7 +77,7 @@ public sealed class VegaLineBudgetTests
     /// <summary>A key named literally: a lone key letter ("E at the cockpit", "M opens the map" — not part of a word, a
     /// token or a number), or the Tab key ("(Tab)", "press Tab", "drücke Tab", "Tab menu", "Tab-Menü"). German also says
     /// "im Tab „Karte“" for a menu tab — that noun is not a key and passes.</summary>
-    private static readonly Regex LiteralKey = new(
+    internal static readonly Regex LiteralKey = new(
         @"(?<![\p{L}\p{N}_{:])(?:E|M|R|Q)(?![\p{L}\p{N}_}])|\(Tab\)|(?i:press|drück\w*)\s+Tab\b|\bTab(?:-Menü|\s+menu)",
         RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture, RegexTimeout);
 
@@ -83,10 +85,17 @@ public sealed class VegaLineBudgetTests
     /// "[P] Autopilot"), the mouse buttons by name ("right mouse button", "Rechtsklick", LMB/RMB, LMT/RMT), WASD, the space
     /// bar ("press Space", "Space×2", "Leertaste") and Ctrl/Strg. <c>vega.hint.rope_gun</c> ("Hold the right mouse button
     /// (pad LB, touch PLACE)") slipped through the narrow pattern; "Space begins right above the clouds" is not a key.</summary>
-    private static readonly Regex LiteralKeyWide = new(
+    internal static readonly Regex LiteralKeyWide = new(
         @"^[A-Z]:\s|\([A-Z]\)|\[[A-Z]\]|(?i:\b(?:right|left)[ -](?:mouse|click))|\b(?:LMB|RMB|LMT|RMT)\b|\bWASD\b"
         + @"|(?i:(?:press|hold|tap)\s+)Space\b|\bSpace(?:×|/|\s+(?:jump|up)\b)|\bLeertaste\b|(?i:\b(?:rechts|links)klick)"
         + @"|(?i:\b(?:rechte|linke)n? Maustaste)|\bStrg\b|\bCtrl\b",
+        RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture, RegexTimeout);
+
+    /// <summary>#2507: a pad control written in — the shoulder buttons, triggers and stick clicks of the three glyph sets
+    /// ("RB fire", "L1", "ZR", "LS actions") and the sticks and the d-pad by name ("Left stick fly", "Steuerkreuz"). The
+    /// pad's flight and EVA lines read like that before they became templates; a token names the player's own button.</summary>
+    internal static readonly Regex LiteralPadControl = new(
+        @"\b(?:RB|LB|RT|LT|RS|LS|R1|L1|R2|L2|R3|L3|ZR|ZL)\b|(?i:\b(?:left|right) stick\b|\b(?:linker|rechter) Stick\b|\bD-pad\b|\bSteuerkreuz\b)",
         RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture, RegexTimeout);
 
     /// <summary>The description keys (#2503): item, block, blueprint and ship-module texts, drawn by the crafting/inventory/
@@ -99,7 +108,7 @@ public sealed class VegaLineBudgetTests
     /// "(press B)", "Taste B"; "A" and the roman "I" of "Oxygen Tank I" are words, "N-ten" is no key), a key named by its
     /// job ("the stow key", "die Wärmebild-Taste") and the action's name used as a key ("press Interact", "Benutzen
     /// drücken"). "Hold the fire button" stays legal: the ship's fire control has no token yet.</summary>
-    private static readonly Regex LiteralKeyInDescription = new(
+    internal static readonly Regex LiteralKeyInDescription = new(
         @"(?<![\p{L}\p{N}_{:\-])[B-HJ-Z](?![\p{L}\p{N}_}\-])"
         + @"|(?i:\b(?:stow|thermal|einpack|wärmebild)[- ]?(?:key|taste)\b)"
         + @"|(?i:\bpress(?:es|ing)?\s+interact\b)|(?i:\bbenutzen\s+drücken\b|\bdrücke\s+benutzen\b)",
@@ -112,7 +121,7 @@ public sealed class VegaLineBudgetTests
                ?? new Dictionary<string, string>(StringComparer.Ordinal);
     }
 
-    private static Dictionary<string, string> Core(string code) => Table("locales", code + ".json");
+    internal static Dictionary<string, string> Core(string code) => Table("locales", code + ".json");
 
     private static Dictionary<string, string> Pack(string code) => Table("stories", "vega_protocol", "locales", code + ".json");
 
@@ -164,7 +173,7 @@ public sealed class VegaLineBudgetTests
 
     /// <summary>The <c>InputAction</c> names, read from the Unity source — the enum lives in the Unity assembly, which this
     /// project cannot reference.</summary>
-    private static HashSet<string> InputActionNames()
+    internal static HashSet<string> InputActionNames()
     {
         string src = File.ReadAllText(Path.Combine(ClientTestPaths.RepoRoot(), "client", "Assets", "BlocksBeyondTheStars", "Scripts", "InputMap.cs"));
         int start = src.IndexOf("public enum InputAction", StringComparison.Ordinal);
@@ -241,6 +250,45 @@ public sealed class VegaLineBudgetTests
             bad.Count == 0,
             $"{code}: texts that name a key literally — use a {{key:Action}} token (the game shows the player's own key, "
             + "pad button or touch button): " + string.Join(" | ", bad));
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    public void ConvertedPrompts_NameNoPadControlLiterally(string code)
+    {
+        // #2507: "RB fire · LB target · (X) land/dock" was right only for an Xbox pad with the stock buttons.
+        var bad = Core(code)
+            .Where(e => ConvertedPrompts.Contains(e.Key) && LiteralPadControl.IsMatch(e.Value))
+            .Select(e => $"{e.Key}: \"{e.Value}\"")
+            .ToList();
+
+        Assert.True(
+            bad.Count == 0,
+            $"{code}: texts that name a pad control literally — use a {{key:Action}} token ({{key:Mine}}, {{key:Move}}, "
+            + "{key:Hotbar}, {key:ContextActions} …; the game names the player's own button in their glyph set): " + string.Join(" | ", bad));
+    }
+
+    [Fact]
+    public void LiteralPadControlPattern_CatchesButtonNames_ButNotWordsOrTokens()
+    {
+        foreach (string literal in new[]
+                 {
+                     "RB fire · LB target", "LS actions", "R1/R2 mine", "ZL place", "Left stick fly", "Linker Stick fliegen",
+                     "D-pad system", "Steuerkreuz System",
+                 })
+        {
+            Assert.Matches(LiteralPadControl, literal);
+        }
+
+        foreach (string fine in new[]
+                 {
+                     "{key:Mine} fire · {key:FlightTargetNext} target", "{key:ContextActions} actions", "Stick to the plan",
+                     "Rbx", "LSD", "Rtm", "a stick of dynamite", "Holzstick",
+                 })
+        {
+            Assert.DoesNotMatch(LiteralPadControl, fine);
+        }
     }
 
     [Theory]
