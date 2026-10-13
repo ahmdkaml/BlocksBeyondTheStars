@@ -61,6 +61,10 @@ public static class ClientFeatures
 
     /// <summary>The client plays data-driven cutscenes (step 9 announces it).</summary>
     public const string Cutscenes1 = "cutscenes1";
+
+    /// <summary>The client draws <see cref="ShipAiLine.Choices"/> as buttons in VEGA's panel (#2499) — the Unity client
+    /// announces it; a headless client or an older build does not, and gets the plain lines it always got.</summary>
+    public const string Choices1 = "choices1";
 }
 
 public sealed class MoveIntent
@@ -1424,7 +1428,8 @@ public sealed class ServerRules
     /// founded base whose owner is home (zone edge only, never inside, never destructive). Opt-in.</summary>
     public bool BaseVisitors { get; set; }
 
-    /// <summary>The world's tutorial rule (#2466): "Auto", "OptIn" or "Off". EMPTY from a server that predates it.</summary>
+    /// <summary>The world's tutorial rule (#2466): "Auto", "OptIn", "Off" or "Courses" (#2498, "Short courses only" — an older
+    /// client does not know the word and hides the row). EMPTY from a server that predates it.</summary>
     public string TutorialPolicy { get; set; } = string.Empty;
 
     /// <summary>The world's story pace (#2472): "Sparse", "Normal" or "Dense" (<c>GameRules.StoryDensity</c>). EMPTY from a
@@ -1495,7 +1500,7 @@ public sealed class SetWorldRulesIntent
     /// <summary>Visitors-at-the-base toggle (#1224): "On"/"Off" to set it, empty to leave unchanged.</summary>
     public string BaseVisitors { get; set; } = string.Empty;
 
-    /// <summary>The tutorial rule (#2466): "Auto"/"OptIn"/"Off" to set it, empty to leave unchanged.</summary>
+    /// <summary>The tutorial rule (#2466): "Auto"/"OptIn"/"Off"/"Courses" (#2498) to set it, empty to leave unchanged.</summary>
     public string TutorialPolicy { get; set; } = string.Empty;
 
     /// <summary>The story pace (#2472): "Sparse"/"Normal"/"Dense" to set it, empty to leave unchanged.</summary>
@@ -3071,6 +3076,59 @@ public sealed class ShipAiLine
     /// to dock at): the client makes it its space waypoint when it has none set, so the radar and the edge arrow lead
     /// there. Empty = none. Additive: an older client ignores it.</summary>
     public string SpaceWaypointId { get; set; } = string.Empty;
+
+    /// <summary>The buttons this line offers (#2499), sent only to a client that announced
+    /// <see cref="ClientFeatures.Choices1"/>: each entry is <see cref="ShipAiChoices.Encode"/>'s
+    /// <c>labelKey␟action␟packId[␟chapterId]</c> (U+001F between the parts), the action a <see cref="StoryPackActions"/> word
+    /// or <see cref="ShipAiChoices.Continue"/>. The first is the primary button (the continue control picks it), the second
+    /// the secondary one (a deliberate click, tap or hold); a choice goes back as an ordinary <see cref="StoryPackIntent"/>.
+    /// Empty = a plain line. Additive (contractless): an older client ignores it.</summary>
+    public string[] Choices { get; set; } = System.Array.Empty<string>();
+}
+
+/// <summary>The wire form of one <see cref="ShipAiLine.Choices"/> entry (#2499): <c>labelKey␟action␟packId[␟chapterId]</c>,
+/// the parts separated by U+001F (the separator <see cref="ShipAiLine.LineArg"/> packs its slots with).</summary>
+public static class ShipAiChoices
+{
+    /// <summary>The separator between the parts of an entry.</summary>
+    public const char Separator = '\u001F';
+
+    /// <summary>The action of a button that only goes on — the line ends, nothing is sent ("Let's go").</summary>
+    public const string Continue = "continue";
+
+    /// <summary>One entry: the button's locale key, its action, the pack it acts on and (for a chapter action) the chapter.
+    /// A part never carries the separator itself (it is stripped).</summary>
+    public static string Encode(string labelKey, string action, string packId, string chapterId = "")
+    {
+        string entry = Clean(labelKey) + Separator + Clean(action) + Separator + Clean(packId);
+        return string.IsNullOrEmpty(chapterId) ? entry : entry + Separator + Clean(chapterId);
+    }
+
+    /// <summary>Reads an entry back. False for anything without a label key and an action (a garbled entry is skipped, never
+    /// guessed at); the pack and the chapter may be empty.</summary>
+    public static bool TryDecode(string? entry, out string labelKey, out string action, out string packId, out string chapterId)
+    {
+        labelKey = action = packId = chapterId = string.Empty;
+        if (string.IsNullOrEmpty(entry))
+        {
+            return false;
+        }
+
+        string[] parts = entry!.Split(Separator);
+        if (parts.Length < 2 || parts.Length > 4 || parts[0].Length == 0 || parts[1].Length == 0)
+        {
+            return false;
+        }
+
+        labelKey = parts[0];
+        action = parts[1];
+        packId = parts.Length > 2 ? parts[2] : string.Empty;
+        chapterId = parts.Length > 3 ? parts[3] : string.Empty;
+        return true;
+    }
+
+    private static string Clean(string? part)
+        => string.IsNullOrEmpty(part) ? string.Empty : part!.Replace(Separator.ToString(), string.Empty, System.StringComparison.Ordinal);
 }
 
 /// <summary>The values of <see cref="ShipAiLine.ObjectiveSource"/> (#2462). Strings, not an enum, so a later

@@ -675,7 +675,7 @@ namespace BlocksBeyondTheStars.Client
             var log = Game?.Discoveries;
             if (log == null || log.Count == 0)
             {
-                sb.Append(L("ui.wiki.discoveries.empty"));
+                sb.Append(HudUi.ExpandKeyTokens(Game?.Localizer, L("ui.wiki.discoveries.empty"))); // "press {key:Scan}" (#2502)
                 return sb.ToString();
             }
 
@@ -878,11 +878,12 @@ namespace BlocksBeyondTheStars.Client
                 : nameKey.Substring(0, nameKey.Length - ".name".Length) + ".desc";
 
         /// <summary>Localized description text for a key, or empty when the key is blank or unknown — so an entry
-        /// renders a description line only when one actually exists (Localizer.Get returns "[key]" for a miss).</summary>
+        /// renders a description line only when one actually exists (Localizer.Get returns "[key]" for a miss).
+        /// Its <c>{key:Action}</c> tokens read as the player's own key, pad button or touch button (#2503).</summary>
         private string Desc(string key)
             => string.IsNullOrEmpty(key) || Game?.Localizer == null || !Game.Localizer.Has(key)
                 ? string.Empty
-                : Game.Localizer.Get(key);
+                : HudUi.ExpandKeyTokens(Game.Localizer, Game.Localizer.Get(key));
 
         private string BuildEntries(string header, List<(string Name, string Desc)> entries)
         {

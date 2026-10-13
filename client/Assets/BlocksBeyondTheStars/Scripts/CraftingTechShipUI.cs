@@ -3379,13 +3379,15 @@ namespace BlocksBeyondTheStars.Client
                 y += 40f;
             }
 
-            // #2472: the stories' world rules, live — the tutorial (Auto / On request / Off, with the chosen rule's one-line
-            // explanation) and the story pace. The same words as the world-creation Stories page (WorldStoryOptions); the
-            // server checks the admin role. An older server sends no value — then the row is not there.
+            // #2472: the stories' world rules, live — the tutorial (Auto / Short courses only / On request / Off, #2498, with
+            // the chosen rule's one-line explanation) and the story pace. The same words and order as the world-creation
+            // Stories page (WorldStoryOptions); the server checks the admin role. An older server sends no value — then the
+            // row is not there.
             void StoryRuleRow(string label, string[] steps, string[] nameKeys, int idx, System.Action<string> send)
             {
                 UiKit.AddText(_listContent, 16, y, 360, 56, label, 20, UiKit.TextCol, TextAnchor.MiddleLeft);
-                UiKit.AddText(_listContent, 380, y, 180, 56, L(nameKeys[idx]), 20, UiKit.Cyan, TextAnchor.MiddleCenter);
+                var ruleName = UiKit.AddText(_listContent, 380, y, 180, 56, L(nameKeys[idx]), 20, UiKit.Cyan, TextAnchor.MiddleCenter);
+                UiKit.FitLabel(ruleName, 12, 20); // "Short courses only" is the longest step name
                 UiKit.AddButton(_listContent, 570, y + 6, 80, 44, "−", () =>
                 {
                     if (idx > 0) { send(steps[idx - 1]); Invoke(nameof(RebuildList), 0.35f); }
@@ -3597,8 +3599,8 @@ namespace BlocksBeyondTheStars.Client
                 showAll ? UiKit.Ok : UiKit.CyanDim, TextAnchor.MiddleLeft, FontStyle.Bold);
             y += 96f;
 
-            // The tutorial (#2471): "Tutorial: on / off" (the player's own switch, optOut / optIn — an opt-in world's tutorial
-            // starts with it) plus "Open the Journal", where its parts are skipped, restarted and replayed. Lives HERE (not on
+            // The tutorial (#2471): "Tutorial & courses: on / off" (#2498 named the courses — the player's own switch for the
+            // whole pack, optOut / optIn; an opt-in world's tutorial starts with it) plus "Open the Journal", where its parts are skipped, restarted and replayed. Lives HERE (not on
             // the HUD chip) because gameplay captures the mouse — the menu is where the cursor is free to click. An older
             // server sends no story list: the old skip / restart button stays for it.
             var tutorialState = TutorialSwitch.Of(Game?.StoryPackStates);
@@ -4351,7 +4353,7 @@ namespace BlocksBeyondTheStars.Client
 
             if (shots.Count == 0)
             {
-                var empty = UiKit.AddText(_listContent, 8, y, 760, 80, L("ui.photos.empty"), 18, UiKit.CyanDim, TextAnchor.UpperLeft);
+                var empty = UiKit.AddText(_listContent, 8, y, 760, 80, HudUi.ExpandKeyTokens(Game?.Localizer, L("ui.photos.empty")), 18, UiKit.CyanDim, TextAnchor.UpperLeft); // {key:Place} (#2502)
                 empty.horizontalOverflow = HorizontalWrapMode.Wrap;
                 return y + 90f;
             }
@@ -4912,7 +4914,7 @@ namespace BlocksBeyondTheStars.Client
                         var stepActions = JournalPackPage.StepActions(step);
                         float top = y;
                         float width = stepActions.Count > 0 ? 780f - 32f - (stepActions.Count * 196f) : 748f;
-                        y = JournalRow(y, 32f, width, JournalPackPage.StepLine(pack, step, live, L, ComposeJournalText), 17,
+                        y = JournalRow(y, 32f, width, JournalPackPage.StepLine(pack, step, live, L, ComposeJournalText, HasLoc), 17,
                             step.OnChip ? UiKit.TextCol : UiKit.CyanDim, FontStyle.Normal);
                         float bx = 780f;
                         for (int i = stepActions.Count - 1; i >= 0; i--)
@@ -4934,10 +4936,10 @@ namespace BlocksBeyondTheStars.Client
             y = AllianceSection(L(JournalPackPage.IsTutorial(pack) ? "ui.journal.parts" : "ui.story.chapters"), y);
             foreach (var ch in pack.Chapters)
             {
-                var actions = JournalPackPage.ChapterActions(pack, ch);
+                var actions = JournalPackPage.ChapterActions(pack, ch); // #2500: none when nothing is left to practise
                 bool active = ch.State == StoryChapterStates.Active || ch.State == StoryChapterStates.Replay;
-                var color = active ? UiKit.Cyan : ch.State == StoryChapterStates.Done || ch.State == StoryChapterStates.Offered ? UiKit.TextCol : UiKit.CyanDim;
-                string row = JournalPackPage.Icon(ch.State) + "  " + JournalPackPage.ChapterLabel(pack, ch, L, HasLoc)
+                var color = active ? UiKit.Cyan : ch.State == StoryChapterStates.Done || ch.State == StoryChapterStates.Offered || ch.NothingLeft ? UiKit.TextCol : UiKit.CyanDim;
+                string row = JournalPackPage.ChapterIcon(ch) + "  " + JournalPackPage.ChapterLabel(pack, ch, L, HasLoc)
                              + "   ·   " + JournalPackPage.StateText(ch, L, HasLoc);
                 float top = y;
                 float width = actions.Count > 0 ? 780f - 8f - (actions.Count * 150f) : 760f;
@@ -5046,11 +5048,13 @@ namespace BlocksBeyondTheStars.Client
 
         /// <summary>Watch again (#2468) for one story: the scenes of that story this player has seen and may replay — the
         /// prologue on the VEGA page, the tutorial's cards on the tutorial's. The server re-sends one on request (spoiler guard:
-        /// only what was shown); the director plays it once this menu is closed.</summary>
-        private float JournalReplaySection(float y, string packId)
+        /// only what was shown); the director plays it once this menu is closed. #2497: <paramref name="withoutEnding"/> leaves
+        /// the ending's two scenes out while the page shows "Watch the ending again" (which replays both); a scene that will
+        /// wait for the player to land says so in a short banner.</summary>
+        private float JournalReplaySection(float y, string packId, bool withoutEnding = false)
         {
             var director = CutsceneDirector.Instance;
-            var replays = director != null ? director.ReplayEntries() : null;
+            var replays = director != null ? director.ReplayEntries(withoutEnding) : null;
             var mine = replays?.Where(e => string.Equals(e.Pack.Id, packId, System.StringComparison.OrdinalIgnoreCase)).ToList();
             if (mine == null || mine.Count == 0)
             {
@@ -5067,6 +5071,7 @@ namespace BlocksBeyondTheStars.Client
                 UiKit.AddButton(_listContent, 688, rowTop, 92, 30, L("ui.story.replay_button"), () =>
                 {
                     Game?.Network?.SendReplayCutscene(chosen.Pack.Id, chosen.CutsceneId);
+                    CutsceneDirector.Instance?.NoteReplayWaits(chosen.Pack.Id, new[] { chosen.CutsceneId }); // #2497: in flight
                     Hide();
                 });
             }
@@ -5119,6 +5124,7 @@ namespace BlocksBeyondTheStars.Client
             float y = 8f;
             var s = Game?.Story;
             bool storyOn = s != null && s.Active;
+            bool endingButton = false; // #2497: "Watch the ending again" shown — "Watch again" then leaves the ending out
 
             if (storyOn)
             {
@@ -5160,12 +5166,18 @@ namespace BlocksBeyondTheStars.Client
                 // The ending, re-viewable (#1124): once the story is resolved, the resolution cinematic can
                 // be replayed any time. The server re-sends it on request; the cinematic itself waits until
                 // this menu is closed, so the button both asks for it and gets the menu out of the way. Not offered
-                // before the player's own story has started — it would spoil what is waiting for them (#2470).
-                if (s.GuardianDefeated && started)
+                // before the player's own story has started — it would spoil what is waiting for them (#2470). #2497: on a
+                // current server it replays the whole ending (the stand-down, then the ending), which "Watch again" below then
+                // leaves out — the ending is listed once.
+                endingButton = s.GuardianDefeated && started;
+                if (endingButton)
                 {
+                    string storyId = s.StoryId;
+                    var endingIds = BlocksBeyondTheStars.Client.Cutscenes.CutsceneCatalog.EndingIds(pack);
                     UiKit.AddButton(_listContent, 0, y, 780, 56, L("ui.story.view_ending"), () =>
                     {
                         Game?.Network?.SendRequestStoryResolution();
+                        CutsceneDirector.Instance?.NoteReplayWaits(storyId, endingIds); // #2497: "Plays when you land" in flight
                         Hide();
                     });
                     y += 66f;
@@ -5292,7 +5304,7 @@ namespace BlocksBeyondTheStars.Client
             // moved to "VEGA's notes".
             if (storyOn)
             {
-                y = JournalReplaySection(y, s.StoryId);
+                y = JournalReplaySection(y, s.StoryId, withoutEnding: endingButton);
             }
 
             return y + 12f;
@@ -6570,14 +6582,14 @@ namespace BlocksBeyondTheStars.Client
             // read on approach and its plating carved in flight. Say so instead of silently offering nothing.
             if (body.Kind == "Wreck")
             {
-                UiKit.AddText(_detail, 8, y, 600, 90, L(body.Salvaged ? "ui.map.wreck_salvaged_detail" : "ui.map.wreck_detail"), 18, new Color(1f, 0.8f, 0.45f), TextAnchor.UpperLeft);
+                UiKit.AddText(_detail, 8, y, 600, 90, HudUi.ExpandKeyTokens(Game?.Localizer, L(body.Salvaged ? "ui.map.wreck_salvaged_detail" : "ui.map.wreck_detail")), 18, new Color(1f, 0.8f, 0.45f), TextAnchor.UpperLeft); // "flight chart ({key:FlightMap})" (#2502)
                 return y + 98f;
             }
 
             // A debris field (#2353): the same kind of place — flown to, read on approach, carved and pulled in flight.
             if (body.Kind == "DebrisField")
             {
-                UiKit.AddText(_detail, 8, y, 600, 110, L("ui.map.debris_detail"), 18, new Color(0.95f, 0.7f, 0.45f), TextAnchor.UpperLeft);
+                UiKit.AddText(_detail, 8, y, 600, 110, HudUi.ExpandKeyTokens(Game?.Localizer, L("ui.map.debris_detail")), 18, new Color(0.95f, 0.7f, 0.45f), TextAnchor.UpperLeft);
                 return y + 118f;
             }
 
@@ -7730,7 +7742,10 @@ namespace BlocksBeyondTheStars.Client
         {
             // Localizer.Get returns "[key]" (never the bare key) on a miss, so comparing against the key
             // can't detect one — ask Has() instead, like WikiUI does, and show nothing for absent texts.
-            return Game?.Localizer?.Has(key) == true ? L(key) : string.Empty;
+            // #2503: item, blueprint and module descriptions name controls by {key:Action} tokens ("press
+            // {key:Interact}", "Use {key:Place} to …") — resolved like a HUD prompt, so they follow the device and
+            // the player's rebinding.
+            return Game?.Localizer?.Has(key) == true ? HudUi.ExpandKeyTokens(Game.Localizer, L(key)) : string.Empty;
         }
     }
 }

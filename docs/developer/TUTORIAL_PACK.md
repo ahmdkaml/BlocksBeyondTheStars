@@ -68,7 +68,7 @@ Every field is optional and defaults to today's behaviour.
 | `priority` | int | 0 | Journal order and chip tie-break between player packs (higher first) |
 | `shortNameKey` | key | — | ≤ 10 characters EN/DE; replaces "Objective:" on the chip while this pack's step is on it |
 | `descriptionKey` | key | — | one line for world creation / the Journal |
-| `narrator` | `{ id, nameKey, icon, color, voice[], lineStart }` | `{ id: "vega" }` | who speaks (`ShipAiLine.Speaker`); an unknown id uses VEGA's style |
+| `narrator` | `{ id, nameKey, icon, color, voice[], lineStart }` | `{ id: "vega" }` | who speaks (`ShipAiLine.Speaker`); an unknown id uses VEGA's style. #2495: `voice` = the chatter clips (`Resources/audio`) a cutscene speaker box plays while it types (empty: VEGA's `vega_chatter_1..3` for `vega`, none for another id); the validators require every `voice` clip and `lineStart` to exist |
 | `defaultEnabled` | bool | `true` | non-tutorial player packs: runs for everyone unless the player opts out |
 | `introCutscene` | cutscene id | — | played when the pack starts for the player — not on "I know the game", not for a veteran the pack completes for silently ([CUTSCENES.md](CUTSCENES.md#bindings--where-a-pack-plays-a-scene)) |
 | `gates` | `{ opportunityTips, banter, stationNear }` → condition | — | tutorial only: when the global advisor systems open (see [Gates](#gates)) |
@@ -193,12 +193,27 @@ player), `radio_worn`, `planet_wrecks` (the world option is not off). `ui:` is n
 
 ## The world rule
 
-`GameRules.TutorialPolicy` = `Auto` (default; starts for every new player, skippable at every level) · `OptIn` (listed,
-starts on the player's request) · `Off` (not offered). Set at world creation (the world-creation **Stories** page, #2472:
-"Auto / On request / Off" with one line each → `--tutorial auto|optin|off`, emitted only when not `Auto`, baked into the
-save's rules), changed live by the admin (the *Tutorial* row of the in-game world rules → `SetWorldRulesIntent.TutorialPolicy`,
-or the admin command `tutorial policy …`). A save without the field reads `Auto`; no server preset switches it off
-(`family` = `Auto`); hosted and glitch worlds pass no flag (`Auto`).
+`GameRules.TutorialPolicy` = `Auto` (default; starts for every new player, skippable at every level) · `Courses`
+("Short courses only", #2498, see below) · `OptIn` (listed, starts on the player's request) · `Off` (not offered — no
+courses either). Set at world creation (the world-creation **Stories** page, #2472: "Auto / Short courses only / On
+request / Off" with one line each — the page's order, from the most guidance to none, not the enum's → `--tutorial
+auto|courses|optin|off`, emitted only when not `Auto`, baked into the save's rules), changed live by the admin (the
+*Tutorial* row of the in-game world rules → `SetWorldRulesIntent.TutorialPolicy`, or the admin command `tutorial policy …`).
+A save without the field reads `Auto`; no server preset switches it off (`family` = `Auto`); hosted and glitch worlds pass
+no flag (`Auto`).
+
+**Short courses only (`Courses`, #2498).** The pack runs as under `Auto` (`StoryPackEnabledFor` — so the courses are
+offered and the Settings switch reads "on"), but `AdvancePack` starts a player's tutorial that has not started yet with its
+mandatory part skipped **silently**: `StartPack(playIntro: false, legacyIntro: false)` + `SkipMandatory(legacySendOff:
+false)` — no welcome card, no line (an older client hears neither the old intro nor `vega.done`), no achievement; the
+legacy graduation keys are written as for a skip. The VEGA story's start rule (`chapter:tutorial:b6`) then holds, so the
+join reads: prologue → story track start (reason `Training`) → `ch1.open` (the prologue's `chainNext` to `tut.welcome`
+never fires — b1 is skipped). Only a pack that has not started takes this path: a live switch leaves a running training
+alone, and anyone not yet started (an `OptIn` or `Off` world switched to `Courses`) gets the silent skip on the next
+advance (`SetTutorialPolicy` / the live world-rules edit re-advance everyone). The player can still run the training from
+the Journal ("Start basic training", below). The enum value is appended (int 3, saves store the number): an older server
+reads it as `Auto` (its policy switch's default) — a graceful downgrade; only a `config/server.json` written with the
+string `"Courses"` would not parse on an older server.
 
 ## Validation
 
@@ -284,17 +299,51 @@ Tier · kind: **M** = must, **C** = core · **do** / **read** / **react**. Event
 courses wait in your Journal." — neutral, without `vega.done`'s memory hook), the achievement **Graduate** (`graduate`,
 counter `tutorial:graduated`, no items), the suggested deep dives `c3` (Pilot), `c4` (Stations, trade and jobs) and since
 #2480 `c1` (Workshop and titanium) marked offered — in the Journal, without a line. The suggestions count as that moment's
-offer, so the next offer VEGA makes by herself waits the usual 90 s. The hand-over to VEGA's chapter 1 is step 11. Since #2473 the graduation card `tut.graduation` shows the achievement and
+offer, so the next offer VEGA makes by herself waits the usual 90 s. Since #2498 every **skip** of the basic training
+("Skip all", the old Settings button, `/tutorial skip`, the silent skip of a `Courses` world — `SkipMandatory`) marks the
+suggestions too (`SuggestCourses(skip: true)`), but only those without a moment of their own (`offerWhen`): c3 and c4 had
+no other way to be offered to a skipper, while c1 keeps its offer at the tool-tier wall, which tells a player who skipped
+more than a silent mark. A skip never graduates (no line, no counter). The hand-over to VEGA's chapter 1 is step 11. Since #2473 the graduation card `tut.graduation` shows the achievement and
 the closing line itself.
+
+### The first-start question and the offer buttons (#2499)
+
+A VEGA line can carry **buttons** (`ShipAiLine.Choices`, see STORY_IMPLEMENTATION) for a client that announces
+`choices1` — the Unity client does, a headless client or an older build does not and gets the plain lines.
+
+- **The question.** When the basic training starts **by itself** for a real newcomer (`GameServerVegaChoices.cs`,
+  `AsksBeforeTraining`: the official `tutorial` pack, world rule **Auto**, the join snapshot says newcomer, nothing of
+  the pack done or skipped after the migration, not a training that would complete silently), VEGA asks once — in the
+  first walk, right after b1's opener `tut.welcome` and before b1.1's start line (`AskSkipBeforeFirstStep` in
+  `ActivateStep`): `story.tutorial.ask_skip` "Want me to show you the basics? If you know the game already, you can skip
+  the training." with **[Let's go]** (`continue` — the continue control; nothing is sent) and **[I know the game —
+  skip]** (`skipPack`). Never on a rejoin or a restart (the pack has started), on request (`OptIn`, "Start basic
+  training"), on `Courses` (it skips by itself) or `Off`. The training does not wait for the answer: b1.1 is active and
+  counts from the start — **doing nothing means the training runs**, and a later "Skip all" still works.
+- **The answer.** The skip arrives as the ordinary `StoryPackIntent` (pause-whitelisted, validated like the Journal's).
+  While the question is open for the session (`PlayerSession.AskSkipOpenPack`) and the training still had something to
+  skip, `SkipPack` sends `story.tutorial.skipped_hint` ("All right, no training. If you ever want it, it waits in your
+  Journal.") before `AdvancePlayer`, so it comes ahead of the VEGA story's lines. The client drops the training's lines
+  still waiting in the panel (`PackId == tutorial`). A Journal skip without the question gets no hint.
+- **Course offers.** A client with `choices1` hears `vega.chapter.offer_choice` ("New short course: {0}. Want to try it
+  now? It also waits in your Journal.") with **[Later]** (the continue control → `declineChapter`, the Journal's Later)
+  and **[Start now]** (deliberate → `startChapter`). "Later" is the default on purpose: a player tapping through VEGA's
+  lines never lands in a course they did not choose. Everyone else keeps `vega.chapter.offer`.
+- **On the client** (`VegaPanel`, model in Client.Core `VegaChoices.cs`): the primary button replaces the continue pill,
+  the secondary sits where the prologue's skip pill is. A click or tap picks a pill; the continue control (N, the pad's
+  VEGA button, touch NEXT, the action list) picks the primary when let go and the **secondary when held 0.8 s**
+  (`VegaChoiceInput.HoldSeconds`) — no stock pad button is free, and the cursor is captured on foot. Esc never answers.
+  An entry the client cannot read leaves its place empty (a secondary never moves up onto the continue control).
 
 ### The deep dives "Research" and "Flying" (C2–C5, #2479)
 
 Optional chapters after the basic training (synthesis §3.2/§3.4): a player starts them from the Journal (**Start**, or
 **Later** to put an offer off — it stays listed and startable, VEGA never offers it again). VEGA offers a course once, at
-its moment of need, with `vega.chapter.offer` ("New short course: {0}…") — never while the basic training runs, at most one
+its moment of need, with `vega.chapter.offer` ("New short course: {0}…"; since #2499 a client with buttons hears
+`vega.chapter.offer_choice` with [Later] / [Start now] in the panel, see above) — never while the basic training runs, at most one
 offer every 90 s of play, and (#2481) never a course the player has nothing left to do in: one whose every counting step is
-done or covered by its evidence (`alreadyDoneIf`, a bridged mission turned in) is neither offered nor suggested — it stays
-startable in the Journal and would complete silently. **The tip becomes the offer** (#2459, synthesis §4.3): a VEGA hint
+done or covered by its evidence (`alreadyDoneIf`, a bridged mission turned in) is neither offered nor suggested — the
+Journal reads it "done — nothing left to practise" without a **Start** (#2500, below). **The tip becomes the offer** (#2459, synthesis §4.3): a VEGA hint
 or tip that a course teaches (one of its steps names it in `hintRefs`) is not spoken when that course's offer is due at the
 same moment (`OfferAbsorbsHint`) or was made a moment ago (`RecentOfferTeaches`, 10 s of play) — the offer line is its
 telling: a once-hint's flag is burned, a context tip's first telling booked and its cooldown started, and the offer takes
@@ -304,15 +353,33 @@ tips are never folded into an offer; a player with no offer due (the course done
 before. Every **do** step of a course counts (tier `core`/`opt` only marks what the synthesis calls
 optional); read and react steps never block. A **replay** walks every step anew and ignores `alreadyDoneIf`, except a
 research step whose every blueprint is known already (it cannot be done twice — #2459, `StepSpentForReplay`): it passes
-silently, like a bridged mission already turned in. Each course opens with the card `tut.course` ("Short course" + its title) and
+silently, like a bridged mission already turned in.
+
+**Spent courses — "nothing left to practise" (#2500).** `ChapterSpentFor` (GameServerStoryPacks.cs) says a chapter has
+nothing left: a finished one (done or skipped, not replaying) whose every counting step a replay passes at once
+(`StepSpentForReplay` or `BridgedMissionTurnedIn` — the Crystal workshop with every job handed in), or a course not started
+yet that is through by evidence (`ChapterThroughByEvidence`). Never a running or replaying chapter, a mandatory one still
+ahead, or one without counting steps. The Journal gets it as the additive `NetStoryChapter.NothingLeft`: no Replay / Start /
+Later (`JournalPackPage.ChapterActions`), the row reads `ui.journal.nothing_left` ("done — nothing left to practise") with
+the ✔ (`ChapterIcon`), and such an offer asks for no attention (no • badge). The server half covers older Journals and a
+click that raced the flag (`AnswerNothingLeft`, GameServerStoryPackActions.cs): a `startChapter`, `replayChapter` or
+`restartChapter` of a spent chapter does not start it; VEGA says `vega.chapter.nothing_left` ("You've already done
+everything in {0}.", {0} = the title; transient — not kept in VEGA's notes), and a course not started yet is stamped done
+silently first (its counting steps `CompleteStep(silent)`, the chapter `CompleteChapter(silent)` — no card, no step line, no
+graduation). A client that announces `choices1` (this build on) gets the key; an older one has no text for it and gets the
+line composed in its language (`ComposeLegacyText`). Where the start would be refused anyway (the story switched off, not
+admitted, ruled out by the world, an older client's course) nothing is said. The admin `/tutorial chapter` keeps its old
+path.
+
+Each course opens with the card `tut.course` ("Short course" + its title) and
 closes with the part banner `tut.done`; two firsts get their own card (below). No legacy keys, no rewards; an older client
 (no `packs1`) never runs a course.
 
 | Course | Needs (`requires`) | Offered (`offerWhen`) |
 |---|---|---|
 | **C2 Knowledge and research** (part Research) | `chapter:tutorial:b5` | `any:[world:data_cache_near, world:scanner_unknown]` — the tips' moment |
-| **C3 Pilot** (Flying) | `chapter:tutorial:b6`, `world:free_flight` | suggested at the graduation |
-| **C4 Stations, trade and jobs** (Flying) | `chapter:tutorial:b6` | suggested at the graduation |
+| **C3 Pilot** (Flying) | `chapter:tutorial:b6`, `world:free_flight` | suggested at the graduation and on a skip (#2498) |
+| **C4 Stations, trade and jobs** (Flying) | `chapter:tutorial:b6` | suggested at the graduation and on a skip (#2498) |
 | **C5 Navigator** (Flying) | `chapter:tutorial:c3` (the pilot course first) | `any:[chapter:tutorial:c3, world:jump_ready]` — right after C3 (and the gap) |
 
 Without free flight C3 and C5 are locked (not suggested, not startable); C4 then runs at a settlement. The forge C5 needs
@@ -361,7 +428,7 @@ the course card `tut.course` and the part banner `tut.done`, no legacy keys, no 
 
 | Course | Needs (`requires`) | Offered (`offerWhen`) |
 |---|---|---|
-| **C1 Workshop and titanium** (part Ship building) | `chapter:tutorial:b4` | `any:[world:tier_gate, all:[step:tutorial:c6.3, not:blueprint:ship_builder]]` — a swing the tool tier refused (the synthesis' `NoteTierGate` moment), or the ship builder course waiting for titanium; suggested at the graduation (third place) |
+| **C1 Workshop and titanium** (part Ship building) | `chapter:tutorial:b4` | `any:[world:tier_gate, all:[step:tutorial:c6.3, not:blueprint:ship_builder]]` — a swing the tool tier refused (the synthesis' `NoteTierGate` moment), or the ship builder course waiting for titanium; suggested at the graduation (third place — a skip leaves it to this moment, #2498) |
 | **C6 Ship builder** (Ship building) | `chapter:tutorial:b5` | `any:[world:module_affordable, world:hull_damaged]` |
 | **C7 Homestead** (Base building) | `chapter:tutorial:b4` | `any:[world:base_core_ready, all:[world:night_outside, not:world:base_here]]` — a base core crafted or carried, or a night out on foot with no base on that world (the synthesis' "two nights outside": the training spans several game days, so the first night after it stands in) |
 | **C17 Station builder** (Ship building) | `chapter:tutorial:c3`, `world:free_flight` (the pilot course's spacewalk first) | `any:[world:station_core_ready, chapter:tutorial:c6]` |
@@ -404,7 +471,12 @@ room and the wall ring all accept own or allied bases — `AreAllied` answers bo
 `base:sealed` and `base:walled` are state checks: the 1 Hz `TutorialStateEvents` pass runs them only while one of the
 player's own active steps waits for them (`StepWaitsFor`), on the player's own world — the air model (`RefreshBaseAir`, a
 supplied sealed room of a base the player owns or shares) and the wall model (`RefreshBaseWalls`: the player's feet in a
-fenced-in part of such a base) are the ones the game already runs, with their own caches.
+fenced-in part of such a base) are the ones the game already runs, with their own caches. The wall model's one outside-in
+fill answers every yard, courtyard **and room**, so on its own it also counted the room just sealed in c7.5 (c7.6 then
+completed in the same pass) and a closed cave near the base; since #2488 the lesson's check (`StandsInOwnOrAlliedYard`, not
+the animals' spawn rule) also wants **open sky** over the feet — nothing solid in the 32 loaded cells above the head
+(`OpenSkyAbove`, a taller `Sheltered` scan; an unloaded cell counts as open). The c7.6 hint says so ("stand under the open
+sky inside the ring").
 
 Left out of the synthesis' tables (the issue's scope, and every do step of a course counts): C1.4–C1.6 (crates, taking things
 apart, a workbench — the workbench needs steel and bronze) and C1.7's "upgrades use up the old tool" (not true for the
@@ -629,6 +701,15 @@ shows `vega.obj.<id>` exactly while such a step owns it, and steps without a leg
 for such a client — it finishes the new lessons once updated). The nine old lessons therefore run in the new order: eat,
 mine, craft, scan, unlock, launch, dock, trade, land.
 
+For such a client the nine old lessons **are** the basic training (#2487): a mandatory chapter whose legacy MUST steps are
+done counts as through (`MandatoryChapterThrough` — the same `LegacyChapterPassable` that lets it walk on to the next
+chapter) wherever the server asks "does the training still run?": the VEGA story's start rule (`StoryStartConditionHolds`,
+so the track starts with the reason "basic training through or off"), the veteran path (`TutorialPackRunning`), the chip's
+tutorial flag and the `banter` gate. Without it the story never started for an older client and VEGA never chatted. Nothing
+is written: the same player on a current client later gets the new lessons (the story keeps running). On a `Courses` world
+(#2498) an older client gets the silent skip like everyone else — the pack is done, the nine legacy keys are written (its
+onboarding reads finished), the story starts at the join, and it hears neither the old intro lines nor `vega.done`.
+
 ### The Journal, settings, skip, replay (#2471)
 
 The player controls the tutorial in the **Journal** (the Tab menu's Story tab grew into it; client rules in
@@ -641,11 +722,17 @@ the objective tracker"):
   running parts only) and **Start part over** (`restartChapter`: the part walks again from its first step; what was done
   stays done, a step done for the first time in it is stamped done, and the part completes for real at the end); then every
   part with its state and **Replay** (`replayChapter`) for a finished one, **Start** / **Later** (`startChapter` /
-  `declineChapter`) for an offered deep dive, **Start** for an available or put-off one; at the top **Track**, **Skip all —
+  `declineChapter`) for an offered deep dive, **Start** for an available or put-off one — none of them for a part with
+  nothing left to practise (#2500, `NothingLeft`: "done — nothing left to practise"); at the top **Track**, **Skip all —
   I know the game** (`skipPack`), **Restart from the beginning** (`restartPack`: every mandatory part replays from part 1 —
   keys stay, so gates and conditions keep holding; never a veteran check, never the prologue; refused while the world has
-  the tutorial off) and **Switch off** / **Switch on** (`optOut` / `optIn`).
-- **Settings:** the old "Skip / Restart tutorial" button is **Tutorial: on / off** (`TutorialSwitch`: on → `optOut`,
+  the tutorial off) and **Switch off** / **Switch on** (`optOut` / `optIn`). #2498: when every mandatory part reads
+  *skipped* and none *done* (`JournalPackPage.SkippedWhole` — after "Skip all" or on a `Courses` world) the restart button
+  reads **Start basic training** (`ui.journal.start_basic_training`, the same `restartPack`). A skipped part replayed to
+  its end by play is stamped *done* (its skipped key goes, `CompleteChapter`), so after the whole training the button reads
+  "Restart" again and the ★ is earned; skipping the replay keeps it skipped. Replays play no part cards.
+- **Settings:** the old "Skip / Restart tutorial" button is **Tutorial & courses: on / off** (named so since #2498 — it
+  switches the training and the short courses together; `TutorialSwitch`: on → `optOut`,
   off → `optIn`, which also starts an opt-in world's tutorial; shown as "Off in this world" while the world rule is `Off`,
   left out when the world has no tutorial) plus **Open the Journal**. A server without the Journal messages (older) keeps
   the old button (`SkipOnboardingIntent`, still served: skip = `skipPack` + `vega.skip`, restart = `RestartPack`).
@@ -654,7 +741,7 @@ the objective tracker"):
 - **Stuck on b6.4 (dock):** after `markerAfter` the step's `onStart.reveal: nearest_station` sets the nearest station as the
   player's space waypoint (`vega.step.marked_station`) — in flight or still landed.
 
-The admin command `/tutorial skip|restart [player]`, `/tutorial chapter <id> [player]`, `/tutorial policy auto|optin|off`
+The admin command `/tutorial skip|restart [player]`, `/tutorial chapter <id> [player]`, `/tutorial policy auto|courses|optin|off`
 (chat, parsed by `AdminChatCommand.Tutorial`) does the same for a named player; without a tutorial pack it answers
 `tutorial_none`. `/story [player]` lists the player packs with their state, running chapter and chip step.
 

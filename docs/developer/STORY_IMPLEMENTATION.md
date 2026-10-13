@@ -116,10 +116,21 @@ progress (1 > 0 %, 2 ≥ 33 %, 3 ≥ 66 %); **4 is the win alone** (#2460) — i
   and `SelectActiveStoryRow` picks: rows of installed packs (or `none`) over unknown ones → the active marker →
   the newest stamp → for older saves the fresh-save choice, else `none`, else the default pack. A row of an
   uninstalled pack never costs real progress. Additive JSON fields — no save-version bump.
+- **A pack that fails to load (#2489).** `ContentLoader.LoadStoryPacks` reads each pack folder under its own
+  error handling: a `JsonException`/`IOException` in `story.json`, `lore_sites.json` or `cutscenes.json` is reported
+  through the loader's `error` callback (the dedicated server logs it as an ERROR naming the pack folder and the file)
+  and skips the whole pack, its locale files included — one malformed pack used to abort the whole content load. The
+  skipped folder names (and the id, when the manifest parsed) land in `GameContent.FailedStoryPacks`. If the save's
+  own story is such a pack (the row `SelectActiveStoryRow` would pick with it installed, or a fresh save's rule), the
+  server runs the default story for the session but `PersistStoryState` writes nothing (`_storyRowHeldFor`), so a
+  restart with the pack repaired carries on with the save's own row; an admin's story switch ends the hold (and
+  deactivates the held row like any switched-away one). A pack that is simply not installed keeps the old rule.
 - **Observers.** A fleet admin in observer mode (`/spectate`) is not a story listener (`StoryListeners()`): no
   beats, story lines, finale rewards or VEGA tick while observing; `MarkArrivedOnBody` books a `/goto` arrival
   silently (no milestone, no frontier growth, no knowledge); `player_near` never names them. `ExitSpectate`
-  runs the catch-up.
+  runs the catch-up. Since #2493 a **visible** fleet admin's `/goto` is booked the same way (`HandleTravel`'s
+  `adminTeleport`: no hyperjump achievement or milestone, `MarkArrivedOnBody(silent: true)`); the admin's finale
+  shortcut (`goto_core`), which drives the arc on purpose, keeps the full arrival.
 
 ## VEGA as its own pack: prologue, story track, held content, chapters, migration (#2470)
 
@@ -527,7 +538,7 @@ drifts from the code), and the authors' path is [STORY_PACK_AUTHORING.md](STORY_
 | `hyperjump:any` | destination system id | a jump between systems (travel screen or in flight) | `GameServer.cs` (`HandleTravel`), `GameServerSpaceCombat.cs` (`JumpFlightToSystem`) |
 | `module:built` | module key | a ship module built | `GameServerSpaceCombat.cs` |
 | `ship:commissioned` | ship id | a self-built ship commissioned | `GameServerCustomShips.cs` |
-| `station:commissioned` | station id | a player station commissioned — raised for its **owner** (online), like the achievement | `GameServerPlayerStations.cs` |
+| `station:commissioned` | station id | a player station commissioned — raised for its **owner** (online), like the achievement; an offline owner gets the message and the achievement at the next join (`station:told:<id>`, #2492), not this event | `GameServerPlayerStations.cs` |
 | `base:founded` | body id | a base core placed | `GameServerBases.cs` (`PlaceBase`) |
 | `tame:any` | species id (`au_sreekmakra`) | a creature tamed; the shapeshifter following a tame raises its own | `GameServerTaming.cs`, `GameServerSreekmakra.cs` (`BondSreekmakra`) |
 | `loot:any` | container kind | a world container looted empty (never a player crate) | `GameServerContainers.cs` |
@@ -557,7 +568,7 @@ drifts from the code), and the authors' path is [STORY_PACK_AUTHORING.md](STORY_
 | `mine:refused` | block key | a swing refused by the tool tier while a better tool exists (where the `tier_gate` tip is armed) | `GameServerShipAiContext.cs` (`NoteTierGate`) |
 | `data:found` | `cache` \| `fragment` | a data cache in the advisor probe's reach, or a data fragment in the backpack or the own ship's hold (1 Hz, only while a step listens) | `GameServerShipAiContext.cs` (`TickVegaContextTips`), `GameServerTutorial.cs` |
 | `flight:flown` | — (whole flight units) | the own ship flying (a pose jump over 60 units — a hyperjump, a warp, a fresh entry — never counts) — measured only while a step listens | `GameServerSpaceCombat.cs` (`ShipMove`) → `TutorialFlightEvents` |
-| `mission:board_accepted` | mission id | a job the player picked: a board's or a mission chain's (`MissionAcceptCountsAsTrade`, B58 — never a story character's errand) | `GameServerMissions.cs`, `GameServerMissionChains.cs` |
+| `mission:board_accepted` | mission id | a job the player picked: a board's, a mission chain's or a stand-alone board job taken at a board (`MissionAcceptCountsAsTrade`, B58; #2491: `supply_cables` — never a story character's errand) | `GameServerMissions.cs`, `GameServerMissionChains.cs` |
 | `visit:world` | body id | the first arrival on a planet, moon or asteroid (`visit:body` counts stations too) | `GameServer.cs` (`MarkArrivedOnBody`) |
 | **#2479 — the deep dives "Research" and "Flying"** | | | |
 | `minigame:played` | game key | a finished run of a DataQube game from the catalogue (a replay too; an abandoned run never) | `GameServerDataCubes.cs` (`HandleMinigameResult`) |
@@ -699,9 +710,11 @@ shipped player packs so a fixture runs alone.
 (`PlayerPacks`, highest `priority` first): conditions are parsed against the server's `world:` predicates, chapters and
 steps indexed; a pack with a structural or condition error is logged and not run. A pack runs for a player when it is
 **enabled** (`StoryPackEnabledFor`, = `pack:<id>:enabled`) and **started** (`story:<pack>:started`). Enabled: the player
-has not opted out, and for a `tutorial` pack the world rule `GameRules.TutorialPolicy` says so (`Auto` → yes, `OptIn` →
-once the player started it, `Off` → no); any other player pack by its `defaultEnabled` or once started. A pack starts by
-itself when enabled and its `start.after` holds (empty = at once); `StoryPackIntent{startPack}` starts an opt-in tutorial
+has not opted out, and for a `tutorial` pack the world rule `GameRules.TutorialPolicy` says so (`Auto` → yes, `Courses` →
+yes, `OptIn` → once the player started it, `Off` → no); any other player pack by its `defaultEnabled` or once started. A
+pack starts by itself when enabled and its `start.after` holds (empty = at once) — a `Courses` world starts the tutorial
+with its mandatory part skipped silently (#2498), and on an `Auto` world a newcomer with a `choices1` client is first asked
+whether they want the training (#2499, both in TUTORIAL_PACK); `StoryPackIntent{startPack}` starts an opt-in tutorial
 (refused while the policy is `Off`). A tutorial's start also writes `vega:intro` (older builds read it as "the intro was
 shown"). The world story (VEGA) is not run here — its per-player track is step 11.
 
@@ -752,7 +765,12 @@ restarts the clock:
 `hintAfter` (default 180 s) → the step's `hintKey` line; `markerAfter` (360 s) on a "where" step (one with
 `onStart.reveal`) → a **private ping** at the provider's target (`nearest_ore:<block>`: the nearest such block in a 33³
 probe; `nearest_settlement`) that only this session sees — RAM, 30 s, never persisted, never broadcast, never
-`RevealPoi` (`GameServer.RaisePrivatePing`, `ServerPing.SessionId`) — plus `vega.step.marked`; nothing found → no ping;
+`RevealPoi` (`GameServer.RaisePrivatePing`, `ServerPing.SessionId`) — plus `vega.step.marked`; nothing found → no ping
+and the marker is **not spent** (#2490: `StepEscalationState.MarkerSent` is set only when a marker went up; a miss records
+`MarkerMissAt` — the player's place as `ground|space|station` + body — and `MarkerMissTime`, and the probe runs again at
+once on a new place or after `MarkerRetrySeconds` = 30 s of play on the same one — at most one probe per 30 s per chip
+step). This is what lets the story mission's observatory marker (`unique_site:*` answers only on the site's own world)
+wait for the landing there instead of being wasted off-site;
 `offerSkipAfter` (600 s) on a `must` step → `vega.step.offer_skip`. Pack defaults in `escalate`, per-step override; `0`
 switches a stage off.
 
@@ -819,8 +837,9 @@ a bracket word in EN and DE. A local player (`AddLocalPlayer`) counts as `packs1
 restartChapter | skipStep | replayCutscene` (#2467: `replayCutscene` + `CutsceneId` = watch a scene again); while a
 singleplayer world is held only `track`, `untrack`, `optOut`, `optIn`, `skipPack` and `replayCutscene` get through
 (`PausedMayHandle`, dispatch tests). Tags 295/296 are the cutscene messages — see [CUTSCENES.md](CUTSCENES.md). Fields:
-`JoinRequest.Features` (`ClientFeatures.Packs1` / `Cutscenes1`; `NetworkClient.Features` announces `packs1`, and
-`cutscenes1` once `NetworkClient.PlaysCutscenes` is set — the Unity client does when its cutscene director exists, #2468),
+`JoinRequest.Features` (`ClientFeatures.Packs1` / `Cutscenes1` / `Choices1`; `NetworkClient.Features` announces `packs1`,
+`cutscenes1` once `NetworkClient.PlaysCutscenes` is set — the Unity client does when its cutscene director exists, #2468 —
+and `choices1` once `NetworkClient.ShowsChoices` is set — the Unity client always, its VEGA panel draws `ShipAiLine.Choices`, #2499),
 `ShipAiLine.PackId` / `Speaker` (the line's pack and narrator) / `ObjectivePackId`, `SetWorldRulesIntent.TutorialPolicy`,
 `ServerRules.TutorialPolicy`. Persistence (additive, no save bump): `PlayerSnapshot.StepProgress` (null while empty) and
 `TrackedStoryId` — an older build drops both on re-save, which costs a running count and the pin, nothing else
@@ -828,7 +847,7 @@ singleplayer world is held only `track`, `untrack`, `optOut`, `optIn`, `skipPack
 
 **Admin** (world management, not a cheat — the role is the gate, above the cheats switch; the slash parsing in the
 client comes with step 12): `AdminCommandIntent{Command = "tutorial", StringArg = "skip" | "restart" | "chapter <id>" |
-"policy auto|optin|off", TargetPlayer = <name or empty for yourself>}` — without an installed tutorial pack every verb but
+"policy auto|courses|optin|off", TargetPlayer = <name or empty for yourself>}` — without an installed tutorial pack every verb but
 `policy` answers `tutorial_none` (#2469). `story_status` (`/story`) now also lists the world's tutorial rule and the
 player packs of the caller (or `TargetPlayer`), and is a read-only report above the cheats switch.
 
@@ -880,6 +899,7 @@ default) — no `Protocol.Version` bump.
 | `StoryStateMessage.NoteKeys` | #2471: the world story's non-beat narrator lines this player heard (Guardian reveal, insights, resolution line — from their once keys) — the Journal's "VEGA's notes" keep them across a rejoin | empty — the notes keep what was spoken this session |
 | `ShipAiLine.ObjectivePackId` | #2466; since #2471 also the world story's id on VEGA's own chip — the client labels the chip with the story's short name ("Training: …", "VEGA: …") instead of "Objective:" | an older client ignores it |
 | `ShipAiLine.SpaceWaypointId` | #2471: a space-flight nav target the line points at (the dock lesson's station, `nearest_station`) — the client makes it its space waypoint when it has none | ignored |
+| `ShipAiLine.Choices` | #2499: the line's buttons, only to a client that announced `ClientFeatures.Choices1` (`NetworkClient.ShowsChoices`; the Unity client). Each entry is `ShipAiChoices.Encode` = `labelKey␟action␟packId[␟chapterId]` (U+001F), action `continue` (nothing sent) or a `StoryPackActions` word; the first is the primary (the continue control), the second the secondary (a deliberate click/tap/hold). A pick goes back as an ordinary `StoryPackIntent`. Used by the tutorial's first-start question and the course offers ([TUTORIAL_PACK.md](TUTORIAL_PACK.md#the-first-start-question-and-the-offer-buttons-2499)) | empty — the plain line; a `choices1`-less client never gets one |
 | `MissionResult.Outcome` / `Title` / `FreeText` | `accepted` / `completed` / `posted` and the mission's title (locale key, or display text when `FreeText`) for the toast (B24) | empty outcome — the client's toast says "Mission updated" and names the mission from its mission list |
 | `SetNpcCallsIntent.VegaHintsMuted` | the client's VEGA hints switch is off (sent at every join and from both settings screens): the server holds advisor hints (Kind 1), context tips and the bandit briefing back WITHOUT burning their once-flags (B31) | absent = hints on (today's behaviour) |
 
@@ -894,6 +914,13 @@ Rules on top of the wire:
 - **Beat list.** `StoryBeatLog` (Client.Core) rebuilds the Story tab's *Memories restored* list from `HeardBeats` plus
   the beats heard live (the join sends the snapshot BEFORE its catch-up lines), in arc order, and holds only pack beats
   (`StoryLog.BeatIndexOf`); other Kind-2 lines go to the VEGA log. Missing locale keys render as `ui.story.entry_missing`.
+- **A story the client lacks (#2500).** `UnknownStoryPacks` (Client.Core, one per world session on GameBootstrap) notes the
+  pack ids of `StoryPackStates` and `StoryStateMessage` this client's content does not have and makes a one-time notice due —
+  VEGA's panel queues `ui.story.pack_missing` (never muted, not kept in the notes). The panel's lines, the chip and the "Show
+  all objectives" rows resolve keys through `UnknownStoryPacks.Text`: a missing key of such a pack (a line's `PackId` the
+  client lacks, or no pack id while any story is missing — the world story's beats carry none) reads as
+  `ui.story.entry_missing`; a missing key of a known pack stays `[key]` (a content bug). The Journal's task lines
+  (`JournalPackPage.StepLine(…, has)`) use the same note.
 - **Client one-shot lessons** (`VegaPanel.SayLocal`) return whether the line was queued; callers set their
   `ClientSettings.*HintShown` flag only then. Since #2469 the flight lessons the tutorial's B6 steps teach
   (`VegaText.LessonCoveredByTutorial`) count as given without being spoken while the basic training runs.
@@ -963,7 +990,7 @@ all objectives"), `GameBootstrap` (`StoryPackStates`, `Objectives`, `JournalVers
   of `StationContactsForCurrentSystem(body)`; the marker is the line `vega.step.marked_station` ({0} = the station's name)
   carrying `ShipAiLine.SpaceWaypointId` — the client's space waypoint (radar + edge arrow), never a ground ping. The
   tutorial's b6.4 uses it.
-- **Admin.** `/tutorial skip|restart [player]`, `/tutorial chapter <id> [player]`, `/tutorial policy auto|optin|off`
+- **Admin.** `/tutorial skip|restart [player]`, `/tutorial chapter <id> [player]`, `/tutorial policy auto|courses|optin|off`
   (`AdminChatCommand.Tutorial` → `AdminCommandIntent{tutorial}`), `/story [player]` (`story_status` with the target).
 
 ## Cinematics: one cutscene state, skip on every device, the world-hold arbiter (#2461)
@@ -1031,7 +1058,8 @@ its whole shot scales with the player's ship (`PrologueOrbit.Scale`), and the ca
   `CutsceneDirectorDuel.cs` + `DuelDialogueScreen.cs`, rules in Client.Core `Cutscenes/CoreDuel.cs`);
   `ClientMusic` finale contexts → `music_boss_*` tracks.
 - World options: `GameRules.StoryId` + `GameRules.StoryDensity` (`--story` / `--story-density`) and
-  `GameRules.TutorialPolicy` (`--tutorial auto|optin|off`, #2466), set when the world is created and baked into its rules.
+  `GameRules.TutorialPolicy` (`--tutorial auto|courses|optin|off`, #2466; `courses` = "Short courses only", #2498), set
+  when the world is created and baked into its rules.
   The world-creation panel shows them as ONE row "Stories: VEGA · Tutorial Auto ›" that opens the **Stories** page
   (#2472, `UiWorldOptions.BuildStories`): main story = every installed pack with `StoryRegistry.CanBeWorldStory` (default
   first, then priority, capped at `WorldStoryOptions.MaxChoices`) plus "None (sandbox)", the chosen pack's
@@ -1059,8 +1087,11 @@ its whole shot scales with the player's ship (`PrologueOrbit.Scale`), and the ca
   HUD prompts and the `@srv.*` server messages (`GameBootstrap.ResolveServerToken`) resolve them through
   `HudUi.KeyTokenGlyph` — the binding, the pad button (the Actions list for an
   action without one), or on a tablet the layout's own button (`VegaText.TouchControlLabel`: USE, MAP, ≡ …) and else
-  "the on-screen action menu". `VegaLineBudgetTests` (Client.Tests) fails on a token that names no `InputAction` and
-  on a literal key in the VEGA lines and the converted prompts.
+  "the on-screen action menu" — in a short HUD prompt, button or toast (`HudUi.ExpandKeyTokens`) "ACT", the button
+  that opens that list (#2502). `VegaLineBudgetTests` (Client.Tests) fails on a token that names no `InputAction` and
+  on a literal key in the VEGA lines (core, both packs) and the converted prompts (since #2502 also the HUD, flight
+  and button texts, with a wider pattern: "G:", "(E)", "[P]", mouse buttons, WASD, Space, Ctrl). A text the server
+  `Localize`s itself (`npc.streamer.ask`) never carries a token — the client would show the braces.
 - **Length.** One VEGA panel page holds about 220 characters. English VEGA lines (`vega.*`, `story.vega.*`) stay at or
   under 220 shown characters, German under 264 (`{key:…}` counts as 3, `{0}` as 10); the epilogue
   `story.vega.beat13` is exempt — the ending card shows it, not the panel.

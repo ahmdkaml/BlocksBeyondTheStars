@@ -137,8 +137,8 @@ public sealed partial class GameServer
     /// <summary>Commissions a station once it has a hull (min blocks) + an airlock: registers it as a boardable
     /// body on the star map + a dock contact, and persists it. The station is its OWNER's (#2460, N3): an ally may
     /// set the last block (<paramref name="placer"/>), but the default name, the "commissioned" message and the
-    /// "Station Master" achievement go to the owner — to an online owner; an offline one finds the station on the
-    /// map.</summary>
+    /// "Station Master" achievement go to the owner — to an online owner now (marked told, #2492); an offline one hears
+    /// it at their next join (<see cref="TellOwnerOfStationsCommissionedAway"/>).</summary>
     private void TryCommissionStation(SpaceInstance instance, SpaceStructure s, PlayerSession placer)
     {
         if (s.Boardable || s.Cells.Count < MinStationBlocks || !StationHasAirlock(s))
@@ -186,11 +186,64 @@ public sealed partial class GameServer
             Send(owner, new ServerMessage { Text = "@srv.station.commissioned:" + s.Name });
             Send(owner, new ServerMessage { Text = "@srv.station.crew_hint" }); // #1472: crew comes with a crew space
             OnAchievementStationCommissioned(owner); // "Station Master" (#1102)
+            owner.State.Milestones.Add(StationToldMilestone(s.Id)); // #2492: never told again at a join
             RaiseGameEvent(owner, GameEventKeys.StationCommissioned, s.Id); // #2465: the owner's, like the achievement
         }
 
         RecordStoryMilestone("station:first"); // the first station of the save advances the arc (#1105)
         _log.Info($"Player station '{s.Name}' ({s.Id}) commissioned with {s.Cells.Count} blocks.");
+    }
+
+    /// <summary>#2492: the player milestone that says the owner was told their station is commissioned.</summary>
+    internal static string StationToldMilestone(string stationId) => "station:told:" + stationId;
+
+    /// <summary>#2492: written at a player's first join with this build. Older builds wrote no told milestones (and the
+    /// commission counter is younger than player stations), so every station the player owns by then is marked told
+    /// silently, once — a station they commissioned themselves is never announced again. A commission an ally made under
+    /// an older build stays untold, as it was then.</summary>
+    internal const string StationToldBaselineMilestone = "station:told-baseline";
+
+    /// <summary>#2492, at the join: a station of this player that an ally commissioned while they were away — the
+    /// "commissioned" message and the "Station Master" achievement now, once (the told milestone). Live commissions
+    /// write the milestone at once; stations from before this build are covered by <see cref="StationToldBaselineMilestone"/>.</summary>
+    private void TellOwnerOfStationsCommissionedAway(PlayerSession session)
+    {
+        if (session.Spectating)
+        {
+            return;
+        }
+
+        var p = session.State;
+        var untold = _playerStationCells.Values
+            .Where(st => st.Boardable && st.OwnerId == p.PlayerId && !p.Milestones.Contains(StationToldMilestone(st.Id)))
+            .OrderBy(st => st.Id, StringComparer.Ordinal)
+            .ToList();
+        if (!p.Milestones.Contains(StationToldBaselineMilestone))
+        {
+            p.Milestones.Add(StationToldBaselineMilestone);
+            foreach (var station in untold)
+            {
+                p.Milestones.Add(StationToldMilestone(station.Id)); // owned before this build — told then, or never
+            }
+
+            _repo.SavePlayer(p);
+            return;
+        }
+
+        if (untold.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var station in untold)
+        {
+            p.Milestones.Add(StationToldMilestone(station.Id));
+            Send(session, new ServerMessage { Text = "@srv.station.commissioned:" + station.Name });
+            OnAchievementStationCommissioned(session); // "Station Master" (#1102)
+            _log.Info($"Told '{p.Name}' that their station '{station.Name}' ({station.Id}) was commissioned while they were away.");
+        }
+
+        _repo.SavePlayer(p);
     }
 
     private void AddStationBodyToGalaxy(string id, string name, string? hostLocationId = null)

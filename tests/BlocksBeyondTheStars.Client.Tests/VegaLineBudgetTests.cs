@@ -12,8 +12,8 @@ namespace BlocksBeyondTheStars.Client.Tests;
 /// <list type="bullet">
 /// <item>a VEGA line fits one panel page (it used to run two or three pages, every page one more key press);</item>
 /// <item>a <c>{key:Action}</c> token names a real <c>InputAction</c> (an unknown name renders as the bare word);</item>
-/// <item>the tutorial lines, the advisor tips and the converted HUD prompts never name a key literally — "press Tab"
-/// is wrong on a pad and on a tablet, the token is right on all three.</item>
+/// <item>the tutorial lines, the advisor tips, the converted HUD prompts and the item/block/blueprint/module descriptions
+/// (#2503) never name a key literally — "press Tab" is wrong on a pad and on a tablet, the token is right on all three.</item>
 /// </list>
 /// </summary>
 public sealed class VegaLineBudgetTests
@@ -36,12 +36,32 @@ public sealed class VegaLineBudgetTests
     private static readonly HashSet<string> NotPanelText = new(StringComparer.Ordinal) { "story.vega.beat13" };
 
     /// <summary>Prompts that expand <c>{key:Action}</c> tokens since #2463: the HUD (HudUi, FactoryView) and the ship
-    /// stations' server messages (GameBootstrap.ResolveServerToken).</summary>
+    /// stations' server messages (GameBootstrap.ResolveServerToken). #2502 (stage 1) adds the server messages whose path
+    /// already expanded, the HUD/world/button texts (each wrapped in <c>HudUi.ExpandKeyTokens</c> where it is drawn), the
+    /// flight and EVA lines, and the two texts rewritten without a key (the streamer's greeting, which the server composes
+    /// itself, and the chat field's title).</summary>
     private static readonly HashSet<string> ConvertedPrompts = new(StringComparer.Ordinal)
     {
         "ui.hud.use", "ui.beam.use_hint", "ui.factory.claim_prompt",
         "srv.station.cargo", "srv.station.cockpit", "srv.station.console", "srv.station.workshop",
+        // #2502 — server messages (@srv tokens, GameBootstrap.ResolveServerToken)
+        "srv.base.founded", "srv.rail.placed", "srv.ship.commissioned", "srv.ship.core_placed", "srv.station.zero_g",
+        // #2502 — HUD, world labels and buttons
+        "ui.wreck.repair_hint", "ui.base.rename_hint", "ui.hud.loot", "ui.hud.feed", "ui.hud.stash_keys", "ui.hud.stash_filter_key",
+        "ui.scan.use_hint", "ui.hud.hint", "ui.hud.hint_fly", "ui.station.leave_hint", "ui.dock.undock_hint",
+        "ui.interact.trade_dock", "ui.datacube.prompt", "ui.netfragment.prompt", "ui.chat.hidden", "ui.container_filter.hint",
+        "ui.crate.stash_all", "ui.crate.take_all", "ui.arcade.empty_body", "ui.map.wreck_detail", "ui.map.debris_detail",
+        "ui.spacemap.autopilot_ready", "ui.launch.yes", "ui.vendor.trade_choice", "ui.bio.workshop_choice_craft",
+        "ui.save.creative_flight", "ui.photos.empty", "ui.wiki.discoveries.empty",
+        // #2502 — the flight and EVA lines (SpaceView)
+        "ui.space.controls", "ui.space.eva_controls", "ui.vega.autopilot.hint", "ui.spacemap.key_hint",
+        // #2502 — rewritten without a key
+        "npc.streamer.ask", "ui.chat.hint",
     };
+
+    /// <summary>#2502: texts the SERVER localizes itself (<c>Localize(s.Locale, …)</c>) and sends as plain text — a
+    /// <c>{key:Action}</c> token there would reach every client as raw braces, so they never carry one.</summary>
+    private static readonly string[] ServerComposedTexts = { "npc.streamer.ask" };
 
     private const string StationBlockPrompts = "ui.station.block.";
 
@@ -57,6 +77,32 @@ public sealed class VegaLineBudgetTests
     /// "im Tab „Karte“" for a menu tab — that noun is not a key and passes.</summary>
     private static readonly Regex LiteralKey = new(
         @"(?<![\p{L}\p{N}_{:])(?:E|M|R|Q)(?![\p{L}\p{N}_}])|\(Tab\)|(?i:press|drück\w*)\s+Tab\b|\bTab(?:-Menü|\s+menu)",
+        RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture, RegexTimeout);
+
+    /// <summary>#2502: the wider net over the same texts — any key letter in a prompt shape ("G: loot", "Launch (E)",
+    /// "[P] Autopilot"), the mouse buttons by name ("right mouse button", "Rechtsklick", LMB/RMB, LMT/RMT), WASD, the space
+    /// bar ("press Space", "Space×2", "Leertaste") and Ctrl/Strg. <c>vega.hint.rope_gun</c> ("Hold the right mouse button
+    /// (pad LB, touch PLACE)") slipped through the narrow pattern; "Space begins right above the clouds" is not a key.</summary>
+    private static readonly Regex LiteralKeyWide = new(
+        @"^[A-Z]:\s|\([A-Z]\)|\[[A-Z]\]|(?i:\b(?:right|left)[ -](?:mouse|click))|\b(?:LMB|RMB|LMT|RMT)\b|\bWASD\b"
+        + @"|(?i:(?:press|hold|tap)\s+)Space\b|\bSpace(?:×|/|\s+(?:jump|up)\b)|\bLeertaste\b|(?i:\b(?:rechts|links)klick)"
+        + @"|(?i:\b(?:rechte|linke)n? Maustaste)|\bStrg\b|\bCtrl\b",
+        RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture, RegexTimeout);
+
+    /// <summary>The description keys (#2503): item, block, blueprint and ship-module texts, drawn by the crafting/inventory/
+    /// tech/ship detail panes (<c>CraftingTechShipUI.Desc</c>) and the Codex (<c>WikiUI.Desc</c>), both of which expand
+    /// <c>{key:Action}</c> tokens.</summary>
+    private static readonly Regex DescriptionKey = new(
+        @"^(?:item|block|blueprint|module)\.[a-z0-9_.]+\.desc$", RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture, RegexTimeout);
+
+    /// <summary>#2503: what the two patterns above miss in a description — any lone key letter ("G to take, H to store",
+    /// "(press B)", "Taste B"; "A" and the roman "I" of "Oxygen Tank I" are words, "N-ten" is no key), a key named by its
+    /// job ("the stow key", "die Wärmebild-Taste") and the action's name used as a key ("press Interact", "Benutzen
+    /// drücken"). "Hold the fire button" stays legal: the ship's fire control has no token yet.</summary>
+    private static readonly Regex LiteralKeyInDescription = new(
+        @"(?<![\p{L}\p{N}_{:\-])[B-HJ-Z](?![\p{L}\p{N}_}\-])"
+        + @"|(?i:\b(?:stow|thermal|einpack|wärmebild)[- ]?(?:key|taste)\b)"
+        + @"|(?i:\bpress(?:es|ing)?\s+interact\b)|(?i:\bbenutzen\s+drücken\b|\bdrücke\s+benutzen\b)",
         RegexOptions.CultureInvariant | RegexOptions.ExplicitCapture, RegexTimeout);
 
     private static Dictionary<string, string> Table(params string[] relative)
@@ -186,7 +232,8 @@ public sealed class VegaLineBudgetTests
                         || e.Key.StartsWith(StationBlockPrompts, StringComparison.Ordinal)
                         || ConvertedPrompts.Contains(e.Key))
             .Concat(TutorialPack(code)) // #2469: every line of the basic training
-            .Where(e => LiteralKey.IsMatch(e.Value))
+            .Concat(Pack(code).Where(e => e.Key.StartsWith("story.vega.", StringComparison.Ordinal))) // #2502: VEGA's story lines too
+            .Where(e => LiteralKey.IsMatch(e.Value) || LiteralKeyWide.IsMatch(e.Value))
             .Select(e => $"{e.Key}: \"{e.Value}\"")
             .ToList();
 
@@ -194,6 +241,61 @@ public sealed class VegaLineBudgetTests
             bad.Count == 0,
             $"{code}: texts that name a key literally — use a {{key:Action}} token (the game shows the player's own key, "
             + "pad button or touch button): " + string.Join(" | ", bad));
+    }
+
+    [Theory]
+    [InlineData("en")]
+    [InlineData("de")]
+    public void ItemBlockBlueprintAndModuleDescriptions_NameNoKeyLiterally(string code)
+    {
+        // #2503: "Press E on it", "Right-click to magnify", "G to take, H to store" — the descriptions now say
+        // {key:Interact}, {key:Place}, {key:LootContainer} and read as the player's own key, pad button or touch button.
+        var descriptions = Core(code).Where(e => DescriptionKey.IsMatch(e.Key)).ToList();
+        Assert.True(descriptions.Count > 100, $"{code}: only {descriptions.Count} description keys found — did the key scheme change?");
+
+        var bad = descriptions
+            .Where(e => LiteralKey.IsMatch(e.Value) || LiteralKeyWide.IsMatch(e.Value) || LiteralKeyInDescription.IsMatch(e.Value))
+            .Select(e => $"{e.Key}: \"{e.Value}\"")
+            .ToList();
+
+        Assert.True(
+            bad.Count == 0,
+            $"{code}: descriptions that name a key literally — use a {{key:Action}} token (\"press {{key:Interact}}\", "
+            + "\"Use {key:Place} to …\"; CraftingTechShipUI.Desc and WikiUI.Desc expand it): " + string.Join(" | ", bad));
+    }
+
+    [Fact]
+    public void DescriptionKeyPattern_CatchesTheOldTexts_ButNotNumeralsOrTokens()
+    {
+        foreach (string literal in new[]
+                 {
+                     "Place it to stash items at a base: G to take, H to store.", "Deploy it on a spacewalk (press B)",
+                     "Beim Weltraumspaziergang einsetzen (Taste B)", "Press the stow key to pack it back",
+                     "drücke beim Durchsehen die Wärmebild-Taste", "mit der Einpack-Taste daneben", "press Interact and its network",
+                     "ansehen und Benutzen drücken",
+                 })
+        {
+            Assert.Matches(LiteralKeyInDescription, literal);
+        }
+
+        // The old texts the narrow and the wide pattern already caught.
+        Assert.Matches(LiteralKey, "Press E on it to make it your home spawn");
+        Assert.Matches(LiteralKeyWide, "Right-click to magnify");
+        Assert.Matches(LiteralKeyWide, "Linksklick schießt; halte die rechte Maustaste");
+        Assert.Matches(LiteralKeyWide, "just steer with WASD");
+
+        foreach (string fine in new[]
+                 {
+                     "upgraded from Oxygen Tank I", "+32 cargo slots on top of Expansion I", "löst bei jedem N-ten Impuls aus",
+                     "fires every Nth pulse", "A simple cot of logs", "press {key:Interact} on it", "Use {key:Place} to magnify",
+                     "{key:LootContainer} to take, {key:DepositToCrate} to store", "hold the fire button on a target",
+                     "A swinging door that opens when you interact with it.", "its network is ON or OFF", "sein Netz ist AN oder AUS",
+                 })
+        {
+            Assert.DoesNotMatch(LiteralKeyInDescription, fine);
+            Assert.DoesNotMatch(LiteralKey, fine);
+            Assert.DoesNotMatch(LiteralKeyWide, fine);
+        }
     }
 
     [Fact]
@@ -208,6 +310,48 @@ public sealed class VegaLineBudgetTests
         Assert.DoesNotMatch(LiteralKey, "press {key:UiMenu} at the {key:Interact}");
         Assert.DoesNotMatch(LiteralKey, "Table, Mk3, Escape, Mars, Riding, Quiet, slot 1, {0}");
         Assert.DoesNotMatch(LiteralKey, "Diese Karte findest du später im Tab „Karte“ wieder.");
+    }
+
+    [Fact]
+    public void WideLiteralKeyPattern_CatchesPromptShapesAndMouseWords_ButNotWordsOrTokens()
+    {
+        foreach (string literal in new[]
+                 {
+                     "G: loot", "Launch (E)", "[P] Autopilot", "Hold the right mouse button", "left-click it", "LMB: scan",
+                     "LMT abbauen", "WASD move", "press Space", "Space×2 fly", "Space/Ctrl up·down", "Leertaste×2 fliegen",
+                     "mit Rechtsklick ein Foto", "Halte die rechte Maustaste", "Strg/C ducken", "Ctrl/C crouch",
+                 })
+        {
+            Assert.Matches(LiteralKeyWide, literal);
+        }
+
+        foreach (string fine in new[]
+                 {
+                     "{key:LootContainer}: loot", "Launch ({key:Interact})", "{key:FlightAutopilot} autopilot",
+                     "Space begins right above the clouds", "a space station", "Spacewalk", "EVA spacewalk",
+                     "VEGA: hello", "Mk2 (Tier 2)", "click the button", "Gold: 3",
+                 })
+        {
+            Assert.DoesNotMatch(LiteralKeyWide, fine);
+        }
+    }
+
+    [Fact]
+    public void ServerComposedTexts_NameNoKeyToken_InAnyLanguage()
+    {
+        // #2502: the streamer's greeting used to say "Talk to me (E)!" — a key in a text the server sends as plain text.
+        foreach (string code in new[] { "en", "de", "es", "fr", "it", "ja", "ko", "nl", "pl", "pt", "ru", "tr", "uk", "zh" })
+        {
+            var table = Core(code);
+            foreach (string key in ServerComposedTexts)
+            {
+                if (table.TryGetValue(key, out var text))
+                {
+                    Assert.DoesNotMatch(KeyToken, text);
+                    Assert.DoesNotMatch(LiteralKeyWide, text);
+                }
+            }
+        }
     }
 
     [Fact]

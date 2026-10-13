@@ -1490,17 +1490,29 @@ namespace BlocksBeyondTheStars.Client
         private readonly System.Collections.Generic.HashSet<string> _journalOffers = new System.Collections.Generic.HashSet<string>();
         private bool _journalOffersSeeded;
 
+        /// <summary>#2500: the stories this world runs that this client does not have (a newer build's pack) — the one-time
+        /// notice VEGA's panel shows (<see cref="UnknownStoryPacks.TakeNotice"/>) and the neutral text their keys read as in the
+        /// panel, on the chip and in the Journal. One per world session (this rig is rebuilt per world).</summary>
+        public readonly UnknownStoryPacks UnknownStories = new UnknownStoryPacks();
+
+        /// <summary>#2500: whether this client has a story pack. Without content loaded yet every story counts as known — no
+        /// notice on a guess.</summary>
+        public bool HasStoryPack(string packId)
+            => Content == null || (!string.IsNullOrEmpty(packId) && Content.Stories.ContainsKey(packId));
+
         /// <summary>#2471: takes a new story list; a chapter offered since the last one badges the Journal tab.</summary>
         private void OnStoryPackStates(StoryPackStates m)
         {
             StoryPackStates = m;
             JournalVersion++;
+            UnknownStories.Observe(UnknownStoryPacks.PackIdsOf(m), HasStoryPack); // #2500: a story this client lacks
             bool fresh = false;
             foreach (var pack in m?.Packs ?? System.Array.Empty<NetStoryPack>())
             {
                 foreach (var chapter in pack.Chapters)
                 {
-                    if (chapter.State == StoryChapterStates.Offered && _journalOffers.Add(pack.Id + "/" + chapter.Id))
+                    // #2500: an offer with nothing left to practise has no Start / Later — it never badges the tab.
+                    if (chapter.State == StoryChapterStates.Offered && !chapter.NothingLeft && _journalOffers.Add(pack.Id + "/" + chapter.Id))
                     {
                         fresh = true;
                     }
@@ -1545,6 +1557,12 @@ namespace BlocksBeyondTheStars.Client
 
         /// <summary>True while any cutscene owns the screen — see <see cref="Cutscenes"/>.</summary>
         public static bool CutsceneActive => Cutscenes.Active;
+
+        /// <summary>#2496: true while the HUD steps aside — a cutscene owns the screen, or a scene hides only the HUD (its
+        /// <c>hideHud</c> on a T3 overlay such as the tutorial's "Lift-off!", the controls stay free). Read by the HUD, the flight
+        /// HUD, the space radar and the name tags; the touch controls, the chat and the controls keep reading
+        /// <see cref="CutsceneActive"/>, so a touch pilot keeps the stick under an overlay.</summary>
+        public static bool HudHidden => Cutscenes.HudHidden;
 
         /// <summary>A fresh process (or an Editor play session without a domain reload) starts with no cutscene.</summary>
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
@@ -3058,6 +3076,7 @@ namespace BlocksBeyondTheStars.Client
             Network.StoryStateReceived += m =>
             {
                 Story = m;
+                UnknownStories.Observe(UnknownStoryPacks.PackIdsOf(m), HasStoryPack); // #2500: a world story this client lacks
                 // Rejoin-proof logs (#1110/#1111): the snapshot carries the found KEYS; texts resolve from
                 // the pack. Replaces the live-collected lists — the server is authoritative.
                 var pack = ActiveStoryPack();
@@ -3309,6 +3328,9 @@ namespace BlocksBeyondTheStars.Client
                         // #2468: this client plays story-pack cutscenes when its world rig has the director — the server then
                         // sends CutscenePlay (tag 295) instead of stamping every scene seen at once.
                         Network.PlaysCutscenes = CutsceneDirector.Instance != null;
+                        // #2499: VEGA's panel draws a line's buttons (the first-start question, Start now / Later on a course
+                        // offer) — every world rig has the panel, so this client always announces choices1.
+                        Network.ShowsChoices = true;
                         Network.Join(PlayerName, string.IsNullOrEmpty(Password) ? null : Password, Locale.Code(),
                             string.IsNullOrEmpty(Token) ? null : Token, ViewDistanceChunks,
                             string.IsNullOrEmpty(HostedToken) ? null : HostedToken,

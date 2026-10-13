@@ -65,6 +65,9 @@ namespace BlocksBeyondTheStars.Client
         // The collapsed tab (#2126) and its state: the fold rule is Unity-free (Client.Core, tested headless).
         private readonly VegaCollapse _collapse = new VegaCollapse();
         private GameObject _tab;
+        private CanvasGroup _speechGroup; // #2497: hides the speech panel under a card (the chip stays)
+        private CanvasGroup _tabGroup;
+        private bool _speechYielded;
         private RectTransform _tabRect;
         private TMPro.TMP_Text _tabText;
         private int _tabCount = -1;                    // the count last drawn, to flash the tab when a line arrives
@@ -73,10 +76,16 @@ namespace BlocksBeyondTheStars.Client
         private bool _clicked;                         // the pill or the tab was clicked/tapped since the last frame
 
         // Each queued line keeps its locale key (empty for a client-side reminder) so the ending can withdraw the epilogue
-        // line it shows itself (#2461, WithdrawLine).
-        private readonly Queue<(string Text, bool Prologue, string Key)> _queue = new Queue<(string, bool, string)>();
+        // line it shows itself (#2461, WithdrawLine) — and since #2499 its pack and its buttons (VegaQueuedLine, Client.Core).
+        private readonly Queue<VegaQueuedLine> _queue = new Queue<VegaQueuedLine>();
         private string _current = string.Empty;  // the page being typed/read (not the whole line)
         private string _currentKey = string.Empty; // the locale key of the line on screen (#2461)
+
+        // #2499: the buttons of the line on screen (None = a plain line) — the primary on the continue pill, the secondary on
+        // the skip pill — and the continue control's press/hold on them (a long press picks the secondary; Client.Core).
+        private VegaChoiceSet _choices = VegaChoiceSet.None;
+        private readonly VegaChoiceInput _choiceInput = new VegaChoiceInput();
+        private bool _skipPillChoice; // the skip pill currently shows the secondary button, not the prologue's skip
         private float _shown;     // characters revealed so far
         private int _shownChars = -1; // #1554: the character count last pushed into the text (skip equal frames)
 
@@ -126,8 +135,8 @@ namespace BlocksBeyondTheStars.Client
 
         // VEGA's non-verbal vocoder voice (#761): short ElevenLabs chatter variants chained while a
         // page types out. No words → language-independent, nothing to re-record when texts change.
-        private AudioClip[] _chatterClips;
-        private AudioSource _chatterSource;
+        // #2495: the shared NarratorVoice (CutsceneScreen.cs) — the cutscene director's speaker box speaks with it too.
+        private NarratorVoice _voice;
         private WorldLoadingOverlay _worldVeil; // chatter never plays behind the loading curtain
 
         // How many break reminders have fired this session — drives the escalating wording and the next due time.
@@ -236,26 +245,23 @@ namespace BlocksBeyondTheStars.Client
                 Game.Network.ShipAiLineReceived += OnLine;
             }
 
-            // Load every bundled chatter variant (vega_chatter_1..n); none bundled → silent typewriter.
-            var chatter = new List<AudioClip>();
-            for (int i = 1; ; i++)
-            {
-                var clip = Resources.Load<AudioClip>("audio/vega_chatter_" + i);
-                if (clip == null)
-                {
-                    break;
-                }
-
-                chatter.Add(clip);
-            }
-
-            _chatterClips = chatter.ToArray();
+            // VEGA's chatter clips (vega_chatter_1..3, #2495: the one default list in Client.Core); none bundled → silent typewriter.
+            _voice = new NarratorVoice(gameObject, () => Settings);
+            _voice.SetClips(BlocksBeyondTheStars.Client.Cutscenes.CutsceneVoice.VegaDefault);
             _worldVeil = FindAnyObjectByType<WorldLoadingOverlay>();
         }
 
         private string L(string key) => Game?.Localizer?.Get(key) ?? key;
 
         private bool HasKey(string key) => Game?.Localizer != null && !string.IsNullOrEmpty(key) && Game.Localizer.Has(key);
+
+        /// <summary>#2500: a story key's text for the panel and the chip — a key of a story this client does not have (a newer
+        /// build's pack) reads as the neutral "needs a newer version" note, never as a raw <c>[key]</c>
+        /// (<see cref="UnknownStoryPacks.Text"/>).</summary>
+        private string StoryKeyText(string key, string packId)
+            => Game != null && Game.Localizer != null
+                ? Game.UnknownStories.Text(key, packId, L, HasKey, Game.HasStoryPack)
+                : L(key);
 
         /// <summary>#2471: the label before an objective — the story's short name ("Training", "VEGA") from the server's story
         /// list or this client's copy of the story, else the generic "Objective".</summary>
@@ -308,7 +314,7 @@ namespace BlocksBeyondTheStars.Client
                 return false;
             }
 
-            _queue.Enqueue((VegaText.Compose(L(lineKey), null, KeyGlyphFor), false, lineKey));
+            _queue.Enqueue(new VegaQueuedLine(VegaText.Compose(L(lineKey), null, KeyGlyphFor), false, lineKey));
             if (Game != null && !Game.VegaLogKeys.Contains(lineKey))
             {
                 Game.VegaLogKeys.Add(lineKey);
@@ -337,6 +343,8 @@ namespace BlocksBeyondTheStars.Client
             _pages.Clear();
             _current = string.Empty;
             _currentKey = string.Empty;
+            _choices = VegaChoiceSet.None; // #2499: an unattended run answers nothing
+            _choiceInput.Reset();
             if (_speech != null)
             {
                 _speech.SetActive(false);
@@ -361,7 +369,7 @@ namespace BlocksBeyondTheStars.Client
             int before = _queue.Count;
             if (before > 0)
             {
-                var keep = new List<(string Text, bool Prologue, string Key)>(before);
+                var keep = new List<VegaQueuedLine>(before);
                 while (_queue.Count > 0)
                 {
                     var item = _queue.Dequeue();
@@ -381,6 +389,8 @@ namespace BlocksBeyondTheStars.Client
             {
                 _current = string.Empty;
                 _currentKey = string.Empty;
+                _choices = VegaChoiceSet.None;
+                _choiceInput.Reset();
                 _pages.Clear();
                 _speechText.text = string.Empty;
                 SetContinueVisible(false);
@@ -389,53 +399,16 @@ namespace BlocksBeyondTheStars.Client
             }
         }
 
-        /// <summary>Starts/chains a chatter segment while a page is typing (#761): random variant, a
-        /// touch of pitch jitter so the babble never sounds looped, volume from the audio settings.
-        /// The existing per-line "ai_blip" stays as the radio keying transient.</summary>
-        private void UpdateChatter()
-        {
-            if (_chatterClips == null || _chatterClips.Length == 0)
-            {
-                return;
-            }
-
-            // A line typing behind the loading curtain (veteran greeting, a landing transition) must not
-            // be audible before anything is visible — VEGA speaks only once the world does.
-            if (_worldVeil != null && _worldVeil.VeilActive)
-            {
-                StopChatter();
-                return;
-            }
-
-            if (_chatterSource == null)
-            {
-                _chatterSource = gameObject.AddComponent<AudioSource>();
-                _chatterSource.spatialBlend = 0f;
-                _chatterSource.playOnAwake = false;
-            }
-
-            if (_chatterSource.isPlaying)
-            {
-                return;
-            }
-
-            _chatterSource.clip = _chatterClips[Random.Range(0, _chatterClips.Length)];
-            _chatterSource.pitch = Random.Range(0.94f, 1.08f);
-            float master = Settings != null ? Settings.MasterVolume : 0.8f;
-            float sfx = Settings != null ? Settings.SfxVolume : 1f;
-            _chatterSource.volume = Mathf.Clamp01(master * sfx) * 0.5f;
-            _chatterSource.Play();
-        }
+        /// <summary>Starts/chains a chatter segment while a page is typing (#761): random variant (#2495: never the same twice
+        /// in a row), a touch of pitch jitter so the babble never sounds looped, volume from the audio settings — the shared
+        /// <see cref="NarratorVoice"/>. The existing per-line "ai_blip" stays as the radio keying transient. A line typing
+        /// behind the loading curtain (veteran greeting, a landing transition) must not be audible before anything is
+        /// visible — VEGA speaks only once the world does.</summary>
+        private void UpdateChatter() => _voice?.Tick(true, _worldVeil != null && _worldVeil.VeilActive);
 
         /// <summary>Cuts the chatter the moment the reveal completes, is fast-forwarded or dismissed —
         /// trailing babble under a finished page reads as a glitch.</summary>
-        private void StopChatter()
-        {
-            if (_chatterSource != null && _chatterSource.isPlaying)
-            {
-                _chatterSource.Stop();
-            }
-        }
+        private void StopChatter() => _voice?.Stop();
 
         /// <summary>True when any queued line still carries the prologue flag.</summary>
         private bool QueueHasPrologue()
@@ -519,11 +492,15 @@ namespace BlocksBeyondTheStars.Client
             }
 
             Debug.Log($"[Cinematic] VEGA line kind={m.Kind} key={m.LineKey} textLen={m.Text?.Length ?? 0} muted={muted}");
+
+            // #2499: the line's buttons (the first-start question, a course offer) — read once here; a line this client cannot
+            // act on stays a plain line. The pack rides along so a skip can drop that pack's waiting lines.
+            var choices = m.Kind == 4 ? VegaChoiceSet.None : VegaChoiceSet.Parse(m.Choices);
             if (!string.IsNullOrEmpty(m.Text) && !muted)
             {
                 // LLM-authored line (already in the player's language). The prologue flag keys on Kind,
                 // NOT on the text source — an authored Kind-4 page must not lose its staging (#760).
-                _queue.Enqueue((m.Text, m.Kind == 4, m.LineKey ?? string.Empty));
+                _queue.Enqueue(new VegaQueuedLine(m.Text, m.Kind == 4, m.LineKey ?? string.Empty, m.PackId, choices));
             }
             else if (!string.IsNullOrEmpty(m.LineKey) && !muted)
             {
@@ -531,11 +508,12 @@ namespace BlocksBeyondTheStars.Client
                 // suit lamp is on L" reads right after a rebind, on a pad, and on touch — expanded BEFORE the
                 // packed {0}… arguments (#1079) are filled in: string.Format reads "{key:" as a broken placeholder
                 // and threw the debris-field tip out of the poll for every pilot in 2026.10.8 (#2363).
-                string text = VegaText.Compose(L(m.LineKey), m.LineArg, KeyGlyphFor);
+                // #2500: a line of a story this client does not have reads as the neutral note, not as its raw key.
+                string text = VegaText.Compose(StoryKeyText(m.LineKey, m.PackId), m.LineArg, KeyGlyphFor);
 
                 // Prologue pages (Kind 4, #754) ride the normal queue with a flag — same panel, same
                 // paging, plus the dim + the skip (Esc, pad cancel, the skip pill) while one is showing.
-                _queue.Enqueue((text, m.Kind == 4, m.LineKey));
+                _queue.Enqueue(new VegaQueuedLine(text, m.Kind == 4, m.LineKey, m.PackId, choices));
             }
 
             Refresh();
@@ -565,7 +543,8 @@ namespace BlocksBeyondTheStars.Client
             {
                 // #2471: the story's short name replaces "Objective:" ("Training: Dock at a station", "VEGA: A signal on …").
                 string counter = ObjectiveTracker.Counter(_objProgress, _objTarget);
-                FitChip(ObjectiveTracker.ChipBody(ObjectivePrefix(_objectivePackId), VegaObjectiveChip.Format(L(_objectiveKey), _objectiveArg)), counter);
+                FitChip(ObjectiveTracker.ChipBody(ObjectivePrefix(_objectivePackId),
+                    VegaObjectiveChip.Format(StoryKeyText(_objectiveKey, _objectivePackId), _objectiveArg)), counter); // #2500
             }
 
             _extraSig = int.MinValue; // the strips under the chip follow it
@@ -617,7 +596,7 @@ namespace BlocksBeyondTheStars.Client
                 }
 
                 var row = rows[i];
-                string body = ObjectiveTracker.ChipBody(ObjectivePrefix(row.PackId), VegaObjectiveChip.Format(L(row.Key), row.Arg));
+                string body = ObjectiveTracker.ChipBody(ObjectivePrefix(row.PackId), VegaObjectiveChip.Format(StoryKeyText(row.Key, row.PackId), row.Arg));
                 string counter = ObjectiveTracker.Counter(row.Progress, row.Target);
                 _extraTexts[i].text = counter.Length > 0 ? body + "  " + counter : body;
                 _extraRows[i].GetComponent<RectTransform>().anchoredPosition =
@@ -673,7 +652,22 @@ namespace BlocksBeyondTheStars.Client
                 2 => "ui.reminder.break.again",
                 _ => "ui.reminder.break.long",
             };
-            _queue.Enqueue((L(key), false, key)); // shows via the normal typewriter path; bypasses the VegaHints mute by design
+            _queue.Enqueue(new VegaQueuedLine(L(key), false, key)); // shows via the normal typewriter path; bypasses the VegaHints mute by design
+        }
+
+        /// <summary>#2500: this world plays a story the client does not have (GameBootstrap noted it from the story list or the
+        /// story state) — the panel says so once per world session: "update the game to follow it". Like the break reminder it
+        /// bypasses the VegaHints mute (it explains why that story's lines read "needs a newer version") and is not kept in the
+        /// notes.</summary>
+        private void CheckUnknownStoryNotice()
+        {
+            if (Game == null || !Game.UnknownStories.TakeNotice())
+            {
+                return;
+            }
+
+            _queue.Enqueue(new VegaQueuedLine(L(UnknownStoryPacks.NoticeKey), false, UnknownStoryPacks.NoticeKey));
+            Refresh();
         }
 
         /// <summary>True when the continue control should be ignored: the in-game menu is open, or a text
@@ -715,6 +709,7 @@ namespace BlocksBeyondTheStars.Client
             }
 
             CheckPlaytimeReminder();
+            CheckUnknownStoryNotice();
             UpdateExtraRows(); // #2471: "Show all objectives" (cheap unless something changed)
 
             // The ending (or any later staged scene) owns the screen (#2461, B16): VEGA neither types nor talks under
@@ -723,20 +718,26 @@ namespace BlocksBeyondTheStars.Client
             // ending waits for a running prologue instead (ResolutionCinematic.CanStart).
             // A director card (T2, free input) does not open the shared state, but it speaks in the frame — VEGA waits for it
             // too (#2468), so the two never talk at once and the continue key reaches only the card.
+            // #2497: under a card (T2, free input) she only falls silent — her speech panel hides, the objective chip stays, as the
+            // HUD does under a card; every other scene takes the whole panel away.
             var ending = ResolutionCinematic.Instance;
-            bool yieldToScene = GameBootstrap.Cutscenes.ActiveOtherThan(CutsceneGate.Prologue)
-                                || (ending != null && ending.Pending && !_prologueStarted)
-                                || CutsceneDirector.HoldsScreen;
-            if (_canvas.enabled == yieldToScene)
+            bool hideAll = GameBootstrap.Cutscenes.ActiveOtherThan(CutsceneGate.Prologue)
+                           || (ending != null && ending.Pending && !_prologueStarted)
+                           || (CutsceneDirector.HoldsScreen && !CutsceneDirector.ShowsCard);
+            bool yieldToScene = hideAll || CutsceneDirector.HoldsScreen;
+            if (_canvas.enabled == hideAll)
             {
-                _canvas.enabled = !yieldToScene;
+                _canvas.enabled = !hideAll;
             }
+
+            SetSpeechYielded(yieldToScene && !hideAll);
 
             if (yieldToScene)
             {
                 StopChatter();
                 _clicked = false;
                 _skipClicked = false;
+                _choiceInput.Reset(); // #2499: a hold under a scene is no answer
                 return;
             }
 
@@ -755,8 +756,8 @@ namespace BlocksBeyondTheStars.Client
                 // partition — prologue pages first, everything else after, both in their original order.
                 if (!_prologueStarted && !_queue.Peek().Prologue && QueueHasPrologue())
                 {
-                    var story = new List<(string Text, bool Prologue, string Key)>();
-                    var rest = new List<(string Text, bool Prologue, string Key)>();
+                    var story = new List<VegaQueuedLine>();
+                    var rest = new List<VegaQueuedLine>();
                     while (_queue.Count > 0)
                     {
                         var item = _queue.Dequeue();
@@ -776,9 +777,13 @@ namespace BlocksBeyondTheStars.Client
                     Debug.Log($"[Cinematic] Reordered queue: {story.Count} story page(s) ahead of {rest.Count} other line(s).");
                 }
 
-                var (text, prologue, lineKey) = _queue.Dequeue();
+                var queued = _queue.Dequeue();
+                string text = queued.Text;
+                bool prologue = queued.Prologue;
                 _currentIsPrologue = prologue;
-                _currentKey = lineKey ?? string.Empty;
+                _currentKey = queued.Key ?? string.Empty;
+                _choices = prologue ? VegaChoiceSet.None : queued.Choices ?? VegaChoiceSet.None; // #2499
+                _choiceInput.Reset();
                 Debug.Log($"[Cinematic] Dequeued line (prologue={prologue}, started={_prologueStarted}, staged={_prologueStaged}, queued={_queue.Count})");
                 if (prologue)
                 {
@@ -828,6 +833,8 @@ namespace BlocksBeyondTheStars.Client
                 _clicked = false;
                 _skipClicked = false;
                 _currentKey = string.Empty;
+                _choices = VegaChoiceSet.None; // #2499
+                _choiceInput.Reset();
                 SetPrologueChrome(false);
                 _currentIsPrologue = false;
                 EndStagedPrologue("queue idle"); // finished or skipped — camera back, letterbox out (#760)
@@ -876,12 +883,16 @@ namespace BlocksBeyondTheStars.Client
             // touch NEXT button and the context-actions list all land here — the panel used to poll the
             // raw N key, which no pad or touch device could ever press. A click/tap on the continue pill or the
             // folded tab counts the same (#2126) — an explicit press, so it is honoured even over a menu.
-            bool pressed = (InputMap.Down(InputAction.VegaContinue) && !InputCaptured()) || _clicked;
+            bool captured = InputCaptured();
+            bool clicked = _clicked;
             _clicked = false;
+            bool keyDown = InputMap.Down(InputAction.VegaContinue) && !captured;
+            bool pressed = keyDown || clicked;
 
             // Folded into the tab (#2126): the continue control opens it again — it never skips the line unread.
             if (_collapse.Collapsed)
             {
+                _choiceInput.Reset(); // #2499: opening the tab is no answer
                 if (pressed)
                 {
                     ExpandFromTab();
@@ -930,6 +941,47 @@ namespace BlocksBeyondTheStars.Client
             // nothing gameplay-critical blocks on the panel (later lines just queue), and unattended
             // capture runs clear it via DismissSpeechForCapture. A page left waiting folds into the tab
             // instead (#2126) — out of the way, but never gone.
+            // #2499: a line with buttons, on its last page: a click or tap picks that pill; the continue control picks the
+            // primary when it is let go, and held for VegaChoiceInput.HoldSeconds the secondary — the deliberate route on a
+            // keyboard (the cursor is captured on foot) and on a pad (no stock button is free). Esc never answers.
+            if (ChoicesOnPage)
+            {
+                bool hasSecondary = _choices.Secondary != null;
+                var pick = VegaChoicePick.None;
+                if (skipClicked && hasSecondary)
+                {
+                    pick = VegaChoicePick.Secondary;
+                }
+                else if (clicked)
+                {
+                    pick = VegaChoicePick.Primary;
+                }
+                else if (captured)
+                {
+                    _choiceInput.Reset(); // a menu or a text field took the keys — a press there answers nothing
+                }
+                else
+                {
+                    pick = _choiceInput.Tick(keyDown, InputMap.Held(InputAction.VegaContinue), Time.unscaledDeltaTime, hasSecondary);
+                }
+
+                if (pick != VegaChoicePick.None)
+                {
+                    Choose(pick);
+                }
+                else
+                {
+                    TintHold(_choiceInput.HoldProgress);
+                    if (!_choiceInput.Holding
+                        && _collapse.Tick(Time.unscaledDeltaTime, fullyRevealed: true, prologue: false, hudHidden: captured))
+                    {
+                        CollapseToTab();
+                    }
+                }
+
+                return;
+            }
+
             if (pressed)
             {
                 if (_page < _pages.Count - 1)
@@ -938,18 +990,74 @@ namespace BlocksBeyondTheStars.Client
                 }
                 else
                 {
-                    _current = string.Empty;
-                    _pages.Clear();
-                    _speechText.text = string.Empty;
-                    SetContinueVisible(false);
-                    // #2469: the player read the line through — a tutorial "read" step waits for exactly this. Teaching only;
-                    // the server ignores it unless a step listens (and an older server drops the tag).
-                    Game?.Network?.SendUiTutorialEvent(BlocksBeyondTheStars.Shared.Story.GameEventKeys.UiVegaContinueId);
+                    EndLine();
                 }
             }
-            else if (_collapse.Tick(Time.unscaledDeltaTime, fullyRevealed: true, prologue: _currentIsPrologue, hudHidden: InputCaptured()))
+            else if (_collapse.Tick(Time.unscaledDeltaTime, fullyRevealed: true, prologue: _currentIsPrologue, hudHidden: captured))
             {
                 CollapseToTab();
+            }
+        }
+
+        /// <summary>The line on screen goes, and the next one may come up. <paramref name="readThrough"/>: the player continued
+        /// past it — off for an answer to a line's buttons (#2499), which is a choice, not a lesson read through (a "read" step
+        /// waiting behind the question must not tick off unseen).</summary>
+        private void EndLine(bool readThrough = true)
+        {
+            _current = string.Empty;
+            _pages.Clear();
+            _speechText.text = string.Empty;
+            SetContinueVisible(false);
+            _choices = VegaChoiceSet.None;
+            _choiceInput.Reset();
+            if (readThrough)
+            {
+                // #2469: the player read the line through — a tutorial "read" step waits for exactly this. Teaching only;
+                // the server ignores it unless a step listens (and an older server drops the tag).
+                Game?.Network?.SendUiTutorialEvent(BlocksBeyondTheStars.Shared.Story.GameEventKeys.UiVegaContinueId);
+            }
+        }
+
+        // ---- A line's buttons (#2499) ---------------------------------------------------------------------------
+
+        /// <summary>The line on screen has buttons and its last page is up.</summary>
+        private bool ChoicesOnPage => _choices.HasAny && _pages.Count > 0 && _page == _pages.Count - 1 && _current.Length > 0;
+
+        /// <summary>The secondary button shows: the line's last page has typed out (it appears with the primary).</summary>
+        private bool SecondaryChoiceShowing => ChoicesOnPage && _choices.Secondary != null && _shown >= _current.Length;
+
+        /// <summary>Acts on the picked button: its intent goes to the server (a plain continue sends none), a skip drops the
+        /// skipped pack's lines still waiting here — they teach what the player just said they know — and the line ends
+        /// (without the "read through" flag). The server answers a skip of the first-start question with one more line.</summary>
+        private void Choose(VegaChoicePick pick)
+        {
+            var choice = pick == VegaChoicePick.Secondary ? _choices.Secondary : _choices.Primary;
+            var pill = pick == VegaChoicePick.Secondary ? _skipPill : _continuePill;
+            if (pill != null)
+            {
+                UiHolo.Flash(pill.GetComponent<UiHolo.Shape>());
+            }
+
+            if (choice != null && choice.SendsIntent)
+            {
+                Game?.Network?.SendStoryPack(choice.PackId, choice.Action, choice.ChapterId);
+                if (choice.DropsPackLines)
+                {
+                    int dropped = VegaQueuedLine.DropPack(_queue, choice.PackId);
+                    Debug.Log($"[VEGA] Choice '{choice.Action}' for '{choice.PackId}': dropped {dropped} waiting line(s) of the pack.");
+                }
+            }
+
+            TintHold(0f);
+            EndLine(readThrough: false);
+        }
+
+        /// <summary>The secondary pill brightens while the continue control is held towards it.</summary>
+        private void TintHold(float progress)
+        {
+            if (_skipHint != null && _skipPillChoice)
+            {
+                _skipHint.color = Color.Lerp(UiKit.Cyan, Color.white, Mathf.Clamp01(progress));
             }
         }
 
@@ -961,6 +1069,7 @@ namespace BlocksBeyondTheStars.Client
             _shownChars = -1;
             _speechText.text = string.Empty;
             SetContinueVisible(false);
+            _choiceInput.Reset(); // #2499: a press from the page before is no answer
             _collapse.Reset(); // every page gets its own wait before it may fold (#2126)
         }
 
@@ -1001,9 +1110,12 @@ namespace BlocksBeyondTheStars.Client
         }
 
         private InputDeviceKind _skipDevice = (InputDeviceKind)(-1);
+        private string _skipLabelKey = string.Empty; // #2499: the secondary button's label key last drawn on the pill
 
         /// <summary>Shows the skip pill on every prologue page — from its first character, not only once it has typed out —
-        /// labelled for the device in hand (#2461): "[Esc]", the pad's cancel button, or a plain tap target on touch.</summary>
+        /// labelled for the device in hand (#2461): "[Esc]", the pad's cancel button, or a plain tap target on touch. Since
+        /// #2499 the same pill carries a line's secondary button once its last page has typed out ("Hold [N]: I know the game
+        /// — skip"; on touch the label alone — the pill is tapped).</summary>
         private void UpdateSkipPill()
         {
             if (_skipPill == null)
@@ -1011,24 +1123,46 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
-            bool want = _currentIsPrologue && _current.Length > 0;
+            bool choice = !_currentIsPrologue && SecondaryChoiceShowing;
+            bool want = (_currentIsPrologue && _current.Length > 0) || choice;
             if (_skipPill.gameObject.activeSelf != want)
             {
                 _skipPill.gameObject.SetActive(want);
                 _skipDevice = (InputDeviceKind)(-1); // re-measure on the next show
             }
 
-            if (!want || InputMap.ActiveDevice == _skipDevice)
+            string labelKey = choice ? _choices.Secondary.LabelKey : string.Empty;
+            if (!want || (InputMap.ActiveDevice == _skipDevice && choice == _skipPillChoice && labelKey == _skipLabelKey))
             {
                 return;
             }
 
             _skipDevice = InputMap.ActiveDevice;
-            _skipHint.text = CinematicFrame.SkipLabel(_localize);
-            float width = Mathf.Clamp(_skipHint.preferredWidth + ContinuePad, 90f, 300f);
+            _skipPillChoice = choice;
+            _skipLabelKey = labelKey;
+            _skipHint.text = choice ? SecondaryLabel(_choices.Secondary) : CinematicFrame.SkipLabel(_localize);
+            _skipHint.color = choice ? UiKit.Cyan : UiKit.CyanDim;
+            float width = Mathf.Clamp(_skipHint.preferredWidth + ContinuePad, 90f, choice ? SecondaryMaxW : 300f);
             _skipPill.sizeDelta = new Vector2(width, ContinueH);
             _skipHint.rectTransform.sizeDelta = new Vector2(width, ContinueH);
         }
+
+        // #2499: the two choice pills share the panel's bottom edge (640 wide, 14 in from each side) — the secondary left, the
+        // primary right — so neither may grow into the other.
+        private const float SecondaryMaxW = 360f, PrimaryMaxW = 230f;
+
+        /// <summary>The control name on a pill for the device in hand: the bound key, the pad glyph, nothing on touch (the pill
+        /// itself is tapped).</summary>
+        private static string ChoiceControl(InputDeviceKind device) => device switch
+        {
+            InputDeviceKind.Touch => string.Empty,
+            InputDeviceKind.Gamepad => InputMap.Glyph(InputAction.VegaContinue),
+            _ => "[" + InputMap.Key(InputAction.VegaContinue) + "]",
+        };
+
+        /// <summary>"Hold [N]: I know the game — skip" (#2499) — the label alone on touch.</summary>
+        private string SecondaryLabel(VegaChoice choice)
+            => VegaChoiceLabels.Secondary(L(choice.LabelKey), L("ui.vega.choice.hold"), ChoiceControl(InputMap.ActiveDevice));
 
         /// <summary>A touch tap the full-screen touch look pad caught first (its canvas sits above the HUD): counts as a
         /// tap on the continue pill or the folded tab when it lands on one (#2126).</summary>
@@ -1101,6 +1235,43 @@ namespace BlocksBeyondTheStars.Client
             _tabCount = -1;
         }
 
+        /// <summary>#2497: under a card VEGA's speech panel, her folded tab and the prologue dim step aside (transparent, no
+        /// clicks) while the objective chip and its extra rows stay — the player keeps playing under a card. Their own
+        /// active state is left alone, so the line she was saying shows again as it was once the card is gone.</summary>
+        private void SetSpeechYielded(bool yielded)
+        {
+            if (yielded == _speechYielded || _speech == null)
+            {
+                return;
+            }
+
+            _speechYielded = yielded;
+            if (_speechGroup == null)
+            {
+                _speechGroup = _speech.AddComponent<CanvasGroup>();
+            }
+
+            if (_tabGroup == null && _tab != null)
+            {
+                _tabGroup = _tab.AddComponent<CanvasGroup>();
+            }
+
+            foreach (var group in new[] { _speechGroup, _tabGroup })
+            {
+                if (group != null)
+                {
+                    group.alpha = yielded ? 0f : 1f;
+                    group.blocksRaycasts = !yielded;
+                    group.interactable = !yielded;
+                }
+            }
+
+            if (_dim != null)
+            {
+                _dim.enabled = !yielded;
+            }
+        }
+
         /// <summary>Keeps the tab's text, size and row spot current: the waiting lines (flashing when one more arrives),
         /// the control that opens it for the device in hand, and beside the objective chip when that is up.</summary>
         private void UpdateTab()
@@ -1153,13 +1324,22 @@ namespace BlocksBeyondTheStars.Client
                 ? next + "  " + string.Format(L("ui.vega.page"), _page + 1, _pages.Count)
                 : next;
 
+            // #2499: on a line's last page its primary button takes the pill ("Let's go · [N]", "Later · (Back)"); a line
+            // whose first button this client could not read keeps the plain "Continue".
+            bool primaryChoice = ChoicesOnPage && _choices.Primary.LabelKey.Length > 0;
+            if (primaryChoice)
+            {
+                hint = VegaChoiceLabels.Primary(L(_choices.Primary.LabelKey), ChoiceControl(_hintDevice));
+            }
+
             // The skip lives in its own pill on prologue pages (UpdateSkipPill, #2461) — clicking this one continues.
 
             // The pill hugs its text (#2126), right-aligned at the panel's bottom edge (measured live — TMP lays out
             // against an active object).
             SetContinueVisible(true);
             _continueHint.text = hint;
-            float width = Mathf.Min(SpeechTextW, _continueHint.preferredWidth + ContinuePad);
+            bool sharesEdge = primaryChoice || (ChoicesOnPage && _choices.Secondary != null); // the secondary pill sits left of it
+            float width = Mathf.Min(sharesEdge ? PrimaryMaxW : SpeechTextW, _continueHint.preferredWidth + ContinuePad);
             _continuePill.sizeDelta = new Vector2(width, ContinueH);
             _continuePill.anchoredPosition = new Vector2(640f - ContinueRight - width, -ContinueY);
             _continueHint.rectTransform.sizeDelta = new Vector2(width, ContinueH);

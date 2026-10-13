@@ -5486,6 +5486,7 @@ namespace BlocksBeyondTheStars.Client
 
         // ── Modern uGUI overlay (replaces the IMGUI fade + hint) ─────────────────────────────
         private Canvas _ui;
+        private Canvas _fx;  // #2496: the launch/landing fade and the hit flash on their own canvas — they work while the HUD hides
         private Image _fade;
         private Image _hit;
         private Image _crosshair;
@@ -5629,13 +5630,19 @@ namespace BlocksBeyondTheStars.Client
                 return;
             }
 
+            // #2496: the launch/landing fade and the hit flash live on a small canvas of their own, so they keep working while
+            // the flight HUD steps aside under a cutscene (GameBootstrap.HudHidden). Same sorting order as the HUD and created
+            // first, so the HUD stays drawn over the fade as before (equal orders draw in hierarchy order).
+            _fx = UiKit.CreateCanvas("Space View Fade", UiKit.HudRefW, UiKit.HudRefH);
+            _fx.sortingOrder = 12;
+
             // Flat (not diegetic) but still a HUD, so it follows the player's UI-scale setting (#483).
             _ui = UiKit.CreateCanvas("Space View Overlay", UiKit.HudRefW, UiKit.HudRefH, userScalable: true); // ~1.25× bigger flight HUD
             _ui.sortingOrder = 12; // above the space HUD, below menus
 
             // Full-screen launch/landing fade.
             var fadeGo = new GameObject("Fade", typeof(RectTransform));
-            fadeGo.transform.SetParent(_ui.transform, false);
+            fadeGo.transform.SetParent(_fx.transform, false);
             var frt = fadeGo.GetComponent<RectTransform>();
             frt.anchorMin = Vector2.zero;
             frt.anchorMax = Vector2.one;
@@ -5647,7 +5654,7 @@ namespace BlocksBeyondTheStars.Client
 
             // Red damage flash on a hit/collision.
             var hitGo = new GameObject("Hit", typeof(RectTransform));
-            hitGo.transform.SetParent(_ui.transform, false);
+            hitGo.transform.SetParent(_fx.transform, false);
             var hrtt = hitGo.GetComponent<RectTransform>();
             hrtt.anchorMin = Vector2.zero;
             hrtt.anchorMax = Vector2.one;
@@ -5842,11 +5849,27 @@ namespace BlocksBeyondTheStars.Client
                     _ui.enabled = false;
                 }
 
+                if (_fx != null && _fx.enabled)
+                {
+                    _fx.enabled = false; // a landing ends on full black — the fade must go with the view
+                }
+
                 return;
             }
 
             EnsureUi();
-            _ui.enabled = true;
+            // #2496: the flight HUD steps aside under a cutscene like the on-foot HUD (GameBootstrap.HudHidden — the T3 overlay
+            // "Lift-off!" over the launch rise, the ending); the fade and the hit flash on their own canvas keep working.
+            bool hud = !GameBootstrap.HudHidden;
+            if (_ui.enabled != hud)
+            {
+                _ui.enabled = hud;
+            }
+
+            if (!_fx.enabled)
+            {
+                _fx.enabled = true;
+            }
 
             // Entry-hatch beacon: a steady cyan glow normally, a strong pulse while on an EVA so you can find
             // your way back to the ship's hatch from a distance.
@@ -5915,18 +5938,30 @@ namespace BlocksBeyondTheStars.Client
                 _fade.color = new Color(0f, 0f, 0f, 0f);
                 var loc = Game.Localizer;
                 // Device-aware controls hint: pad glyphs on a gamepad; blank on touch (the on-screen buttons
-                // are self-labelling); the keyboard text otherwise.
-                _hint.text = InputMap.ActiveDevice switch
+                // are self-labelling); the keyboard text otherwise — its keys are {key:Action} tokens since #2502,
+                // expanded when the device, the language or a binding changes, not every frame.
+                var evaDevice = InputMap.ActiveDevice;
+                var evaStamp = HudUi.GlyphStamp;
+                if (_evaHint == null || evaDevice != _evaHintDevice || !ReferenceEquals(loc, _evaHintLoc) || !evaStamp.Equals(_evaHintStamp))
                 {
-                    InputDeviceKind.Touch => string.Empty,
-                    InputDeviceKind.Gamepad => loc != null ? loc.Get("ui.space.eva_controls_pad")
-                        : "EVA — Left stick float · Right stick look · (A)/(B) up·down · (X) board",
-                    _ => loc != null ? loc.Get("ui.space.eva_controls")
-                        : "EVA — WASD/Mouse float · Space/Ctrl up/down · E board",
-                };
+                    _evaHintDevice = evaDevice;
+                    _evaHintLoc = loc;
+                    _evaHintStamp = evaStamp;
+                    _evaHint = evaDevice switch
+                    {
+                        InputDeviceKind.Touch => string.Empty,
+                        InputDeviceKind.Gamepad => loc != null ? loc.Get("ui.space.eva_controls_pad")
+                            : "EVA — Left stick float · Right stick look · (A)/(B) up·down · (X) board",
+                        _ => loc != null ? HudUi.ExpandKeyTokens(loc, loc.Get("ui.space.eva_controls"))
+                            : "EVA — WASD/Mouse float · Space/Ctrl up/down · E board",
+                    };
+                }
+
+                _hint.text = _evaHint;
                 _hint.gameObject.SetActive(true);
 
-                string useGlyph = InputMap.Glyph(InputAction.Interact); // the live binding (key or pad button)
+                // The live binding (key or pad button) — and on a tablet the USE button, not the key letter (#2502).
+                string useGlyph = HudUi.KeyTokenGlyph(loc, nameof(InputAction.Interact), prompt: true);
                 bool stationCloser = _nearStationId != null && (!_evaNearShip || _nearStationSq <= _evaShipSq);
                 if (stationCloser)
                 {
@@ -5968,27 +6003,32 @@ namespace BlocksBeyondTheStars.Client
                 // the Text mesh each frame although the final string never changed.
                 var device = InputMap.ActiveDevice;
                 bool autopilot = Game.AiCoreTier >= 2;
-                if (_flightHint == null || device != _flightHintDevice || autopilot != _flightHintAutopilot || !ReferenceEquals(loc, _flightHintLoc))
+                var stamp = HudUi.GlyphStamp; // #2502: a rebind or another pad glyph set re-expands the {key:Action} tokens
+                if (_flightHint == null || device != _flightHintDevice || autopilot != _flightHintAutopilot || !ReferenceEquals(loc, _flightHintLoc)
+                    || !stamp.Equals(_flightHintStamp))
                 {
                     _flightHintDevice = device;
                     _flightHintAutopilot = autopilot;
                     _flightHintLoc = loc;
+                    _flightHintStamp = stamp;
                     string hint = device switch
                     {
                         InputDeviceKind.Touch => string.Empty,
                         InputDeviceKind.Gamepad => loc != null ? loc.Get("ui.space.controls_pad")
                             : "Left stick fly · Right stick steer · RB fire · (X) land/dock · (Y) view",
-                        _ => loc != null ? loc.Get("ui.space.controls").Replace("{feedback_key}", FeedbackUi.HotkeyName)
+                        _ => loc != null ? HudUi.ExpandKeyTokens(loc, loc.Get("ui.space.controls")).Replace("{feedback_key}", FeedbackUi.HotkeyName)
                             : "WASD/Mouse fly · V view · E land/dock · L return · G EVA",
                     };
+                    // #2502: the autopilot and chart hints name the bound key / the pad's Actions list — the pad line used to
+                    // read the keyboard's "[P] Autopilot · [M] Chart".
                     if (autopilot && device != InputDeviceKind.Touch)
                     {
-                        hint += " · " + Loc("ui.vega.autopilot.hint", "[P] Autopilot");
+                        hint += " · " + HudUi.ExpandKeyTokens(loc, Loc("ui.vega.autopilot.hint", "{key:FlightAutopilot} autopilot"));
                     }
 
                     if (device != InputDeviceKind.Touch)
                     {
-                        hint += " · " + Loc("ui.spacemap.key_hint", "[M] Chart"); // system chart (#597)
+                        hint += " · " + HudUi.ExpandKeyTokens(loc, Loc("ui.spacemap.key_hint", "{key:FlightMap} chart")); // system chart (#597)
                     }
 
                     _flightHint = hint;
@@ -5998,8 +6038,8 @@ namespace BlocksBeyondTheStars.Client
                 _hint.gameObject.SetActive(true);
 
                 // Prompt whichever you're closest to: dock a station or land on a body you've flown up to —
-                // labelled with the live Interact binding (keyboard key or pad glyph).
-                string useGlyph = InputMap.Glyph(InputAction.Interact);
+                // labelled with the live Interact binding (keyboard key or pad glyph; a tablet's USE button, #2502).
+                string useGlyph = HudUi.KeyTokenGlyph(loc, nameof(InputAction.Interact), prompt: true);
                 bool haveStation = _nearStationId != null;
                 bool haveBody = _landTargetId != null;
                 bool stationCloser = haveStation && (!haveBody || _nearStationSq <= _landTargetSq);
@@ -6400,6 +6440,13 @@ namespace BlocksBeyondTheStars.Client
         private InputDeviceKind _flightHintDevice;
         private bool _flightHintAutopilot;
         private object _flightHintLoc;
+        private (ClientSettings, int, PadGlyphSet) _flightHintStamp;
+
+        // #2502: the EVA controls line, cached like the flight line (its keys are {key:Action} tokens now).
+        private string _evaHint;
+        private InputDeviceKind _evaHintDevice;
+        private object _evaHintLoc;
+        private (ClientSettings, int, PadGlyphSet) _evaHintStamp;
         private string _cargoText;
         private int _cargoTextCount = -1;
         private string _cargoTextLabel;
@@ -6442,6 +6489,11 @@ namespace BlocksBeyondTheStars.Client
             if (_ui != null)
             {
                 Destroy(_ui.gameObject);
+            }
+
+            if (_fx != null)
+            {
+                Destroy(_fx.gameObject);
             }
         }
 

@@ -96,13 +96,13 @@ public sealed partial class GameServer
                 StartPackOnRequest(s, pack);
                 break;
             case StoryPackActions.SkipPack:
-                SkipPack(s, pack);
+                SkipPack(s, pack, journalHint: AnswersAskSkip(s, pack)); // #2499: the first-start question's "skip" gets the hint
                 break;
             case StoryPackActions.RestartPack:
                 RestartPackOnRequest(s, pack);
                 break;
             case StoryPackActions.StartChapter:
-                if (pack.ChaptersById.TryGetValue(chapterId, out var start))
+                if (pack.ChaptersById.TryGetValue(chapterId, out var start) && !AnswerNothingLeft(s, start))
                 {
                     StartChapter(s, start);
                 }
@@ -123,14 +123,15 @@ public sealed partial class GameServer
 
                 break;
             case StoryPackActions.RestartChapter:
-                if (pack.ChaptersById.TryGetValue(chapterId, out var restart))
+                if (pack.ChaptersById.TryGetValue(chapterId, out var restart) && !AnswerNothingLeft(s, restart))
                 {
                     RestartChapter(s, restart);
                 }
 
                 break;
             case StoryPackActions.ReplayChapter:
-                if (pack.ChaptersById.TryGetValue(chapterId, out var replay) && ChapterDoneOrSkipped(s, replay) && !ChapterReplaying(s, replay))
+                if (pack.ChaptersById.TryGetValue(chapterId, out var replay) && ChapterDoneOrSkipped(s, replay) && !ChapterReplaying(s, replay)
+                    && !AnswerNothingLeft(s, replay))
                 {
                     RestartChapter(s, replay);
                 }
@@ -156,7 +157,8 @@ public sealed partial class GameServer
     }
 
     /// <summary>Switches a pack back on. A pack that would not start by itself — an opt-in world's tutorial, a pack off by
-    /// default — starts with it (#2471: the Settings' "Tutorial: on" is one switch for the player, whatever the world rule).</summary>
+    /// default — starts with it (#2471: the Settings' "Tutorial &amp; courses: on" is one switch for the player, whatever the
+    /// world rule; on a "Short courses only" world the pack then starts with its basic training skipped, #2498).</summary>
     private void OptIntoPack(PlayerSession s, CompiledPack pack)
     {
         bool changed = MilestonesOf(s).Remove(StoryPackKeys.OptOut(pack.Id));
@@ -230,10 +232,32 @@ public sealed partial class GameServer
         return true;
     }
 
-    /// <summary>"I know the game": every mandatory chapter is skipped (deep-dive offers stay on). Grants nothing.</summary>
-    private void SkipPack(PlayerSession s, CompiledPack pack)
+    /// <summary>"I know the game": every mandatory chapter is skipped (deep-dive offers stay on, the graduation's suggested
+    /// courses are marked offered, #2498). Grants nothing. <paramref name="journalHint"/> (#2499, the answer to VEGA's
+    /// first-start question): VEGA says the training waits in the Journal — before the world story's lines the skip may set
+    /// off.</summary>
+    private void SkipPack(PlayerSession s, CompiledPack pack, bool journalHint = false)
     {
         StartPack(s, pack, playIntro: false);
+        SkipMandatory(s, pack);
+        _repo.SavePlayer(s.State);
+        if (journalHint)
+        {
+            SendPackLine(s, pack, SkippedHintLine);
+        }
+
+        AdvancePlayer(s);
+        SendVegaObjective(s);
+    }
+
+    /// <summary>The skip of a pack's mandatory part (#2498, shared by "Skip all" and the silent start of a "Short courses only"
+    /// world): every mandatory chapter not yet through is skipped with its open steps — no card, no closing line, no
+    /// graduation, nothing granted — a tutorial writes the legacy graduation keys, the pack is stamped done, and the
+    /// graduation's suggested courses without a moment of their own (the flight courses) are marked offered silently (Start /
+    /// Later and the badge in the Journal; this counts as an offer, so the next one waits the usual gap).
+    /// <paramref name="legacySendOff"/> off: an older client does not hear the old send-off either.</summary>
+    private void SkipMandatory(PlayerSession s, CompiledPack pack, bool legacySendOff = true)
+    {
         foreach (var ch in pack.Chapters)
         {
             if (!ch.Optional && !ChapterFinished(s, ch))
@@ -248,10 +272,8 @@ public sealed partial class GameServer
             WriteLegacyGraduation(s);
         }
 
-        CheckPackDone(s, pack);
-        _repo.SavePlayer(s.State);
-        AdvancePlayer(s);
-        SendVegaObjective(s);
+        CheckPackDone(s, pack, legacySendOff);
+        SuggestCourses(s, pack, skip: true);
     }
 
     private void SkipChapterSteps(PlayerSession s, CompiledChapter ch)
@@ -299,6 +321,59 @@ public sealed partial class GameServer
         AdvancePlayer(s);
         SendVegaObjective(s);
         return true;
+    }
+
+    /// <summary>#2500, the server half of "nothing left to practise": a Start, Replay or Start over of a chapter with nothing
+    /// left (<see cref="ChapterSpentFor"/>) — from an older Journal that has no <see cref="NetStoryChapter.NothingLeft"/>, or a
+    /// click that raced the flag — does not start it: it would end at once without a word. VEGA says so instead
+    /// (<see cref="ChapterNothingLeftLine"/>), and a course not started yet is stamped done silently (it is through; the Journal
+    /// then lists it done). True when answered — the caller then starts nothing. Where the start would be refused anyway (the
+    /// story switched off, a course the player is not admitted to or the world rules out, an older client's course) nothing is
+    /// said either.</summary>
+    private bool AnswerNothingLeft(PlayerSession s, CompiledChapter ch)
+    {
+        if (!PackRunsFor(s, ch.Pack) || !ChapterSpentFor(s, ch))
+        {
+            return false;
+        }
+
+        if (!ChapterDoneOrSkipped(s, ch))
+        {
+            if ((!s.SupportsPacks && ch.Pack.IsTutorial) || !EvaluateStoryCondition(ch.Requires, s) || !ChapterVisible(s, ch))
+            {
+                return false; // StartChapter refuses it silently
+            }
+
+            foreach (var step in ch.Steps.Where(StepCountsForChapter).Where(st => !StepComplete(s, st)))
+            {
+                CompleteStep(s, step, silent: true); // what the start would have done: the evidence counts, nothing is said
+            }
+
+            CompleteChapter(s, ch, skipped: false, silent: true);
+        }
+
+        SendNothingLeftLine(s, ch);
+        return true;
+    }
+
+    /// <summary>"You've already done everything in {0}." A client of this build or newer (<see cref="ClientFeatures.Choices1"/>
+    /// came with it) localizes the key itself; an older one — the Journal this fallback is for — has no text for it, so the line
+    /// goes out composed in the player's language.</summary>
+    private void SendNothingLeftLine(PlayerSession s, CompiledChapter ch)
+    {
+        string title = string.IsNullOrEmpty(ch.Def.TitleKey) ? ch.Id : LocalizerFor(s.Locale).Get(ch.Def.TitleKey);
+        if (s.SupportsPacks && s.SupportsChoices)
+        {
+            SendPackLine(s, ch.Pack, ChapterNothingLeftLine, title);
+            return;
+        }
+
+        SendVegaWithObjective(s, new ShipAiLine
+        {
+            PackId = ch.Pack.Id,
+            Speaker = ch.Pack.Narrator,
+            Text = ComposeLegacyText(s.Locale, ChapterNothingLeftLine, title),
+        });
     }
 
     /// <summary>Starts an optional chapter (or a non-optional one that does not start by itself); a chapter that is done
@@ -400,8 +475,8 @@ public sealed partial class GameServer
     }
 
     /// <summary>The tutorial packs' answer to the old Settings button (<see cref="SkipOnboardingIntent"/> — still sent by an
-    /// older client; a current one has "Tutorial: on/off" and the Journal, #2471): skip = skip the pack, restart = replay its
-    /// mandatory chapters (refused while the world has the tutorial off).</summary>
+    /// older client; a current one has "Tutorial &amp; courses: on/off" and the Journal, #2471): skip = skip the pack,
+    /// restart = replay its mandatory chapters (refused while the world has the tutorial off).</summary>
     private void SkipOrRestartTutorialPacks(PlayerSession s, bool restart)
     {
         foreach (var pack in PlayerPacks)
@@ -450,6 +525,14 @@ public sealed partial class GameServer
                 continue;
             }
 
+            // #2487: an older client (no packs1) never stamps the pack done — its basic training is through once its nine
+            // legacy lessons are, so VEGA may chat with it from then on (nothing is written; a current client later still
+            // gets the new lessons).
+            if (gate == StoryGateNames.Banter && !s.SupportsPacks && MandatoryChaptersThrough(s, pack))
+            {
+                return true;
+            }
+
             return pack.Gates.TryGetValue(gate, out var condition) ? EvaluateStoryCondition(condition, s) : null;
         }
 
@@ -461,8 +544,8 @@ public sealed partial class GameServer
     // ---------------------------------------------------------------------------------------------
 
     /// <summary>The server side of <c>/tutorial</c> (#2466): <c>skip|restart|chapter &lt;id&gt;</c> for the caller or the named
-    /// player, <c>policy auto|optin|off</c> for the world. World management, not a cheat — the role is the gate. The verb
-    /// line rides in <see cref="AdminCommandIntent.StringArg"/>, the player in <see cref="AdminCommandIntent.TargetPlayer"/>.</summary>
+    /// player, <c>policy auto|courses|optin|off</c> for the world. World management, not a cheat — the role is the gate. The
+    /// verb line rides in <see cref="AdminCommandIntent.StringArg"/>, the player in <see cref="AdminCommandIntent.TargetPlayer"/>.</summary>
     private void HandleTutorialAdmin(PlayerSession session, AdminCommandIntent cmd)
     {
         string[] words = (cmd.StringArg ?? string.Empty).Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
@@ -573,7 +656,9 @@ public sealed partial class GameServer
         return ChapterRuns(s, ch);
     }
 
-    /// <summary>Sets the world's tutorial rule live: persisted into the save's rules and re-sent to everyone.</summary>
+    /// <summary>Sets the world's tutorial rule live: persisted into the save's rules and re-sent to everyone, whose packs then
+    /// advance under it — "Short courses only" (#2498) skips the basic training silently for whoever has not started it and
+    /// leaves a running training alone.</summary>
     private void SetTutorialPolicy(TutorialPolicy policy)
     {
         Rules.TutorialPolicy = policy;

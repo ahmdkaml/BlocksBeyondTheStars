@@ -22,8 +22,16 @@ public sealed class StepEscalationState
     /// <summary>The hint line went out.</summary>
     public bool HintSent { get; set; }
 
-    /// <summary>The marker ping went out (or found nothing).</summary>
+    /// <summary>The marker went up (#2490: only then — a provider that found nothing retries).</summary>
     public bool MarkerSent { get; set; }
+
+    /// <summary>#2490: where the last marker probe found nothing (<see cref="GameServer"/>'s location key), or null before
+    /// the first miss. A new location retries at once.</summary>
+    public string? MarkerMissAt { get; set; }
+
+    /// <summary>#2490: <see cref="PlayerSession.StoryPackPlaySeconds"/> of the last miss — on the same spot the probe retries
+    /// after <c>MarkerRetrySeconds</c>.</summary>
+    public double MarkerMissTime { get; set; }
 
     /// <summary>The skip offer went out.</summary>
     public bool OfferSent { get; set; }
@@ -61,8 +69,13 @@ public sealed partial class GameServer
     /// <summary>Spoken when a MUST step has been open for the skip-offer time.</summary>
     internal const string StepOfferSkipLine = "vega.step.offer_skip";
 
-    /// <summary>Spoken when an optional chapter is offered ({0} = the chapter title).</summary>
+    /// <summary>Spoken when an optional chapter is offered ({0} = the chapter title) — to a client without buttons; one with
+    /// them (#2499) hears <see cref="ChapterOfferChoiceLine"/> with [Later] / [Start now].</summary>
     internal const string ChapterOfferLine = "vega.chapter.offer";
+
+    /// <summary>#2500: spoken instead of a silent nothing when the player starts or replays a chapter with nothing left to
+    /// practise ({0} = the chapter title) — <see cref="ChapterSpentFor"/>.</summary>
+    internal const string ChapterNothingLeftLine = StoryNarratorLines.ChapterNothingLeft;
 
     // ---------------------------------------------------------------------------------------------
     // The compiled pack model.
@@ -462,6 +475,10 @@ public sealed partial class GameServer
     private bool PackRunsFor(PlayerSession s, CompiledPack pack)
         => PackStarted(s, pack) && StoryPackEnabledFor(s, pack.Id);
 
+    /// <summary>#2498: the world's "Short courses only" rule applies to this pack — a tutorial on a
+    /// <see cref="TutorialPolicy.Courses"/> world starts with its mandatory part skipped silently.</summary>
+    private bool SkipsBasicTraining(CompiledPack pack) => pack.IsTutorial && Rules.TutorialPolicy == TutorialPolicy.Courses;
+
     private static bool StepDoneOrSkipped(PlayerSession s, CompiledStep step)
         => MilestonesOf(s).Contains(StoryPackKeys.StepDone(step.Pack.Id, step.Id))
            || MilestonesOf(s).Contains(StoryPackKeys.StepSkipped(step.Pack.Id, step.Id));
@@ -521,6 +538,18 @@ public sealed partial class GameServer
     /// stages then run across the new chapters.</summary>
     private static bool LegacyChapterPassable(PlayerSession s, CompiledChapter ch)
         => ch.Steps.Where(st => st.LegacyStageId is not null && StepCountsForChapter(st)).All(st => StepComplete(s, st));
+
+    /// <summary>Whether a non-optional chapter is through for the readers that ask "does the basic training still run?" —
+    /// the story start, the veteran path, the chip's tutorial flag and the banter gate (#2487): finished, or — for a client
+    /// without <c>packs1</c> in a tutorial — passable on its legacy MUST steps. Such a client can never finish the new
+    /// lessons, so without this the VEGA story never started for it. Nothing is written: the same player on a current
+    /// client later still gets the new lessons.</summary>
+    private static bool MandatoryChapterThrough(PlayerSession s, CompiledChapter ch)
+        => ChapterFinished(s, ch) || (!s.SupportsPacks && ch.Pack.IsTutorial && LegacyChapterPassable(s, ch));
+
+    /// <summary>Every non-optional chapter of the pack is through (<see cref="MandatoryChapterThrough"/>).</summary>
+    private static bool MandatoryChaptersThrough(PlayerSession s, CompiledPack pack)
+        => pack.Chapters.Where(c => !c.Optional).All(c => MandatoryChapterThrough(s, c));
 
     /// <summary>Whether a chapter runs for this player now.</summary>
     private bool ChapterRuns(PlayerSession s, CompiledChapter ch)
@@ -600,8 +629,10 @@ public sealed partial class GameServer
     /// gets <paramref name="legacyKey"/> when the line has an old equivalent (a tutorial step with a legacy stage — no
     /// <c>Text</c>, it localizes and sets its own keys), else the line composed on the server in its language with
     /// device-neutral key words and an empty <c>LineKey</c> (synthesis §5.7: its <c>Text</c> path fills neither tokens
-    /// nor slots). <paramref name="waypointId"/> rides along as the line's space waypoint (#2471, the station marker).</summary>
-    private void SendPackLine(PlayerSession s, CompiledPack pack, string key, string arg = "", string? legacyKey = null, byte kind = 0, string waypointId = "")
+    /// nor slots). <paramref name="waypointId"/> rides along as the line's space waypoint (#2471, the station marker).
+    /// <paramref name="choices"/> are the line's buttons (#2499, <see cref="ShipAiLine.Choices"/>) — only a client that draws
+    /// them (<c>choices1</c>) gets them.</summary>
+    private void SendPackLine(PlayerSession s, CompiledPack pack, string key, string arg = "", string? legacyKey = null, byte kind = 0, string waypointId = "", string[]? choices = null)
     {
         if (string.IsNullOrEmpty(key) && string.IsNullOrEmpty(legacyKey))
         {
@@ -613,6 +644,10 @@ public sealed partial class GameServer
         {
             line.LineKey = key;
             line.LineArg = arg ?? string.Empty;
+            if (choices is { Length: > 0 } && s.SupportsChoices)
+            {
+                line.Choices = choices;
+            }
         }
         else if (!string.IsNullOrEmpty(legacyKey))
         {
@@ -704,7 +739,23 @@ public sealed partial class GameServer
                 return;
             }
 
-            StartPack(s, pack);
+            if (SkipsBasicTraining(pack))
+            {
+                // #2498 "Short courses only": the basic training is skipped silently for a player who never started it —
+                // no welcome card, no line, no achievement (an older client hears no old intro or send-off either). The
+                // story track starts right after (AdvancePlayer), the courses come at their moment. A player already in
+                // the training when the rule changes keeps it: only a pack that has not started takes this path.
+                StartPack(s, pack, playIntro: false, legacyIntro: false);
+                SkipMandatory(s, pack, legacySendOff: false);
+                _repo.SavePlayer(s.State);
+            }
+            else
+            {
+                // #2499: a newcomer whose client draws buttons is asked once whether they want the training — the walk below
+                // asks it right before the first lesson's line (after part 1's welcome card), AskSkipBeforeFirstStep.
+                s.AskSkipDuePack = AsksBeforeTraining(s, pack) ? pack.Id : string.Empty;
+                StartPack(s, pack);
+            }
         }
 
         for (int pass = 0; pass < 64; pass++) // bounded: each pass that changes something completes a step or a chapter
@@ -724,13 +775,16 @@ public sealed partial class GameServer
                 break;
             }
         }
+
+        s.AskSkipDuePack = string.Empty; // #2499: asked with the first lesson, or there was none to ask before
     }
 
     /// <summary>Starts a pack for a player: the started key, and for a tutorial the legacy intro key (older builds read it
-    /// as "the intro was shown") — with the old intro lines for an older client that has not heard them. The pack's
+    /// as "the intro was shown") — with the old intro lines for an older client that has not heard them (unless
+    /// <paramref name="legacyIntro"/> is off: the silent start of a "Short courses only" world, #2498). The pack's
     /// <c>introCutscene</c> plays unless <paramref name="playIntro"/> is off ("I know the game") or the pack would complete
     /// silently for this player (#2467: a veteran never gets the welcome card).</summary>
-    private void StartPack(PlayerSession s, CompiledPack pack, bool playIntro = true)
+    private void StartPack(PlayerSession s, CompiledPack pack, bool playIntro = true, bool legacyIntro = true)
     {
         MigratePackIfNeeded(s, pack); // #2469: the old state is read before anything of this pack is written (skip, restart, start on request)
         var m = MilestonesOf(s);
@@ -740,7 +794,7 @@ public sealed partial class GameServer
         }
 
         MarkJournalDirty(s); // #2471
-        if (pack.IsTutorial && m.Add(StoryLegacy.IntroMilestone) && !s.SupportsPacks)
+        if (pack.IsTutorial && m.Add(StoryLegacy.IntroMilestone) && !s.SupportsPacks && legacyIntro)
         {
             foreach (string intro in StoryLegacy.IntroLines)
             {
@@ -905,6 +959,28 @@ public sealed partial class GameServer
     private bool ChapterThroughByEvidence(PlayerSession s, CompiledChapter ch)
         => ch.Steps.Where(StepCountsForChapter).All(st => StepComplete(s, st) || StepAlreadyDone(s, st) || BridgedMissionTurnedIn(s, st));
 
+    /// <summary>#2500: whether a chapter has nothing left to practise for this player — a Replay or a Start would end at once,
+    /// silently. A finished chapter (done or skipped, not being replayed) whose every counting step a replay passes at once
+    /// (<see cref="StepSpentForReplay"/>: research of blueprints known already; <see cref="BridgedMissionTurnedIn"/>: the Crystal
+    /// workshop's jobs handed in); a course not started yet that is through by evidence (<see cref="ChapterThroughByEvidence"/>
+    /// — never offered for that reason, #2481). A running or replaying chapter, a mandatory one still ahead and a chapter
+    /// without counting steps never are. The Journal hides Replay / Start for it (<see cref="NetStoryChapter.NothingLeft"/>).</summary>
+    private bool ChapterSpentFor(PlayerSession s, CompiledChapter ch)
+    {
+        var counting = ch.Steps.Where(StepCountsForChapter).ToList();
+        if (counting.Count == 0 || ChapterReplaying(s, ch))
+        {
+            return false;
+        }
+
+        if (ChapterDoneOrSkipped(s, ch))
+        {
+            return counting.All(st => StepSpentForReplay(s, st) || BridgedMissionTurnedIn(s, st));
+        }
+
+        return ch.Optional && !MilestonesOf(s).Contains(StoryPackKeys.ChapterActive(ch.Pack.Id, ch.Id)) && ChapterThroughByEvidence(s, ch);
+    }
+
     /// <summary>#2482: whether an optional chapter exists for this player — its <c>visibleIf</c> (a rule-gated deep dive: combat
     /// switched on, a world for more than one player). One that does not is never offered, suggested or started.</summary>
     private bool ChapterVisible(PlayerSession s, CompiledChapter ch)
@@ -973,6 +1049,7 @@ public sealed partial class GameServer
             PlayBoundCutscene(s, step.Pack.Def, step.Def.OnStart?.Cutscene, step.Id);
         }
 
+        AskSkipBeforeFirstStep(s, step); // #2499: "Want me to show you the basics?" — once, before the first lesson's line
         SpeakStepStart(s, step);
         _repo.SavePlayer(s.State);
         return false;
@@ -1095,6 +1172,12 @@ public sealed partial class GameServer
         {
             m.Add(skipped ? StoryPackKeys.ChapterSkipped(pack, ch.Id) : StoryPackKeys.ChapterDone(pack, ch.Id));
         }
+        else if (!skipped && !silent && m.Remove(StoryPackKeys.ChapterSkipped(pack, ch.Id)))
+        {
+            // #2498: a skipped chapter replayed to its end by play ("Start basic training" after a skip) is learnt now — done,
+            // not skipped, so the Journal reads it as finished and its badge can be earned. A skip of the replay keeps it skipped.
+            m.Add(StoryPackKeys.ChapterDone(pack, ch.Id));
+        }
 
         MarkJournalDirty(s);
 
@@ -1153,10 +1236,28 @@ public sealed partial class GameServer
             Advance(s, graduation.Counter);
         }
 
+        SuggestCourses(s, pack);
+        MarkJournalDirty(s); // #2471: the badge and the suggested chapters
+        _repo.SavePlayer(s.State);
+    }
+
+    /// <summary>Marks the graduation's suggested courses (<c>graduation.suggest</c>, at most
+    /// <see cref="StoryGraduation.MaxSuggestions"/>) offered — silently: the Journal lists them with Start / Later and its
+    /// badge, VEGA says nothing. Never one that is done, skipped, declined, running, not admitted (<c>requires</c>), ruled out
+    /// by the world or through by evidence. Run by the graduation and, since #2498, by every skip of the mandatory part
+    /// (<paramref name="skip"/>: "Skip all — I know the game", the silent skip of a "Short courses only" world): the flight
+    /// courses c3 and c4 have no moment of their own, so a skipper was never offered them. A skip leaves a suggested course
+    /// that has its own moment (<c>offerWhen</c>, e.g. the workshop course c1 at the tool-tier wall) to that moment — VEGA's
+    /// offer there tells a player who skipped the training more than a silent mark.</summary>
+    private void SuggestCourses(PlayerSession s, CompiledPack pack, bool skip = false)
+    {
+        var graduation = pack.Def.Graduation ?? new StoryGraduation();
         var m = MilestonesOf(s);
+        bool marked = false;
         foreach (string id in graduation.Suggest.Take(StoryGraduation.MaxSuggestions))
         {
             if (pack.ChaptersById.TryGetValue(id ?? string.Empty, out var suggested) && suggested.Optional
+                && !(skip && suggested.OfferWhen is not null)
                 && !ChapterDoneOrSkipped(s, suggested)
                 && !m.Contains(StoryPackKeys.ChapterDeclined(pack.Id, suggested.Id))
                 && !m.Contains(StoryPackKeys.ChapterActive(pack.Id, suggested.Id))
@@ -1168,16 +1269,21 @@ public sealed partial class GameServer
                 // #2479: the suggestions are this moment's offer — the next deep dive VEGA offers by itself (a data cache in
                 // reach …) waits the usual gap, so the graduation's cards and lines are not followed by an offer line at once.
                 s.LastChapterOfferAt = s.StoryPackPlaySeconds;
+                marked = true;
             }
         }
 
-        MarkJournalDirty(s); // #2471: the badge and the suggested chapters
-        _repo.SavePlayer(s.State);
+        if (marked)
+        {
+            MarkJournalDirty(s); // #2471: Start / Later and the badge
+        }
     }
 
     /// <summary>Stamps the pack done once every non-optional chapter is through. A tutorial writes all nine legacy stage
-    /// keys (an older build then sees a finished onboarding) and an older client hears the old send-off.</summary>
-    private bool CheckPackDone(PlayerSession s, CompiledPack pack)
+    /// keys (an older build then sees a finished onboarding) and an older client hears the old send-off — unless
+    /// <paramref name="legacySendOff"/> is off (the silent skip of a "Short courses only" world, #2498: no training, no
+    /// send-off).</summary>
+    private bool CheckPackDone(PlayerSession s, CompiledPack pack, bool legacySendOff = true)
     {
         if (PackDone(s, pack) || !pack.Chapters.Where(c => !c.Optional).All(c => ChapterFinished(s, c)))
         {
@@ -1190,7 +1296,7 @@ public sealed partial class GameServer
         if (pack.IsTutorial)
         {
             WriteLegacyGraduation(s);
-            if (!s.SupportsPacks)
+            if (!s.SupportsPacks && legacySendOff)
             {
                 SendVegaLine(s, StoryLegacy.DoneLine, 0);
             }
@@ -1494,9 +1600,10 @@ public sealed partial class GameServer
         return null;
     }
 
-    /// <summary>Whether a tutorial pack's mandatory part still runs for this player (the Settings button says "Skip").</summary>
+    /// <summary>Whether a tutorial pack's mandatory part still runs for this player (the Settings button says "Skip"). An
+    /// older client is through once its nine legacy lessons are (#2487, <see cref="MandatoryChapterThrough"/>).</summary>
     private bool TutorialPackRunning(PlayerSession s)
-        => PlayerPacks.Any(p => p.IsTutorial && PackRunsFor(s, p) && !p.Chapters.Where(c => !c.Optional).All(c => ChapterFinished(s, c)));
+        => PlayerPacks.Any(p => p.IsTutorial && PackRunsFor(s, p) && !MandatoryChaptersThrough(s, p));
 
     // ---------------------------------------------------------------------------------------------
     // The tick: offers and help escalation.
@@ -1544,7 +1651,15 @@ public sealed partial class GameServer
         MarkJournalDirty(s); // #2471: Start / Later in the Journal
         MarkTipsToldByOffer(s, ch); // #2459: the tip of this moment is the offer — it does not follow it
         string title = string.IsNullOrEmpty(ch.Def.TitleKey) ? ch.Id : LocalizerFor(s.Locale).Get(ch.Def.TitleKey);
-        SendPackLine(s, pack, ChapterOfferLine, title);
+        if (s.SupportsChoices && s.SupportsPacks)
+        {
+            SendPackLine(s, pack, ChapterOfferChoiceLine, title, choices: OfferChoices(ch)); // #2499: [Later] [Start now] in the panel
+        }
+        else
+        {
+            SendPackLine(s, pack, ChapterOfferLine, title);
+        }
+
         _repo.SavePlayer(s.State);
     }
 
@@ -1583,10 +1698,16 @@ public sealed partial class GameServer
         return null;
     }
 
+    /// <summary>#2490: play seconds before a marker probe that found nothing tries again on the same body — at most one probe
+    /// per this many seconds per chip step (a new location tries at once).</summary>
+    internal const double MarkerRetrySeconds = 30.0;
+
     /// <summary>The help escalation of one chip step on active play time (synthesis §3.1): after <c>hintAfter</c> the hint
     /// line (an open CORE step of a non-optional chapter then stops blocking), after <c>markerAfter</c> a marker ping for
     /// this session only on a "where" step, after <c>offerSkipAfter</c> the skip offer on a MUST step. Each fires once
-    /// per session; progress restarts the clock.</summary>
+    /// per session; progress restarts the clock. A marker whose provider found nothing (the site is on another world, no
+    /// ore in reach yet) is not spent (#2490): it tries again when the player's location changes, or after
+    /// <see cref="MarkerRetrySeconds"/> on the same spot.</summary>
     private void EscalateStep(PlayerSession s, CompiledStep step)
     {
         if (!s.StepEscalation.TryGetValue(step.ProgressKey, out var esc))
@@ -1612,10 +1733,17 @@ public sealed partial class GameServer
         }
 
         string reveal = step.Def.OnStart?.Reveal ?? string.Empty;
-        if (!esc.MarkerSent && markerAfter > 0 && open >= markerAfter && reveal.Length > 0)
+        if (!esc.MarkerSent && markerAfter > 0 && open >= markerAfter && reveal.Length > 0 && MarkerProbeDue(s, esc))
         {
-            esc.MarkerSent = true;
-            MarkRevealTarget(s, step, reveal);
+            if (MarkRevealTarget(s, step, reveal))
+            {
+                esc.MarkerSent = true;
+            }
+            else
+            {
+                esc.MarkerMissAt = MarkerLocationKey(s); // #2490: not spent — retried elsewhere or a little later
+                esc.MarkerMissTime = s.StoryPackPlaySeconds;
+            }
         }
 
         if (!esc.OfferSent && offerAfter > 0 && open >= offerAfter && step.Tier == StoryStepTiers.Must
@@ -1624,6 +1752,22 @@ public sealed partial class GameServer
             esc.OfferSent = true;
             SendPackLine(s, step.Pack, StepOfferSkipLine);
         }
+    }
+
+    /// <summary>#2490: whether a marker probe may run now — never tried, a new location since the last miss, or
+    /// <see cref="MarkerRetrySeconds"/> of play on the same spot.</summary>
+    private bool MarkerProbeDue(PlayerSession s, StepEscalationState esc)
+        => esc.MarkerMissAt is null
+           || !string.Equals(esc.MarkerMissAt, MarkerLocationKey(s), StringComparison.Ordinal)
+           || s.StoryPackPlaySeconds - esc.MarkerMissTime >= MarkerRetrySeconds;
+
+    /// <summary>#2490: where the player is for the marker retry — the body, and whether they are in flight above it or on a
+    /// station (a launch or a landing on the same body is a new place for the providers).</summary>
+    private string MarkerLocationKey(PlayerSession s)
+    {
+        string pid = s.State.PlayerId;
+        string where = InSpace(pid) ? "space" : InStation(pid) ? "station" : "ground";
+        return where + "|" + (s.CurrentLocationId ?? string.Empty);
     }
 
     /// <summary>The help marker of a "where" step: the nearest station becomes the client's space waypoint

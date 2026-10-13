@@ -48,7 +48,11 @@ Last updated: 2026-10-04.
   servers** — every world belongs to a player. To play with friends: set a **join password**, then
   **list the world publicly** (world's **Manage** dialog → *"List publicly"*; only password-protected
   worlds can be listed). Friends find it under *Official Worlds → Public worlds* and join with your
-  password. Worlds are private by default and only visible to their owner until listed.
+  password. Worlds are private by default and only visible to their owner until listed. On an official
+  world **the owner is its world admin** — a friend who happens to arrive first is a normal player. The shared
+  **glitch.fun arcade worlds** have no player admins at all; the game's operators look after them. A world
+  marked **"needs a server update"** (amber) was saved by a newer version of the game than the official
+  servers run — it opens again once they are updated.
 - **Join Server:** enter your **player name**, the server address, port and (if the server has one) the
   password. **Name verification:** the first join under a name claims it for your installation — later
   joins under that name from other machines are rejected ("name belongs to another player"), and a name
@@ -65,9 +69,11 @@ Last updated: 2026-10-04.
   - **Main story** — the story this world tells: **The VEGA Protocol** (default; a line under the list says what it is
     about) or **None (sandbox)** for free exploring and building. More stories appear in this list once they are installed.
   - **Story pace** — *Slow / Normal / Fast*: how quickly the story's chapters unfold as you play.
-  - **Tutorial** — **Auto** (default: every new player starts with the basic training and can skip it at any time),
-    **On request** (it does not start by itself; players start it in their Journal) or **Off** (no basic training in
-    this world). A world without a story still has the tutorial when it is on.
+  - **Tutorial** — four rows, each with a line saying what it means: **Auto** (default: every new player starts with the
+    basic training and can skip it at any time), **Short courses only** (no basic training at the start — the story
+    begins right after VEGA's opening, and VEGA offers the short courses when they fit; a player can still start the
+    training in the Journal), **On request** (it does not start by itself; players start it in their Journal) or **Off**
+    (no basic training and no short courses in this world). A world without a story still has the tutorial when it is on.
 
   The summary row shows your choice (e.g. "VEGA (Fast) · Tutorial Off ›"); the presets reset it to VEGA · Normal · Auto.
   The world admin can change the **tutorial** and the **story pace** later in-game (Settings tab → world rules); the main
@@ -88,7 +94,8 @@ Last updated: 2026-10-04.
 - On the **very first start** a short (~28 s) **intro cinematic** plays between the title splash and the
   menu — any key, pad button or tap skips it, and the Credits screen's **"Watch intro"** button replays it any time.
 - On a **new world**, the ship AI **VEGA** boots up and walks you through the **basic training** (six short parts,
-  see §5 → VEGA) — her opening narration is staged like a scene (letterbox, an orbit shot of your landed ship, scaled
+  see §5 → VEGA; right after the welcome card she asks whether you want it — **I know the game — skip** if you do,
+  and on a world set to *Short courses only* or *Off* there is no training at the start) — her opening narration is staged like a scene (letterbox, an orbit shot of your landed ship, scaled
   to your ship's size). Veteran saves get a one-line "systems online" instead.
 - **Skipping a cutscene works on every device:** **Esc** on the keyboard, the pad's back button **(B)** (or
   whatever you bound to *Close / back*), or a click / tap on the **Skip** button in the corner — this goes for
@@ -103,7 +110,8 @@ Last updated: 2026-10-04.
   backup over `world.db`. A world that was last saved by a **newer** version of the game is not opened by an
   older one — the game says so and leaves the world untouched. On the **Official Worlds** the same holds: a
   save from a newer game version than the server's is refused at upload, and a world the server cannot open
-  yet says so when you join it (the worlds page on the portal marks it **"needs a server update"**) — it opens
+  yet says so when you join it (the worlds page on the portal and the in-game *Official Worlds* list mark it
+  **"needs a server update"** in amber; **Play** still works and tells you the same) — it opens
   again once the server is updated. And a server whose game
   version has a different set of blocks refuses the join with "This server runs a different version of the
   game" — update the game (or the server).
@@ -258,7 +266,12 @@ Tap the pad button and press any controller button to rebind it (actions marked 
 by default but can be given one). *Reset controls* restores both keyboard and pad defaults. The **Menus**
 group at the bottom (close/back, open the menu) shows its keyboard keys greyed out: **Esc** and **Tab**
 stay fixed so nobody can bind away the key that leaves a window — the pad buttons **(B)** and **Menu**
-are rebindable as usual.
+are rebindable as usual. The hints on screen name **your** key: the controls lines at the bottom (on foot,
+flying, in EVA), prompts like "G: loot" or "Launch (E)", the crate buttons and the server's messages follow
+your rebinding, and on a pad they name the pad button — or **LS** (the Actions list) for a verb without a
+button of its own. So do the item, block and blueprint descriptions (in the crafting, inventory and Blueprints
+panes and the Codex lists): "Press E on it" names your use key, "Use RMB to magnify" reads "Use LB …" on a pad and
+"Use PLACE …" on a tablet. Only the Codex's long articles still name the default keys.
 
 ### Touch controls (experimental — tablet / touch browser)
 
@@ -272,7 +285,7 @@ cutscene they step aside — tap its **Skip** button to leave it, or the **Conti
 | **Drag** anywhere on the right | Look / steer the ship |
 | **◄ ►** | Cycle hotbar slot (ship-systems bar — laser ↔ tractor beam — at the helm) |
 | **…** (beside ►) | **Hotbar slot actions** on the selected slot (see §5); shown only when the menu can open |
-| **ACT** (beside ◄) | **Actions** — a list of everything you can do right now: rotate the held block, trade / dock with the player beside you, undock, loot / stash, repair a wreck, lamp, thermal vision, deploy a station in EVA, leave / refuel the speeder, … Tap an entry to do it. Shown only when something applies |
+| **ACT** (beside ◄) | **Actions** — a list of everything you can do right now: rotate the held block, trade / dock with the player beside you, undock, loot / stash, repair a wreck, lamp, thermal vision, deploy a station in EVA, leave / refuel the speeder, … Tap an entry to do it. Shown only when something applies. A hint on screen that reads "ACT: undock" or "Store all materials (ACT)" means: find it in this list |
 | **NEXT ▶** (top-centre) | **VEGA: continue** — advance or dismiss the ship AI's line; also opens the folded VEGA tab; shown only while a line is up |
 | **≡** (top-right) | Open / close the gameplay menu |
 | *On foot:* **JUMP · MINE (hold) · PLACE · USE · DOWN · CHAT · VIEW · MAP** | Jump (at a wall, with the stick pushed towards it: hold JUMP to hold on and climb, let go of it to slide down) · mine · place · use/board · descend (on a wall: drop off) · open chat · camera · planet map |
@@ -374,8 +387,8 @@ separate unlock; admins can still disable it through server world rules.
   research N of M blueprints, Codex discoveries (with a button straight into the Codex chapter, where every entry
   now names the planet and system it was first scanned on), story %, achievements done — and a **Journey** grid of your
   lifetime tallies (worlds visited, systems entered, blocks mined/placed, subjects scanned, missions …); the
-  goals below run from the first blocks to the late game (thousands of blocks, dozens of worlds, the whole
-  tech tree, your own station or ship, the Guardian finale) and each pays an item reward. The **Blueprints** tab
+  goals below run from the first blocks to the late game (thousands of blocks, dozens of worlds, every
+  blueprint, your own station or ship, the Guardian finale) and each pays an item reward. The **Blueprints** tab
   header shows how much of the tree you have researched and which blueprint you could research next; its filter
   row shows your **knowledge points** and data fragments and has an **"Enough knowledge"** toggle that hides every
   blueprint your knowledge does not cover yet (each card also shows *Knowledge have/need*). Crafting/Blueprints/Ship are **location-bound**: Crafting to a station **block**
@@ -441,7 +454,9 @@ separate unlock; admins can still disable it through server world rules.
     the next world start.
   - **Settings → Comfort → Story text: wait for me** (on by default): the texts of story scenes wait until you turn the
     page — **N** (pad **Back**), the **Continue** button, or a tap on the text box. Off, they turn the page by themselves
-    after a reading time. Titles always run on their own.
+    after a reading time — and **N** (or a tap on the text) still skips ahead to the next page. Either way, once you have
+    read a scene's text, the picture moves on about a second later instead of making you wait. Titles always run on
+    their own.
   - Lower graphics presets use fewer particles automatically.
 
 ### Atmosphere effects (Settings → Graphics → Atmosphere effects)
@@ -507,9 +522,12 @@ orbit, planets with air show a lit atmosphere rim with a warm terminator and a d
   the panel (clickable whenever the mouse cursor is free, tappable on touch) — a line stays until you do (no
   auto-dismiss), and further lines wait in the queue. Leave a line for about 45 seconds and the panel **folds into a
   small VEGA tab** beside the objective, showing how many messages are waiting; press **N** (pad **View**, touch
-  **NEXT ▶**) or click/tap the tab to open it again — nothing is lost. Advisor hints can be muted (Settings → VEGA
-  hints); the tutorial is switched on or off in the Settings tab (**Tutorial: on/off**), and its parts are skipped,
-  restarted and replayed in the **Journal** (Settings → **Open the Journal**).
+  **NEXT ▶**) or click/tap the tab to open it again — nothing is lost. Some lines ask you something and show **two
+  buttons** instead of *Continue* (VEGA's first-start question, a short-course offer): the right one is what **N**
+  (pad **View**, touch **NEXT ▶**) picks; the left one takes a click or tap, or **holding** N (View, NEXT) for a moment —
+  it fills brighter while you hold. **Esc** never picks a button. Advisor hints can be muted (Settings → VEGA
+  hints); the tutorial is switched on or off in the Settings tab (**Tutorial & courses: on/off**), and its parts are
+  skipped, restarted and replayed in the **Journal** (Settings → **Open the Journal**).
 
 ---
 
@@ -1061,7 +1079,7 @@ players.
   **door**, and an **airtight hull** — glass and doors seal fine, any open gap does not.
 - Stand at the helm and press **E** ("Commission ship"). If something is missing the message tells you what;
   once it passes, the build becomes your **active ship**, parked right where you built it. Launch as usual
-  via menu (Tab) → Map → *Enter space*.
+  via menu (Tab) → Map → *Launch into space*.
 - **It flies the way you built it:** hull strength grows with the hull size, speed and handling come from
   engines versus weight — more engines fly faster, a heavy brick turns slowly. You can keep editing your
   ship on foot afterwards; the launch check re-runs every start (no engine → grounded until you add one).
@@ -1109,6 +1127,12 @@ players.
      a first job from a mission board, landing on a new world, and travelling home via the map.
   At the end VEGA congratulates you and you earn the achievement **Graduate**. There are no items or knowledge for the
   lessons — they teach, they don't pay. Three **short courses** (below) then wait in your Journal.
+  - **"Want me to show you the basics?"** Right after the welcome card on your very first start, VEGA asks whether you
+    want the training, with two buttons in her panel: **Let's go** (press your continue key **N** — or the pad's VEGA
+    button, NEXT on a tablet, or click the button) and **I know the game — skip** (click or tap that button, or **hold**
+    the continue key for a moment; **Esc** never skips). Doing nothing is fine: the training simply runs. If you skip,
+    VEGA tells you the training waits in your **Journal** — start it there any time (**Start basic training**). She asks
+    only once, and only a brand-new player on a world whose tutorial rule is *Auto*.
   - **Cards:** each part opens with a short title card ("Basic training · Part 2 of 6 — Staying alive"; the first one
     welcomes you right after the prologue) and ends with a small "Part complete!" banner. Your first launch gets a
     "Lift-off!" title over the climb, your first landing on a new world a short look around your ship with the world's
@@ -1127,13 +1151,20 @@ players.
   - **Skipping and replaying** — all in the **Journal** (Tab menu → Journal → the training): **Skip step** ("I know
     this"), **Skip part**, **Start part over**, **Replay** for a part you finished, **Skip all — I know the game**,
     **Restart from the beginning** (runs it again from part 1 — for anyone, experienced players included, and without
-    the opening narration) and **Switch off**. Some lessons you already did early simply tick off by themselves.
-  - **Tutorial: on/off** in the Settings tab switches the training off for you (VEGA stops the lessons and the
-    course offers) and back on — on an *On request* world "on" starts it. Next to it, **Open the Journal**.
-  - **Tutorial on/off for a world:** the world rule *Tutorial* is **Auto** (every new player starts it), **On request**
-    (only on request) or **Off** — chosen on the world-creation **Stories** page (§1), and changed later by the world
-    admin under Tab → Settings → world rules (*Tutorial*, with a line saying what the choice means) or with
-    `/tutorial policy auto|optin|off`.
+    the opening narration) and **Switch off**. Some lessons you already did early simply tick off by themselves. **Skip
+    all** puts the two flight courses (*Pilot* and *Stations, trade and jobs*) on offer in your Journal straight away,
+    quietly — the other courses come when they fit. If you skipped the whole training without doing any of it, the
+    restart button reads **Start basic training**; play it through and its parts count as done (with the ★).
+  - **Tutorial & courses: on/off** in the Settings tab switches the training and the short courses off for you (VEGA
+    stops the lessons and the course offers) and back on — on an *On request* world "on" starts it. Next to it, **Open
+    the Journal**.
+  - **Tutorial on/off for a world:** the world rule *Tutorial* is **Auto** (every new player starts it), **Short courses
+    only** (new players skip the basic training without a word — no welcome card, no lesson, no achievement — VEGA's
+    opening leads straight into chapter 1, the two flight courses wait in the Journal and the other courses are offered
+    when they fit; someone already in the training when the rule is switched keeps it), **On request** (only on request)
+    or **Off** — chosen on the world-creation **Stories** page (§1), and changed later by the world admin under Tab →
+    Settings → world rules (*Tutorial*, with a line saying what the choice means) or with
+    `/tutorial policy auto|courses|optin|off`.
   - VEGA's lessons — and the prompts at the ship's cockpit, workshop, cargo hold and console, the crafting
     stations, the bed, the heal tank, the transporter pad and a factory terminal — name the control of the device
     you are using: the key you bound, the pad button, or on a tablet the on-screen button (USE, MAP, JUMP, MINE,
@@ -1145,9 +1176,11 @@ players.
   - While the basic training runs, VEGA's matching tips wait for their lesson, so you never hear the same thing
     twice (the flight chart and ship-scanner explanations, for example, come with part 6).
   - A game version from before the new tutorial still follows the nine old lessons on a new server.
-- **Short courses (after the basic training):** deeper lessons you choose yourself — VEGA offers one when it fits what
-  you are doing (at most one offer every minute and a half, never during the basic training), and the Journal lists them
-  all with **Start** or **Later** (a course you put off stays there; VEGA does not offer it again). Each opens with a short
+- **Short courses (after the basic training — or after skipping it, and on a *Short courses only* world):** deeper
+  lessons you choose yourself — VEGA offers one when it fits what you are doing (at most one offer every minute and a half, never during the basic training), and the Journal lists them
+  all with **Start** or **Later** (a course you put off stays there; VEGA does not offer it again). VEGA's offer has the
+  same two buttons right in her panel: **Later** (your continue key **N** — so reading on never starts a course by
+  accident) and **Start now** (click or tap it, or **hold** the continue key for a moment). Each opens with a short
   "Short course" card and ends with the "Part complete!" banner; your docking in the stations course ("Docked — …") and your
   first hyperjump in the navigator course ("New system — …") get a short card of their own, your first base and your first
   own ship a short look from outside ("Your home", "Your own ship"), your first working circuit and your first tamed
@@ -1161,10 +1194,10 @@ players.
   - **Knowledge and research** (offered when a data cache is close by, or when you dig a lot without a terrain scanner):
     scanning three new things, mining a data cache (two data fragments), what a blueprint costs, a DataQube game, reading
     a rune stone, the terrain scanner (or, before you have its blueprint, what it needs) and the Achievements tab.
-  - **Pilot** (suggested when you finish the training; needs space flight): setting a waypoint on the chart, scanning a
+  - **Pilot** (suggested when you finish or skip the training; needs space flight): setting a waypoint on the chart, scanning a
     planet before you land, breaking an asteroid with the ship's laser, walking around inside your flying ship and a
     spacewalk through the hatch — plus target lock where enemies fly, and what to do when you float above a world's air.
-  - **Stations, trade and jobs** (suggested when you finish the training): docking at a station, the vendors and their
+  - **Stations, trade and jobs** (suggested when you finish or skip the training): docking at a station, the vendors and their
     trades (researchers sell data fragments), taking a job from the mission board, undocking, and handing the job in
     where you took it. Without a reachable station the course runs at a settlement.
   - **Navigator** (offered once the pilot course is done): markers and pings on the planet map, map travel between worlds,
@@ -1176,8 +1209,9 @@ players.
     a helm, an engine and a door, commissioning it at the helm, and switching between your ships.
   - **Homestead** (offered when you craft or carry a base core, or out on foot at night with no base on that world): a
     base core, building in its zone, two lights, a wooden door, a sealed room that holds air (on airless worlds; elsewhere
-    only explained), a closed wall ring that keeps animals out, and a bed to wake up in. A friend's base on the same world
-    counts as yours when you are allies or in one crew.
+    only explained), a closed wall ring that keeps animals out (stand inside it under the open sky — a roofed room or a
+    cave does not count), and a bed to wake up in. A friend's base on the same world counts as yours when you are allies
+    or in one crew.
   - **Station builder** (offered when you have a station core or its materials, or after the ship builder course; needs
     the pilot course and space flight): deploying a station core on a spacewalk, building its hull with a door as the
     airlock until it is commissioned, and floating while you build aboard (zero-g building).
@@ -1351,7 +1385,8 @@ gloves' blueprint first, but crafting them does **not** use up your shock gloves
   your system, VEGA has you trade with a settlement vendor instead of sending you to a star you cannot reach yet.
 - **Build your own**: deploy a **Station Core** on a spacewalk (press **B**), build a hull + an airlock door
   around it, and it commissions into a boardable station on the star map. An ally may help and even set the last
-  block — the station, its default name, the "commissioned" message and the achievement stay the owner's.
+  block — the station, its default name, the "commissioned" message and the achievement stay the owner's (an owner who
+  was offline hears it, and gets the achievement, the next time they join).
 - **Air only fills sealed rooms** in a station you built: walls, glass and doors are airtight, a hole in the
   hull means **helmet on** (the suit tank takes over, and you get a warning) until you patch it — a
   **force-field block** seals an opening you want to keep. **Crew** (two civilians) moves in once you build a
@@ -1859,6 +1894,9 @@ gloves' blueprint first, but crafting them does **not** use up your shock gloves
   giver for the reward. A short message names the mission and says what happened — **accepted**, **complete**
   (only when you really hand it in) or **posted** (your own mission) — in your language. Crystal Net jobs name
   what the circuit must do ("Circuit · a switch turns on a lamp 0/1").
+- **Starter jobs:** *First Iron* waits in your Missions tab from the start. The repeatable **Cable Supply Run** is a board
+  job: it is offered at any settlement or space-station mission board (stand at the board to take it), and taking it
+  counts as your first job from a board. Being repeatable, it does not move the story.
 - **Camp bounty:** a settlement mission board on a planet with an uncleared **bandit camp** offers a
   bounty to drive the bandits out. Accepting it marks the camp on your planet map (key **M**); clear the
   camp — everyone holding the bounty gets credit, so it's co-op friendly — and report back for a reward
@@ -1997,8 +2035,15 @@ called **stories**:
   a station", with its counter), **Skip step** and **More in the Codex** where there is more to read, and for the part
   **Skip part** and **Start part over** — then every part with its state (*done*, *skipped*, *now*, *coming up*; short
   courses *offered* with **Start** / **Later**, *available*, or *locked* with what they still need) and **Replay** for a
-  part you finished. At the top: **Track**, **Skip all — I know the game**, **Restart from the beginning** and
-  **Switch off** (**Switch on** brings it back). Below: the training's scenes to watch again.
+  part you finished. A course with nothing left to practise reads **✔ done — nothing left to practise** and has no
+  button — for example the *Crystal workshop* once every workshop job is handed in, also when you did them on the radio
+  before the course came. (Pressing **Start** or **Replay** there in an older version of the game makes VEGA say "You've
+  already done everything in …" instead of nothing.) At the top: **Track**, **Skip all — I know the game**, **Restart
+  from the beginning** (**Start basic training** when you skipped all of it) and **Switch off** (**Switch on** brings it
+  back). Below: the training's scenes to watch again.
+- **A story your game does not know yet:** when a world plays a story that only a newer version of the game has, VEGA
+  says so once ("This world plays a story your game doesn't know yet — update the game to follow it"), and that story's
+  lines, goals and tasks read *(This entry needs a newer version of the game.)* until you update.
 - **VEGA's page** shows the star-network meter (also as a bar), **Track**, **Missions in this chapter** — VEGA's story
   mission with its steps (**✔** done, **●** now, **○** next) and **Skip mission** — then **Leads in this chapter** — the
   chapter's tasks: **✔** done, **●** the one on your chip now, **○** still open (see "Story: finding the thread") — the chapter
@@ -2120,7 +2165,8 @@ called **stories**:
 - **Finishing the story is a moment now**: winning the duel shows the machines **standing down** — VEGA's words over the
   sleeping core — and then the **ending**: the resolution, the credits roll, and an epilogue that opens the door to what
   comes after. It's skippable (**Esc**, pad **(B)** or the **Skip** button), it plays its own music every time you watch
-  it, and the Journal keeps a **"Watch the ending again"** button once you've earned it. A player who had heard
+  it, and the Journal keeps a **"Watch the ending again"** button once you've earned it — it plays the stand-down and the
+  ending again (so they are not listed a second time under **Watch again**). A player who had heard
   the story to its last chapter but was offline for the win gets the stand-down and the ending — and the finale
   achievement — once on their next join; someone who first arrives on an already finished world is not played the ending
   at the door: it plays when their own story starts after the basic training (on hosted and arcade worlds it stays in
@@ -2128,15 +2174,24 @@ called **stories**:
 - **When the Guardian falls, every world goes quiet** — the machines on all worlds players are on stand down at once.
 - The hint at the Guardian core ("walk to the marked shaft, don't dig here") shows even with **VEGA hints** off.
 - **Story scenes.** Big story moments can play as short scenes: a **banner** at the top (it never stops you), a
-  **card** with a title or VEGA speaking in a box (you can keep moving), or a **staged scene** where the camera shows your
+  **card** with a title or VEGA speaking in a box (you can keep moving — only the world behind it darkens a little; your
+  HUD, crosshair and VEGA's objective stay bright), or a **staged scene** where the camera shows your
   ship, the sky, a view from space or a small memory scene, and the controls rest for a moment (in singleplayer the world
   waits meanwhile). A scene never starts in
   a fight, while you fall, swim, drive, fly or have a menu open — it waits for a calm moment. Taking damage ends it, and
   its text goes back to VEGA's panel ("Story moment saved"). In multiplayer the camera comes back after 30 seconds.
+  A few moments only make sense right then ("Lift-off!", arriving at the Guardian system): if danger is near, they show
+  just their title as a short banner at the top. During "Lift-off!" the flight HUD steps aside for a few seconds — you
+  keep the controls.
+  - **Sound:** while VEGA's box types she "speaks" with the same robot babble as in her side panel (no words — it follows
+    the **Master volume** and **Effects volume** sliders). The narration at the very start stays silent. While a scene plays, rain,
+    wind and other background sounds get quieter (a little under a card, more under a staged scene) and come back after it.
   - **Skip** a scene with **Esc**, the pad's **(B)** or the **Skip** button (on a card, where you can move, Esc or the
-    button). Turn the text pages with **N**, pad **Back**, the **Continue** button or a tap on the text.
+    button). Turn the text pages with **N**, pad **Back**, the **Continue** button or a tap on the text — once the last
+    page is read, the scene moves on about a second later.
   - **Watch again:** the Journal lists every scene you have seen under **Watch again** — press **Watch**, close the
-    menu, and it plays again (nothing in the game changes).
+    menu, and it plays again (nothing in the game changes). A scene with its own camera waits until you have landed if you
+    press **Watch** while flying; a short banner says **"Plays when you land."**
 - **After the ending the galaxy is calmer, not empty.** The Guardian's machines don't vanish for good: the
   hunter robots are gone and only a thinned-out remnant of scan-drones keeps roaming (half as many, spawning
   half as often), space stays hostile only where it is dangerous by nature — **pirate havens** and the
@@ -2288,7 +2343,7 @@ called **stories**:
 ### The frontier — why flying far pays
 - Systems far from your home system carry a **"Frontier"** tag on the star map (shown even before you know
   their name — it's the reason to go). Out there worlds generate **richer rare-ore veins** (titanium, cobalt,
-  uranium, platinum, tungsten, neodymium, diamond — everything the late tech tree wants), roll an **extra
+  uranium, platinum, tungsten, neodymium, diamond — everything the late blueprints want), roll an **extra
   buried vault and monument**, and structure caches carry a bonus late-game find. Your starter ores (iron,
   copper, …) are the same everywhere — the frontier is the better place to *return to*, never the better
   place to begin.
@@ -3026,7 +3081,7 @@ Your radio determines **how far** your comms carry — text chat and voice both 
 - **System Radio** (upgrade) — everyone in the **same star system**.
 - **Galaxy Radio** (upgrade) — **everyone**, anywhere in the galaxy.
 
-Craft the upgrades at the workshop (each tier builds on the previous one and unlocks via the tech tree).
+Craft the upgrades at the workshop (each tier builds on the previous one; research it under **Blueprints**).
 The **widest** radio you carry sets your reach. Without any radio you can't transmit (you'll get a
 "need a comm radio" notice).
 
@@ -3241,7 +3296,9 @@ is the one in-world moderation lever there is, and every removal is written to t
 
 An observer also leaves the **story** alone: a `/goto` to another star maps nothing for the world's story and
 grows no frontier, VEGA stays silent (no tips, no story lines — the lines you missed arrive when you leave observer
-mode), and VEGA's "another pilot is nearby" tip never names you to the players you are watching.
+mode), and VEGA's "another pilot is nearby" tip never names you to the players you are watching. A `/goto` made
+**without** observer mode is booked the same quiet way: it is a teleport, not a voyage — no "first hyperjump", no new
+system for the story, no frontier, no explorer achievement.
 
 The fleet admin panel's per-world page lists the same players and structures plus **build hotspots** (clusters
 of changed blocks — how you find a house built without a base core), each with a `/goto` line to paste here.
@@ -3271,7 +3328,7 @@ option (the answer buttons; only a player on the Guardian Core can answer) until
 **Tutorial controls** (admin role only — works with cheats off): `/tutorial skip [Player]` skips the basic training of you
 or the named player, `/tutorial restart [Player]` runs it again from part 1, `/tutorial chapter <id> [Player]` jumps to a
 part (e.g. `/tutorial chapter b6` — earlier parts count as skipped, a finished one is replayed), and
-`/tutorial policy auto|optin|off` sets the world's tutorial rule for everyone.
+`/tutorial policy auto|courses|optin|off` sets the world's tutorial rule for everyone (`courses` = *Short courses only*).
 
 **Story scene preview** (admin role only — works with cheats off, changes nothing): `/cutscene <pack> <id>` plays a story
 pack's scene for you alone, e.g. `/cutscene vega_protocol prologue`; `/cutscene <pack> __recap` shows the "story so far"

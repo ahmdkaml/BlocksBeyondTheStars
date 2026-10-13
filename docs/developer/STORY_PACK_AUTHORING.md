@@ -25,7 +25,7 @@ How the server runs packs (the step runtime, the chip, the Journal, the wire) is
 | `kind` | `scope` | Runs | Examples |
 |---|---|---|---|
 | `side` | `player` | per player, as many at once as are installed | the pilot `side_pilot` |
-| `tutorial` | `player` (always) | per player, under the world rule `TutorialPolicy` (Auto / On request / Off) | `data/stories/tutorial/` (basic training B1–B6 + the short courses) |
+| `tutorial` | `player` (always) | per player, under the world rule `TutorialPolicy` (Auto / Short courses only / On request / Off) | `data/stories/tutorial/` (basic training B1–B6 + the short courses) |
 | `story` | `world` | one per save, chosen at world creation; progress shared by everyone, a per-player track on top | `data/stories/vega_protocol/` (VEGA) |
 
 `scope` defaults to `world` for a pack with beats and `player` for one without. A **player pack** has chapters of steps,
@@ -295,6 +295,11 @@ English and German, budgets — the list is in [TUTORIAL_PACK.md → Validation]
 [CUTSCENES.md → Validation](CUTSCENES.md#validation). A pack outside `data/stories/` (a test fixture) is validated
 against the repository's data.
 
+A pack whose `story.json`, `lore_sites.json` or `cutscenes.json` is not valid JSON (or cannot be read) does not stop the
+game (#2489): the server logs an ERROR naming the pack folder and the file and leaves that pack out, its texts included;
+every other pack loads. A save whose world story is that pack runs the default story until the pack is fixed and keeps
+its own progress for then. Run the validator before you ship.
+
 A play-through test is the best proof that a pack works. `SideStoryPilotTests` is the template: boot a server with the
 pack, join a player, drive real handlers (`SetLampIntent`, `MineBlockOnce`, `SelectHotbarIntent`, `MoveIntent` …) or
 `RaiseGameEventForTest` for verbs that are hard to stage, and assert the milestones (`StoryPackKeys`), the chip
@@ -338,7 +343,11 @@ BBTS_UPDATE_STORY_VOCABULARY=1 dotnet test tests/BlocksBeyondTheStars.Tests -c R
   world flags and knowledge levels) are phase 10 of the plan and not built; the finale code knows VEGA's Guardian core
   only.
 - **Install on both sides.** The server runs the pack; texts and cutscenes resolve on the client from its own copy. A
-  client without the pack shows the raw keys. Desktop: the client's `StreamingAssets/data/stories/`. The browser build and
+  client without the pack cannot show its texts: since #2500 it says once "This world plays a story your game doesn't know
+  yet — update the game to follow it" (`ui.story.pack_missing`) and shows that pack's lines, chip goals and Journal tasks as
+  the neutral `ui.story.entry_missing` (Client.Core `UnknownStoryPacks`) — never raw keys; names and titles read as their ids.
+  A server-side text fallback for such a client is deferred until community packs exist. Desktop: the client's
+  `StreamingAssets/data/stories/`. The browser build and
   the hosted worlds ship official packs only (the operator vouches for what children read).
 - **No scripts.** A pack is data; it cannot add a verb, a predicate or a rule — see §14.
 - **No rewards** in a pack's own fields (a mission it bridges onto keeps its rewards); a tutorial's only reward is the

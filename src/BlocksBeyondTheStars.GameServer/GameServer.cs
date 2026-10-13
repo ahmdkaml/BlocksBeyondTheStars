@@ -1018,8 +1018,10 @@ public sealed partial class GameServer
     /// <summary>Travels (instantly) to a body. <paramref name="quickTravel"/> = true is the travel-screen
     /// shortcut: it is gated by the Instant Travel world rule — when that rule is off you may only quick-travel
     /// to bodies you've already landed on. <paramref name="quickTravel"/> = false is a manual flight landing
-    /// (you flew there and chose to set down), which is always allowed.</summary>
-    private void HandleTravel(PlayerSession session, TravelIntent intent, bool quickTravel = true, bool adminBypass = false, bool allowCurrentBody = false)
+    /// (you flew there and chose to set down), which is always allowed. <paramref name="adminTeleport"/> (#2493: a fleet admin's
+    /// <c>/goto</c>, which also passes <paramref name="adminBypass"/>) books the arrival silently, like an observer's.</summary>
+    private void HandleTravel(PlayerSession session, TravelIntent intent, bool quickTravel = true, bool adminBypass = false, bool allowCurrentBody = false,
+        bool adminTeleport = false)
     {
 
         if (!AllowNormalTravel(session, intent, quickTravel, adminBypass, allowCurrentBody))
@@ -1038,14 +1040,19 @@ public sealed partial class GameServer
         LoadWorld(body.PlanetType!, body.Id); // loads/initialises the destination + sets the Active cursor
         session.CurrentLocationId = body.Id;
         OnMarkerOwnerLeftWorld(session, oldLoc, disconnected: false); // the players left behind lose this player's pings (#1293)
-        if (hyperjump && !session.Spectating)
+
+        // #2493: a fleet admin's /goto is a teleport, not a voyage — booked like an observer's arrival: no jump achievement,
+        // no story milestone, no frontier growth, no explorer credit. (The admin's finale shortcut, which drives the arc on
+        // purpose, keeps the full arrival.)
+        bool silentArrival = session.Spectating || adminTeleport;
+        if (hyperjump && !silentArrival)
         {
             OnAchievementHyperjump(session);        // "Jump Pilot" (#1102)
             RecordStoryMilestone("hyperjump:first"); // the save's first jump between stars advances the arc (#1105)
             RaiseGameEvent(session, GameEventKeys.HyperjumpAny, body.SystemId); // #2465
         }
 
-        MarkArrivedOnBody(session, body.Id); // landed here → a quick-travel target + its system now known
+        MarkArrivedOnBody(session, body.Id, silent: silentArrival); // landed here → a quick-travel target + its system now known
 
         // Park this player's own ship object on the destination world before placing them.
         SetCurrent(session);
@@ -4266,12 +4273,18 @@ public sealed partial class GameServer
             state.Role = PlayerRole.Admin;
         }
 
+        // Hosted worlds: the join token proved this is the control plane's owner account for this world.
+        bool verifiedOwner = !string.IsNullOrEmpty(_config.WorldOwnerAccountId)
+            && hostedAccountId == _config.WorldOwnerAccountId;
+
+        // #2486: on an instance without player admins (the arcade pool), a saved admin role is taken back here —
+        // AFTER the name check above, so a rejected impostor can never demote the real holder of a name.
+        EnforceNoPlayerAdmins(state, name, verifiedOwner);
+
         // Owner bootstrap (hosted worlds): the token-verified owner account is granted WorldAdmin even when
         // someone else already holds that role — an uploaded singleplayer save carries its old first-joiner
         // WorldAdmin, and without this the uploader could be locked out of administering their own world.
-        if (!string.IsNullOrEmpty(_config.WorldOwnerAccountId)
-            && hostedAccountId == _config.WorldOwnerAccountId
-            && state.Role != PlayerRole.WorldAdmin)
+        if (verifiedOwner && state.Role != PlayerRole.WorldAdmin)
         {
             state.Role = PlayerRole.WorldAdmin;
             _repo.SavePlayer(state); // persist immediately, like the name claim above
@@ -4381,6 +4394,7 @@ public sealed partial class GameServer
         // Achievements: settle anything that came due while a reward had nowhere to go, retro-award entries that
         // were added to the data file since this save was made, and send the list with live progress.
         SettleAchievements(session);
+        TellOwnerOfStationsCommissionedAway(session); // #2492: a station an ally commissioned while this owner was away
         SendBeacons(session);
         SendBeams(session); // placed beam blocks (teleporter pads) on the join world
         SendCrystalNet(session); // #2046: the Crystal Net lists of this world
@@ -4451,6 +4465,35 @@ public sealed partial class GameServer
         return sb.ToString();
     }
 
+    /// <summary>Whether a brand-new player record gets WorldAdmin as the world's first-ever joiner (#2486). Only on
+    /// a world without a control-plane owner (singleplayer, LAN, self-hosting — whoever creates such a world owns
+    /// it) and only where player admins exist at all. A hosted world names its owner (<c>BBS_WORLD_OWNER</c>) and
+    /// the owner rule in <see cref="HandleJoin"/> grants them WorldAdmin, so its first joiner is just a Player: on a
+    /// portal world that may be a friend who arrives before the owner, on an arcade pool world it is the first
+    /// anonymous guest (owner id <c>glitch</c> never matches a guest's <c>glitch:&lt;install&gt;</c>). An uploaded
+    /// save keeps its existing rows — this only decides roles for records created now.</summary>
+    private bool FirstJoinerBecomesWorldAdmin()
+        => string.IsNullOrEmpty(_config.WorldOwnerAccountId)
+            && !_config.NoPlayerAdmins
+            && _repo.ListPlayerIds().Count == 0;
+
+    /// <summary><see cref="ServerConfig.NoPlayerAdmins"/> (#2486): a joining player whose saved role is Admin or
+    /// WorldAdmin is demoted to Player — written straight back and logged — unless the name is a configured
+    /// <see cref="ServerConfig.AdminPlayers"/> entry or the join is the token-verified world owner. Fleet admins are
+    /// a session flag, not a role, so their powers are untouched. No-op without the flag.</summary>
+    private void EnforceNoPlayerAdmins(PlayerState state, string name, bool verifiedOwner)
+    {
+        if (!_config.NoPlayerAdmins || !state.IsAdmin || verifiedOwner || _config.AdminPlayers.Contains(name))
+        {
+            return;
+        }
+
+        var held = state.Role;
+        state.Role = PlayerRole.Player;
+        _repo.SavePlayer(state); // persist immediately, like the name claim and the owner bootstrap
+        _log.Warn($"Player '{name}' held the {held} role on a world without player admins (no-player-admins) — demoted to Player.");
+    }
+
     private PlayerState CreateNewPlayer(string name)
     {
         int spawnX = 0, spawnZ = 0;
@@ -4478,8 +4521,9 @@ public sealed partial class GameServer
             // only anchor that is truly theirs here; SetupPlayerShip re-anchors to their own heal tank.
             RespawnPoint = spawn,
             AboardShip = true,
-            // The very first player to join becomes the world admin (world creator).
-            Role = _repo.ListPlayerIds().Count == 0
+            // The very first player to join becomes the world admin (world creator) — unless the world has a
+            // control-plane owner or no player admins at all (#2486, see FirstJoinerBecomesWorldAdmin).
+            Role = FirstJoinerBecomesWorldAdmin()
                 ? PlayerRole.WorldAdmin
                 : (_config.AdminPlayers.Contains(name) ? PlayerRole.Admin : PlayerRole.Player),
         };
@@ -4658,6 +4702,8 @@ public sealed partial class GameServer
             state.Role = PlayerRole.Admin;
         }
 
+        EnforceNoPlayerAdmins(state, name, verifiedOwner: false); // #2486: same rule as the network join
+
         int connectionId = _nextLocalConnectionId--;
 
         // Return the player to the body they were last on (persisted); home/default for a fresh player.
@@ -4688,6 +4734,7 @@ public sealed partial class GameServer
         GrantStarterTeleporter(session); // StarterTeleporter world rule (#1056): hand out the device on join
         OnMarkerOwnerJoined(session); // the loaded state is the truth for this player's shared markers (#1293)
         RestoreStationOnJoin(session, savedLocation, savedPosition); // #1925: saved aboard a station → back on it
+        TellOwnerOfStationsCommissionedAway(session); // #2492: like the network join
         session.InJoinPlacement = false; // #2465
         return session;
     }
@@ -7759,8 +7806,10 @@ public sealed partial class GameServer
     }
 
     /// <summary>Records that a player has physically arrived ON a body — marks it landed (a quick-travel
-    /// target) and its system known (its bodies + mini map revealed on the travel screen). Persisted.</summary>
-    private void MarkArrivedOnBody(PlayerSession session, string bodyId)
+    /// target) and its system known (its bodies + mini map revealed on the travel screen). Persisted.
+    /// <paramref name="silent"/> books the arrival without any effect (#2493: a visible admin's <c>/goto</c>), like an
+    /// observer's.</summary>
+    private void MarkArrivedOnBody(PlayerSession session, string bodyId, bool silent = false)
     {
         var body = _galaxy?.FindBody(bodyId);
         if (body == null)
@@ -7768,10 +7817,10 @@ public sealed partial class GameServer
             return;
         }
 
-        // An invisible observer (#2460, N1) is booked as having been there — so a later rejoin on this body counts
-        // nothing either — but leaves no trace in the shared world: no story points, no frontier growth, no
-        // achievements, no knowledge.
-        if (session.Spectating)
+        // An invisible observer (#2460, N1) — or an admin's /goto (#2493) — is booked as having been there, so a later
+        // rejoin or a real landing on this body counts nothing either, but leaves no trace in the shared world: no story
+        // points, no frontier growth, no achievements, no knowledge.
+        if (session.Spectating || silent)
         {
             session.State.LandedBodies.Add(body.Id);
             if (!string.IsNullOrEmpty(body.SystemId))
