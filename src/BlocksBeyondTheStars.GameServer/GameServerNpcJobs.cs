@@ -74,6 +74,12 @@ public sealed partial class GameServer
     /// <summary>One NPC's job on duty (called from the routine pass for NPCs in reach).</summary>
     private void TickNpcJob(ServerNpc npc, double dt, List<PlayerSession> targets)
     {
+        if (npc.LodgeKey.Length > 0)
+        {
+            TickLodgeResidentJob(npc, targets); // #2641: the wilderness folk work round their hut (GameServerNpcWork.cs)
+            return;
+        }
+
         if (npc.BaseId == 0 || npc.Job.Length == 0 || npc.Phase != NpcPhase.Day || npc.Pose != 0)
         {
             return;
@@ -511,8 +517,12 @@ public sealed partial class GameServer
 
     // ---------------- crates ----------------
 
+    /// <summary>The player crate at a cell — what a base job, a Crystal Net machine (sender, receiver, fabricator, a device's
+    /// price), the drills and the base index work with. Never a lodge resident's store (#2640): it is theirs alone — a
+    /// matter sender or a base built beside a hut must not drain it or fill it.</summary>
     private StoredContainer? ContainerAt(Vector3i cell)
         => _containers.FirstOrDefault(c => c.Kind == "crate"
+                                           && !c.Id.StartsWith(LodgeStoreIdPrefix, System.StringComparison.Ordinal)
                                            && WorldConstants.CanonicalBlock(c.Position, _world.Circumference).Equals(WorldConstants.CanonicalBlock(cell, _world.Circumference)));
 
     /// <summary>The first base crate whose filter lets these items in.</summary>

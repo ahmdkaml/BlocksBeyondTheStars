@@ -138,14 +138,15 @@ public sealed partial class GameServer
         bool ownResident = IsOwnBaseResident(session, npc); // #2594: "welcome home" talk vs. a visitor's talk
         foreach (var d in AllDialogs())
         {
-            bool profession = guest || NpcProfessions.ByJob(npc.Job) != null; // #2602: a guest_* job talks like a profession
+            bool profession = guest || NpcProfessions.ByJob(npc.Job) != null // #2602: a guest_* job talks like a profession
+                || IsLodgeJob(npc.Job); // #2641: so do the wilderness folk (their own lodge_<job> talk, never the vendor's)
             bool matches = !string.IsNullOrEmpty(d.Character)
                 ? string.Equals(d.Character, npc.CharacterId, StringComparison.OrdinalIgnoreCase)
                 : !string.IsNullOrEmpty(d.Job)
                     ? string.Equals(d.Job, npc.Job, StringComparison.OrdinalIgnoreCase) // 2026-09: a profession's own talk
                     : !profession && (string.IsNullOrEmpty(d.Role) || string.Equals(d.Role, npc.Role, StringComparison.OrdinalIgnoreCase));
             if (!matches
-                || !DialogHomeMatches(d.Home, ownResident)
+                || !DialogHomeMatches(d.Home, ownResident, npc.LodgeKey.Length > 0, IsWandererNpc(npc))
                 || d.Nodes.Count == 0
                 || (d.PlanetTypes.Count > 0 && !d.PlanetTypes.Contains(_worlds.Active.PlanetType, StringComparer.OrdinalIgnoreCase)) // #1793
                 || StageRank(d.MinStage) > stage
@@ -187,11 +188,14 @@ public sealed partial class GameServer
         return false;
     }
 
-    /// <summary>#2594: a dialogue's <see cref="DialogDefinition.Home"/> against where the NPC lives for this player.</summary>
-    private static bool DialogHomeMatches(string? home, bool ownResident) => home switch
+    /// <summary>#2594: a dialogue's <see cref="DialogDefinition.Home"/> against where the NPC lives for this player (#2641:
+    /// a lodge dialogue only for a lodge's resident; #2646: a wanderer's only for a wanderer).</summary>
+    private static bool DialogHomeMatches(string? home, bool ownResident, bool lodgeResident = false, bool wanderer = false) => home switch
     {
         DialogDefinition.HomeOwnBase => ownResident,
         DialogDefinition.HomeAway => !ownResident,
+        DialogDefinition.HomeLodge => lodgeResident,
+        DialogDefinition.HomeWander => wanderer,
         _ => true,
     };
 
@@ -476,7 +480,10 @@ public sealed partial class GameServer
             Theme = npc.Theme,
             Stage = stage,
             Situation = guest ? "visiting the player's own base, offering something"
-                : IsOwnBaseResident(session, npc) ? "the player's own base, where the speaker lives" : string.Empty,
+                : IsOwnBaseResident(session, npc) ? "the player's own base, where the speaker lives"
+                : npc.LodgeKey.Length > 0 ? "the speaker's own little hut out in the wild, where they live and work" // #2641
+                : IsWandererNpc(npc) ? WandererAiSituation // #2646
+                : string.Empty,
             Speakers =
             {
                 new NpcLinesSpeaker
@@ -611,7 +618,7 @@ public sealed partial class GameServer
         // #2598: talking to a PERSON pays every 10 minutes (a child gets to "known" in one session); the shared role
         // keys of the stall and the board keep their hour.
         session.DialogRewardCooldownUntil[key] = _uptime
-            + (IsPersonKey(npcKey) ? PersonDialogRewardCooldownSeconds : DialogRewardCooldownSeconds);
+            + (IsPersonKey(npcKey) || IsWildernessPersonKey(npcKey) ? PersonDialogRewardCooldownSeconds : DialogRewardCooldownSeconds);
         return true;
     }
 
@@ -697,6 +704,23 @@ public sealed partial class GameServer
 
             case "news":
                 _dialogExtraText = "\n\n" + NewsDigest(session, npc);
+                break;
+
+            // #2641: the wilderness folk.
+            case LodgeGiftConsequence:
+                ApplyLodgeGift(session, npc); // a friend's present from the store crate, once per in-game day
+                break;
+
+            case LodgeTipConsequence:
+                ApplyLodgeTip(session, npc); // the nearest unrevealed find goes on the map, else the way to the village
+                break;
+
+            case LodgePoisonConsequence:
+                ApplyLodgePoison(session); // the gatherer names this world's poisonous plants
+                break;
+
+            case WandererTipConsequence:
+                ApplyWandererTip(session, npc); // #2646: a hut on the way, else a find or the way to the village
                 break;
         }
     }

@@ -126,7 +126,10 @@ public sealed partial class GameServer
             Job = npc.Job,
             Theme = npc.Theme,
             IsRobot = npc.IsRobot,
-            Settlement = string.IsNullOrEmpty(npc.Settlement) ? _settlementName : npc.Settlement,
+            Settlement = !string.IsNullOrEmpty(npc.Settlement) ? npc.Settlement
+                : npc.LodgeKey.Length > 0 ? LodgeAiPlace // #2641: a lodge resident lives in no village
+                : IsWandererNpc(npc) ? WandererAiPlace // #2646: a wanderer is on the road
+                : _settlementName,
             // #2590: never the real name — the cache key has no player, so a line naming "Justus" would greet every
             // other player at this NPC/standing/language as Justus. The token is filled per receiver at send time.
             PlayerName = AiLineTokens.Player,
@@ -323,7 +326,7 @@ public sealed partial class GameServer
         }
 
         string tier = RelationshipTier(RelationshipValue(session.State, npcKey));
-        if (tier is not ("known" or "trusted") || NpcProfessions.ByJob(npc.Job) is not null
+        if (tier is not ("known" or "trusted") || NpcProfessions.ByJob(npc.Job) is not null || IsLodgeJob(npc.Job) // #2641
             || npc.Role is not ("vendor" or "quartermaster"))
         {
             return string.Empty;

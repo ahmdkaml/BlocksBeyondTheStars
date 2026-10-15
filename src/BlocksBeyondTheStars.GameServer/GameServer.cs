@@ -824,6 +824,7 @@ public sealed partial class GameServer
                     if (!restricted)
                     {
                         BootDetail("bandit camps", StampBanditCamps); // small hostile outposts (unprotected; self-skips per config + Bandits rule)
+                        BootDetail("lodges", StampLodges); // #2640: wilderness huts and their residents (generation 25+; after the camps so it avoids them)
                     }
 
                     BootDetail("sps labs", StampSpsLabs); // 2026-09: abandoned SPS research stations — only on a type that allows them (Titas)
@@ -1936,11 +1937,15 @@ public sealed partial class GameServer
             Guard("TickFire", deltaSeconds, TickFire);
             Guard("TickWeather", deltaSeconds, TickWeather);
             Guard("TickFlora", deltaSeconds, TickFlora);
+            Guard("TickNpcFelling", deltaSeconds, TickNpcFelling); // #2644: a woodcutter's tree comes down from the top, a few cells a tick
+            Guard("TickNpcRestores", deltaSeconds, TickNpcRestores); // #2643: mined quarry cells fill up again (1 Hz)
             Guard("TickCreatures", deltaSeconds, TickCreatures);
             Guard("TickSreekmakra", deltaSeconds, TickSreekmakra); // 2026-09: Valuma's shapeshifter and mood (1 Hz)
             Guard("TickGiants", deltaSeconds, TickGiants); // #1998: the colossus, the sandworms and the thumpers
             Guard("TickTrains", deltaSeconds, TickTrains); // #2113: the monorail trains and their riders
             Guard("TickBaseGuests", deltaSeconds, TickBaseGuests); // #2602: friendly visitors walk up to a base whose owner is home (1 Hz)
+            Guard("TickLodges", deltaSeconds, TickLodges); // #2640/#2641: lodges found by passing players, the store crates (1 Hz)
+            Guard("TickWanderers", deltaSeconds, TickWanderers); // #2646: named travellers met in the open land (1 Hz)
             Guard("TickNpcRoutine", deltaSeconds, TickNpcRoutine); // #1867/#1868: work by day, sit in the evening, sleep at night; jobs
             Guard("TickNpcPaths", deltaSeconds, TickNpcPaths); // #1866: at most one NPC path search per tick
             Guard("TickNpcs", deltaSeconds, TickNpcs);
@@ -5148,7 +5153,9 @@ public sealed partial class GameServer
         // It is protected like the wall it sits in — say so, rather than healing a "ghost block" at its air cell.
         if (StampedDoorAt(pos))
         {
-            Reject(session, "mine", IsStationBlock(pos) ? "@srv.protect.station" : "@srv.protect.settlement");
+            Reject(session, "mine", IsStationBlock(pos) ? "@srv.protect.station"
+                : IsLodgeBlock(pos) ? "@srv.protect.lodge:" + (LodgeAt(pos)?.ResidentName ?? string.Empty) // #2640: a hut's door
+                : "@srv.protect.settlement");
             return;
         }
 
@@ -5203,7 +5210,10 @@ public sealed partial class GameServer
         // A natural tree inside the box is not the settlement's either (#1659) — see IsSettlementProtected.
         if (!harvestingPlant && IsSettlementProtected(pos, current))
         {
-            Reject(session, "mine", "@srv.protect.settlement");
+            // #2640: a lodge says whose hut it is (the plants in its plot stay pickable — harvestingPlant above).
+            Reject(session, "mine", IsLodgeBlock(pos) && !IsSettlementBoxBlock(pos) && !IsIntercityRailBlock(pos)
+                ? "@srv.protect.lodge:" + (LodgeAt(pos)?.ResidentName ?? string.Empty)
+                : "@srv.protect.settlement");
             return;
         }
 
@@ -7158,6 +7168,10 @@ public sealed partial class GameServer
 
             case "summon_biped":
                 AdminSummonBiped(session); // #2081: /biped — a begging herd of bipeds, for testing
+                break;
+
+            case "summon_wanderer":
+                AdminSummonWanderer(session); // #2646: /wanderer — a wanderer comes by right now, for testing
                 break;
 
             case "instant_build":
