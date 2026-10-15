@@ -148,6 +148,15 @@ public static class ContentLoader
             ? JsonSerializer.Deserialize<SpaceSalvageDefinition>(File.ReadAllText(salvageFile), JsonOptions)
             : null);
 
+        // "The village lives" (#2589): no village_life.json → no friend presents, chatter or festival (each part optional).
+        string villageFile = Path.Combine(dataDir, "village_life.json");
+        content.SetVillageLife(File.Exists(villageFile)
+            ? JsonSerializer.Deserialize<VillageLifeDefinition>(File.ReadAllText(villageFile), JsonOptions)
+            : null);
+
+        // The villagers' personal wishes (#2601) are optional the same way: no wishes.json → nobody wishes anything.
+        content.SetWishes(LoadArray<BlocksBeyondTheStars.Shared.Missions.WishTemplate>(Path.Combine(dataDir, "wishes.json")));
+
         content.Validate();
         return content;
     }

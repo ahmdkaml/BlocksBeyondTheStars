@@ -94,7 +94,7 @@ public sealed partial class GameServer
             return true;
         }
 
-        int value = p.NpcMemory.TryGetValue(giverKey, out var rel) ? rel.Value : 0;
+        int value = RelationshipValue(p, giverKey); // #2598: a villager without an own entry reads the floor
         return MissionChains.StageRank(RelationshipTier(value)) >= MissionChains.StageRank(def.MinStage);
     }
 
@@ -374,8 +374,11 @@ public sealed partial class GameServer
                     return false;
                 }
 
-                // A place-bound chain continues with the SAME giver (an authored character is the same person anywhere).
+                // A place-bound chain continues at the SAME place (an authored character is the same person anywhere).
+                // #2598: a villager's person key carries a "#slot" — compare places, and still accept a chain bound
+                // before (its bound place may carry the slot of a base resident's key).
                 if (bound.Length > 0 && !dialogGiverKey.StartsWith("char:", StringComparison.Ordinal)
+                    && PlaceOfNpcKey(dialogGiverKey) != bound
                     && !dialogGiverKey.StartsWith(bound + ":", StringComparison.Ordinal))
                 {
                     reason = "@srv.mission.chain_giver";
@@ -421,6 +424,11 @@ public sealed partial class GameServer
             if (!def.Active || player.Missions.Any(m => m.MissionId == def.Id))
             {
                 continue; // already accepted / turned in (non-repeatable) is hidden
+            }
+
+            if (IsWishMission(def.Id))
+            {
+                continue; // #2601: a villager's wish is asked in person, never listed — and another player's is theirs
             }
 
             if (IsBoardMissionId(def.Id) && !currentBoardIds.Contains(def.Id))
@@ -522,7 +530,8 @@ public sealed partial class GameServer
     /// ("I've got something more for you") — through the dialogue-promised-call queue, so it obeys the
     /// radio gates, the player's NpcCallsMode and the 90 s delay, and gives up if the player stays away.
     /// A chain VEGA hands out (#2481, B55: <see cref="MissionChains.GiverVega"/>, the Crystal workshop) gets VEGA's own line
-    /// instead (<see cref="VegaChainFollowUp"/>).</summary>
+    /// instead (<see cref="VegaChainFollowUp"/>). The end of a settlement's "settlement needs" chain plans its festival
+    /// (#2604, <see cref="OnSettlementChainDone"/>).</summary>
     private void OnChainStepTurnedIn(PlayerSession session, MissionDefinition def, MissionProgress pr)
     {
         // #1291: only a step that is FEASIBLE here counts as "next" — otherwise the giver promises a call
@@ -531,6 +540,7 @@ public sealed partial class GameServer
         if (next.Count == 0)
         {
             RestartChainIfRepeatable(session, def);
+            OnSettlementChainDone(session, def, pr); // #2604: the village helped with everything → a festival
             return;
         }
 
@@ -685,7 +695,8 @@ public sealed partial class GameServer
         }
 
         // The chain binds to the giver's place; an authored character binds to wherever you met them.
-        string acceptedFrom = npcKey.StartsWith("char:", StringComparison.Ordinal) ? place : npcKey[..Math.Max(0, npcKey.IndexOf(':'))];
+        // #2598: PlaceOfNpcKey cuts a villager's "#slot" too — the chain binds to the settlement, not to a bed.
+        string acceptedFrom = npcKey.StartsWith("char:", StringComparison.Ordinal) ? place : PlaceOfNpcKey(npcKey);
         p.Missions.Add(NewMissionProgress(p, def, acceptedFrom));
         OnChainStepAccepted(session, def, npcKey, npc.Name);
         Send(session, MissionSucceeded(session, def, MissionOutcomes.Accepted));

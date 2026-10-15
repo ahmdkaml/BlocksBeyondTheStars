@@ -170,9 +170,10 @@ public sealed class PlayerState
     /// <c>ServerConfig.FleetAdminPlayers</c>.</para></summary>
     public PlayerRole Role { get; set; } = PlayerRole.Player;
 
-    /// <summary>ISO-8601 UTC timestamp of this player's last join or save, so the admin player list can show
-    /// "last seen" for players who are not online (issue #488). Empty for records written before this existed.
-    /// Persisted in the player blob, so no schema change was needed.</summary>
+    /// <summary>ISO-8601 UTC timestamp of when this player was last online — stamped on join, on disconnect and on every
+    /// world save while they play — so the admin player list can show "last seen" for players who are not online
+    /// (issue #488), and the next join can tell how long they were away (the welcome-back, #2595). Empty for records
+    /// written before this existed. Persisted in the player blob, so no schema change was needed.</summary>
     public string LastSeenUtc { get; set; } = string.Empty;
 
     /// <summary>Name verification: SHA-256 hex of the per-install secret the name's first join presented.
@@ -237,6 +238,11 @@ public sealed class PlayerState
 
     /// <summary>Accepted missions and their progress.</summary>
     public List<MissionProgress> Missions { get; set; } = new();
+
+    /// <summary>The villagers' personal wishes per place (#2601): place location key (<c>settle_&lt;hash&gt;</c>) → the
+    /// lanes' counters and givers. A held wish is also an ordinary row in <see cref="Missions"/>. Persisted additively:
+    /// an older build drops it on re-save — the lanes then start over, a held wish stays in the mission list.</summary>
+    public Dictionary<string, WishLedger> Wishes { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>One-time progression milestones the ship AI (VEGA) has seen this player reach — the legacy onboarding
     /// stages ("vega:stage:N", since #2469 only double-written by the tutorial pack for older builds), advisor once-hints

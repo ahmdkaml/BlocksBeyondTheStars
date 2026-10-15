@@ -67,6 +67,8 @@ public sealed partial class GameServer
             npc.Bed = TakeNearestBed(freeBeds, standing);
             npc.FurnitureScanned = true;
             npc.Seat = EveningSeatFor(settlement, seats, ref seatCursor, npc.Bed); // a free one only (#2122)
+            int noFallback = 0; // a profession always has its post marker — the fallback ordinal is never used
+            npc.PersonKey = SettlementPersonKey(settlement, npc, pos, npc.Bed, ref noFallback); // #2598: <job>@<post cell>
 
             npc.RoutineEnabled = true;
             _npcs.Add(npc);
@@ -255,7 +257,17 @@ public sealed partial class GameServer
                     continue;
                 }
 
-                Send(s, new NpcGreeting { NpcId = npc.Id, Name = npc.Name, Role = npc.Role, Text = Localize(s.Locale, "npc.streamer.ask") });
+                // #2593: the streamer calls out to a player walking by — a passing line with a wave, not an addressed one.
+                Send(s, new NpcGreeting
+                {
+                    NpcId = npc.Id,
+                    Name = npc.Name,
+                    Role = npc.Role,
+                    Text = Localize(s.Locale, "npc.streamer.ask"),
+                    GreetingId = NextGreetingId(),
+                    Kind = NpcGreetingKinds.Passing,
+                    Gesture = NpcGestures.Wave,
+                });
             }
         }
     }
@@ -274,27 +286,15 @@ public sealed partial class GameServer
     private string NewsPlaceKey(ServerNpc npc)
         => npc.Settlement.Length > 0 ? "s:" + npc.Settlement : npc.BaseId > 0 ? "b:" + npc.BaseId : "w:" + _world.LocationId;
 
-    /// <summary>The latest articles of the reporter's place, newest first, for the "read the news" answer.</summary>
+    /// <summary>The latest news of the teller's place, newest first, for the "read the news" answer — the reporter's and
+    /// (#2599, E13) the innkeeper's: the place's interviews and the deeds of this world that concern it
+    /// (<see cref="NewsDigestLines"/>, GameServerVillageLife.cs).</summary>
     private string NewsDigest(PlayerSession session, ServerNpc npc)
     {
-        if (!_meta.News.TryGetValue(NewsPlaceKey(npc), out var list) || list.Count == 0)
-        {
-            return Localize(session.Locale, "dlg.reporter.no_news");
-        }
-
-        var sb = new System.Text.StringBuilder();
-        foreach (var article in Enumerable.Reverse(list).Take(3))
-        {
-            string text = article.Text.StartsWith("@", System.StringComparison.Ordinal) ? Localize(session.Locale, article.Text.Substring(1)) : article.Text;
-            if (sb.Length > 0)
-            {
-                sb.Append('\n');
-            }
-
-            sb.Append("• ").Append(article.PlayerName).Append(": ").Append(text);
-        }
-
-        return sb.ToString();
+        var lines = NewsDigestLines(session, npc);
+        return lines.Count == 0
+            ? Localize(session.Locale, npc.Job == "innkeeper" ? "dlg.innkeeper.no_news" : "dlg.reporter.no_news")
+            : string.Join("\n", lines);
     }
 
     /// <summary>The player's interview answer (2026-09): accepted only right after that reporter asked, trimmed, screened
@@ -341,7 +341,7 @@ public sealed partial class GameServer
             _meta.News[key] = list = new List<NewsArticle>();
         }
 
-        list.Add(new NewsArticle { PlayerName = session.State.Name, Text = text!, Day = MarketDay });
+        list.Add(new NewsArticle { PlayerName = session.State.Name, Text = text!, Day = MarketDay, At = System.Math.Max(1, _meta.CumulativePlaytimeSeconds) });
         while (list.Count > NewsArticle.MaxPerPlace)
         {
             list.RemoveAt(0);

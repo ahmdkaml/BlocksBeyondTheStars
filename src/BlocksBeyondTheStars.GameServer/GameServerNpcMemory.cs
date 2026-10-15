@@ -51,19 +51,18 @@ public sealed partial class GameServer
     }
 
     /// <summary>Records an interaction in an NPC's memory of this player (item 14): raises the relationship by a
-    /// per-kind weight and appends to the capped last-N log. Persists with the player.</summary>
+    /// per-kind weight and appends to the capped last-N log. Persists with the player. A passing guest at the base
+    /// (<c>guest:&lt;name&gt;</c>, #2602) is nobody to remember — the roster stays clean.</summary>
     private void RecordNpcInteraction(PlayerState player, string npcKey, string npcName, string npcRole, NpcInteractionKind kind, string place = "")
     {
-        if (string.IsNullOrEmpty(npcKey))
+        if (string.IsNullOrEmpty(npcKey) || npcKey.StartsWith(GuestKeyPrefix, System.StringComparison.Ordinal))
         {
             return;
         }
 
-        if (!player.NpcMemory.TryGetValue(npcKey, out var rel))
-        {
-            rel = new NpcRelationship { Name = npcName, Role = npcRole };
-            player.NpcMemory[npcKey] = rel;
-        }
+        // #2598: a villager's first entry starts at the floor of the old shared standing (plus the first-meeting lift).
+        var rel = EnsureRelationship(player, npcKey, npcName, npcRole);
+        rel.LastSeenUtc = WallUtcNowIso(); // #2595: "when did they last see me" — welcome-back reads it
 
         if (!string.IsNullOrEmpty(npcName))
         {
@@ -126,8 +125,11 @@ public sealed partial class GameServer
             return; // traded at the ship's own console — not an NPC vendor
         }
 
-        // An authored character behind the counter (#1128) banks the trade on their GLOBAL memory.
-        string key = vendor is { CharacterId.Length: > 0 } ? "char:" + vendor.CharacterId : NpcKey(locationKey, "vendor");
+        // An authored character behind the counter (#1128) banks the trade on their GLOBAL memory; a trading profession
+        // (doctor, grocer …) on their own person key (#2598) — only the classic stall keeps the shared vendor key.
+        string key = vendor is { CharacterId.Length: > 0 } ? "char:" + vendor.CharacterId
+            : vendor is { PersonKey.Length: > 0 } && NearSettlementVendor(player) ? vendor.PersonKey
+            : NpcKey(locationKey, "vendor");
         RecordNpcInteraction(player, key, vendor?.Name ?? string.Empty, "vendor", NpcInteractionKind.Trade, NpcPlaceFor(player));
     }
 

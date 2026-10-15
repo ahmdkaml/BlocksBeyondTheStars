@@ -84,6 +84,14 @@ public sealed class NpcDialogTests : IDisposable
         throw new Xunit.Sdk.XunitException("no qualifying settlement NPC found across 200 seeds");
     }
 
+    /// <summary>#2601: a plain settler without a personal wish for the test player ("Friend") — a wish opens before every
+    /// other dialogue, so the smalltalk tests talk to somebody who has none.</summary>
+    private static (int Id, string Name, string Role, string CharacterId)? SettlerWithoutWish(SvGameServer s)
+    {
+        var wishGivers = s.WishGiverIdsForTest("Friend");
+        return FirstNpc(s, n => n.Role == "settler" && n.CharacterId.Length == 0 && !wishGivers.Contains(n.Id));
+    }
+
     private static (int Id, string Name, string Role, string CharacterId)? FirstNpc(SvGameServer s, Func<(int Id, string Name, string Role, string CharacterId), bool> where)
         => s.NpcRosterForTest().Where(where).Cast<(int, string, string, string)?>().FirstOrDefault();
 
@@ -92,7 +100,7 @@ public sealed class NpcDialogTests : IDisposable
     [Fact]
     public void TalkingToASettler_WalksTheDialogue_AndPersistsTheChoice()
     {
-        var server = StartedAt(s => FirstNpc(s, n => n.Role == "settler" && n.CharacterId.Length == 0),
+        var server = StartedAt(SettlerWithoutWish,
             out var repo, out var player, out int npcId, out _);
         using (repo)
         {
@@ -104,11 +112,11 @@ public sealed class NpcDialogTests : IDisposable
             Assert.Null(server.ActiveDialogForTest(p.PlayerId));
 
             // The decision persisted, the dormant Dialog interaction finally has a producer, and the
-            // standing moved (+1 interaction weight, +1 consequence).
+            // standing moved (#2598: the first meeting lifts a villager to 3, +1 interaction weight, +1 consequence).
             Assert.Contains("dialogflag:settler_neighbours:0:0", p.Milestones);
             var rel = Assert.Single(p.NpcMemory.Values.Where(r => r.Role == "settler"));
             Assert.Contains(rel.Log, e => e.Kind == NpcInteractionKind.Dialog);
-            Assert.Equal(2, rel.Value);
+            Assert.Equal(5, rel.Value);
 
             // Not once-per-player: talking again reopens it.
             server.TalkToNpcForTest(p.PlayerId, npcId);
@@ -216,29 +224,29 @@ public sealed class NpcDialogTests : IDisposable
     [Fact]
     public void RepeatableSmalltalk_PaysItsRelationshipReward_OncePerCooldown()
     {
-        var server = StartedAt(s => FirstNpc(s, n => n.Role == "settler" && n.CharacterId.Length == 0),
+        var server = StartedAt(SettlerWithoutWish,
             out var repo, out var player, out int npcId, out _);
         using (repo)
         {
             var p = player.State;
 
-            // First walk pays: +1 Dialog interaction, +1 standing consequence.
+            // First walk pays: the first meeting (#2598: lifts a villager to 3), +1 Dialog interaction, +1 standing.
             server.TalkToNpcForTest(p.PlayerId, npcId);
             server.ChooseDialogForTest(p.PlayerId, 0);
             var rel = Assert.Single(p.NpcMemory.Values.Where(r => r.Role == "settler"));
-            Assert.Equal(2, rel.Value);
+            Assert.Equal(5, rel.Value);
 
             // Spam-talking pays nothing more — the dialogue still opens and reads normally (#1162).
             server.TalkToNpcForTest(p.PlayerId, npcId);
             Assert.Equal(("settler_neighbours", 0), server.ActiveDialogForTest(p.PlayerId));
             server.ChooseDialogForTest(p.PlayerId, 0);
-            Assert.Equal(2, rel.Value);
+            Assert.Equal(5, rel.Value);
 
-            // After the cooldown it pays again.
+            // After the cooldown it pays again (a person's is 10 minutes, #2598) — the first meeting only once.
             server.SkipDialogRewardCooldownForTest(p.PlayerId);
             server.TalkToNpcForTest(p.PlayerId, npcId);
             server.ChooseDialogForTest(p.PlayerId, 0);
-            Assert.Equal(4, rel.Value);
+            Assert.Equal(7, rel.Value);
             server.Stop();
         }
     }

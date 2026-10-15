@@ -65,8 +65,10 @@ Created on first run; editable directly or through the admin UI.
 | `webSocketBindAddress` | WebSocket HTTP bind host (`+` for all interfaces/reverse proxies) | `localhost` |
 | `databaseProvider` | Save backend: `sqlite` or `postgresql` | `sqlite` |
 | `postgresConnectionString` | PostgreSQL connection string (prefer env/secret) | `""` |
-| `aiLevel` | Optional AI text backend: `Off`, `Suggest` (AI missions land as drafts), `Auto` (published) — see §8 | `Off` |
+| `aiLevel` | Optional AI text backend: `Off`, `TextOnly` (AI only re-words NPC/VEGA text), `Suggest` (AI missions land as drafts), `Auto` (published) — see §8 | `Off` |
 | `aiBackendUrl` | Base URL of the optional AI backend | `http://127.0.0.1:8077` |
+| `aiTimeoutSeconds` | HTTP timeout for AI-backend calls (players never wait on it — AI lines upgrade later) | `35` |
+| `aiLinesPerMinute` | Per-world budget for AI-personalised NPC/VEGA lines (bucket of 6, at most 2 requests at once; `0` = none) | `4` |
 
 **Machine catch-up (#2269).** A world sleeps while nobody is on it. When a player comes back, the Crystal Net
 machines that were running when the world stopped (drills, drill lasers, matter senders, fabricators, harvesting
@@ -125,6 +127,7 @@ command line**, so env vars override the file but the in-game host's CLI flags s
 | `BBS_SHIP_WEAPONS` | `rules.shipWeapons` | `BBS_SPACE_NPCS` | `rules.spaceNpcEnemies` |
 | `BBS_DATABASE_PROVIDER` (`BBS_DATABASE`) | `databaseProvider` | `BBS_POSTGRES_CONNECTION_STRING` (`DATABASE_URL`) | `postgresConnectionString` |
 | `BBS_AI_LEVEL` | `aiLevel` | `BBS_AI_BACKEND_URL` | `aiBackendUrl` |
+| `BBS_AI_TIMEOUT_SECONDS` | `aiTimeoutSeconds` | `BBS_AI_LINES_PER_MINUTE` | `aiLinesPerMinute` |
 | `BBS_CHUNK_STREAM_PER_TICK` | `chunkStreamPerTick` | `BBS_CHUNK_STREAM_BUDGET_MS` | `chunkStreamBudgetMs` |
 | `BBS_CHUNK_GEN_WORKERS` | `chunkGenWorkers` (default 2, 0 = generate inline on the tick) | `BBS_TICK_TIMING_LOG_SECONDS` | `tickTimingLogSeconds` |
 | `BBS_BACKUP_INTERVAL_MINUTES` | `backupIntervalMinutes` | `BBS_BACKUP_KEEP` | `backupKeepCount` |
@@ -612,9 +615,10 @@ configure it** — otherwise no Python process runs. It is enabled when either:
 
 Set `BBS_AI_BACKEND=1`/`0` to force it on/off explicitly. When it starts it listens on the in-container
 `127.0.0.1:8077`, which is the game server's default `aiBackendUrl` — so you only need to turn the
-server's usage on with **`BBS_AI_LEVEL=Suggest`** (AI missions as drafts) or **`Auto`** (published);
-any non-`Off` value also enables NPC greetings / board flavour / VEGA banter (see §8). With no `.env`
-and `BBS_AI_LEVEL=Off` (the defaults), the game is fully AI-free and no backend runs.
+server's usage on with **`BBS_AI_LEVEL=TextOnly`** (NPC/VEGA lines and board flavour only, no AI missions),
+**`Suggest`** (AI missions as drafts) or **`Auto`** (published); any non-`Off` value also enables NPC greetings /
+board flavour / VEGA banter (see §8), paced by `BBS_AI_LINES_PER_MINUTE` (default 4, `0` = authored lines only).
+With no `.env` and `BBS_AI_LEVEL=Off` (the defaults), the game is fully AI-free and no backend runs.
 
 ```yaml
 # docker-compose.yml — enable the bundled AI backend

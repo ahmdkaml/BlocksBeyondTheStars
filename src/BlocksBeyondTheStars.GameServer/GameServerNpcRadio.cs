@@ -101,8 +101,8 @@ public sealed partial class GameServer
             return false;
         }
 
-        if (requireKnown
-            && (!p.NpcMemory.TryGetValue(npcKey, out var rel) || RelationshipTier(rel.Value) is not ("known" or "trusted")))
+        // #2598: a villager without an own entry reads the floor of the old shared standing.
+        if (requireKnown && RelationshipTier(RelationshipValue(p, npcKey)) is not ("known" or "trusted"))
         {
             return false;
         }
@@ -110,6 +110,49 @@ public sealed partial class GameServer
         Send(session, new ChatMessage { Sender = $"☎ {npcName} ({place})", Text = text, IsNpcCall = true });
         session.NpcCallReadyAt = _uptime + NpcCallGap;
         session.NpcCallCooldownUntil[cooldownKey] = _uptime + NpcCallRepeatCooldown;
+        return true;
+    }
+
+    /// <summary>
+    /// #2596 — news from the player's OWN base through VEGA, for when the NPC radio call cannot reach them (no radio worn,
+    /// the radio's range, its cadence) or the news has no caller. Foreign villages stay radio-only — VEGA is the ship's
+    /// link to the player's home, not to everyone's. Call it after the radio attempt failed; it never rings the radio.
+    /// <para><b>For other systems</b> (visitors, landing traders …): <c>RelayBaseNewsViaVega(owner, "guest:" + baseId,
+    /// "vega.news.&lt;thing&gt;", new[] { arg0, arg1 })</c> — <paramref name="lineKey"/> is a VEGA locale key whose
+    /// <c>{0}</c>, <c>{1}</c> … are filled from <paramref name="args"/> (display strings: a name, a base, a body).</para>
+    /// <para>Gates, in order: the owner is joined and not observing; the "NPC calls" setting — <see cref="NpcCallsMode.All"/>
+    /// for ordinary news, anything but Off for an <paramref name="urgent"/> warning (the guard's scouts, like the ☎ it
+    /// replaces); a line on the advisor/tip channel (<paramref name="kind"/> 1 or 5) is held back while the player muted
+    /// VEGA's hints (nothing is spent); and the per-key cooldown <paramref name="cooldownKey"/> — SHARED with the radio's
+    /// (<see cref="PlayerSession.NpcCallCooldownUntil"/>), so one piece of news is told once by whichever channel got
+    /// there first. <paramref name="kind"/>: 3 (system, never muted — the default) or 1 (an advisor line the hints
+    /// switch mutes). With AI personalisation on, a cached <c>vega_news</c> re-wording that keeps every
+    /// <c>{0}</c>/<c>{1}</c> of the authored line is used.</para>
+    /// Returns true when VEGA said it.
+    /// </summary>
+    internal bool RelayBaseNewsViaVega(PlayerSession owner, string cooldownKey, string lineKey, string[] args,
+        byte kind = 3, double cooldownSeconds = NpcCallRepeatCooldown, bool urgent = false)
+    {
+        var p = owner.State;
+        if (!owner.Joined || owner.Spectating
+            || p.NpcCallsMode == NpcCallsMode.Off || (!urgent && p.NpcCallsMode != NpcCallsMode.All)
+            || HintMutedFor(owner, kind)
+            || (owner.NpcCallCooldownUntil.TryGetValue(cooldownKey, out double until) && _uptime < until))
+        {
+            return false;
+        }
+
+        owner.NpcCallCooldownUntil[cooldownKey] = _uptime + cooldownSeconds;
+        var anchors = new List<string> { Localize(owner.Locale, lineKey) };
+        var values = new Dictionary<string, string>(System.StringComparer.Ordinal);
+        for (int i = 0; i < args.Length; i++)
+        {
+            values["{" + i.ToString(System.Globalization.CultureInfo.InvariantCulture) + "}"] = args[i] ?? string.Empty;
+        }
+
+        SpeakVegaChatter(owner, lineKey, kind, args, new VegaAiAsk(
+            NpcLinePurposes.VegaNews, lineKey, anchors, values, AiLineText.TokensIn(anchors),
+            Situation: "news from the player's own base"));
         return true;
     }
 
@@ -306,21 +349,23 @@ public sealed partial class GameServer
                 continue;
             }
 
-            foreach (string role in new[] { "quartermaster", "vendor", "settler" })
+            foreach (string role in ThreadCallRoles)
             {
-                string npcKey = NpcKey(SettlementLocationKey(s.Name), role);
-                if (!session.State.NpcMemory.TryGetValue(npcKey, out var rel)
-                    || PeekNpcThread(session, role, npcKey) is not { } thread)
+                foreach (string npcKey in ThreadCallKeys(session.State, SettlementLocationKey(s.Name), role))
                 {
-                    continue;
-                }
+                    if (!session.State.NpcMemory.TryGetValue(npcKey, out var rel)
+                        || PeekNpcThread(session, role, npcKey) is not { } thread)
+                    {
+                        continue;
+                    }
 
-                string name = string.IsNullOrEmpty(rel.Name) ? CoinGiverName(s.Name) : rel.Name;
-                if (TryNpcRadioCallText(session, npcKey, name, s.Name, _world.LocationId,
-                        "thread:" + thread.Key, Localize(session.Locale, thread.TextKey), isMission: false))
-                {
-                    CommitNpcThread(session, thread);
-                    return;
+                    string name = string.IsNullOrEmpty(rel.Name) ? CoinGiverName(s.Name) : rel.Name;
+                    if (TryNpcRadioCallText(session, npcKey, name, s.Name, _world.LocationId,
+                            "thread:" + thread.Key, Localize(session.Locale, thread.TextKey), isMission: false))
+                    {
+                        CommitNpcThread(session, thread);
+                        return;
+                    }
                 }
             }
         }
