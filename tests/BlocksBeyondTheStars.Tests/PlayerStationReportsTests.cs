@@ -60,12 +60,13 @@ public sealed class PlayerStationReportsTests : IDisposable
         public void Dispose() { }
     }
 
-    private SvGameServer NewServer(string name, out SqliteWorldRepository repo, IServerTransport? transport = null, bool placeStarterShip = false)
+    private SvGameServer NewServer(string name, out SqliteWorldRepository repo, IServerTransport? transport = null, bool placeStarterShip = false,
+        IGameLogger? logger = null)
     {
         repo = new SqliteWorldRepository(new SaveGamePaths(_root, name));
         var config = new ServerConfig { WorldName = name, Seed = 1, AutoSaveIntervalMinutes = 9999, PlaceStarterShip = placeStarterShip };
         config.Rules.FreeSpaceFlight = true;
-        var server = new SvGameServer(config, _content, transport ?? new LoopbackServerTransport(new LoopbackLink()), repo);
+        var server = new SvGameServer(config, _content, transport ?? new LoopbackServerTransport(new LoopbackLink()), repo, logger);
         server.Start();
         return server;
     }
@@ -453,21 +454,153 @@ public sealed class PlayerStationReportsTests : IDisposable
             float inside = pilot.State.Oxygen = 50f;
             TickAt(server, pilot, spawn);
             Assert.True(pilot.State.Oxygen > inside, $"Oxygen should refill inside the sealed hull (was {pilot.State.Oxygen}).");
-            Assert.DoesNotContain(transport.Sent, m => m is ServerMessage sm && sm.Text == "@station_air_lost");
+            Assert.Empty(HullWarnings(transport));
 
-            // Knock the top centre block out: the pocket reaches the void → helmet on, and a one-shot warning.
+            // Knock the top centre block out: the pocket reaches the void → helmet on, and a one-shot warning that names the
+            // hole (#2654) — where the room meets the void, at the hole's height.
             var hole = new Vector3i(10, 68, 10);
             server.World.SetBlock(hole, BlockId.Air);
             float holed = pilot.State.Oxygen = 80f;
             TickAt(server, pilot, spawn, halfSeconds: 8);
             Assert.True(pilot.State.Oxygen < holed, $"Oxygen should drain once the hull has a hole (was {pilot.State.Oxygen}).");
-            Assert.Single(transport.Sent.Where(m => m is ServerMessage sm && sm.Text == "@station_air_lost"));
+            var warning = Assert.Single(HullWarnings(transport));
+            Assert.Contains("at 10/68/10, 3 blocks above you", warning, StringComparison.Ordinal);
 
             // A force-field block in the gap is airtight: the pocket seals again.
             server.World.SetBlock(hole, _content.GetBlock("force_field")!.NumericId);
             float plugged = pilot.State.Oxygen = 50f;
             TickAt(server, pilot, spawn, halfSeconds: 8);
             Assert.True(pilot.State.Oxygen > plugged, $"Oxygen should refill once the hole is plugged (was {pilot.State.Oxygen}).");
+        }
+    }
+
+    /// <summary>The station hull warnings sent: the located leak line (#2654) or the general fallback.</summary>
+    private static List<string> HullWarnings(RecordingTransport transport)
+        => transport.Sent.OfType<ServerMessage>().Select(m => m.Text)
+            .Where(t => t == "@station_air_lost" || t.Contains("this room leaks", StringComparison.Ordinal)).ToList();
+
+    [Fact]
+    public void AStationHallPastTheOld64000Cells_Breathes()
+    {
+        // #2652: a closed station hall of 67 240 cells counted as breached under the 64 000-cell budget (#1559). Now it
+        // breathes, and a hole in its roof still leaks — named where it is.
+        var transport = new RecordingTransport();
+        var server = NewServer("bighall", out var repo, transport);
+        using (repo)
+        {
+            var pilot = server.AddLocalPlayer("Owner");
+            string id = BuildSealedBox(server, pilot);
+            Edit(server, "Owner", id, 60, 45, 60, "iron_wall"); // a far corner block: the build box now spans world 8…70 / 64…111
+            BoardOwnStation(server, "Owner", id);
+
+            // The hall (interior world x 14…54, y 66…105, z 14…54) is built straight into the interior world.
+            var iron = _content.GetBlock("iron_wall")!.NumericId;
+            for (int x = 13; x <= 55; x++)
+                for (int y = 65; y <= 106; y++)
+                    for (int z = 13; z <= 55; z++)
+                    {
+                        bool shell = x == 13 || x == 55 || y == 65 || y == 106 || z == 13 || z == 55;
+                        if (shell)
+                        {
+                            server.World.SetBlock(new Vector3i(x, y, z), iron);
+                        }
+                        else if (x % 16 == 0 && y % 16 == 0 && z % 16 == 0)
+                        {
+                            server.World.GetBlock(new Vector3i(x, y, z)); // a boarder inside streams these chunks in
+                        }
+                    }
+
+            var inHall = new Vector3i(30, 66, 30);
+            Assert.True(server.StationCellSealedForTest(id, inHall), "the closed hall holds air");
+            int size = server.StationPocketSizeForTest(id, inHall);
+            Assert.True(size > 64000, $"one sealed pocket of the whole hall ({size} cells)");
+
+            var at = new Vector3f(30.5f, 66.03f, 30.5f);
+            float before = pilot.State.Oxygen = 50f;
+            TickAt(server, pilot, at);
+            Assert.True(pilot.State.Oxygen > before, $"oxygen should refill in the big hall (was {pilot.State.Oxygen})");
+
+            server.World.SetBlock(new Vector3i(30, 106, 30), BlockId.Air);
+            TickAt(server, pilot, at, halfSeconds: 8);
+            Assert.False(server.StationCellSealedForTest(id, inHall), "a hole to the void still leaks");
+            var warning = Assert.Single(HullWarnings(transport));
+            Assert.Contains("at 30/106/30, 40 blocks above you", warning, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>Keeps the server's warnings, so a test can count how often the air brake was logged.</summary>
+    private sealed class RecordingLog : IGameLogger
+    {
+        public readonly System.Collections.Concurrent.ConcurrentQueue<string> Warnings = new();
+
+        public void Info(string message) { }
+        public void Warn(string message) => Warnings.Enqueue(message);
+        public void Error(string message) { }
+    }
+
+    [Fact]
+    public void AStationRoomPastTheBrake_KeepsItsLastAir_AndTheBrakeIsLoggedOnce()
+    {
+        // #2649 review: a station room the brake stopped read as "no air", nothing was logged, and the stall came back with
+        // every backstop. Now the room keeps its last known air, the brake is logged once, and a backstop refill does not
+        // fill it again.
+        var log = new RecordingLog();
+        var server = NewServer("stationbrake", out var repo, logger: log);
+        using (repo)
+        {
+            var pilot = server.AddLocalPlayer("Owner");
+            string id = BuildSealedBox(server, pilot);
+            BoardOwnStation(server, "Owner", id);
+            var inside = BoxWorld(1, -1, 0);
+            Assert.True(server.StationCellSealedForTest(id, inside));
+
+            server.SetAirBrakeForTest(maxCells: 10, maxSpans: 1_000); // the 26-cell room is past this brake now
+            server.World.SetBlock(BoxWorld(-1, 1, -1), _content.GetBlock("iron_wall")!.NumericId); // a block set: a refill
+            Assert.True(server.StationCellSealedForTest(id, inside), "the braked room keeps its last known air");
+            Assert.True(server.StationAirBrakedForTest(id));
+
+            server.AdvanceUptimeForTest(10); // the backstop: another refill
+            Assert.True(server.StationCellSealedForTest(id, inside));
+            Assert.Single(log.Warnings, w => w.StartsWith("Station air", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    public void AStationBreachBehindADoor_EmptiesOnlyThatRoom_AndOnlyItsPostLosesItsKeeper()
+    {
+        // #2653: doors are bulkheads on stations too. Room 1 (the core's box) keeps a vendor, room 2 behind the slide door
+        // keeps the mission board; a hole in room 2 sends only its quartermaster away.
+        var server = NewServer("bulkheadstation", out var repo, new RecordingTransport());
+        using (repo)
+        {
+            var pilot = server.AddLocalPlayer("Owner");
+            string id = BuildSealedBox(server, pilot, vendorItem: "station_vendor");
+            for (int x = 3; x <= 6; x++)
+                for (int y = -2; y <= 2; y++)
+                    for (int z = -2; z <= 2; z++)
+                    {
+                        if (x == 6 || Math.Abs(y) == 2 || Math.Abs(z) == 2)
+                        {
+                            Edit(server, "Owner", id, x, y, z, "iron_wall"); // room 2: x 3…5 beyond the box's door
+                        }
+                    }
+
+            Edit(server, "Owner", id, 4, -1, 0, "mission_board");
+            BoardOwnStation(server, "Owner", id);
+            var room1 = BoxWorld(-1, -1, 0);
+            var room2 = BoxWorld(4, 0, 1);
+            Assert.True(server.StationCellSealedForTest(id, room1));
+            Assert.True(server.StationCellSealedForTest(id, room2));
+            Assert.Contains(server.NpcSnapshots, n => n.Role == "vendor");
+            Assert.Contains(server.NpcSnapshots, n => n.Role == "quartermaster");
+
+            server.World.SetBlock(BoxWorld(4, 2, 0), BlockId.Air); // a hole in room 2's roof
+            var at = new Vector3f(room1.X + 0.5f, room1.Y + 0.03f, room1.Z + 0.5f);
+            TickAt(server, pilot, at, halfSeconds: 12);
+            Assert.False(server.StationCellSealedForTest(id, room2), "room 2 leaks");
+            Assert.True(server.StationCellSealedForTest(id, room1), "room 1 behind the door keeps its air");
+            Assert.Contains(server.NpcSnapshots, n => n.Role == "vendor");
+            Assert.DoesNotContain(server.NpcSnapshots, n => n.Role == "quartermaster");
         }
     }
 
@@ -526,15 +659,16 @@ public sealed class PlayerStationReportsTests : IDisposable
             float o2 = pilot.State.Oxygen = 50f;
             TickAt(server, pilot, inside);
             Assert.True(pilot.State.Oxygen > o2, $"Oxygen should refill in the sealed west room (was {pilot.State.Oxygen}).");
-            Assert.DoesNotContain(transport.Sent, m => m is ServerMessage sm && sm.Text == "@station_air_lost");
+            Assert.Empty(HullWarnings(transport));
             Assert.False(server.FloatingOutsideStationForTest("Owner"), "the west room lies inside the gravity volume");
 
-            // The fill really sees the west walls: a hole in the roof leaks.
+            // The fill really sees the west walls: a hole in the roof leaks, and the warning names it west of the origin.
             server.World.SetBlock(new Vector3i(-4, 68, 10), BlockId.Air);
             float holed = pilot.State.Oxygen = 80f;
             TickAt(server, pilot, inside, halfSeconds: 8);
             Assert.True(pilot.State.Oxygen < holed, $"Oxygen should drain once the west roof has a hole (was {pilot.State.Oxygen}).");
-            Assert.Single(transport.Sent.Where(m => m is ServerMessage sm && sm.Text == "@station_air_lost"));
+            var warning = Assert.Single(HullWarnings(transport));
+            Assert.Contains("at -4/68/10, 3 blocks above you", warning, StringComparison.Ordinal);
         }
     }
 

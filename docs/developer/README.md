@@ -66,8 +66,9 @@ refreshed 2026-08-08.
 - [SPACE_COMBAT_CONCEPT.md](SPACE_COMBAT_CONCEPT.md) — space-combat MVP concept + what has since landed.
 - [CRAFTING_TECH_SHIP_UI.md](CRAFTING_TECH_SHIP_UI.md) — the crafting / tech / ship management screen.
 - [SHIP_REPAIR.md](SHIP_REPAIR.md) — own-ship repair (hull + EVA-carved cells).
-- [BASE_LIFE_SUPPORT.md](BASE_LIFE_SUPPORT.md) — base air: the core zone and sealed rooms (the pocket model, the
-  64 000-cell budget, reach that grows with the build, allies sharing air, why a room has no air, the cost guards).
+- [BASE_LIFE_SUPPORT.md](BASE_LIFE_SUPPORT.md) — base and station air: the core zone and the shared air engine (one rule
+  for bases and stations, every door a bulkhead, no size limit, vertical spans, time slicing, the emergency brake,
+  unknown is not a leak, the leak named at its opening).
 - [CREATOR_SUITE.md](CREATOR_SUITE.md) — what players make themselves: the texture editor and the three-layer
   texture source, world textures, animated tiles, the main-menu form editor and forms over several blocks,
   tool models as data and player tool looks, texture submissions (#1950).
@@ -175,3 +176,4 @@ ones are marked, not deleted.
 - [0015 — Unity 6.6, the Supported-release cadence, and WebGPU first in the browser](adr/0015-unity-6-6-supported-releases-and-webgpu-first.md)
 - [0016 — Lava, crystals and the glowing flora light their surroundings (quietly)](adr/0016-natural-emitters-light-their-surroundings.md)
 - [0017 — Endless water by class, finite still water, and falls that keep their level](adr/0017-water-classes-finite-still-water-and-bounded-falls.md)
+- [0018 — Every closed room breathes: one air engine for bases and stations, doors are bulkheads](adr/0018-every-closed-room-breathes-one-air-engine.md)
