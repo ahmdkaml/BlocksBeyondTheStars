@@ -24,6 +24,26 @@ envelope at the WebSocket edge; deterministic seed world-gen; SQLite default per
 
 ---
 
+### 🎲 Hash variety follow-ups — Titas labs on dry land, gravity and village trade per world — #2696, #2697, #2698, branch fix/hash-variety-follow-ups — ✅ done 2026-10-17 (⚠ playtest open)
+
+Side findings of #2694, all decisions by Marcel (per recommendation, one PR). Package label
+`package: hash variety follow-ups 2026-10`. The per-species flora/wood tints were measured and are fine (no change).
+
+- **Titas SPS labs (#2696):** the ≥ 3-block ice sheet counted as land, so labs were seated on the seabed under the frozen
+  sea (pad roofed → no air, −90 °C). Lab placement now requires the floor at/above sea level, no water/ice/lava under the
+  footprint and the 17 `SpsLabGenerator.OpenColumns` (ship pad, helipad, doorway fronts) open to the sky
+  (`TryPlaceStructureGuaranteed(…, seatOk)`); stored labs never move. Seeds 70–100: 25 roofed pads → 0, 134/134 labs placed.
+- **Gravity (#2697):** `Shared/World/BodyGravity.FactorFor(id, class, seed, generation)` — gen 26 mixed + world-seeded
+  (planets of a system no longer share 1.13 g), gen ≤ 25 bit-identical; weather and ship scanner share it.
+- **Village trade + quest giver (#2698):** gen 26 derives a settlement's trade, extra-vendor themes and quest-giver name from
+  its body-aware place key; gen ≤ 25 unchanged. In gen 26 the chain giver fallback is the settlement's quest giver (the
+  quartermaster) — no more second name for the same person. Stations still derive theirs from the station id.
+- ⚠ Open: playtest (Titas new world: labs reachable; gravity per planet; two same-name villages). Not done (ask Marcel):
+  other structure types may also seat under thick sea ice on non-Titas frozen worlds (`FootprintWet` treats the ice as
+  land); station giver names/vendor themes still from the station id alone.
+
+---
+
 ### 🎲 Hash variety — well-mixed deterministic picks, more varied worlds without changing existing ones — epic #2694, #2686–#2693, branch feat/hash-variety-2026-10 — ✅ done 2026-10-16 (⚠ playtest open; terrain generation 26)
 
 A side finding of #2682: `WorldGenerator.StableHash` (FNV-1a without a finaliser — its prime acts like "× 435" on the low
@@ -52,12 +72,12 @@ Package label `package: hash variety 2026-10`.
   `HashVarietyWorldsTests`); the start planet keeps a floor (`StartPlanetMinCircumference` 9600, seeded draw up to
   12000) so new players still start on a roomy world; gen-26 outputs and `StableHashing` are pinned as known answers
   (bit-frozen once shipped). Tests standing on fixed coordinates of a default world are pinned to gen 25.
-- ⚠ Side finding (not done, ask Marcel): SPS labs on Titas often sit under the frozen sea, so their "open" ship pads count
-  as roofed (no air, −90 °C) — on gen 25 and 26 alike.
+- ✅ Side findings done in the follow-ups section above: SPS labs on Titas under the frozen sea (#2696), gravity per world
+  (#2697), village trade and quest-giver names from the name alone (#2698); per-species `FloraTints.For`/`ForWood`
+  measured and fine (no change).
 - ⚠ Open: playtest (a NEW world: planet sizes in a system, sky colours; old world unchanged); release notes (mission
   boards look different, big-order progress restarts; new worlds = gen 26); an older client on a gen-26 server draws
-  other bodies' orbit spheres with the classic sizes (cosmetic). Follow-ups not done: gravity per world (`GravityFor`,
-  h·31 ^ seed), per-species `FloraTints.For`/`ForWood`, quartermaster names / settlement trade still from the name alone.
+  other bodies' orbit spheres with the classic sizes (cosmetic).
 
 ---
 
