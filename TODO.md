@@ -24,6 +24,43 @@ envelope at the WebSocket edge; deterministic seed world-gen; SQLite default per
 
 ---
 
+### 🎲 Hash variety — well-mixed deterministic picks, more varied worlds without changing existing ones — epic #2694, #2686–#2693, branch feat/hash-variety-2026-10 — ✅ done 2026-10-16 (⚠ playtest open; terrain generation 26)
+
+A side finding of #2682: `WorldGenerator.StableHash` (FNV-1a without a finaliser — its prime acts like "× 435" on the low
+bits) and a few `h * 31 + c` helpers barely mix the last characters of a key, so keys with a trailing counter gave skewed or
+periodic picks (600 keys `crop:…:{i}` → `% 3` = 500/10/90). All decisions by Marcel (everything per recommendation, one PR).
+Package label `package: hash variety 2026-10`.
+
+- **The base (#2686):** `Shared/World/StableHashing` — `Fnv64` (bit-identical to `StableHash`, which never changes),
+  SplitMix64 `Mix64`, `Mixed(key[, worldSeed])`, `Index`, `Unit`, `Seed32`.
+- **Runtime (#2687):** animal sizes (a herd is no longer cloned, runts and giants occur), pack flank angles, per-species
+  gait jitter, taming needs/bait/shyness (no "120120120"), enemy refill interval and drone bob, bandit speech lines.
+- **Mission boards + place keys (#2688, #2693):** boards roll per slot AND per world (`Seed32(key, seed)`; slot k vs k+4
+  matched 87 % before, now 15 %); settlement keys include the body (`settle_` + 9 digits), so same-name settlements on
+  different bodies stop sharing boards, mission ids and NPC memory. Held jobs keep their old ids and definitions (legacy
+  pass), old memory moves to the new key on world entry (`MigrateLegacySettlementKeys`); new station/base jobs use an `m`
+  stream; big-order progress restarts on the new ids. Also seeded per world: base guest visits, planet traders, giants.
+- **Settlements (#2689, #2690):** greenhouse crops (`CropIndex`) and the authored-module roll use the mixed hash; a
+  placement record carries `HashRevision` (0 = legacy pick, 1 = mixed) because a settlement can be re-stamped (pre-#1990
+  saves, a crash mid-stamp) — stamped settlements keep their crops; pinned compositions replay unchanged, pre-#1872
+  records keep the legacy roll. Single-crop settlements in the test sample (200 town/city seeds) 54 % → 28 % (chance
+  ≈ 25 %; the analysis measured 62 % for settlements with two or more greenhouses), three crops now occur.
+- **Terrain generation 26 (#2691, #2692) — new saves only:** body sizes come from `StableHashing.Mixed(key, worldSeed)`
+  (before: all planets of a standard system within one chunk, `sys0` = 11760 in every world); the server sends the size
+  as `NetBody.Circumference` (0 = older server → classic formula, `Client.Core/Planets/BodySize`); sky/cloud, flora-base
+  and auto-water tint families use the mixed hash. Gen ≤ 25 keeps every size and tint bit-for-bit (pinned in
+  `HashVarietyWorldsTests`); the start planet keeps a floor (`StartPlanetMinCircumference` 9600, seeded draw up to
+  12000) so new players still start on a roomy world; gen-26 outputs and `StableHashing` are pinned as known answers
+  (bit-frozen once shipped). Tests standing on fixed coordinates of a default world are pinned to gen 25.
+- ⚠ Side finding (not done, ask Marcel): SPS labs on Titas often sit under the frozen sea, so their "open" ship pads count
+  as roofed (no air, −90 °C) — on gen 25 and 26 alike.
+- ⚠ Open: playtest (a NEW world: planet sizes in a system, sky colours; old world unchanged); release notes (mission
+  boards look different, big-order progress restarts; new worlds = gen 26); an older client on a gen-26 server draws
+  other bodies' orbit spheres with the classic sizes (cosmetic). Follow-ups not done: gravity per world (`GravityFor`,
+  h·31 ^ seed), per-species `FloraTints.For`/`ForWood`, quartermaster names / settlement trade still from the name alone.
+
+---
+
 ### 📬 Justus' reports 2026-10-16 (Layex + Screelit, one by Lorenzo) — body paint in multiplayer, talking to traders, beta derelicts, residents upstairs, pioneer outposts, wall torches — epic #2684, #2672–#2683 (+ #2425), branch feat/justus-reports-2026-10-16 — ✅ done 2026-10-16 (⚠ playtest open)
 
 Justus played a LAN world as Layex (host, v2026.10.17) and Screelit (two reports written with v2026.10.16); one Screelit

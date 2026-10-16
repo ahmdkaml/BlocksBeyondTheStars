@@ -208,7 +208,7 @@ public sealed partial class GameServer
                 }
 
                 if (TryNpcRadioCall(session, npcKey, CoinGiverName(s.Name), s.Name, bodyId,
-                        $"camp:{s.Name}:{camp.Key}", "npc.call.camp", string.Empty, isMission: true))
+                        $"camp:{SettlementLocationKey(s.Name)}:{camp.Key}", "npc.call.camp", string.Empty, isMission: true)) // #2693: per body (a runtime cooldown)
                 {
                     // Remember who called: clearing the camp now pays a friendship bonus (#1158).
                     session.CalledCamps[camp.Key] = (npcKey, CoinGiverName(s.Name), s.Name);
@@ -376,9 +376,10 @@ public sealed partial class GameServer
     private void NpcRadioOnBoardTurnIn(PlayerSession session, string missionId, string giverName)
     {
         string place = NpcPlaceFor(session.State);
-        TryNpcRadioCall(session, NpcKey(LocationKeyOfMission(missionId), "quartermaster"), giverName,
+        string location = MemoryLocationOfBoardMission(missionId); // #2693: a job held from before names its place's new key
+        TryNpcRadioCall(session, NpcKey(location, "quartermaster"), giverName,
             string.IsNullOrEmpty(place) ? giverName : place, _world.LocationId,
-            "board:" + LocationKeyOfMission(missionId), "npc.call.board", string.Empty, isMission: false);
+            "board:" + location, "npc.call.board", string.Empty, isMission: false);
     }
 
     /// <summary>Test seam: run one full radio trigger scan for a player right now (skips the scan timer).</summary>

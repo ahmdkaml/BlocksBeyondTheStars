@@ -47,7 +47,7 @@ public sealed partial class GameServer
         {
             if (!s.Ruined && !string.IsNullOrEmpty(s.Name) && PlayerInSettlement(p, s))
             {
-                return SettlementLocationKey(s.Name);
+                return SettlementPlaceKey(s);
             }
         }
 
@@ -554,7 +554,7 @@ public sealed partial class GameServer
         string giverKey = ChainGiverKey(def, place);
         string giverName = !string.IsNullOrEmpty(def.GiverName) ? def.GiverName
             : session.State.NpcMemory.TryGetValue(giverKey, out var rel) && !string.IsNullOrEmpty(rel.Name) ? rel.Name
-            : CoinGiverName(place);
+            : ChainGiverFallbackName(place); // #2693: coined from the place's old key, as before
         string placeName = NpcPlaceFor(session.State);
         _dialogRadioPending.Add((session.State.PlayerId, giverKey, giverName,
             string.IsNullOrEmpty(placeName) ? giverName : placeName, session.CurrentLocationId,
@@ -715,7 +715,7 @@ public sealed partial class GameServer
     /// <summary>Keeps a board's big orders stocked for this player (#1212): every <see cref="BigOrderEveryTurnIns"/>
     /// turn-ins at this board earn one 2-step order (ids <c>…c{2k}</c>/<c>…c{2k+1}</c>); only the current order
     /// is on offer, the next one appears once it is finished. The chain rule gates the steps (known standing,
-    /// step 2 after step 1).</summary>
+    /// step 2 after step 1). An old board stream (#2688/#2693) offers no new order — see <see cref="EnsureHeldBigOrders"/>.</summary>
     private void EnsureBigOrders(PlayerState player, string idPrefix, string boardKey, HashSet<string> idSet, string giverName, HashSet<string> currentBoardIds, bool station)
     {
         string orderPrefix = idPrefix + BigOrderSlotInfix;
@@ -756,12 +756,52 @@ public sealed partial class GameServer
         }
     }
 
+    /// <summary>The big orders a player started (ids <paramref name="orderPrefix"/>&lt;n&gt;) and has not finished: both steps,
+    /// so step 2 still follows the step 1 they hold or turned in. On an old board stream (#2688/#2693,
+    /// <paramref name="legacy"/>) with the old rolls and the old chain id — such a stream offers no new order.</summary>
+    private void EnsureHeldBigOrders(PlayerState player, string orderPrefix, string boardKey, HashSet<string> idSet, string giverName, HashSet<string> currentBoardIds, bool station, bool legacy)
+    {
+        foreach (var m in player.Missions)
+        {
+            if (!m.MissionId.StartsWith(orderPrefix, StringComparison.Ordinal)
+                || !int.TryParse(m.MissionId.AsSpan(orderPrefix.Length), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int n))
+            {
+                continue;
+            }
+
+            int k = n / 2;
+            string idA = orderPrefix + (2 * k);
+            string idB = orderPrefix + (2 * k + 1);
+            if (player.Missions.Any(x => x.MissionId == idB && x.Status == MissionStatus.TurnedIn))
+            {
+                continue; // finished
+            }
+
+            if (!_missionDefs.ContainsKey(idA))
+            {
+                _missionDefs[idA] = BuildBigOrderMission(idA, idB, boardKey, k, step: 1, giverName, station, legacy);
+            }
+
+            if (!_missionDefs.ContainsKey(idB))
+            {
+                _missionDefs[idB] = BuildBigOrderMission(idA, idB, boardKey, k, step: 2, giverName, station, legacy);
+            }
+
+            idSet.Add(idA);
+            idSet.Add(idB);
+            currentBoardIds.Add(idA);
+            currentBoardIds.Add(idB);
+        }
+    }
+
     /// <summary>Deterministically coins one step of a board's k-th big order (rng stream "bigorder", stable per
     /// (board, k) like every board mission): step 1 is a doubled delivery, step 2 a large build (settlement) or
-    /// a wide survey (station); both pay × <see cref="BigOrderRewardFactor"/> of the template reward.</summary>
-    private MissionDefinition BuildBigOrderMission(string idA, string idB, string boardKey, int order, int step, string giverName, bool station)
+    /// a wide survey (station); both pay × <see cref="BigOrderRewardFactor"/> of the template reward. A
+    /// <paramref name="legacy"/> order (#2688) keeps the old roll and chain id; a new one rolls per world and carries its
+    /// own chain id, so it never counts as the other "alternative" of an old order of the same number.</summary>
+    private MissionDefinition BuildBigOrderMission(string idA, string idB, string boardKey, int order, int step, string giverName, bool station, bool legacy = false)
     {
-        var rng = new System.Random(unchecked((int)WorldGenerator.StableHash($"{boardKey}:bigorder:{order}")));
+        var rng = BoardRng(boardKey, "bigorder", order, legacy);
         var tpl = GiverMissionTemplates[rng.Next(GiverMissionTemplates.Length)];
         if (_content.GetItem(tpl.Need) is null || _content.GetItem(tpl.Reward) is null)
         {
@@ -769,7 +809,7 @@ public sealed partial class GameServer
         }
 
         int second = rng.Next(2); // drawn before the branch so both steps roll the same stream
-        string chainId = $"{boardKey}:bigorder:{order}";
+        string chainId = legacy ? $"{boardKey}:bigorder:{order}" : $"{boardKey}:bigorder:{MixedRollsInfix}{order}";
         string scope = station ? "station" : "settlement";
         var def = new MissionDefinition
         {
