@@ -35,35 +35,7 @@ public sealed class ProtocolHardeningTests : IDisposable
         _root = Path.Combine(Path.GetTempPath(), "bbts_hardening_" + Guid.NewGuid().ToString("N"));
         _content = ContentLoader.LoadFromDirectory(TestPaths.DataDir());
     }
-
-    /// <summary>A transport the test drives directly: it raises connect/payload/disconnect into the server
-    /// and records every message the server sends back, per connection.</summary>
-    private sealed class DrivenTransport : IServerTransport
-    {
-        public event Action<int>? ClientConnected;
-        public event Action<int>? ClientDisconnected;
-        public event Action<int, byte[]>? PayloadReceived;
-
-        public readonly List<(int Conn, object Msg)> Sent = new();
-
-        public void Connect(int id) => ClientConnected?.Invoke(id);
-        public void Disconnect(int id) => ClientDisconnected?.Invoke(id);
-        public void Receive(int id, object message) => PayloadReceived?.Invoke(id, NetCodec.Encode(message));
-
-        public void Start(int port) { }
-        public void Send(int connectionId, byte[] payload, DeliveryMode mode)
-        {
-            if (NetCodec.Decode(payload) is { } m) Sent.Add((connectionId, m));
-        }
-        public void Broadcast(byte[] payload, DeliveryMode mode)
-        {
-            if (NetCodec.Decode(payload) is { } m) Sent.Add((int.MinValue, m));
-        }
-        public void Poll() { }
-        public void Stop() { }
-        public void Dispose() { }
-    }
-
+    
     private SvGameServer NewServer(string name, DrivenTransport transport)
     {
         var repo = new SqliteWorldRepository(new SaveGamePaths(_root, name));

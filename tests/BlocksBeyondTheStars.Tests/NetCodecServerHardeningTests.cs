@@ -35,38 +35,6 @@ public sealed class NetCodecServerHardeningTests : IDisposable
         _content = ContentLoader.LoadFromDirectory(TestPaths.DataDir());
     }
 
-    /// <summary>
-    /// Minimal transport harness that raises exactly the events consumed by
-    /// GameServer.OnPayload and records messages sent by the server.
-    /// </summary>
-    private sealed class DrivenTransport : IServerTransport
-    {
-        public event Action<int>? ClientConnected;
-        public event Action<int>? ClientDisconnected;
-        public event Action<int, byte[]>? PayloadReceived;
-
-        public readonly List<(int Conn, object Msg)> Sent = new();
-
-        public void Connect(int id) => ClientConnected?.Invoke(id);
-        public void Disconnect(int id) => ClientDisconnected?.Invoke(id);
-        public void Receive(int id, object message) => PayloadReceived?.Invoke(id, NetCodec.Encode(message));
-        public void ReceiveRaw(int id, byte[] payload) => PayloadReceived?.Invoke(id, payload);
-        public void Start(int port) { }
-        public void Poll() { }
-        public void Stop() { }
-        public void Dispose() { }
-
-        public void Send(int connectionId, byte[] payload, DeliveryMode mode)
-        {
-            if (NetCodec.Decode(payload) is { } message) { Sent.Add((connectionId, message)); }
-        }
-
-        public void Broadcast(byte[] payload, DeliveryMode mode)
-        {
-            if (NetCodec.Decode(payload) is { } message) { Sent.Add((int.MinValue, message)); }
-        }
-    }
-
     private SvGameServer NewServer(string name, DrivenTransport transport)
     {
         var repo = new SqliteWorldRepository(new SaveGamePaths(_root, name));
@@ -287,14 +255,11 @@ public sealed class NetCodecServerHardeningTests : IDisposable
 
     public void Dispose()
     {
-        try
+        foreach (var repo in _repos)
         {
-            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-            if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
+            repo.Dispose();
         }
-        catch
-        {
-            // Cleanup must never hide the actual test result.
-        }
+
+        try { Directory.Delete(_root, recursive: true); } catch { }
     }
 }
