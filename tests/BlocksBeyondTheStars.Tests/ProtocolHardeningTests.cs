@@ -35,7 +35,7 @@ public sealed class ProtocolHardeningTests : IDisposable
         _root = Path.Combine(Path.GetTempPath(), "bbts_hardening_" + Guid.NewGuid().ToString("N"));
         _content = ContentLoader.LoadFromDirectory(TestPaths.DataDir());
     }
-    
+
     private SvGameServer NewServer(string name, DrivenTransport transport)
     {
         var repo = new SqliteWorldRepository(new SaveGamePaths(_root, name));
