@@ -1,6 +1,9 @@
 // Blocks Beyond the Stars — Copyright (c) 2026 Justus Dütscher & Marcel Dütscher (JuMaVe Games)
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // This file is part of Blocks Beyond the Stars. See LICENSE for the full AGPL-3.0 text.
+
+using System.Text;
+
 namespace BlocksBeyondTheStars.Persistence;
 
 /// <summary>
@@ -36,6 +39,46 @@ internal static class BlockPaletteMigration
         }
 
         return remap;
+    }
+    /// <summary>
+    /// Builds a SQL UPDATE statement that remaps the <c>block</c> column of a table via a single CASE over the
+    /// original value, so every row is translated atomically (a row remapped to N is never re-caught by a later WHEN N).
+    /// Only changed IDs appear; all values are server-side ushorts, so inlining them is injection-safe.
+    /// Returns <see langword="null"/> if the remap dictionary is empty.
+    /// </summary>
+    internal static string? BuildBlockColumnRemapSql(string table, IReadOnlyDictionary<ushort, ushort> remap)
+    {
+        if (remap.Count == 0)
+        {
+            return null;
+        }
+
+        // Materialize into a sorted array once to avoid multiple enumeration warnings
+        // and preserve local immutability of the caller's dictionary reference.
+        var sorted = remap.OrderBy(kv => kv.Key).ToArray();
+
+        var sb = new StringBuilder();
+        sb.Append("UPDATE ").Append(table).Append(" SET block = CASE block");
+        foreach (var kv in sorted)
+        {
+            sb.Append(" WHEN ").Append(kv.Key).Append(" THEN ").Append(kv.Value);
+        }
+
+        sb.Append(" ELSE block END WHERE block IN (");
+        var first = true;
+        foreach (var kv in sorted)
+        {
+            if (!first)
+            {
+                sb.Append(',');
+            }
+
+            sb.Append(kv.Key);
+            first = false;
+        }
+
+        sb.Append(");");
+        return sb.ToString();
     }
 
     /// <summary>Remaps the block id inside a space-structure cell string ("x:y:z:block" cells joined by ';').

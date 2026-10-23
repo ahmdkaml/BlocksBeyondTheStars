@@ -410,40 +410,17 @@ public sealed class SqliteWorldRepository : IWorldRepository
         }
     }
 
-    /// <summary>Remaps the <c>block</c> column of a table via a single CASE over the ORIGINAL value, so every
-    /// row is translated atomically (a row remapped to N is never re-caught by a later WHEN N). Only ids that
-    /// actually change appear; all values are server-side ushorts, so inlining them is injection-safe.</summary>
+    /// <summary>
+    /// Executes a palette remap UPDATE on the specified table if <paramref name="remap"/> contains entries.
+    /// </summary>
     private void RemapBlockColumn(string table, IReadOnlyDictionary<ushort, ushort> remap)
     {
-        if (remap.Count == 0)
+        var sql = BlockPaletteMigration.BuildBlockColumnRemapSql(table, remap);
+        if (sql != null)
         {
-            return;
+            Execute(sql);
         }
-
-        var sb = new System.Text.StringBuilder();
-        sb.Append("UPDATE ").Append(table).Append(" SET block = CASE block");
-        foreach (var kv in remap)
-        {
-            sb.Append(" WHEN ").Append(kv.Key).Append(" THEN ").Append(kv.Value);
-        }
-
-        sb.Append(" ELSE block END WHERE block IN (");
-        bool first = true;
-        foreach (var kv in remap)
-        {
-            if (!first)
-            {
-                sb.Append(',');
-            }
-
-            sb.Append(kv.Key);
-            first = false;
-        }
-
-        sb.Append(");");
-        Execute(sb.ToString());
     }
-
     private void RemapSpaceStructureBlocks(IReadOnlyDictionary<ushort, ushort> remap)
     {
         if (remap.Count == 0)
