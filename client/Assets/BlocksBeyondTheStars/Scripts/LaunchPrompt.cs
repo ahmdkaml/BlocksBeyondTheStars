@@ -17,10 +17,8 @@ namespace BlocksBeyondTheStars.Client
     {
         public GameBootstrap Game;
 
-        public static LaunchPrompt Instance { get; private set; }
-
         /// <summary>True while the question is on screen — PlayerController leaves E to it then.</summary>
-        public static bool IsOpen => Instance != null && Instance._shown;
+        public bool IsOpen => _shown;
 
         /// <summary>The E press that opened the prompt must not also answer it — ignore keys this long.</summary>
         private const float KeyGraceSeconds = 0.25f;
@@ -31,16 +29,6 @@ namespace BlocksBeyondTheStars.Client
         private bool _shown;
         private float _openedAt;
         private Action _onDecline;
-
-        private void Awake() => Instance = this;
-
-        private void OnDestroy()
-        {
-            if (Instance == this)
-            {
-                Instance = null;
-            }
-        }
 
         /// <summary>Shows the question if the player is at the cockpit of a landed ship on a surface. Returns
         /// false (and shows nothing) in space or aboard the floating interior, so the caller keeps its old
@@ -121,21 +109,15 @@ namespace BlocksBeyondTheStars.Client
             _overlay.SetActive(false);
         }
 
-        private string Tr(string key)
-        {
-            string s = Game?.Localizer?.Get(key);
-            if (!string.IsNullOrEmpty(s) && s != key)
-            {
-                return s;
-            }
+        private string Tr(string key) => UiKit.Tr(Game?.Localizer, key, Fallback);
 
-            return key switch
-            {
-                "ui.launch.title" => "Launch into space?",
-                "ui.launch.yes" => "Launch ({key:Interact})",
-                "ui.launch.no" => "Not yet — map",
-                _ => key,
-            };
-        }
+        /// <summary>English text while the localizer is not ready. A cached delegate, so a lookup allocates nothing.</summary>
+        private static readonly System.Func<string, string> Fallback = key => key switch
+        {
+            "ui.launch.title" => "Launch into space?",
+            "ui.launch.yes" => "Launch ({key:Interact})",
+            "ui.launch.no" => "Not yet — map",
+            _ => key,
+        };
     }
 }

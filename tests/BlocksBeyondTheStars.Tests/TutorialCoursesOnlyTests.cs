@@ -8,7 +8,6 @@ using System.Linq;
 using BlocksBeyondTheStars.GameServer;
 using BlocksBeyondTheStars.Networking;
 using BlocksBeyondTheStars.Networking.Messages;
-using BlocksBeyondTheStars.Networking.Transport;
 using BlocksBeyondTheStars.Persistence;
 using BlocksBeyondTheStars.Shared.Configuration;
 using BlocksBeyondTheStars.Shared.Content;
@@ -61,40 +60,6 @@ public sealed class TutorialCoursesOnlyTests : IDisposable
 
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         try { Directory.Delete(_root, recursive: true); } catch { /* best-effort temp cleanup */ }
-    }
-
-    /// <summary>Records every server send so a test can assert who was told what, in order.</summary>
-    private sealed class RecordingTransport : IServerTransport
-    {
-        public event Action<int>? ClientConnected;
-        public event Action<int>? ClientDisconnected;
-        public event Action<int, byte[]>? PayloadReceived;
-
-        public readonly List<(int Conn, object Msg)> Sent = new();
-
-        public void Start(int port) { }
-
-        public void Send(int connectionId, byte[] payload, DeliveryMode mode)
-        {
-            if (NetCodec.Decode(payload) is { } m) Sent.Add((connectionId, m));
-        }
-
-        public void Broadcast(byte[] payload, DeliveryMode mode)
-        {
-            if (NetCodec.Decode(payload) is { } m) Sent.Add((int.MinValue, m));
-        }
-
-        public void Poll() { _ = ClientConnected; _ = ClientDisconnected; _ = PayloadReceived; }
-        public void Stop() { }
-        public void Dispose() { }
-
-        public List<TMsg> To<TMsg>(PlayerSession who) => Sent.Where(x => x.Conn == who.ConnectionId).Select(x => x.Msg).OfType<TMsg>().ToList();
-
-        public List<string> LineKeys(PlayerSession who) => To<ShipAiLine>(who).Where(l => l.LineKey.Length > 0).Select(l => l.LineKey).ToList();
-
-        public List<(string Pack, string Id)> Plays(PlayerSession who) => To<CutscenePlay>(who).Select(c => (c.PackId, c.CutsceneId)).ToList();
-
-        public List<ShipAiLine> Offers(PlayerSession who) => To<ShipAiLine>(who).Where(l => l.LineKey == SvGameServer.ChapterOfferLine).ToList();
     }
 
     /// <summary>A world with the VEGA story and free flight (the pilot course needs it), on <paramref name="policy"/>.</summary>
@@ -236,7 +201,7 @@ public sealed class TutorialCoursesOnlyTests : IDisposable
 
         // The cards: VEGA's prologue, then chapter 1 — never the welcome card or another card of the training.
         Settle(server, p);
-        var plays = transport.Plays(p);
+        var plays = transport.PackPlays(p);
         int prologue = plays.IndexOf((V, StoryCutsceneIds.Prologue));
         int chapterOne = plays.IndexOf((V, "ch1.open"));
         Assert.True(prologue >= 0 && chapterOne > prologue, string.Join(", ", plays));
@@ -249,20 +214,20 @@ public sealed class TutorialCoursesOnlyTests : IDisposable
     {
         var (server, transport) = World("moment");
         var p = Join(server, 1, "Rookie");
-        double suggestedAt = p.LastChapterOfferAt;
+        double suggestedAt = p.Story.LastChapterOfferAt;
         Assert.False(double.IsNegativeInfinity(suggestedAt)); // the suggestions are this moment's offer
 
-        p.VegaTipLive = new[] { "data_cache_near" }; // a data cache in reach: the research course's moment
+        p.Vega.VegaTipLive = new[] { "data_cache_near" }; // a data cache in reach: the research course's moment
         server.TickStoryPacksForTest(p);
         Assert.Empty(transport.Offers(p));
-        while (transport.Offers(p).Count == 0 && p.StoryPackPlaySeconds < suggestedAt + 200)
+        while (transport.Offers(p).Count == 0 && p.Story.StoryPackPlaySeconds < suggestedAt + 200)
         {
             server.TickStoryPacksForTest(p);
         }
 
         var research = Assert.Single(transport.Offers(p));
         Assert.Equal("Knowledge and research", research.LineArg);
-        Assert.True(p.LastChapterOfferAt - suggestedAt >= 90, $"offered {p.LastChapterOfferAt - suggestedAt} s after the suggestions");
+        Assert.True(p.Story.LastChapterOfferAt - suggestedAt >= 90, $"offered {p.Story.LastChapterOfferAt - suggestedAt} s after the suggestions");
         Assert.True(Has(p, StoryPackKeys.ChapterOffered(T, "c2")));
     }
 

@@ -59,17 +59,6 @@ public sealed class NameAndAiScreeningTests : IDisposable
         public string[]? GenerateNpcLines(NpcLinesRequest request) => new[] { _text };
     }
 
-    /// <summary>Keeps the server's info lines. The operator ping itself is an HTTP post through
-    /// <c>AdminNotifier</c> (unconfigured in tests), so the "Name watch" log line written right beside it is
-    /// what a test can see of a watch-list hit.</summary>
-    private sealed class CapturingLogger : IGameLogger
-    {
-        public List<string> Infos { get; } = new();
-        public void Info(string message) => Infos.Add(message);
-        public void Warn(string message) { }
-        public void Error(string message) { }
-    }
-
     private SvGameServer NewServer(string name, RecordingTransport transport,
         Action<ServerConfig>? configure = null, IAiMissionProvider? ai = null, IGameLogger? log = null)
     {
@@ -190,7 +179,7 @@ public sealed class NameAndAiScreeningTests : IDisposable
         Assert.Equal(1, NoticesTo(transport, owner, "@srv.name.blocked"));
 
         // …while the very same word in chat is relayed with asterisks, as it always was.
-        owner.LastChatTick = Environment.TickCount - 10_000;
+        owner.Chat.LastChatTick = Environment.TickCount - 10_000;
         server.Chat("Builder", "you are an asshole");
         var heard = transport.Sent.Where(s => s.Conn == reader.ConnectionId)
             .Select(s => s.Msg).OfType<ChatMessage>().Select(c => c.Text).ToList();

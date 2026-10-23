@@ -9,7 +9,6 @@ using System.Text.Json;
 using BlocksBeyondTheStars.GameServer;
 using BlocksBeyondTheStars.Networking;
 using BlocksBeyondTheStars.Networking.Messages;
-using BlocksBeyondTheStars.Networking.Transport;
 using BlocksBeyondTheStars.Persistence;
 using BlocksBeyondTheStars.Shared.Configuration;
 using BlocksBeyondTheStars.Shared.Content;
@@ -56,35 +55,6 @@ public sealed class VegaChapterLeadsTests : IDisposable
 
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         try { Directory.Delete(_root, recursive: true); } catch { /* best-effort temp cleanup */ }
-    }
-
-    private sealed class RecordingTransport : IServerTransport
-    {
-        public event Action<int>? ClientConnected;
-        public event Action<int>? ClientDisconnected;
-        public event Action<int, byte[]>? PayloadReceived;
-
-        public readonly List<(int Conn, object Msg)> Sent = new();
-
-        public void Start(int port) { }
-
-        public void Send(int connectionId, byte[] payload, DeliveryMode mode)
-        {
-            if (NetCodec.Decode(payload) is { } m) Sent.Add((connectionId, m));
-        }
-
-        public void Broadcast(byte[] payload, DeliveryMode mode)
-        {
-            if (NetCodec.Decode(payload) is { } m) Sent.Add((int.MinValue, m));
-        }
-
-        public void Poll() { _ = ClientConnected; _ = ClientDisconnected; _ = PayloadReceived; }
-        public void Stop() { }
-        public void Dispose() { }
-
-        public List<T> To<T>(PlayerSession who) => Sent.Where(x => x.Conn == who.ConnectionId).Select(x => x.Msg).OfType<T>().ToList();
-
-        public List<string> VegaPlays(PlayerSession who) => To<CutscenePlay>(who).Where(c => c.PackId == V).Select(c => c.CutsceneId).ToList();
     }
 
     private SqliteWorldRepository Repo(string world)
@@ -446,7 +416,7 @@ public sealed class VegaChapterLeadsTests : IDisposable
             server.AdvanceUptimeForTest(SvGameServer.CutsceneCooldownSeconds);
         }
 
-        var plays = transport.VegaPlays(kid);
+        var plays = transport.Plays(kid, V);
         Assert.Contains(StoryCutsceneIds.Recap, plays);
         Assert.Contains("ch5.open", plays);
         Assert.True(plays.IndexOf(StoryCutsceneIds.Recap) < plays.IndexOf("ch5.open"));
@@ -613,11 +583,11 @@ public sealed class VegaChapterLeadsTests : IDisposable
         server.SyncStoryMarkersForTest(a);
         Assert.Equal(marker.Id, Assert.Single(server.StoryMarkersForTest("Ann")).Id);
 
-        a.VegaHintsMuted = true; // the hints off: the marker hides with the chip …
+        a.Vega.VegaHintsMuted = true; // the hints off: the marker hides with the chip …
         server.SyncStoryMarkersForTest(a);
         Assert.Empty(server.StoryMarkersForTest("Ann"));
         Assert.DoesNotContain(transport.To<MarkerList>(a).Last().Markers, m => m.Story);
-        a.VegaHintsMuted = false; // … and comes back with it
+        a.Vega.VegaHintsMuted = false; // … and comes back with it
         server.SyncStoryMarkersForTest(a);
         Assert.Contains(transport.To<MarkerList>(a).Last().Markers, m => m.Id == marker.Id);
 
@@ -874,7 +844,7 @@ public sealed class VegaChapterLeadsTests : IDisposable
 
         pilot.CurrentLocationId = "planet_never_loaded";
         pilot.State.UnlockedBlueprints.Add("radar_array"); // researched: the evidence books it at the next pass
-        double pilotSeconds = pilot.StoryPackPlaySeconds, walkerSeconds = walker.StoryPackPlaySeconds;
+        double pilotSeconds = pilot.Story.StoryPackPlaySeconds, walkerSeconds = walker.Story.StoryPackPlaySeconds;
         for (int i = 0; i < 6; i++)
         {
             server.Tick(0.5);
@@ -884,8 +854,8 @@ public sealed class VegaChapterLeadsTests : IDisposable
         Assert.False(Has(walker, LeadKey("what_you_are", 1))); // per player
 
         // Once a second for both — the walker by the world's own pass, the pilot by the new one; nobody twice.
-        Assert.Equal(3.0, pilot.StoryPackPlaySeconds - pilotSeconds);
-        Assert.Equal(3.0, walker.StoryPackPlaySeconds - walkerSeconds);
+        Assert.Equal(3.0, pilot.Story.StoryPackPlaySeconds - pilotSeconds);
+        Assert.Equal(3.0, walker.Story.StoryPackPlaySeconds - walkerSeconds);
     }
 
     // ---------------- Cost ----------------

@@ -24,6 +24,355 @@ envelope at the WebSocket edge; deterministic seed world-gen; SQLite default per
 
 ---
 
+### 🔧 Refactoring follow-ups 2026-10 — the bugs and cleanups the code-health refactoring found — #2919–#2928, branch fix/refactoring-follow-ups-2026-10, PR #2930 — ✅ done 2026-10-23 (⚠ playtest open)
+
+The deferred class extractions are #2929 (not part of this branch).
+
+- **Owner-only world routes answer 403, not 500 (#2919):** the ten owner-only WorldHost world routes (password,
+  visibility, bans, kick, stop, delete, save upload/download) refused a signed-in non-owner with `Results.Forbid()`,
+  which needs an auth scheme the WorldHost never registers, so the request ended as a 500. Now they answer 403 with the
+  usual `{error, code}` body (`WorldHostApi.NotWorldOwner()`, code `not_world_owner`, English text like
+  `operator_protected`); `WorldHostHttpTests.OwnerRoutes_RefuseAStranger_With403AndTheJsonErrorAsync` pins all ten.
+- **Account deletion erases the recovery codes (#2920):** `AccountStore.DeleteAccount` removed sessions, reports,
+  notices, visits and bans but left the account's `recovery_code` rows (hash + creation time) behind — personal data
+  that outlived the GDPR erasure. It now deletes them in the same locked sequence, before the account row; no other
+  registry table kept the account id. `WorldHostLegalTests.DeleteAccount_LeavesNoRowWithTheAccountId_InAnyTable`
+  scans every table from `sqlite_master` for the deleted id (empty, commented allow-list); HOSTED_WORLDS.md lists it.
+- **The admin export leaves out reply keys (#2921):** `GET /admin/export` serialised the raw `BugReportRecord` rows,
+  `ReplyKey` column included, and the stored `ReportJson` payload still held the client's top-level `replyKey`, so the
+  "Download JSON" file handed out every reporter's reply-thread credential. Rows now go through
+  `ReportApiJson.ExportItem` (the other 19 columns, same names and order) and `WithoutReplyKey` strips the key from the
+  exported payload copy (the database keeps it); `ReportHostReadApiHttpTests` (`AssertExportAsync`) pins it.
+- **Save uploads follow the upload cap, not Kestrel's body limit (#2922):** Kestrel's default request-body limit of
+  30,000,000 bytes sat below `UploadMaxBytes` (`BBS_WH_UPLOAD_MAX_BYTES`, 50 MB), so saves between the two got a
+  bare 413. `POST /api/worlds/{id}/save` now raises the per-request limit (`IHttpMaxRequestBodySizeFeature`) to the cap
+  once its guards pass and answers a refused body with JSON `upload_too_large`; HOSTED_WORLDS.md adds the proxy note.
+  `WorldHostHttpTests.SaveUpload_FollowsTheUploadCap_NotKestrelsDefaultBodyLimitAsync` pins both sides on Kestrel.
+- **Partner-cell + head-cell checks, validator quirks (#2927):** a multi-cell block's further cells skipped the anchor's
+  `door_here`/`fluid_cell` refusals and `above_head` used the unwrapped `Position.X` (west of the seam a player could wall
+  in their head); `IsFreePartnerCell` reuses `DoorFillsCell` + `FluidCellRefusal`, both use the wrapped `OwnHeadCell`.
+  Validator: invariant cutscene floats; a bad player lead type still gets the lead warning, a tutorial reward 0 errors
+  (C# + Python). Pinned by `PlacementPartnerCellTests`, `StoryPackValidationTests`, `CutsceneContentTests` (de-DE).
+- **PlayMode join waits for the server; env-var tests share one collection (#2923):** the PlayMode test
+  `Join_AgainstRealServer_AcceptsAndStreamsChunks` dialled after a fixed 2 s + 5 s, but a fresh world plus NetCodec
+  warm-up takes ~7–8 s, so it failed under load. It now waits for `LocalServerLauncher.Ready` (the bound-port line, up
+  to 60 s, ends early if the process exits), then re-dials once a second for 10 s; UnityPlay ran 6/6 three times.
+  `AdminServiceTests` + `AdminContentTests` read `BBS_*` beside the config tests; they now join the explicit
+  `ServerConfigEnvironmentCollection`, and its guard `ServerConfigEnvironmentCollectionTests` scans the test sources.
+- **Code-health cleanups found by the refactoring (#2928):** an unused `Weather` using, stale `Stashable` crefs, a
+  wrong `WebSocketServerTransport.FixedTimeEquals` comment, GameBootstrap doc comments above the wrong members and
+  private `Slug`/`RightPanel` copies in `AvatarEditor`/`KitEditorPanel` (now `EditorSceneKit`) are fixed. The dead
+  `WeatherForecastRequest` (nothing sent or handled it) is removed and tag 200 stays retired (`NetCodecTests`,
+  `ClientDispatchRegistryTests`); a new `AdminCommandGateTests` fact pins the `/basewalls` base-owner exemption.
+- **Main-menu icons load as 2D textures again (#2924):** fifteen shell icons (`btn_*`, `sys_*`, `info_*`) had a
+  guid-only `.meta`, so Unity imported them as Cubemaps, `Resources.Load<Texture2D>` returned null and
+  `AddButton`/`AddIcon` drew no icon (Editor and player). Each `.meta` now carries the `cat_*.png` TextureImporter
+  settings, written by Unity with the guids unchanged. `UiIconImportEditModeTests` (every `Resources/icons` PNG) and
+  `IconCoverageTests.EveryIcon_MetaImportsItAsA2DTexture` (CI) pin it; `MainMenuHierarchy.golden.txt` is re-baked.
+- **The read API leaves out reply keys too (#2921):** `GET /api/reports` and `GET /api/reports/{id}` embedded the
+  stored payload as parsed `reportJson`, client's top-level `replyKey` included — against `ReportApiJson.Item`'s own
+  "never exposed" comment. `Item` now parses `WithoutReplyKey(r.ReportJson)` like the export (the database keeps the
+  key, every other field stays); REPORT_HOST.md says so. `ReportHostReadApiHttpTests`
+  (`AssertReadApiHidesReplyKeysAsync`) reads the list and the single report and finds no reply key in either.
+- **The privacy page names the recovery codes (#2920):** `/datenschutz` never mentioned the `recovery_code` rows (PBKDF2
+  hash, creation time, time of use) the registry keeps per account, nor that account deletion erases them. The German
+  body now lists them in the short card, as a section-2 bullet (what, why, how long) and in the section-5 deletion
+  list; `privacy.summary.text` says the same in all 14 languages; HOSTED_WORLDS.md too.
+  `WorldHostHttpTests.Privacy_NamesTheRescueCodes_AndThatDeletingTheAccountErasesThemAsync` pins all four spots.
+- **The interview panel's canvas goes with the rig (#2925):** `InterviewUi` overrode `KeepCanvasOnDestroy => true`,
+  so its scene-root canvas outlived every rig teardown — one more hidden canvas per world join, plus a still-open
+  overlay (the #2303 leak class). The override and the now-unused `UiPanel.KeepCanvasOnDestroy` hook are gone, so
+  `UiPanel.OnDestroy` destroys every panel's canvas; nothing reads the interview canvas once the rig is torn down.
+  `UiPanelPlayModeTests.InterviewUi_DestroyedPanel_TakesItsCanvasAlong` pins it (PlayMode: edit mode skips OnDestroy).
+- **Board-reach hint, ping ray mask, three main-menu modal quirks (#2926):** the HUD's "Board (E)" hint hard-coded
+  3.2 m and now reads `PlayerController.SpeederBoardRange`; the ping cast `~0` and now uses `WorldRayMask` (a pin no
+  longer sticks to a giant). A "name reserved" retry now also updates the visible name field (`SetMenuName`); the
+  browser menu builds the "New world?" and name dialogs last so they draw on top (desktop golden unchanged); refresh
+  notices wait while the rules or password prompt is open. `ClientQuirksWiringTests` and
+  `MainMenuHierarchyEditModeTests.NameReservedRetry_ShowsTheReplacementNameInTheMenuField` pin it.
+
+### 🧹 Code-health refactoring 2026-10 — subsystem classes, dispatch tables, no clones, split giant files — epic #2883, #2884–#2915, branch refactor/code-health-2026-10, draft PR #2916 — ✅ done on the branch 2026-10-23 (⚠ maintainer playtest + merge open)
+
+Behaviour-preserving restructuring in one feature branch, one commit per sub-issue (players notice nothing: same
+gameplay, saves, wire format, texts, world-gen hashes). Stage 1 mechanical server/shared, stage 2 GameServer
+subsystems + WorldHost/ReportHost, stage 3 Unity client splits, Messages.cs last. Out of scope: #2781 and #2782
+(contributor-reserved), the SQLite/PostgreSQL repository base (waits for #2782).
+
+- **Format check covers WorldHost and ReportHost (#2884):** both projects were missing from
+  `BlocksBeyondTheStars.CI.slnf`, so the required `dotnet format --verify-no-changes` gate never looked at them. Added;
+  their code already passes.
+- **One shared set of test fakes (#2885):** 74 private helper copies nested in test classes (42 `RecordingTransport`,
+  6 `CapturingLogger`, 6 `FakeLauncher`, 8 NPC-line fakes, 3 HTTP stubs, 5 world probes, 4 client transports) → 8
+  shared files under the two test projects' `Helpers/`, query helpers in `RecordingTransportExtensions`;
+  `SharedTestHelperGuardTests` (was `RecordingTransportGuardTests`, no allow-list) fails on any new private copy.
+  ~1,640 lines less. Test-only: nothing under `src/`, `client/` or `data/` changed; all 69 touched classes green.
+- **Admin commands as a table (#2886):** `HandleAdminCommand`'s 450-line `switch` left `GameServer.cs` (8,780 → 8,330
+  lines) for the new partial `GameServerAdminCommands.cs`: a case-insensitive table of 40 verbs, each with one gate (20
+  role, 2 fleet-admin, 18 cheats), a ~40-line dispatcher and 19 `AdminCommand*` methods. Gate order and every reply
+  string are unchanged (`not_admin`, then `observer_reserved` before any cheat check, then `cheats_disabled`; unknown
+  verbs as before); `AdminCommandGateTests` (12 tests, green against the old switch first) pins them.
+- **Block placement as an ordered rule table (#2887):** `HandlePlace` left `GameServer.cs` (8,330 → 7,738 lines) for the
+  new partial `GameServerPlacement.cs`: a resolve step, a table of 18 named rules (`height_limit` … `form_room`; the
+  first refusal sends the one `ActionRejected` "place", then the flora VEGA hint), payment, then eight effect steps in
+  the old order. Rule order, all 24 reject strings, message and side-effect order are unchanged; the five shape/bed/
+  ladder helpers moved byte-identical. `PlacementRuleOrderTests` pins the order; ~1,060 placement tests green.
+- **One BasicAuth for both hosts (#2888):** WorldHost and ReportHost each had an identical 65-line `BasicAuth.cs`;
+  now one class in `Shared/Security/BasicAuth.cs` (ReportHost copy moved with history, WorldHost copy deleted; 2 → 1).
+  The `IsAuthorized`/`TokenEquals` bodies are byte-identical (still `CryptographicOperations.FixedTimeEquals`, which
+  netstandard2.1 has); the 31 call sites are unchanged, four files gained one `using`. The stale "no FixedTimeEquals on
+  netstandard2.1/Unity" comments in `SecretCompare`/`HostedJoinToken` are corrected; 100 host/hardening tests green.
+- **ServerConfig options as one table (#2889):** the command-line `switch` and the `ApplyEnvironment` `if` chain left
+  `ServerConfig.cs` (1,036 → 572 lines) for the new `ServerConfigOptions.cs`: one table of 105 rows (52 environment
+  variables in the old override order, then 53 CLI-only switches; 95 accepted spellings incl. 13 aliases, 4 env
+  fallbacks) plus two generic appliers behind the unchanged `ApplyCommandLine`/`ApplyEnvironment` facades. Every switch,
+  variable, parse rule, clamp, reported name and warning order is kept, quirks included; `ServerConfigOptionsTests`
+  (19 tests) pins them, ~400 config/admin/caller tests green.
+- **GameContent split three ways (#2890):** `GameContent.cs` (1,990 → 861 lines) keeps the registry, block ids,
+  locales and pack setters; `Validate()` with `ValidateLodges`/`ValidateWishes` moved byte-identical to the partial
+  `GameContent.Validation.cs` (784), the template pools, kits and picks to the new `StructureCatalog` (352), the craft
+  depth to the new `CraftingGraph` (101). 16 structure and 2 craft-depth members pass through with unchanged signatures;
+  depths are still computed in the constructor over the same `_recipes.Values`; 531 content/worldgen-golden tests green.
+- **StoryPackValidator split into section validators (#2891):** `StoryPackValidator.cs` (1,429 → 270 lines) keeps
+  the public constants and helpers; `Validate()` (850 → 36 lines) now calls one section method per old `// ----`
+  header in order. Closure state and helpers moved to a private `Run` class, the sections to six partials (`.Run`,
+  `.Pack`, `.Texts`, `.Chapters`, `.Steps`, `.Cutscenes`). Public surface, messages, paths and issue order unchanged:
+  three `*InDocumentOrder` goldens (green on the old code first) pin them; 408 story/cutscene/tutorial tests green.
+- **Chunk Generate as named stage methods (#2892):** `WorldGenerator.Generate` (864 → 49 lines) is now a stage
+  orchestrator; its stages left `WorldGenerator.Columns.cs` (1,574 → 760 lines) verbatim, only re-indented, for the
+  new partial `WorldGenerator.ChunkFill.cs` (1,084): `FillContext`, `ResolveFillContext`, `BuildColumnContext`,
+  `CollectSealSpans`, `FillColumnCells` (the y-loop), `PlantColumnFlora`, `StampChunkPasses`, in the old order. 64
+  golden groups + 598 worldgen tests green, chunk hashes byte-identical, perf neutral; per-cell helpers skipped (slower).
+- **FloraCatalog lookups from one index (#2893):** `IsCultivated`, `IsTall`, `IsHanging` and `IsSolid` lost their
+  hand-written scans of `All` and delegate to `Find`, which now reads a `ByKey` dictionary built once from the same
+  table (`FloraCatalog.cs` 421 → 383 lines, 9 → 5 `foreach` over `All`). Ordinal keys, first entry wins and a null
+  key still yields null/false, so every answer is unchanged; the 68-entry table is untouched. The new
+  `FloraCatalogOrderTests` pins the catalog order (persisted identity), host arrays and lookups; 321 flora/golden
+  tests green.
+- **Message dispatch through registries (#2894):** the 155-arm `switch` in `GameServer.Dispatch` (`GameServer.cs`
+  7,738 → 7,575 lines) and the 136-arm one in `NetworkClient` (1,481 → 1,328) became exact-type lookups in static
+  `On<T>` tables (new partials `GameServerDispatch.cs`, `NetworkClientDispatch.cs`). Gates, handlers and wire format
+  are untouched; every message is sealed, so the lookup equals the old switch. `IntentDispatchRegistryTests` and
+  `ClientDispatchRegistryTests` pin 155/136 (WeatherForecastRequest stays unhandled); 506 server + 2,317 client green.
+- **PlayerSession state in per-subsystem components (#2895):** 180 RAM-only members left `PlayerSession.cs` (829 →
+  269 lines, 228 → 61 public/internal members) for 13 sealed components reached as `session.<Group>` (`Throttles`,
+  `Chat`, `Liveness`, `Streaming`, `Hazards`, `Vega`, `Tutorial`, `Story`, `Npc`, `Bandit`, `Respawn`, `Transit`,
+  `Sync`; files `PlayerSession<Group>.cs`), declarations verbatim: defaults, sentinels, field/property kinds unchanged.
+  The three PlayerState mirrors stay in core; 937 compiler-guided `.<Group>` insertions (no regex, DTO names untouched),
+  nothing persisted or on the wire changed; 1,040 server + 34 client session tests green.
+- **Code-health ratchet against growing methods and files (#2896):** the new `CodeHealthRatchetTests` parses every
+  `*.cs` under `src/` and the client `Scripts/` with Roslyn 5.9 (syntax only, 1,103 files) and compares, per file, the
+  methods over 60 lines and a new crossing of 1,000 lines with `Fixtures/code_health_baseline.json` (434 files, 82 over
+  1,000 lines, 868 long methods). Growth fails and prints the rebase command (`BBS_CODE_HEALTH_REBASE=1`); shrinking
+  passes. Test-only: nothing under `src/`, `client/` or `data/` changed (`SourceFiles` moved to `TestPaths`); 22 green.
+- **Subsystem template, IServerHost and CrewSystem (#2897):** the crew code left the partial `GameServerCrews.cs`
+  (517 → 45 lines, now one-line facades) for the new sealed `CrewSystem.cs` (545), moved verbatim behind
+  `ICrewHost : IServerHost` (9 shared + 4 crew members). The new `GameServer.Systems.cs` holds the 15 subsystem slots
+  and `ConstructSystems()` (the only `GameServer.cs` edit, 7,575 → 7,576); ADR 0019 records the shape. Facade names,
+  signatures, callers, reject strings and the 765 `*ForTest` seams are unchanged; 108 crew/alliance/marker tests green.
+- **BioLabSystem (#2897):** the bio lab left the partial `GameServerBioLab.cs` (687 → 92 lines, now one-line facades,
+  `WornKeys` and the 3 `*ForTest` seams) for the new sealed `BioLabSystem.cs` (738), moved verbatim behind
+  `IBioLabHost : IServerHost` (6 shared + 20 lab members, explicit one-liners); five one-word `private` → `internal`
+  widenings (`BioResearch`, `SampleCount`, `TakeSample`, `CabinComfortC`, `BioLabActionArg`). No state, RNG or cache;
+  reject strings, result keys, sounds, hints and tick/dispatch callers unchanged; 308 bio-lab/neighbour tests green.
+- **EquipmentSystem (#2897):** the suit gear left the partial `GameServerEquipment.cs` (419 → 90 lines, now one-line
+  facades, the 3 `*ForTest` seams and 3 explicit host one-liners) for the new sealed `EquipmentSystem.cs` (427), moved
+  verbatim behind `IEquipmentHost : IServerHost` (5 shared + 3 equipment members: `AmbientTemperature`, `Ship`,
+  `AbsorbWithShield`); `WornKeys` came along from `GameServerBioLab.cs` (92 → 88), `HotbarSlots` `private` → `internal`.
+  No state; the ship cursor is still read at call time; reject/event keys, drain rates and callers unchanged; 371
+  equipment/hazard/neighbour tests green.
+- **AiLinesSystem (#2898):** the NPC/VEGA AI-line path left the partial `GameServerAiLines.cs` (916 → 94 lines, now
+  one-line facades, the 11 `*ForTest` seams and the `AiLineMaxVariants` const) for the new sealed `AiLinesSystem.cs`
+  (296) behind `IAiLinesHost : IServerHost` (1 own member, `Ai`); the five helper types moved verbatim to
+  `AiLineText.cs` (394), `AiLineBudget.cs` (103) and `AiVariantCache.cs` (143). Budget, cache, in-flight dedupe and
+  both RNGs (same seeds 0x7A11/0x41A1) moved with it; the provider is still read at use time, the 4 raw budget releases
+  call `ReleaseAiBudget()`; 143 NPC-line/greeting/village/VEGA/guest tests green.
+- **ObserverSystem (#2898):** fleet-admin observer mode and `/players`, `/where`, `/builds`, `/goto` left the partial
+  `GameServerObserver.cs` (475 → 132 lines, now one-line facades, the kept `SpectatorMayHandle`/`JoinedPlayerCount`
+  helpers and the 3 `*ForTest` seams) for the new sealed `ObserverSystem.cs` (493), moved verbatim behind the wide
+  `IObserverHost : IServerHost` (3 shared + 19 own members). Sessions and galaxy are read at use time; reject/`@srv`
+  keys, CheatLog texts and statement order unchanged; 173 observer/admin/hosted/story tests green.
+- **NpcWorkSystem (#2898):** the wilderness folk's job state machine left the partial `GameServerNpcWork.cs` (706 → 166
+  lines, now the four nested work types, the 2 `*ForTest` seams and the `TickNpcWork`/`ResetNpcWork` facades) for the
+  new sealed `NpcWorkSystem.cs` (682): 18 cadence constants, the work RNG (same seed 0x2641) and 21 methods moved
+  verbatim behind the wide `INpcWorkHost : IServerHost` (2 shared + 21 own members); `NpcMineRefillSeconds` `private` →
+  `internal`. World, uptime and creatures are read at use time; 93 NPC-work/lodge/pioneer/wanderer/guest tests green.
+- **HullRepair, FarTerrain and ShipExtension (#2899):** `GameServerHullRepair.cs` (417 → 38 lines) → sealed
+  `HullRepairSystem.cs` (449, one-shot pass built where `Start` runs it, `IHullRepairHost`: 2 members),
+  `GameServerFarTerrain.cs` (401 → 64) → sealed `FarTerrainSystem.cs` (432, `IFarTerrainHost`: 4 own members), the
+  door/air geometry of `GameServerShipExtension.cs` (462 → 199, glue kept) → static `ShipExtensionGeometry.cs` (322).
+  Moved verbatim behind one-line facades; budgets, constants, seams and callers unchanged; 231 ship/terrain tests green.
+- **ReportHost endpoint groups (#2903):** `ReportHostApp.Create()` (810 → ~90 lines, file 829 → 111, same signature)
+  keeps the wiring (builder, limiters, CSRF, CORS), `/healthz` and `/`; 20 routes moved verbatim to the route groups
+  `ReportHost{Player,Api,Admin}Endpoints` (4/7/9), its 13 local functions to `ReportHostRuntime` (state, `Guard*`
+  gates), `ReportApiJson` and `ReportPairActions`. Routes, guard order, status codes and JSON key order unchanged:
+  `ReportHostRouteTableTests` (22 routes) and `ReportHostReadApiHttpTests` (green on the old code first); 61 tests green.
+- **WorldHost endpoint groups (#2902):** `Program.cs` (1,849 → 129 lines) keeps the wiring, keep-awake and reaper;
+  `WorldHostApp.Create` builds the host and maps the 62 routes, moved verbatim to six groups
+  `{Portal,Glitch,Account,Moderation,AdminUi,World}Endpoints` (11/6/10/7/13/15), 18 local functions to `WorldHostApi`,
+  limiters and stats cache to `WorldHostServices`. Paths, gates, status codes and bodies unchanged (task handlers typed
+  `Task<IResult>`, never `RequestDelegate`); `WorldHostHttpTests` (73, green on the old code first); 401 tests green.
+- **HostRegistry split into per-area stores (#2902):** `HostRegistry.cs` (1,807 → 350 lines) is a facade keeping all
+  59 public members (signatures, docs, `CountForMetrics`) over sealed `AccountStore` (515), `NoticeStore` (91),
+  `WorldStore` (467), `WorldModerationStore` (179), `PlayerReportStore` (100) and `GlitchStore` (123); records, name
+  rules and the one unpooled connection, schema/ALTER migration and shared `Lock` went to `HostRegistryRecords`,
+  `RegistryNameRules`, `RegistryDb`. Bodies and SQL moved verbatim, ctor order kept; tests untouched, 393 green.
+- **Markers, Journal and Temperature (#2900):** `GameServerTemperature.cs` (440 → 91 lines), `GameServerMarkers.cs`
+  (516 → 109) and `GameServerJournal.cs` (475 → 105) keep one-line facades and seams; the code moved verbatim to the
+  new sealed `TemperatureSystem.cs` (501), `MarkerSystem.cs` (513) and `JournalSystem.cs` (544) behind
+  `ITemperatureHost`/`IMarkerHost`/the wide `IJournalHost` (21/13/26 members); 16 `private` → `internal` widenings.
+  Guard keys, the 45 callers, run-once latches and seams unchanged; 604 temperature/marker/journal/story tests green.
+- **ContainerSystem (#2901):** the crate/loot/drop-packet code left the partial `GameServerContainers.cs` (600 → 113
+  lines, now the `_containers` accessor, 17 one-line facades and the 2 `*ForTest` seams) for the new sealed
+  `ContainerSystem.cs` (643): 26 members incl. the three intent adapters, moved verbatim behind `IContainerHost :
+  IServerHost` (11 own members; the active store as `ContainerStore`); 0 `private` → `internal` widenings. Reject
+  strings, dispatch entries, callers and the cross-world `RefreshOpenCrates` quirk unchanged; 169 crate/loot tests green.
+- **VehicleSystem (#2901):** speeders and boats left the partials `GameServerSpeeders.cs` (1,112 → 266 lines, now
+  the `_speeders` accessor, 2 const + 16 one-line facades and the 14 `*ForTest` seams) and `GameServerBoats.cs` (203 →
+  39) for the new sealed `VehicleSystem.cs` (1,223), moved verbatim behind `IVehicleHost : IServerHost` (19 own
+  members); `ServerSpeeder` is top-level there now, the reconcile scratch lists came along, 1 widening
+  (`ShipStationReach`). Reject/`@srv` keys, ids, send order and the stow-before-reach quirk unchanged; 113
+  speeder/boat/recovery/neighbour tests green.
+- **TutorialSystem (#2901):** the teaching verbs, UI teaching flags and world predicates left the partial
+  `GameServerTutorial.cs` (784 → 502 lines, now 13 one-line facades, the hint hold, the pack migration and the seams)
+  for the new sealed `TutorialSystem.cs` (411), moved verbatim behind `ITutorialHost : IServerHost` (8 own members);
+  the lazy plant/tree caches came along, 1 widening (`AnchorOf`). Event keys, the `WorldPredicates` names, callers
+  and `*ForTest` seams unchanged; 425 tutorial/story/VEGA/ship-AI/hint tests green.
+- **The tick order as a schedule table (#2904):** the 75 inline `Guard("…", …)` calls in `Tick` (`GameServer.cs` 7,576
+  → 7,501 lines) became entries of the new partial `GameServerTickSchedule.cs` (234): four arrays built once after
+  `ConstructSystems()` — `Held` 4, `PreWorld` 2, `PerWorld` 49 (one sweep-, one far-tile-gated), `PostWorld` 20 — walked
+  by `RunTickSteps` through the two existing `Guard` overloads, so walking them allocates no delegates. Control flow,
+  order and bucket names unchanged (Autosave/Backups stay literal); `TickScheduleTests` pins them; 83 tests green.
+- **Block atlas decoration as a look table (#2906, part 1 of 5):** `BlockTextureAtlas.Decorate`'s 445-line `switch` over
+  46 block keys became the `CodeTiles` table (small paint combinators + 16 bespoke painters, bodies unchanged) in the new
+  partial `BlockTextureAtlas.CodeTiles.cs`; `BlockTextureAtlas.cs` 1,844 → 1,191 lines. `BlockAtlasLooksGoldenEditModeTests`
+  pinned every code-painted tile and the whole 303-block atlas (FNV-1a) before the move and still matches: identical pixels.
+- **One FallImpactFx base for lava falls and waterfall mist (#2906):** `WaterfallMistView` and `LavaFallView` held
+  the same impact scan, emit loop and particle pool; they moved once into the new abstract `FallImpactFx.cs` (201
+  lines), and the views keep only their settings, materials, `Spawn` and `Step` (220 → 81 and 256 → 123 lines). Lava's
+  `FeedHeat` runs from a `BeforeEmit` hook at the same spot; scan constants, method bodies and `Random` call order are
+  unchanged, names and `sealed` kept (`WorldRig` untouched); Unity build + 264 EditMode + 2,317 client tests green.
+- **Shared UiKit builders for scroll viewports, panels and prompt texts (#2906):** seven copied scroll viewports
+  (credits, settings, planet types, world list, what's new, feedback reply, main-menu worlds) call the new
+  `UiKit.AddScrollViewport`; `MeasureHeight`, `AddCenteredPanel`, `AddStretchChild` and `Tr` replace the bandit/NPC
+  dialogue and five prompt copies (15 files, +190/−378 lines; `UiKit.cs` 1,513 → 1,623). Wheel step, hit image, measure
+  settings, fallback literals and keys unchanged; Unity + WebGL builds, 264 EditMode + 2,317 client tests green.
+- **Editor scene helpers shared by the ship and structure editors (#2906):** camera setup, cell picking, room bounds,
+  brush tile, right panel, bottom hint, hex/slug and palette panel, held as copies by `ShipEditor` and `StructureEditor`,
+  moved once into `EditorSceneKit` (369 → 519 lines, 10 helpers) and `EditorPaletteKit` (293 → 325); the editors keep
+  one-line wrappers under the old names (1,335 → 1,225 and 1,898 → 1,789). Pick ranges, room sizes, locale keys and the
+  per-keystroke search rebuild are passed in unchanged; Unity build, 264 EditMode + 2,317 client tests green.
+- **One layer-canvas base for the form and tool-look editors (#2906):** the shared frame loop, keys, cell picking,
+  layer stepping, undo/redo, status/hint lines, preview stage and teardown of `FormEditor` and `ToolLookEditor` moved
+  once into the new abstract `LayerCanvasEditor` (380 lines); both models implement the new Client.Core `ILayerCanvas`.
+  `FormEditor.cs` 964 → 754 lines (long methods 1 → 0), `ToolLookEditor.cs` 646 → 459 (2 → 1). Paint rules, per-cell vs
+  per-stroke label refresh, frame and teardown order are kept via hooks; Unity build, 264 EditMode + 2,319 client green.
+- **CraftingTechShipUI split into a shell and per-tab files (#2907):** `CraftingTechShipUI.cs` (8,192 → 1,171 lines,
+  long methods 28 → 5) keeps the state, public control, `Update`, craft result, header/tabs, sidebar, list and detail
+  dispatch; 216 of its 233 methods moved verbatim (comments and order kept) to 18 partials `CraftingTechShipUI.<Part>.cs`
+  — the 12 tabs and their areas (Suit, Samples, Notes, Journal …) plus `Recipes`, `Stations` and `Scaffolding`, the
+  largest 751 lines. Only `partial` was added: no logic, keys or visibility changed; `CraftDetailLayoutTests` reads
+  every part; Unity build, 264 EditMode + 2,319 client tests green.
+- **SpaceView split into concern files (#2908, C5a):** `SpaceView.cs` (7,546 → 903 lines, long methods 24 → 3) keeps
+  the `MonoBehaviour` hub — state, ship systems, `Update`/`Enter`/`Exit`, hyperjump and the navigation hub; the rest
+  moved verbatim, comments and order kept, to 12 partials `SpaceView.<Concern>.cs` (`Flight`, `LandMap`, `ShipFx`,
+  `Combat`, `Eva`, `Structures`, `Docking`, `Scene`, `Entities`, `Hud`, `Models`, `Capture`; largest 930 lines). Pure
+  move: the hub diff is deletions only, public surface and member fingerprint identical; Unity build, 264 EditMode +
+  6 PlayMode + 2,319 client tests green.
+- **HudUi split into a composer and widget files (#2909):** `HudUi.cs` (4,232 → 698 lines, long methods 12 → 3)
+  keeps the state, `LateUpdate`, `EnsureBuilt`, `Refresh` and the prompt helpers; the widgets moved verbatim to 14
+  partials `HudUi.<Widget>.cs` (`Vitals`, `Hotbar`, `Compass`, `Scan`, `Toasts` …; largest 588 lines), `HudToastPolicy`
+  to its own file. `EnsureBuilt` calls 13 `Build*` steps in the old statement order (same uGUI sibling order), `Refresh`
+  the carved `RefreshVitals` in place; guards read every part; Unity build, 264 EditMode + 2,319 client tests green.
+- **Main menu built by one method per screen (#2910):** `UiMainMenu.Build` (1,926 → 24 lines; file 1,957 → 566, long
+  methods 1 → 0) runs a private `Builder` whose 12 `Build*` methods keep the old draw order; the 1,430-line
+  Official-worlds overlay moved verbatim (renames only) to the native-only partial `UiOfficialWorlds` (4 files, 47
+  methods, largest 685 lines). The new `MainMenuHierarchyEditModeTests` golden, baked from the old code, is byte-identical;
+  keys and `Add*` calls unchanged; Unity + WebGL builds, 274 EditMode + 2,319 client tests green.
+- **Docs follow the new structure, part 1 (#2905):** README.md, AGENTS.md, ADR 0019 and 34 developer docs updated for
+  the packages landed so far: ARCHITECTURE.md's server runtime (core + `*System` classes behind facades, tick schedule,
+  sessions, admin command and placement tables, dispatch registry), DEVELOPER.md (server options, subsystem recipe),
+  SERVER/CLIENT_TESTING.md, the host code maps, and every concept-doc pointer to a split or moved file. The rest
+  (main menu, PlayerController, GameBootstrap, panels, singletons, messages) follows once those packages land.
+- **PlayerController split into concern files (#2911, C3a):** `PlayerController.cs` (8,154 → 765 lines, long methods
+  21 → 1) keeps the wiring, shared body state, `Update` and the spawn gate; the rest of its 528 member declarations
+  (232 methods) moved verbatim, comments and order kept, to 17 partials `PlayerController.<Concern>.cs` (`View`,
+  `Movement`, `Combat`, `Interact`, `Climb`, `Vehicles` … `Capture`; largest 923 lines). Pure move, only `partial` and
+  headers added; the 9 source guards read every part; Unity build, 273 EditMode + 6 PlayMode + 2,319 client green.
+- **Screenshot pose helpers in a PlayerCapture component (#2911, C3b):** the interim partial `PlayerController.Capture.cs`
+  (923 lines, 5 long methods; deleted) moved to the new sibling `MonoBehaviour` `PlayerCapture.cs` (877 lines, 30
+  members, names unchanged); the controller's `Capture` accessor adds it on first use like the optic/camera tools, so
+  normal play never does. Walk/look hooks went to `.Movement`, `IsCaptureGrounded` stays; 7 members `private` →
+  `internal`. Same poses and log text; client source guards read it; Unity build, 273 EditMode + 2,319 client tests green.
+- **Vehicle and train riding as PlayerController components (#2911, C3c):** the partials `PlayerController.Vehicles.cs`
+  (627 lines) and `.Train.cs` (270; both deleted) moved to the new sibling `MonoBehaviour`s `PlayerVehicleDrive.cs` (645)
+  and `PlayerTrainRider.cs` (316), added in `Awake` and called through `_vehicles`/`_train` at the old spots in the old
+  statement order; they read `Player.Game`, `Camera` and `Avatar` at use time and cache nothing. 9 `private` → `internal`;
+  the framed `SendMovement` block became `TrySendFramedMove` (`PlayerController.cs` 789 → 784 lines). Client source guards
+  read both; Unity build, 273 EditMode + 2,319 client tests green (speeder/boat/train: maintainer playtest only).
+- **GameBootstrap split into concern files (#2912, C4a):** `GameBootstrap.cs` (5,162 → 1,666 lines, long methods
+  7 → 3) keeps the fields it shares, `Start` with all 101 subscriptions, `Update`, `OnWorldReset` and `OnDestroy`; the
+  rest of its class body moved verbatim, comments and order kept, to 11 partials `GameBootstrap.<Concern>.cs` beside
+  `.ChunkPipeline` (`ChunkStreaming`, `Environment`, `PlayerState`, `Messages` … `Stations`; largest 1,192 lines). An
+  order-preserving proof maps all 5,136 body lines to exactly one file; the guards read the exact 13-file set; Unity +
+  WebGL builds, 273 EditMode + 6 PlayMode + 2,319 client tests green, PerfProbe before/after alike.
+- **GameBootstrap.Start wires each concern in its own method (#2912, C4b):** `Start`'s 101 subscriptions moved
+  verbatim, order kept, into 12 `Wire<Concern>()` methods (`WireSession`/`WireContent` in core, one per partial) called
+  at the old spot before `Network.Connect`; `Update`'s blocks became `TickSkyScan`/`TickConnect`/`TickChunkStreaming` in
+  the old per-frame order. `GameBootstrap.cs` 1,666 → 934 lines, `Start` 921 → 154, `Update` 195 → 16; a slice-map
+  proof shows every body byte-identical. Unity + WebGL builds, 273 EditMode + 6 PlayMode + 2,319 client + PerfProbe green.
+- **UiPanel base and ClientContext with three pilot panels (#2913, C1a):** the new abstract `UiPanel` (199 lines)
+  owns canvas, overlay, menu ownership, Esc guard and `L`; the `ClientContext` registry (41) on `GameBootstrap.Context`
+  replaces the static `Instance` (filled by the `Game` setter, emptied in `OnDestroy`). `BeamPadUi` 192 → 166,
+  `TrainCabUi` 175 → 152, `ContainerFilterUi` 231 → 219 lines; 3 readers use `Context.Panel<T>()` (holders 37 → 34).
+  Open/close/Esc order kept; Unity build, 278 EditMode (5 new `UiPanelEditModeTests`) + 6 PlayMode + 2,319 client green.
+- **Seven more in-world panels on the UiPanel base (#2913, C1b):** `TeleporterUi`, `StoryReaderUi`, `BeaconLabelUi`,
+  `BlueprintToolUi`, `CrystalDeviceUi`, `BioLabUi` and `InterviewUi` derive from `UiPanel` (each 22–39 lines shorter,
+  e.g. `BioLabUi` 1,760 → 1,731) and lost their static `Instance`; 17 readers use `Game?.Context.Panel<T>()` (UiPanel
+  subclasses 3 → 10, holders 34 → 27, outside `.Instance` reads 20 → 3). Open/Update/Close order, every Esc/Enter guard
+  and the teleporter's ship-teleport fallback are kept, `InterviewUi` keeps its canvas; Unity build, 278 EditMode + 6
+  PlayMode + 2,319 client tests green.
+- **Last three in-world panels on the UiPanel base (#2913, C1c):** `CrateUi` (408 → 393 lines), `HotbarActionUi`
+  (795 → 784) and `ContextActionsUi` (293 → 276) derive from `UiPanel` and lost their static `Instance`, canvas fields
+  and private `L`; 3 readers (`PlayerController.Stations`, `TouchControlsUi`) use `Game?.Context.Panel<T>()`. All 13
+  panels are now on the base (holders 27 → 24, outside `.Instance` reads 3 → 0). Open/close/Esc order, the `Game` guards
+  in `Update`, the ring/list dimmers and the toggle-key open-frame guard are kept; Unity build, 278 EditMode, 6 PlayMode,
+  2,319 client tests and PerfProbe green.
+- **Rig views registered in RigViews instead of a static Instance (#2914, C9):** the 19 rig views C1 did not migrate
+  (`HudUi`, `NpcView`, `DoorView`, `CutsceneDirector`, `LaunchPrompt` … `VegaPanel`) lost their static `Instance`; the
+  new plain-C# `RigViews` (99 lines, 19 `Live<T>` getters) on `GameBootstrap.Views` is filled by `WorldRig` right after
+  each `AddComponent` (18; `VegaPanel` in `Start`), and 101 readers use `Game.Views.X`. `public static … Instance`
+  25 → 4 (ClientAudio, FxKit, ScreenLabelLayer, UrpScenePost kept by design). Registration moment and guards kept;
+  Unity + WebGL builds, 281 EditMode (3 new `RigViewsEditModeTests`) + 6 PlayMode + 2,319 client tests, PerfProbe green.
+- **Messages.cs split into one file per domain (#2915):** `Messages.cs` (3,569 lines, 198 types; deleted) moved
+  verbatim, source order kept, into 26 new files `Messages/<Domain>Messages.cs` (`Session` 11, `Player` 14 …
+  `WorldRules` 2; largest 306 lines); `Messages/` now holds 58 files and 360 types. Only the 9 banner comments went and
+  one stray summary moved to `ChatMessage`; names, namespace and members are byte-identical (198/198), so MessagePack,
+  JSON and NetCodec tags are unchanged; Unity + WebGL builds, 92 codec + 2,319 client, 281 EditMode + 6 PlayMode green.
+- **Docs follow the new structure, part 2 (#2905):** 24 docs for the packages since part 1 — ARCHITECTURE.md's client
+  runtime (GameBootstrap partials, `Wire*()` and the tick order, `Context` + `Views`, PlayerController partials and
+  components, the main-menu Builder), CLIENT_TESTING.md (split-file guards, the menu golden, `-perfProbe` as the
+  rig-boot check), DEVELOPER.md (adding an in-world panel), the screenshots README and the developer pointers in the
+  user manual §8. Drift that predated the branch fixed on the way: the project table and dependency graph, README/AGENTS
+  layout (WorldHost, ReportHost), the 32×32 atlas with `AtlasBands` and the 400-tile capacity, 14 languages, and member
+  names that no longer existed (`PaintStationAccents`, `PlanetCloudLook`, `SpawnWarpFlash`, `GetStationLayout`).
+- **Open follow-ups (found during the refactoring, deliberately not changed on this branch):**
+  - #2919 WorldHost owner-only routes answer non-owners with 500 instead of 403 (`Results.Forbid()` without an auth scheme).
+  - #2920 WorldHost account self-deletion leaves the `recovery_code` rows behind (GDPR).
+  - #2921 ReportHost `/admin/export` includes each reporter's `ReplyKey`.
+  - #2922 WorldHost: Kestrel's ~28.6 MB body limit may cut save uploads below the 50 MB `UploadMaxBytes` (to verify).
+  - #2923 Test flakes: the PlayMode join test races the server boot; config env tests race the admin tests.
+  - #2924 Main-menu button icons may not load (icon `.meta` files without importer settings) — check the built game.
+  - #2925 InterviewUi's canvas survives the rig teardown (one leaked canvas per world join, #2303 class).
+  - #2926 Client quirks: board-reach hint hard-codes 3.2, ping ray uses mask `~0`, three main-menu modal quirks.
+  - #2927 Server quirks: multi-cell partner-cell checks, `above_head` across the seam, story-validator quirks.
+  - #2928 Code-health cleanups (dead code, stale crefs and docs, copied helpers, a missing gate test).
+  - #2929 The class extractions deferred from this refactoring (a stage of its own, each needs a design decision).
+- **Contributor follow-ups by ahmdkaml (#2781, #2782):** the protocol and server-hardening suites share one
+  `Helpers/DrivenTransport` instead of two private copies, and `NetCodecServerHardeningTests` closes its repositories
+  before deleting the temp folder (PR #2917; guarded by `SharedTestHelperGuardTests`); the palette-remap `UPDATE` is
+  built once by `BlockPaletteMigration.BuildBlockColumnRemapSql` for SQLite and PostgreSQL, keys sorted, with its own
+  tests (PR #2918).
+
 ### 📬 Player reports 2026-10-21, second batch (Lyxette, v2026.10.23) — power to the rim of a 95 × 95 spaceport, torch light in tiles — #2879–#2881, branch fix/relay-cap-light-tiles — ✅ done 2026-10-21 (⚠ playtest open; no generation, save or protocol change)
 
 "The base shape of the spaceport stands: 57 × 57 in the middle, a 5-block sandstone ring, 14 more blocks to the edge —
@@ -389,7 +738,8 @@ Behaviour-preserving cleanup from the same sweep as PR 1 (the fixes).
 - **One shared `RecordingTransport` (#2792):** the server tests' transport fake lives in
   `tests/BlocksBeyondTheStars.Tests/RecordingTransport.cs`; `NpcLifeWorld`'s public copy and 36 identical private copies
   are gone (~800 lines). `RecordingTransportGuardTests` is a ratchet: a new private copy fails, the 42 drifted copies
-  are listed and the list may only shrink. SERVER_TESTING.md names the helper.
+  are listed and the list may only shrink. SERVER_TESTING.md names the helper. (Superseded by #2885: the fake moved to
+  `Helpers/RecordingTransport.cs`, the ratchet is `SharedTestHelperGuardTests`.)
 
 **Released** in **v2026.10.21** "the in-hand release" (2026-10-19).
 

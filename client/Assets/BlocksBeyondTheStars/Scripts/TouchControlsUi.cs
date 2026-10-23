@@ -260,7 +260,7 @@ namespace BlocksBeyondTheStars.Client
             if (onFoot)
             {
                 SetActive(_rotate?.gameObject, Player != null && Player.HeldRotatable);
-                var finale = FinaleView.Instance;
+                var finale = Game?.Views.Finale;
                 SetActive(_attack?.gameObject, (Player != null && Player.HoldsWeapon) || (finale != null && finale.BreachAvailable));
                 SetActive(_feed?.gameObject, Player != null && Player.CanFeedCreature); // #2018
             }
@@ -283,7 +283,7 @@ namespace BlocksBeyondTheStars.Client
 
             // ACT opens the context-actions list (#1042) — every verb that applies right now, one tap away.
             // Like the slot pie, opening registers a menu owner (hides this layer); closing brings it back.
-            var ctx = ContextActionsUi.Instance;
+            var ctx = Game?.Context.Panel<ContextActionsUi>();
             if (_contextActions != null)
             {
                 bool canCtx = ctx != null && ctx.CanOpen;
@@ -309,7 +309,7 @@ namespace BlocksBeyondTheStars.Client
             // The "…" button opens the slot-action pie on the selected hotbar slot (#940). Shown only while
             // the pie could actually open (same hidden-hotbar gates; EVA allowed). Opening registers a menu
             // owner, which hides this whole layer — so taps reach the pie, and closing it brings us back.
-            var pie = HotbarActionUi.Instance;
+            var pie = Game?.Context.Panel<HotbarActionUi>();
             if (_slotActions != null)
             {
                 bool canAct = pie != null && pie.CanOpen;
@@ -351,6 +351,7 @@ namespace BlocksBeyondTheStars.Client
             // Full-screen look pad FIRST (bottom sibling) so buttons/stick placed after sit on top of it and
             // win the touch; empty-area drags fall through to the look pad.
             _lookPad = MakeLookPad(canvas.transform);
+            _lookPad.Game = Game;
 
             // Left virtual joystick.
             _stick = MakeStick(canvas.transform);
@@ -619,6 +620,8 @@ namespace BlocksBeyondTheStars.Client
     /// LateUpdate after gameplay has read it, so each frame reports only that frame's movement.</summary>
     public sealed class TouchLookPad : MonoBehaviour, IDragHandler, IPointerClickHandler
     {
+        public GameBootstrap Game;
+
         public Vector2 Delta { get; private set; }
 
         public void OnDrag(PointerEventData e) => Delta += e.delta;
@@ -628,12 +631,12 @@ namespace BlocksBeyondTheStars.Client
         /// story card (the touch controls stay up under it) gets it first — its skip button, continue button and speaker box.</summary>
         public void OnPointerClick(PointerEventData e)
         {
-            if (CutsceneDirector.Instance != null && CutsceneDirector.Instance.TapAt(e.position))
+            if (Game?.Views.Director != null && Game.Views.Director.TapAt(e.position))
             {
                 return;
             }
 
-            VegaPanel.Instance?.TapAt(e.position);
+            Game?.Views.Vega?.TapAt(e.position);
         }
 
         public void ResetDelta() => Delta = Vector2.zero;

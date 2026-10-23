@@ -13,7 +13,6 @@ using BlocksBeyondTheStars.Shared.Geometry;
 using BlocksBeyondTheStars.Shared.Primitives;
 using BlocksBeyondTheStars.Shared.State;
 using BlocksBeyondTheStars.Shared.Story;
-using BlocksBeyondTheStars.Shared.Weather;
 using BlocksBeyondTheStars.Shared.World;
 using BlocksBeyondTheStars.WorldGeneration;
 
@@ -31,7 +30,7 @@ public sealed partial class GameServer
 {
     private const string ShipId = "default";
     private const float MaxReach = 8f;
-    private const int HotbarSlots = 9;
+    internal const int HotbarSlots = 9;
     private const int MaxPlayerNameLength = Protocol.MaxPlayerNameLength; // client-supplied names are capped to this on join (the client fields cap at the same, #1368)
 
     // Vertical build band: client-driven block edits and chunk streaming are clamped to this Y range so a
@@ -238,6 +237,15 @@ public sealed partial class GameServer
                 _config.WorldName,
                 ServerVersionString),
             LazyThreadSafetyMode.ExecutionAndPublication);
+        ConstructSystems();
+
+        // The tick order, built once — see GameServerTickSchedule.cs. These four lines must stay the LAST statements of
+        // the constructor: a schedule entry may capture a subsystem field (e.g. after a subsystem extraction), which must
+        // already be assigned by then.
+        _heldSchedule = BuildHeldSchedule();
+        _preWorldSchedule = BuildPreWorldSchedule();
+        _perWorldSchedule = BuildPerWorldSchedule();
+        _postWorldSchedule = BuildPostWorldSchedule();
     }
 
     private GameRules Rules => _config.Rules;
@@ -1099,7 +1107,7 @@ public sealed partial class GameServer
         var spawn = _shipPlaced ? _healTank : new Vector3f(pad.CenterX + 0.5f, surfaceY + 2f, pad.CenterZ + 0.5f);
         session.State.Position = spawn;
         session.AwaitingSpawnAdopt = true; // #865: the client still streams its pre-landing pose for a beat
-        session.SentChunks.Clear();
+        session.Streaming.SentChunks.Clear();
         if (!session.Spectating)
         {
             session.State.RespawnPoint = _shipPlaced ? _healTank : spawn;
@@ -1193,7 +1201,7 @@ public sealed partial class GameServer
             }
 
             BeginTransit(session, body.Id, crossSystem ? body.SystemId : null, intent.PadIndex);
-            if (!session.AutomaticTransit)
+            if (!session.Transit.AutomaticTransit)
             {
                 session.AssignedPadIndex = heldPad; // the take-off was refused — the ship still stands on its old pad
             }
@@ -1214,11 +1222,11 @@ public sealed partial class GameServer
     /// — or free flight in the new system when there is no destination ("Hyperjump to this system").</summary>
     private void BeginTransit(PlayerSession session, string? destinationBodyId, string? systemId, int padIndex)
     {
-        session.PendingTransitBodyId = destinationBodyId;
-        session.PendingTransitSystemId = systemId;
-        session.PendingTransitPadIndex = padIndex;
-        session.AutomaticTransit = true;
-        session.TransitLaunchTimer = 0;
+        session.Transit.PendingTransitBodyId = destinationBodyId;
+        session.Transit.PendingTransitSystemId = systemId;
+        session.Transit.PendingTransitPadIndex = padIndex;
+        session.Transit.AutomaticTransit = true;
+        session.Transit.TransitLaunchTimer = 0;
 
         // No warp flag here: the warp belongs between the take-off and the arrival, not over the take-off.
         EnterSpace(session.State.PlayerId, skipLaunch: false);
@@ -1231,16 +1239,16 @@ public sealed partial class GameServer
     /// <summary>#1614: forgets any pending automatic transit of this player.</summary>
     private static void ClearTransit(PlayerSession session)
     {
-        session.PendingTransitBodyId = null;
-        session.PendingTransitSystemId = null;
-        session.PendingTransitPadIndex = -1;
-        session.AutomaticTransit = false;
-        session.TransitLaunchTimer = 0;
+        session.Transit.PendingTransitBodyId = null;
+        session.Transit.PendingTransitSystemId = null;
+        session.Transit.PendingTransitPadIndex = -1;
+        session.Transit.AutomaticTransit = false;
+        session.Transit.TransitLaunchTimer = 0;
     }
 
     private void HandleTransitLaunchDone(PlayerSession session, TransitLaunchDoneIntent intent)
     {
-        if (session.AutomaticTransit)
+        if (session.Transit.AutomaticTransit)
         {
             AdvanceTransit(session);
         }
@@ -1254,10 +1262,10 @@ public sealed partial class GameServer
     private void AdvanceTransit(PlayerSession session)
     {
         string playerId = session.State.PlayerId;
-        string? destinationBodyId = session.PendingTransitBodyId;
-        string? systemId = session.PendingTransitSystemId;
-        int padIndex = session.PendingTransitPadIndex;
-        session.TransitLaunchTimer = 0;
+        string? destinationBodyId = session.Transit.PendingTransitBodyId;
+        string? systemId = session.Transit.PendingTransitSystemId;
+        int padIndex = session.Transit.PendingTransitPadIndex;
+        session.Transit.TransitLaunchTimer = 0;
 
         if (!InSpace(playerId))
         {
@@ -1276,7 +1284,7 @@ public sealed partial class GameServer
             }
 
             // The warp is the next stage; with no destination the trip ends with it, in free flight.
-            session.PendingTransitSystemId = null;
+            session.Transit.PendingTransitSystemId = null;
             if (string.IsNullOrEmpty(destinationBodyId))
             {
                 ClearTransit(session);
@@ -1286,7 +1294,7 @@ public sealed partial class GameServer
                 ?? system.Bodies.FirstOrDefault(b => !string.IsNullOrEmpty(b.PlanetType))
                 ?? system.Bodies[0];
             JumpFlightToSystem(session, system, anchor);
-            if (!session.AutomaticTransit)
+            if (!session.Transit.AutomaticTransit)
             {
                 TellArrivedInFlight(session, system, anchor); // the trip ends here, in flight — the landing never says it
             }
@@ -1322,10 +1330,10 @@ public sealed partial class GameServer
     /// is not loaded, which the per-world tick never visits.</summary>
     private void TickTransits(double dt)
     {
-        foreach (var session in _sessions.Values.Where(s => s.Joined && s.AutomaticTransit).ToList())
+        foreach (var session in _sessions.Values.Where(s => s.Joined && s.Transit.AutomaticTransit).ToList())
         {
-            session.TransitLaunchTimer += dt;
-            if (session.TransitLaunchTimer >= _config.TransitLaunchTimeoutSeconds)
+            session.Transit.TransitLaunchTimer += dt;
+            if (session.Transit.TransitLaunchTimer >= _config.TransitLaunchTimeoutSeconds)
             {
                 AdvanceTransit(session);
             }
@@ -1335,11 +1343,11 @@ public sealed partial class GameServer
     /// <summary>Persistence key for a player's ACTIVE ship. Kept as the legacy single-ship key (#848): every
     /// save still mirrors the active ship here, so a save written by this build stays loadable by an older one
     /// and the pre-fleet write sites need no change. The other ships use <see cref="FleetShipSaveKey"/>.</summary>
-    private static string ShipSaveKey(string playerId) => "ship_" + playerId;
+    internal static string ShipSaveKey(string playerId) => "ship_" + playerId;
 
     /// <summary>Persistence key for one ship of a player's fleet (#848). The `ship` table is a generic
     /// key→JSON store, so per-ship rows need no schema change; <c>PlayerState.FleetShipIds</c> is the index.</summary>
-    private static string FleetShipSaveKey(string playerId, string shipId) => "ship_" + playerId + "#" + shipId;
+    internal static string FleetShipSaveKey(string playerId, string shipId) => "ship_" + playerId + "#" + shipId;
 
     /// <summary>Per player: fleet ids whose ship row failed to load this session (#1275) — kept in the saved index.</summary>
     private readonly Dictionary<string, List<string>> _unloadableFleetIds = new();
@@ -1692,7 +1700,7 @@ public sealed partial class GameServer
     /// does — this stands in for a real payload, and a test client must not look silent for sending one.</summary>
     public void PauseForTest(PlayerSession session, bool paused)
     {
-        session.LastPayloadAt = _uptime;
+        session.Liveness.LastPayloadAt = _uptime;
         HandlePause(session, new PauseIntent { Paused = paused });
     }
 
@@ -1703,23 +1711,23 @@ public sealed partial class GameServer
     /// </summary>
     private void HandlePause(PlayerSession session, PauseIntent intent)
     {
-        session.PausedSilentSeconds = 0; // hearing from this client at all is what the keep-alive is for
+        session.Liveness.PausedSilentSeconds = 0; // hearing from this client at all is what the keep-alive is for
 
         if (!intent.Paused)
         {
-            session.PauseHoldExpired = false; // closing the menu ends the hold — and any lockout on it
+            session.Liveness.PauseHoldExpired = false; // closing the menu ends the hold — and any lockout on it
         }
         else
         {
             // A repeat while this session already wants the hold is the client's keep-alive: behind an open
             // menu it is the only payload it sends, and the only proof that it is still alive (see
             // SweepSilentPausedSessions). Seeing one also tells us this client is new enough to send them.
-            if (session.WantsPause)
+            if (session.Liveness.WantsPause)
             {
-                session.SendsPauseKeepAlive = true;
+                session.Liveness.SendsPauseKeepAlive = true;
             }
 
-            if (session.PauseHoldExpired)
+            if (session.Liveness.PauseHoldExpired)
             {
                 // The hold already ran out under this open menu. The keep-alives still prove the client is
                 // alive (stamped above), but they must not put the world straight back to sleep — that would
@@ -1728,7 +1736,7 @@ public sealed partial class GameServer
             }
         }
 
-        session.WantsPause = intent.Paused;
+        session.Liveness.WantsPause = intent.Paused;
         RecomputePause();
     }
 
@@ -1754,7 +1762,7 @@ public sealed partial class GameServer
             }
 
             joined++;
-            if (s.WantsPause)
+            if (s.Liveness.WantsPause)
             {
                 holding++;
             }
@@ -1767,7 +1775,7 @@ public sealed partial class GameServer
         {
             foreach (var s in _sessions.Values)
             {
-                if (s.Joined && !s.Spectating && !s.WantsPause)
+                if (s.Joined && !s.Spectating && !s.Liveness.WantsPause)
                 {
                     (waitingFor ??= new List<string>()).Add(s.State.Name);
                 }
@@ -1788,7 +1796,7 @@ public sealed partial class GameServer
             _pausedFor = 0;
             foreach (var s in _sessions.Values)
             {
-                s.PausedSilentSeconds = 0; // the paused-silence clock only runs while the world stands still
+                s.Liveness.PausedSilentSeconds = 0; // the paused-silence clock only runs while the world stands still
             }
 
             _log.Info(hold
@@ -1816,14 +1824,14 @@ public sealed partial class GameServer
     }
 
     /// <summary>Clears every player's pause intent when the hold expires on its own, and latches the menus
-    /// that were holding it (see <see cref="PlayerSession.PauseHoldExpired"/>) — otherwise the world would
+    /// that were holding it (see <see cref="PlayerSessionLiveness.PauseHoldExpired"/>) — otherwise the world would
     /// re-enter the hold on the very next recompute, with everybody still sitting in their menus.</summary>
     private void ClearPauseIntents()
     {
         foreach (var s in _sessions.Values)
         {
-            s.PauseHoldExpired |= s.WantsPause;
-            s.WantsPause = false;
+            s.Liveness.PauseHoldExpired |= s.Liveness.WantsPause;
+            s.Liveness.WantsPause = false;
         }
     }
 
@@ -1866,25 +1874,14 @@ public sealed partial class GameServer
         {
             // #2558: the one clock that does run — "Back to my ship"'s fight grace and fall reading age behind the menu.
             _heldSeconds += deltaSeconds;
-            Guard("Moderation", deltaSeconds, TickModeration);
-            Guard("Maintenance", deltaSeconds, TickMaintenance);
-
-            // The control plane must keep seeing a held world (#973): the /status snapshot is what the hosted
-            // fleet polls, and freezing it would report a stale player count for as long as the pause lasts.
-            // Safe to run here — with players joined it only republishes; the idle timer stays at zero.
-            Guard("HostedLifecycle", deltaSeconds, TickHostedLifecycle);
-
-            // #996: an observer neither holds nor counts toward the pause (#973) and keeps flying — without
-            // streaming they run off the already-sent chunks into void until somebody resumes the world.
-            Guard("SpectatorChunks", StreamChunksToSpectators);
+            RunTickSteps(_heldSchedule, deltaSeconds); // the control plane + spectator streaming (GameServerTickSchedule.cs)
             EndTickTiming(deltaSeconds);
             return;
         }
         // The shared orbital clock advances once per server tick — not once per occupied world, which ran it twice
         // as fast with two worlds loaded (#2173: the biome weather offsets the maps mirror rotate on it).
         _systemTimeDays += deltaSeconds / SystemDaySeconds;
-        Guard("TickSpace", deltaSeconds, TickSpace); // space instances are keyed by location and handle their own players
-        Guard("Transits", deltaSeconds, TickTransits); // #1614: per player, wherever they fly
+        RunTickSteps(_preWorldSchedule, deltaSeconds); // space instances + transits (GameServerTickSchedule.cs)
 
         // Tick each occupied world with the Active cursor set to it, so its environment/fauna/fluids/
         // weather/presence/chunk-streaming only touch that world's players. With a single occupied world
@@ -1924,90 +1921,22 @@ public sealed partial class GameServer
                 continue;
             }
 
-            // Each simulation system is contained on its own (see GameServerResilience.Guard): a system
-            // that throws on edge-case data is logged + skipped for this tick, while every OTHER system in
-            // this world — and every other occupied world — keeps simulating. A throw here can never reach
-            // Run() and crash the process.
-            Guard("TickEnvironment", deltaSeconds, TickEnvironment);
-            Guard("TickEnemies", deltaSeconds, TickEnemies);
-            Guard("TickBandits", deltaSeconds, TickBandits);
-            Guard("TickPresence", deltaSeconds, TickPresence);
-            Guard("TickMarkerPings", deltaSeconds, TickMarkerPings); // expire "look here" pings (#1217)
-            Guard("TickFluids", deltaSeconds, TickFluids);
-            Guard("TickGranular", deltaSeconds, TickGranular); // #1319: woken sand/ash/snow settles, sinks through fluid
-            Guard("TickFire", deltaSeconds, TickFire);
-            Guard("TickWeather", deltaSeconds, TickWeather);
-            Guard("TickFlora", deltaSeconds, TickFlora);
-            Guard("TickNpcFelling", deltaSeconds, TickNpcFelling); // #2644: a woodcutter's tree comes down from the top, a few cells a tick
-            Guard("TickNpcRestores", deltaSeconds, TickNpcRestores); // #2643: mined quarry cells fill up again (1 Hz)
-            Guard("TickCreatures", deltaSeconds, TickCreatures);
-            Guard("TickSreekmakra", deltaSeconds, TickSreekmakra); // 2026-09: Valuma's shapeshifter and mood (1 Hz)
-            Guard("TickGiants", deltaSeconds, TickGiants); // #1998: the colossus, the sandworms and the thumpers
-            Guard("TickTrains", deltaSeconds, TickTrains); // #2113: the monorail trains and their riders
-            Guard("TickBaseGuests", deltaSeconds, TickBaseGuests); // #2602: friendly visitors walk up to a base whose owner is home (1 Hz)
-            Guard("TickBaseLife", TickBaseLife); // #1120/#2718: settlers move in — per world, one base per 10 s, one scan per tick at most
-            Guard("TickLodges", deltaSeconds, TickLodges); // #2640/#2641: lodges found by passing players, the store crates (1 Hz)
-            Guard("TickWanderers", deltaSeconds, TickWanderers); // #2646: named travellers met in the open land (1 Hz)
-            Guard("TickNpcRoutine", deltaSeconds, TickNpcRoutine); // #1867/#1868: work by day, sit in the evening, sleep at night; jobs
-            Guard("TickNpcPaths", deltaSeconds, TickNpcPaths); // #1866: at most one NPC path search per tick
-            Guard("TickNpcs", deltaSeconds, TickNpcs);
-            Guard("TickNpcConversations", deltaSeconds, TickNpcConversations); // #2616: end dead talks, hold the talking NPC (1 Hz)
-            Guard("TickPassingGreetings", deltaSeconds, TickPassingGreetings); // #2593: NPCs greet and wave as you walk by (1 Hz)
-            Guard("TickProfessions", deltaSeconds, TickProfessions); // the streamer asks for photos, the tamer's pet follows (2026-09)
-            Guard("TickVillageLife", deltaSeconds, TickVillageLife); // #2600: villagers talk to each other (1 Hz, scan every 3 s)
-            Guard("TickVillageFestivals", deltaSeconds, TickVillageFestivals); // #2604: the village festival (1 Hz + the tune's notes)
-            Guard("TickAirFills", deltaSeconds, TickAirFills); // #2650: time-sliced base/station air fills move on
-            Guard("TickStationStaffing", deltaSeconds, TickStationStaffing); // #1487: crew only staffs posts in sealed rooms
-            Guard("TickPlanetTraders", deltaSeconds, TickPlanetTraders); // #2603: traders land on occupied bodies even when nobody flies (5 s)
-            Guard("TickLandedTraders", deltaSeconds, TickLandedTraders); // P3: materialize/lift-off a peaceful trader parked on this surface
-            Guard("TickDoors", deltaSeconds, TickDoors);
-            Guard("TickCrystalNet", deltaSeconds, TickCrystalNet); // #2046: the Crystal Net's logic + sensor beats
-            Guard("TickDropPackets", deltaSeconds, TickDropPackets); // #853: ground packets flow back into whoever walks over them
-            Guard("TickCompanionPayoff", TickCompanionPayoff); // #1210: companions growl at hostiles, stall robbers, drop produce (1 Hz)
-            Guard("TickCompanionScouting", TickCompanionScouting); // #1225: a deeply bonded companion shares a landmark now and then
-            Guard("TickSentries", TickSentries); // #1214: base sentry posts fire at hostiles near a home base (2 Hz)
-            Guard("TickBurning", TickBurning); // #1700: lava and fire hurt animals, robbers and machines too (2 Hz)
-            Guard("TickHealTanks", deltaSeconds, TickHealTanks); // base/station regen field: heal + feed + suit recharge
-            Guard("TickStationsInReach", deltaSeconds, TickStationsInReach); // #1070: Tab-menu station gates follow the player
-            Guard("TickVoidRescue", deltaSeconds, TickVoidRescue);
-            Guard("TickShipAi", deltaSeconds, TickShipAi); // VEGA advisor hints + memory-fragment redemption
-            Guard("StreamChunks", StreamChunks);
-            Guard("StreamWorldTextures", StreamWorldTextures); // #1958: one page of the texture list per client per tick
-            Guard("ServeFarTiles", ServeFarTiles); // #1871: far-terrain tile builds under a per-tick budget
-            Guard("FlushEntityLists", FlushEntityLists); // #1530: one list per type + one player state per session per tick
-            if (sweepDue)
-            {
-                Guard("SweepFarChunks", SweepFarChunks);
-            }
-
-            if (farTilesDue)
-            {
-                Guard("RefreshFarTiles", RefreshFarTiles);
-            }
+            // Every simulation system of this world, each contained on its own (GameServerTickSchedule.cs).
+            RunTickSteps(_perWorldSchedule, deltaSeconds, sweepDue, farTilesDue);
         }
 
-        Guard("DerelictSpacewalks", TickDerelictSpacewalks); // #2636: boarders the void check found outside a derelict's hull step out (a world change, so after the loop)
-        Guard("ShipVisits", deltaSeconds, TickShipVisits); // #2723: guests who walked out go home; the 1 Hz check of every docking visit
-        Guard("TickStoryOutsideWorlds", deltaSeconds, TickStoryOutsideWorlds); // #2477: the 1 Hz story pass for players no loaded world reaches
-        Guard("TickCutscenes", TickCutscenes); // #2468: queued cutscenes for every joined player, wherever they are (space too)
-        Guard("TickJournal", TickJournal); // #2471: the Journal's coalesced pushes (only players whose stories changed)
-        Guard("TickAmbientWeather", deltaSeconds, TickAmbientWeather); // #2173: the weather of every body in an occupied system
-        Guard("SampleHistories", deltaSeconds, SampleHistories); // also advances _uptime
-        Guard("SilentSessions", SweepSilentSessions); // release names/slots held by dead clients (#964)
-        Guard("SweepExpiredLandedTraders", SweepExpiredLandedTraders); // P3: free pads of traders whose dwell ended on bodies nobody is on
-        Guard("TickGreetings", TickGreetings); // push any LLM NPC greetings finished off-thread (item 15)
-        Guard("TickDialogRadio", TickDialogRadio); // due "they said they'd call" dialogue consequences (#1127)
-        Guard("TickNpcRadio", TickNpcRadio);   // NPC radio calls (#1119): per-player 30 s trigger scans
-        Guard("TickMissionTexts", TickMissionTexts); // push mission-list refreshes when L3 board texts arrive
-        Guard("TickAiMissions", TickAiMissions); // publish /ai_mission generations finished off-thread
-        Guard("TickVegaBanter", TickVegaBanter); // push VEGA's LLM banter lines finished off-thread
+        // The systems that run once per tick after the worlds (GameServerTickSchedule.cs), then autosave and backups.
+        RunTickSteps(_postWorldSchedule, deltaSeconds);
+        TickAutosave(deltaSeconds);
+        Guard("Backups", TickBackups); // #2223: rotating backups, written off the tick thread
 
-        Guard("AccumulatePlaytime", deltaSeconds, AccumulatePlaytime);
-        Guard("HostedLifecycle", deltaSeconds, TickHostedLifecycle); // idle shutdown + /status snapshot (hosted worlds)
-        Guard("Maintenance", deltaSeconds, TickMaintenance); // announcement intake + restart countdown broadcasts
-        Guard("Moderation", deltaSeconds, TickModeration); // kick intake + the delayed close behind it
-        Guard("CrashReportFlush", deltaSeconds, MaybeFlushCrashReports); // best-effort background upload of queued reports
+        EndTickTiming(deltaSeconds);
+    }
 
+    /// <summary>The autosave cadence. Called UNGUARDED from <see cref="Tick"/>: it guards <see cref="SaveAll"/> itself
+    /// under the name "Autosave", so wrapping it in a second guard would double-count that tick-timing bucket.</summary>
+    private void TickAutosave(double deltaSeconds)
+    {
         _sinceAutoSave += deltaSeconds;
         if (_sinceAutoSave >= _config.AutoSaveIntervalMinutes * 60.0)
         {
@@ -2017,10 +1946,6 @@ public sealed partial class GameServer
                 _log.Info("Autosave complete.");
             }
         }
-
-        Guard("Backups", TickBackups); // #2223: rotating backups, written off the tick thread
-
-        EndTickTiming(deltaSeconds);
     }
 
     /// <summary>Advances the world's cumulative playtime — but only while at least one player is joined, so an
@@ -2127,13 +2052,13 @@ public sealed partial class GameServer
             TickJetpack(session, dt);
             // A deferred respawn choice is pending (issue #462): the player lies at the death spot at 0 HP.
             // No drains, no regen, no re-death — just enforce the timeout fallback to the ship.
-            if (session.RespawnChoiceDeadline > 0)
+            if (session.Respawn.RespawnChoiceDeadline > 0)
             {
-                if (_uptime >= session.RespawnChoiceDeadline)
+                if (_uptime >= session.Respawn.RespawnChoiceDeadline)
                 {
-                    session.RespawnChoiceDeadline = 0;
-                    CompleteRespawn(session, session.PendingRespawnReason, session.PendingRespawnSalvaged,
-                        session.PendingRespawnSameWorld, useCustomSpawn: false);
+                    session.Respawn.RespawnChoiceDeadline = 0;
+                    CompleteRespawn(session, session.Respawn.PendingRespawnReason, session.Respawn.PendingRespawnSalvaged,
+                        session.Respawn.PendingRespawnSameWorld, useCustomSpawn: false);
                 }
 
                 continue;
@@ -2217,7 +2142,7 @@ public sealed partial class GameServer
                 // Health regen never revives a dead player (0 HP) — that would outrun the death check
                 // below and quietly skip the respawn on breathable worlds.
                 p.Oxygen = System.Math.Min(maxOxygen, p.Oxygen + (float)(dt * 25));
-                if (p.Health > 0f && session.ToxicWaterSeconds <= ToxicWaterGraceSeconds && p.Exposure < 1f) // 2026-09: toxic water and a full exposure meter stop the regen
+                if (p.Health > 0f && session.Hazards.ToxicWaterSeconds <= ToxicWaterGraceSeconds && p.Exposure < 1f) // 2026-09: toxic water and a full exposure meter stop the regen
                 {
                     // #2202: a "tired" side effect takes natural healing away for as long as it lasts.
                     p.Health = System.Math.Min(100f, p.Health + (float)(dt * 2) * Shared.Bio.PlayerEffects.NaturalHealingFactor(p.Effects));
@@ -2248,7 +2173,7 @@ public sealed partial class GameServer
                 }
             }
 
-            session.HazardDeathReason = null; // set below by a hazard with its own death line (2026-09)
+            session.Hazards.HazardDeathReason = null; // set below by a hazard with its own death line (2026-09)
 
             // Lava burns (reduced by armor). Every hit below goes through DamagePlayer — nothing hurts in Sandbox (#2712).
             if (InLava(p.Position))
@@ -2262,7 +2187,7 @@ public sealed partial class GameServer
             if (gasDps > 0f)
             {
                 DamagePlayer(p, (float)(dt * gasDps));
-                session.HazardDeathReason = "@srv.death.gas";
+                session.Hazards.HazardDeathReason = "@srv.death.gas";
             }
 
             // Standing in fire burns too (item 30) — a little less than lava.
@@ -2304,29 +2229,29 @@ public sealed partial class GameServer
 
             if (p.Health <= 0f)
             {
-                RespawnPlayer(session, session.HazardDeathReason ?? "@srv.death.critical");
+                RespawnPlayer(session, session.Hazards.HazardDeathReason ?? "@srv.death.critical");
                 continue;
             }
 
             // Periodic vitals sync: oxygen/hunger/energy/health drain + regen every tick SERVER-side, but
             // PlayerStateUpdate used to go out only on discrete events — the HUD bars froze in between.
             // Push the state twice a second whenever a vital has visibly moved since the last send.
-            session.VitalsSyncTimer += dt;
-            if (session.VitalsSyncTimer >= 0.5)
+            session.Sync.VitalsSyncTimer += dt;
+            if (session.Sync.VitalsSyncTimer >= 0.5)
             {
-                session.VitalsSyncTimer = 0;
-                bool changed = System.Math.Abs(p.Health - session.LastSentHealth) > 0.4f
-                    || System.Math.Abs(p.Oxygen - session.LastSentOxygen) > 0.4f
-                    || System.Math.Abs(p.SuitEnergy - session.LastSentEnergy) > 0.4f
-                    || System.Math.Abs(p.Hunger - session.LastSentHunger) > 0.4f
-                    || System.Math.Abs(p.Exposure - session.LastSentExposure) > 0.004f;
+                session.Sync.VitalsSyncTimer = 0;
+                bool changed = System.Math.Abs(p.Health - session.Sync.LastSentHealth) > 0.4f
+                    || System.Math.Abs(p.Oxygen - session.Sync.LastSentOxygen) > 0.4f
+                    || System.Math.Abs(p.SuitEnergy - session.Sync.LastSentEnergy) > 0.4f
+                    || System.Math.Abs(p.Hunger - session.Sync.LastSentHunger) > 0.4f
+                    || System.Math.Abs(p.Exposure - session.Hazards.LastSentExposure) > 0.004f;
                 if (changed)
                 {
-                    session.LastSentExposure = p.Exposure;
-                    session.LastSentHealth = p.Health;
-                    session.LastSentOxygen = p.Oxygen;
-                    session.LastSentEnergy = p.SuitEnergy;
-                    session.LastSentHunger = p.Hunger;
+                    session.Hazards.LastSentExposure = p.Exposure;
+                    session.Sync.LastSentHealth = p.Health;
+                    session.Sync.LastSentOxygen = p.Oxygen;
+                    session.Sync.LastSentEnergy = p.SuitEnergy;
+                    session.Sync.LastSentHunger = p.Hunger;
                     SendPlayerState(session);
                 }
             }
@@ -2484,16 +2409,16 @@ public sealed partial class GameServer
             && (FeetInWater(p) || HeadUnderwater(p));
         if (!wet)
         {
-            session.ToxicWaterSeconds = 0;
+            session.Hazards.ToxicWaterSeconds = 0;
             return;
         }
 
-        session.ToxicWaterSeconds += dt;
+        session.Hazards.ToxicWaterSeconds += dt;
         ShipAiHintOnce(session, "toxic_water");
-        if (session.ToxicWaterSeconds > ToxicWaterGraceSeconds)
+        if (session.Hazards.ToxicWaterSeconds > ToxicWaterGraceSeconds)
         {
             DamagePlayer(p, (float)(dt * dps));
-            session.HazardDeathReason = "@srv.death.toxic_water";
+            session.Hazards.HazardDeathReason = "@srv.death.toxic_water";
         }
     }
 
@@ -2507,7 +2432,7 @@ public sealed partial class GameServer
     }
 
     /// <summary>Test seam (2026-09): the toxic-water clock.</summary>
-    public double ToxicWaterSecondsForTest(string playerId) => FindSessionByPlayerId(playerId)?.ToxicWaterSeconds ?? 0;
+    public double ToxicWaterSecondsForTest(string playerId) => FindSessionByPlayerId(playerId)?.Hazards.ToxicWaterSeconds ?? 0;
 
     /// <summary>Hunger level at or below which the suit auto-consumes a stored emergency ration.</summary>
     private const float EmergencyRationThreshold = 15f;
@@ -2675,10 +2600,10 @@ public sealed partial class GameServer
         if (!string.IsNullOrEmpty(p.CustomSpawnBodyId))
         {
             p.Health = 0f;
-            session.RespawnChoiceDeadline = _uptime + RespawnChoiceTimeout;
-            session.PendingRespawnSalvaged = salvaged;
-            session.PendingRespawnSameWorld = sameWorld;
-            session.PendingRespawnReason = reason;
+            session.Respawn.RespawnChoiceDeadline = _uptime + RespawnChoiceTimeout;
+            session.Respawn.PendingRespawnSalvaged = salvaged;
+            session.Respawn.PendingRespawnSameWorld = sameWorld;
+            session.Respawn.PendingRespawnReason = reason;
             Send(session, new RespawnOptions
             {
                 Reason = reason,
@@ -2773,14 +2698,14 @@ public sealed partial class GameServer
     /// or late packet can't double-respawn).</summary>
     private void HandleRespawnChoice(PlayerSession session, RespawnChoiceIntent choice)
     {
-        if (session.RespawnChoiceDeadline <= 0)
+        if (session.Respawn.RespawnChoiceDeadline <= 0)
         {
             return;
         }
 
-        session.RespawnChoiceDeadline = 0;
-        CompleteRespawn(session, session.PendingRespawnReason, session.PendingRespawnSalvaged,
-            session.PendingRespawnSameWorld, choice.UseCustomSpawn);
+        session.Respawn.RespawnChoiceDeadline = 0;
+        CompleteRespawn(session, session.Respawn.PendingRespawnReason, session.Respawn.PendingRespawnSalvaged,
+            session.Respawn.PendingRespawnSameWorld, choice.UseCustomSpawn);
     }
 
     /// <summary>Recovery with a world transition: lands the player at their ship's heal-tank on the ship's
@@ -2829,7 +2754,7 @@ public sealed partial class GameServer
         session.AwaitingSpawnAdopt = true; // #865: ignore death-spot reports until the client snaps
         p.AboardShip = true;
         ResetVegaAboardWelcome(session); // #2595: put back aboard (a death, a lost ship) — no "welcome back aboard"
-        session.SentChunks.Clear();
+        session.Streaming.SentChunks.Clear();
 
         var (systemName, planetName) = ActiveLocationNames();
         Send(session, new WorldReset { PlanetType = homeType, PlanetName = planetName, SystemName = systemName, Hyperjump = false });
@@ -2982,14 +2907,14 @@ public sealed partial class GameServer
     private void SampleStreamVelocity(PlayerSession session)
     {
         var pos = session.State.Position;
-        double since = _uptime - session.StreamSampleAt;
-        if (session.StreamSampleAt < 0 || since > 2.0 || since < 0)
+        double since = _uptime - session.Streaming.StreamSampleAt;
+        if (session.Streaming.StreamSampleAt < 0 || since > 2.0 || since < 0)
         {
-            session.StreamSampleX = pos.X;
-            session.StreamSampleZ = pos.Z;
-            session.StreamSampleAt = _uptime;
-            session.StreamVelX = 0f;
-            session.StreamVelZ = 0f;
+            session.Streaming.StreamSampleX = pos.X;
+            session.Streaming.StreamSampleZ = pos.Z;
+            session.Streaming.StreamSampleAt = _uptime;
+            session.Streaming.StreamVelX = 0f;
+            session.Streaming.StreamVelZ = 0f;
             return;
         }
 
@@ -2999,8 +2924,8 @@ public sealed partial class GameServer
         }
 
         int circumference = _world.Circumference;
-        float ddx = WrapDelta(pos.X - session.StreamSampleX, circumference);
-        float ddz = WrapDelta(pos.Z - session.StreamSampleZ, WorldConstants.LatitudePeriodFor(circumference));
+        float ddx = WrapDelta(pos.X - session.Streaming.StreamSampleX, circumference);
+        float ddz = WrapDelta(pos.Z - session.Streaming.StreamSampleZ, WorldConstants.LatitudePeriodFor(circumference));
         float vx = 0f, vz = 0f;
         if (ddx * ddx + ddz * ddz <= 96f * 96f)
         {
@@ -3015,11 +2940,11 @@ public sealed partial class GameServer
             }
         }
 
-        session.StreamVelX = 0.5f * (session.StreamVelX + vx);
-        session.StreamVelZ = 0.5f * (session.StreamVelZ + vz);
-        session.StreamSampleX = pos.X;
-        session.StreamSampleZ = pos.Z;
-        session.StreamSampleAt = _uptime;
+        session.Streaming.StreamVelX = 0.5f * (session.Streaming.StreamVelX + vx);
+        session.Streaming.StreamVelZ = 0.5f * (session.Streaming.StreamVelZ + vz);
+        session.Streaming.StreamSampleX = pos.X;
+        session.Streaming.StreamSampleZ = pos.Z;
+        session.Streaming.StreamSampleAt = _uptime;
 
         static float WrapDelta(float d, int period)
         {
@@ -3142,9 +3067,9 @@ public sealed partial class GameServer
             }
 
             SampleStreamVelocity(session); // #1818: every pass, so the look-ahead is current when the view unsettles
-            if (session.FarInfoDue)
+            if (session.Streaming.FarInfoDue)
             {
-                session.FarInfoDue = false;
+                session.Streaming.FarInfoDue = false;
                 SendFarTerrainWorldInfo(session); // #1820: after the JoinAccepted / WorldReset that introduced the world
             }
 
@@ -3158,17 +3083,17 @@ public sealed partial class GameServer
             // footing all add or remove entries) — or the periodic re-check comes due. The enumeration below is
             // up to ~1200 coords + one terrain lookup per far column, per player, per tick; standing still it
             // produced an empty list every time.
-            int sentCount = session.SentChunks.Count;
-            if (session.StreamSettled
-                && session.StreamSettledCenter == center
-                && session.StreamSettledRadius == streamRadius
-                && session.StreamSettledSentCount == sentCount
-                && ++session.StreamSettledTicks < StreamSettledRecheckTicks)
+            int sentCount = session.Streaming.SentChunks.Count;
+            if (session.Streaming.StreamSettled
+                && session.Streaming.StreamSettledCenter == center
+                && session.Streaming.StreamSettledRadius == streamRadius
+                && session.Streaming.StreamSettledSentCount == sentCount
+                && ++session.Streaming.StreamSettledTicks < StreamSettledRecheckTicks)
             {
                 continue;
             }
 
-            session.StreamSettled = false;
+            session.Streaming.StreamSettled = false;
             StreamEnumerationsForTest++;
             anyEnumerated = true;
 
@@ -3177,8 +3102,8 @@ public sealed partial class GameServer
             float forwardX = (float)System.Math.Sin(yawRad);
             float forwardZ = (float)System.Math.Cos(yawRad);
             float aheadMax = streamRadius * 0.5f;
-            float aheadDx = System.Math.Clamp(session.StreamVelX * StreamLookAheadSeconds / WorldConstants.ChunkSize, -aheadMax, aheadMax);
-            float aheadDz = System.Math.Clamp(session.StreamVelZ * StreamLookAheadSeconds / WorldConstants.ChunkSize, -aheadMax, aheadMax);
+            float aheadDx = System.Math.Clamp(session.Streaming.StreamVelX * StreamLookAheadSeconds / WorldConstants.ChunkSize, -aheadMax, aheadMax);
+            float aheadDz = System.Math.Clamp(session.Streaming.StreamVelZ * StreamLookAheadSeconds / WorldConstants.ChunkSize, -aheadMax, aheadMax);
 
             // Collect the not-yet-sent chunks in the view column and stream them NEAREST-FIRST. The player's
             // own chunk (its floor) then loads before everything else, so a freshly spawned/teleported player
@@ -3253,7 +3178,7 @@ public sealed partial class GameServer
                         // Canonicalize longitude so chunks just west of the seam (center.X+dx < 0) stream as the
                         // wrapped chunk from the far side — the player can see across X = 0 ≡ X = Circumference.
                         var coord = WorldConstants.CanonicalChunk(new ChunkCoord(center.X + dx, cy, center.Z + dz), _world.Circumference);
-                        if (session.SentChunks.Contains(coord))
+                        if (session.Streaming.SentChunks.Contains(coord))
                         {
                             continue;
                         }
@@ -3265,11 +3190,11 @@ public sealed partial class GameServer
             if (pending.Count == 0)
             {
                 // Nothing to send for this view: remember it, so the next ticks skip the enumeration (#1507).
-                session.StreamSettled = true;
-                session.StreamSettledCenter = center;
-                session.StreamSettledRadius = streamRadius;
-                session.StreamSettledSentCount = sentCount;
-                session.StreamSettledTicks = 0;
+                session.Streaming.StreamSettled = true;
+                session.Streaming.StreamSettledCenter = center;
+                session.Streaming.StreamSettledRadius = streamRadius;
+                session.Streaming.StreamSettledSentCount = sentCount;
+                session.Streaming.StreamSettledTicks = 0;
                 continue;
             }
 
@@ -3294,7 +3219,7 @@ public sealed partial class GameServer
                 while (idx < pending.Count && batch.Count < batchSize && sent + batch.Count < perTickBudget)
                 {
                     var candidate = pending[idx++].Coord;
-                    if (session.SentChunks.Contains(candidate) || batch.Contains(candidate))
+                    if (session.Streaming.SentChunks.Contains(candidate) || batch.Contains(candidate))
                     {
                         continue; // two view offsets can map to the same wrapped chunk — send it once
                     }
@@ -3321,7 +3246,7 @@ public sealed partial class GameServer
                 for (int i = idx; i < pending.Count && _streamSpeculate.Count < pool.Workers * 6; i++)
                 {
                     var next = pending[i].Coord;
-                    if (!session.SentChunks.Contains(next) && !_world.IsChunkLoaded(next))
+                    if (!session.Streaming.SentChunks.Contains(next) && !_world.IsChunkLoaded(next))
                     {
                         _streamSpeculate.Add(next);
                     }
@@ -3350,7 +3275,7 @@ public sealed partial class GameServer
         {
             SendEncoded(session.ConnectionId, ChunkPayloadFor(chunk, coord), DeliveryMode.ReliableOrderedBulk); // #1534: the world-stream channel
         }
-        session.SentChunks.Add(coord);
+        session.Streaming.SentChunks.Add(coord);
         MarkExploredCell(session, coord); // #1113: the planet map remembers this across sessions
     }
 
@@ -3449,7 +3374,7 @@ public sealed partial class GameServer
         foreach (var cell in new[] { feetCell, below })
         {
             var coord = WorldConstants.CanonicalChunk(WorldConstants.WorldToChunk(cell), _world.Circumference);
-            if (coord.Y < minChunkY || coord.Y > maxChunkY || session.SentChunks.Contains(coord))
+            if (coord.Y < minChunkY || coord.Y > maxChunkY || session.Streaming.SentChunks.Contains(coord))
             {
                 continue;
             }
@@ -3502,7 +3427,7 @@ public sealed partial class GameServer
             {
                 foreach (var coord in removed)
                 {
-                    session.SentChunks.Remove(coord);
+                    session.Streaming.SentChunks.Remove(coord);
                 }
             }
         }
@@ -3525,7 +3450,7 @@ public sealed partial class GameServer
             int pruneRadius = System.Math.Min(EffectiveViewRadius(session) + 4, 20);
             int pruneSq = pruneRadius * pruneRadius;
             int circumference = _world.Circumference;
-            session.SentChunks.RemoveWhere(c => WorldConstants.WrappedChunkDistanceSquared(c, anchor, circumference) > pruneSq);
+            session.Streaming.SentChunks.RemoveWhere(c => WorldConstants.WrappedChunkDistanceSquared(c, anchor, circumference) > pruneSq);
         }
     }
 
@@ -3590,13 +3515,13 @@ public sealed partial class GameServer
         Send(session, new BlockChanged { X = pos.X, Y = pos.Y, Z = pos.Z, Block = _world.GetBlock(pos).Value, Tint = rsTint, Glow = rsGlow, Shape = _world.GetShape(pos) });
 
         var coord = WorldConstants.CanonicalChunk(WorldConstants.WorldToChunk(pos), _world.Circumference);
-        if (session.GhostChunkSeen.TryGetValue(coord, out double lastAt) && _uptime - lastAt < GhostRestreamCooldown)
+        if (session.Streaming.GhostChunkSeen.TryGetValue(coord, out double lastAt) && _uptime - lastAt < GhostRestreamCooldown)
         {
             return false; // already re-streamed this chunk moments ago — the BlockChanged above is enough
         }
 
-        session.GhostChunkSeen[coord] = _uptime;
-        session.SentChunks.Remove(coord); // not-sent again → StreamChunks re-streams it on the next tick
+        session.Streaming.GhostChunkSeen[coord] = _uptime;
+        session.Streaming.SentChunks.Remove(coord); // not-sent again → StreamChunks re-streams it on the next tick
         return true;
     }
 
@@ -3645,7 +3570,7 @@ public sealed partial class GameServer
         List<int>? dead = null;
         foreach (var (connectionId, session) in _sessions)
         {
-            if (session.Joined && session.HeartbeatTracked && _uptime - session.LastPayloadAt > SessionHeartbeatTimeout)
+            if (session.Joined && session.Liveness.HeartbeatTracked && _uptime - session.Liveness.LastPayloadAt > SessionHeartbeatTimeout)
             {
                 (dead ??= new List<int>()).Add(connectionId);
             }
@@ -3675,13 +3600,13 @@ public sealed partial class GameServer
         List<int>? dead = null;
         foreach (var (connectionId, session) in _sessions)
         {
-            if (!session.Joined || !session.HeartbeatTracked || !session.SendsPauseKeepAlive)
+            if (!session.Joined || !session.Liveness.HeartbeatTracked || !session.Liveness.SendsPauseKeepAlive)
             {
                 continue;
             }
 
-            session.PausedSilentSeconds += deltaSeconds;
-            if (session.PausedSilentSeconds > SessionHeartbeatTimeout)
+            session.Liveness.PausedSilentSeconds += deltaSeconds;
+            if (session.Liveness.PausedSilentSeconds > SessionHeartbeatTimeout)
             {
                 (dead ??= new List<int>()).Add(connectionId);
             }
@@ -3841,8 +3766,8 @@ public sealed partial class GameServer
             return; // ignore gameplay intents before joining
         }
 
-        session.LastPayloadAt = _uptime; // app-level heartbeat (#964) — see SweepSilentSessions
-        session.PausedSilentSeconds = 0; // the same signal on a clock that runs while the world is held (#973)
+        session.Liveness.LastPayloadAt = _uptime; // app-level heartbeat (#964) — see SweepSilentSessions
+        session.Liveness.PausedSilentSeconds = 0; // the same signal on a clock that runs while the world is held (#973)
 
         // Per-connection flood gate: a token bucket refilled at MsgRatePerSecond, capped at MsgBurst.
         // Every joined intent costs one token; when the bucket is empty the packet is dropped. This bounds
@@ -3922,20 +3847,20 @@ public sealed partial class GameServer
     private static bool AllowMessage(PlayerSession session)
     {
         int now = Environment.TickCount;
-        int elapsedMs = unchecked(now - session.LastMsgRefillTick);
+        int elapsedMs = unchecked(now - session.Throttles.LastMsgRefillTick);
         if (elapsedMs is < 0 or > 60_000)
         {
             elapsedMs = 0; // clock wrap or a long gap — just don't over-refill
         }
 
-        session.LastMsgRefillTick = now;
-        session.MsgBudget = System.Math.Min(MsgBurst, session.MsgBudget + (elapsedMs / 1000.0 * MsgRatePerSecond));
-        if (session.MsgBudget < 1.0)
+        session.Throttles.LastMsgRefillTick = now;
+        session.Throttles.MsgBudget = System.Math.Min(MsgBurst, session.Throttles.MsgBudget + (elapsedMs / 1000.0 * MsgRatePerSecond));
+        if (session.Throttles.MsgBudget < 1.0)
         {
             return false;
         }
 
-        session.MsgBudget -= 1.0;
+        session.Throttles.MsgBudget -= 1.0;
         return true;
     }
 
@@ -4019,173 +3944,10 @@ public sealed partial class GameServer
             return;
         }
 
-        switch (message)
+        // The intent → handler table lives in GameServerDispatch.cs; a type without an entry is dropped, as the switch did.
+        if (IntentHandlers.TryGetValue(message.GetType(), out var handler))
         {
-            case MoveIntent move: HandleMove(session, move); break;
-            case FarTerrainTileRequest farTiles: HandleFarTerrainTileRequest(session, farTiles); break; // #1821
-            case SelectHotbarIntent hotbar:
-                int previousSlot = session.State.SelectedHotbarSlot;
-                session.State.SelectedHotbarSlot = System.Math.Clamp(hotbar.Slot, 0, HotbarSlots - 1);
-                ClearRopeIfNotHeld(session.State); // #2319: putting the rope gun away drops the rope
-                // #2525: a resync (the client re-sending the slot it shows after a join or world change) is no pick.
-                if (session.State.SelectedHotbarSlot != previousSlot && !hotbar.Resync)
-                {
-                    RaiseGameEvent(session, GameEventKeys.HotbarSelect, (session.State.SelectedHotbarSlot + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)); // #2469
-                }
-
-                break;
-            case MoveItemIntent moveItem: HandleMoveItem(session, moveItem); break;
-            case EquipItemIntent equip: HandleEquipItem(session, equip); break;       // #2110
-            case UnequipItemIntent unequip: HandleUnequipItem(session, unequip); break; // #2110
-            case DiscardItemIntent discard: HandleDiscardItem(session, discard); break;
-            case MineBlockIntent mine: HandleMine(session, mine); break;
-            case PlaceBlockIntent place: HandlePlace(session, place); break;
-            case CraftIntent craft: HandleCraft(session, craft); break;
-            case TintCraftIntent tint: HandleTintCraft(session, tint); break;
-            case ShapeCraftIntent shapeIntent: HandleShapeCraft(session, shapeIntent); break;
-            case UnlockBlueprintIntent unlock: HandleUnlock(session, unlock); break;
-            case ChatIntent chat: HandleChat(session, chat); break;
-            case VoiceFrame voice: HandleVoice(session, voice); break;
-            case BumpReport bump: HandleBumpReport(session, bump); break;
-            case RequestStarMap: SendStarMap(session); break;
-            case SaveGameIntent: SaveAll(); _log.Info($"Explicit save requested by '{session.State.Name}'."); break;
-            case TractorPullIntent pull: HandleTractorPull(session, pull); break;
-            case DoorInteractIntent door: HandleDoorInteract(session, door); break;
-            case SetSpawnPointIntent spawnPoint: HandleSetSpawnPoint(session, spawnPoint); break;
-            case PauseIntent pause: HandlePause(session, pause); break;
-            case RespawnChoiceIntent respawnChoice: HandleRespawnChoice(session, respawnChoice); break;
-            case UnlockGameIntent unlockGame: HandleUnlockGame(session, unlockGame); break;
-            case MinigameResultIntent miniResult: HandleMinigameResult(session, miniResult); break;
-            case FallDamageIntent fall: HandleFallDamage(session, fall); break;
-            case AdminCommandIntent admin: HandleAdminCommand(session, admin); break;
-            case RequestMissions: SendMissionList(session); break;
-            case AcceptMissionIntent accept: HandleAcceptMission(session, accept.MissionId); break;
-            case TurnInMissionIntent turnIn: HandleTurnInMission(session, turnIn.MissionId); break;
-            case CreateMissionIntent create: HandleCreateMission(session, create); break;
-            case DockRequestIntent dock: HandleDockRequest(session, dock); break;
-            case DockResponseIntent response: HandleDockResponse(session, response); break;
-            case UndockIntent: HandleUndock(session); break;
-            case VisitShipIntent visit: HandleVisitShip(session, visit); break; // #2723: walk over into the docked friend's ship
-            case BuildShipModuleIntent build: HandleBuildModule(session, build); break;
-            case UninstallShipModuleIntent uninstall: HandleUninstallModule(session, uninstall); break;
-            case EnterSpaceIntent: HandleEnterSpace(session); break;
-            case HyperjumpSystemIntent hyperjump: HandleHyperjumpSystem(session, hyperjump); break;
-            case ContributeRelayIntent relay: HandleContributeRelay(session, relay); break; // #1125
-            case TalkToNpcIntent talk: HandleTalkToNpc(session, talk); break; // #1127
-            case NpcDialogChoiceIntent dialogChoice: HandleNpcDialogChoice(session, dialogChoice); break; // #1127
-            case EnterShipIntent: EnterShipInterior(session.State.PlayerId); break;
-            case ExitShipIntent: ExitShipToFlight(session.State.PlayerId); break;
-            case LeaveSpaceIntent leaveSpace: HandleLeaveSpace(session, leaveSpace); break;
-            case FireWeaponIntent fire: HandleFireWeapon(session, fire); break;
-            case AttackEntityIntent attack: HandleAttackEntity(session, attack); break;
-            case ShootBlockIntent shot: HandleShootBlock(session, shot); break;
-            case UseStationIntent use: HandleUseStation(session, use); break;
-            case LocateStationIntent locate: HandleLocateStation(session, locate); break; // #1072
-            case SetAppearanceIntent appearance: HandleSetAppearance(session, appearance); break;
-            case SetFaceIntent face: HandleSetFace(session, face); break;
-            case SetBodyPaintIntent bodyPaint: HandleSetBodyPaint(session, bodyPaint); break;
-            case SetToolLookIntent toolLook: HandleSetToolLook(session, toolLook); break;
-            case PaintBlockIntent paint: HandlePaintBlock(session, paint); break;
-            case PaintCraftIntent paintCraft: HandlePaintCraft(session, paintCraft); break;
-            case CustomShapeCraftIntent form: HandleCustomShapeCraft(session, form); break;
-            case PublishWorldTextureIntent publishTexture: HandlePublishWorldTexture(session, publishTexture); break;
-            case RemoveWorldTextureIntent removeTexture: HandleRemoveWorldTexture(session, removeTexture); break;
-            case CraftShipIntent craftShip: HandleCraftShip(session, craftShip); break;
-            case SwitchShipIntent switchShip: HandleSwitchShip(session, switchShip); break;
-            case ConsumeItemIntent consume: HandleConsume(session, consume); break;
-            case ThrowFoodIntent throwFood: HandleThrowFood(session, throwFood); break; // #2018: the Feed action
-            case UseGadgetIntent gadget: HandleUseGadget(session, gadget); break;
-            case BioLabIntent bioLab: HandleBioLab(session, bioLab); break; // #2203
-            case DiscardSampleIntent discardSample: HandleDiscardSample(session, discardSample); break; // #2301
-            case TameRespondIntent tameResp: HandleTameRespond(session, tameResp); break;
-            case BanditResponseIntent banditResp: HandleBanditResponse(session, banditResp); break;
-            case RequestCompanionsIntent: HandleRequestCompanions(session); break;
-            case SetCompanionNameIntent compName: HandleSetCompanionName(session, compName); break;
-            case ReleaseCompanionIntent release: HandleReleaseCompanion(session, release); break;
-            case FeedCompanionIntent feed: HandleFeedCompanion(session, feed); break;
-            case EnterSpeederIntent enterSpeeder: HandleEnterSpeeder(session, enterSpeeder); break;
-            case ExitSpeederIntent: HandleExitSpeeder(session); break;
-            case StowSpeederIntent stowSpeeder: HandleStowSpeeder(session, stowSpeeder); break;
-            case RefuelSpeederIntent refuelSpeeder: HandleRefuelSpeeder(session, refuelSpeeder); break;
-            case SpeederImpactIntent speederImpact: HandleSpeederImpact(session, speederImpact); break;
-            case RecallVehicleIntent recallVehicle: HandleRecallVehicle(session, recallVehicle); break;
-            case EnterTrainIntent enterTrain: HandleEnterTrain(session, enterTrain); break; // #2113
-            case ExitTrainIntent: HandleExitTrain(session); break;
-            case SetTrainIntent setTrain: HandleSetTrain(session, setTrain); break;
-            case StowTrainIntent stowTrain: HandleStowTrain(session, stowTrain); break;
-            case PlanetScanIntent planetScan: HandlePlanetScan(session, planetScan); break;
-            case FxIntent fxIntent: HandleFxIntent(session, fxIntent); break; // #2158: cosmetic, relayed as ActionFx
-            case SetBeaconLabelIntent beacon: HandleSetBeaconLabel(session, beacon); break;
-            case SetBeamNameIntent beamName: HandleSetBeamName(session, beamName); break;
-            case BeamTeleportIntent beamJump: HandleBeamTeleport(session, beamJump); break;
-            case SetCrystalDeviceIntent crystal: HandleSetCrystalDevice(session, crystal); break; // #2046: toggle / press / configure a device
-            case SetBaseNameIntent baseName: HandleSetBaseName(session, baseName); break;
-            case SetStationNameIntent stationName: HandleSetStationName(session, stationName); break;
-            case RequestLandingPadsIntent reqPads: HandleRequestLandingPads(session, reqPads); break;
-            case LootContainerIntent loot: HandleLootContainer(session, loot); break;
-            case DepositContainerIntent dep: HandleDepositContainer(session, dep); break;
-            case SetContainerFilterIntent filter: HandleSetContainerFilter(session, filter); break;
-            case OpenContainerIntent openCrate: HandleOpenContainer(session, openCrate); break;          // #2436
-            case MoveContainerItemIntent moveCrate: HandleMoveContainerItem(session, moveCrate); break; // #2436
-            case MoveCargoItemIntent moveCargo: HandleMoveCargoItem(session, moveCargo); break;
-            case ShipMoveIntent shipMove: HandleShipMove(session, shipMove); break;
-            case DisassembleIntent disassemble: HandleDisassemble(session, disassemble); break;
-            case ClaimStructureIntent claim: HandleClaimStructure(session, claim); break;
-            case TradeRequestIntent tradeReq: HandleTradeRequest(session, tradeReq); break;
-            case TradeRespondIntent tradeResp: HandleTradeRespond(session, tradeResp); break;
-            case TradeOfferIntent tradeOffer: HandleTradeOffer(session, tradeOffer); break;
-            case TradeKnowledgeIntent tradeKnow: HandleTradeKnowledge(session, tradeKnow); break;
-            case TradeConfirmIntent: HandleTradeConfirm(session); break;
-            case TradeCancelIntent: HandleTradeCancel(session); break;
-            case ScanIntent scan: HandleScan(session, scan); break;
-            case ScanEntityIntent scanEntity: HandleScanEntity(session, scanEntity); break;
-            case LoadRationIntent loadRation: HandleLoadRation(session, loadRation); break;
-            case TeleportToShipIntent: HandleTeleportToShip(session); break;
-            case TeleportToPlayerIntent tpp: HandleTeleportToPlayer(session, tpp); break;
-            case ReturnToShipIntent: HandleReturnToShip(session); break; // #2286
-            case ToggleStealthIntent: HandleToggleStealth(session); break;
-            case SetJetpackIntent sj: HandleSetJetpack(session, sj); break;
-            case SetGlidingIntent sg: HandleSetGliding(session, sg); break;   // #2296
-            case ReleaseRopeIntent: HandleReleaseRope(session); break;         // #2319
-            case SetLampIntent sl: HandleSetLamp(session, sl); break;
-            case CopyBuildIntent cb: HandleCopyBuild(session, cb); break;    // #1117: region → share code
-            case PasteBuildIntent pb: HandlePasteBuild(session, pb); break;  // #1117: share code → blocks
-            case RequestKnownNpcsIntent: HandleRequestKnownNpcs(session); break;  // #1118: "People you know"
-            case RequestBaseResidentsIntent rbr: HandleRequestBaseResidents(session, rbr); break; // #2717: who lives at the base
-            case SetNpcCallsIntent nc: HandleSetNpcCalls(session, nc); break;     // #1119: call preference
-            case SetSeatedIntent seat: HandleSetSeated(session, seat); break;
-            case SetEvaIntent eva: HandleSetEva(session, eva); break;
-            case StructureEditIntent structureEdit: HandleStructureEdit(session, structureEdit); break;
-            case DeployStationCoreIntent: HandleDeployStationCore(session); break;
-            case BoardStationIntent boardStation: HandleBoardStation(session, boardStation); break;
-            case LeaveStationIntent: HandleLeaveStation(session); break;
-            case SetStationZeroGIntent stationZeroG: HandleSetStationZeroG(session, stationZeroG); break; // #1842: zero-g construction mode
-            case RepairWreckIntent repairWreck: HandleRepairWreck(session, repairWreck); break;
-            case ClaimWreckIntent: HandleClaimWreck(session); break;
-            case RepairShipIntent repairShip: HandleRepairShip(session, repairShip); break;
-            case TravelIntent travel: HandleTravelIntent(session, travel); break;
-            case TransitLaunchDoneIntent transitLaunchDone: HandleTransitLaunchDone(session, transitLaunchDone); break;
-            case WormholeTransitIntent wormholeTransit: HandleWormholeTransit(session, wormholeTransit); break;
-            case NpcGreetIntent greet: HandleNpcGreet(session, greet); break;
-            case SkipOnboardingIntent skipOnboarding: HandleSkipOnboarding(session, skipOnboarding); break;
-            case SetWorldRulesIntent worldRules: HandleSetWorldRules(session, worldRules); break;
-            case RequestAllianceListIntent: HandleRequestAllianceList(session); break;
-            case RequestAllianceIntent allianceReq: HandleRequestAlliance(session, allianceReq); break;
-            case AllianceResponseIntent allianceResp: HandleAllianceResponse(session, allianceResp); break;
-            case DissolveAllianceIntent allianceDis: HandleDissolveAlliance(session, allianceDis); break;
-            case CrewActionIntent crewAction: HandleCrewAction(session, crewAction); break;
-            case MarkerActionIntent markerAction: HandleMarkerAction(session, markerAction); break;
-            case NoteActionIntent noteAction: HandleNoteAction(session, noteAction); break; // player notes (#1844)
-            case InterviewAnswerIntent interview: HandleInterviewAnswer(session, interview); break; // reporter news (2026-09)
-            case CreativeTakeItemIntent take: HandleCreativeTakeItem(session, take); break; // the Sandbox catalog (#1930)
-            case StorySelectIntent storySelect: HandleStorySelect(session, storySelect); break;
-            case StoryPackIntent storyPack: HandleStoryPackIntent(session, storyPack); break; // #2466: the player's own pack controls
-            case CutsceneSeenIntent cutsceneSeen: HandleCutsceneSeen(session, cutsceneSeen); break; // #2467: the seen ledger
-            case UiTutorialEvent uiTutorial: HandleUiTutorialEvent(session, uiTutorial); break; // #2469: a UI lesson's teaching flag
-            case NetFragmentFoundIntent netFrag: HandleNetFragmentFound(session, netFrag); break;
-            case CoreHackIntent coreHack: HandleCoreHack(session, coreHack); break;
-            case CoreDialogueChoiceIntent coreChoice: HandleCoreDialogueChoice(session, coreChoice); break;
-            case RequestStoryResolutionIntent: HandleRequestStoryResolution(session); break; // #1124: watch the ending again
+            handler(this, session, message);
         }
     }
 
@@ -4413,12 +4175,12 @@ public sealed partial class GameServer
             ViewDistance = join.ViewDistanceChunks,
             InstallId = StripControlChars(join.InstallId).Trim(), // #1222: arcade guest identity, empty otherwise
             IsFleetAdmin = fleetAdmin,
-            HeartbeatTracked = true, // joined over the wire → silence is meaningful (#964)
+            Liveness = { HeartbeatTracked = true }, // joined over the wire → silence is meaningful (#964)
             InJoinPlacement = true, // #2465: the join's own placement raises no game events (cleared at the end)
-            CutsceneJoinAt = _uptime, // #2467: cutscenes wait until the client is in the world
+            Story = { CutsceneJoinAt = _uptime }, // #2467: cutscenes wait until the client is in the world
         };
-        session.LastPayloadAt = _uptime; // start the heartbeat clock now (#964) — a client that freezes
-                                         // right after joining must age out like any other silent session
+        session.Liveness.LastPayloadAt = _uptime; // start the heartbeat clock now (#964) — a client that freezes
+                                                  // right after joining must age out like any other silent session
         foreach (string feature in join.Features ?? System.Array.Empty<string>())
         {
             if (!string.IsNullOrEmpty(feature) && feature.Length <= 32 && session.ClientFeatures.Count < 16)
@@ -4431,7 +4193,7 @@ public sealed partial class GameServer
         // blueprints into the state (the spawn-system mapping, the Creative grants, the story beat catch-up).
         session.Join = TakeJoinSnapshot(state);
         _sessions[connectionId] = session;
-        session.PreviousSeenUtc = state.LastSeenUtc ?? string.Empty; // #2595: when they were last online, before the overwrite
+        session.Vega.PreviousSeenUtc = state.LastSeenUtc ?? string.Empty; // #2595: when they were last online, before the overwrite
         state.LastSeenUtc = WallUtcNowIso(); // "last seen" for the admin player list (issue #488)
         MigrateSettlementMemory(session); // #2598: the join world's old shared villager entries become people (once)
         SetupPlayerShip(session); // give the player their own ship, stamped into their world
@@ -4836,7 +4598,7 @@ public sealed partial class GameServer
         session.Join = TakeJoinSnapshot(state); // #2460: the arrival state, like the network join path
         _sessions[connectionId] = session;
         session.AnnouncedWorldId = WorldIdOf(joinBody); // #2117: joined on this body, like a JoinAccepted would say
-        session.PreviousSeenUtc = state.LastSeenUtc ?? string.Empty; // #2595: like the network join, before the overwrite
+        session.Vega.PreviousSeenUtc = state.LastSeenUtc ?? string.Empty; // #2595: like the network join, before the overwrite
         state.LastSeenUtc = WallUtcNowIso();
         MigrateSettlementMemory(session); // #2598: like the network join
         SetupPlayerShip(session); // local/test players get their own ship too
@@ -4860,7 +4622,7 @@ public sealed partial class GameServer
 
     /// <summary>Test hook: how many chunks this session has had fully re-streamed by the ghost heal (#965).</summary>
     public int GhostReStreamsForTest(string playerId)
-        => FindSessionByPlayerId(playerId)?.GhostChunkSeen.Count ?? 0;
+        => FindSessionByPlayerId(playerId)?.Streaming.GhostChunkSeen.Count ?? 0;
 
     /// <summary>Test hook: an air cell just above the player, for driving the ghost-block path.</summary>
     public Vector3i? FindAirCellForTest(string playerId)
@@ -5022,7 +4784,7 @@ public sealed partial class GameServer
 
     private void HandleMove(PlayerSession session, MoveIntent move)
     {
-        if (session.RespawnChoiceDeadline > 0)
+        if (session.Respawn.RespawnChoiceDeadline > 0)
         {
             return; // lying dead awaiting the respawn choice — the corpse doesn't walk
         }
@@ -5664,107 +5426,6 @@ public sealed partial class GameServer
         WarnIfPoolOverflowed(session, pool);
     }
 
-    /// <summary>Auto-orients a placed shape from the surface it was built against: the shape's base rests on
-    /// the first solid neighbour, preferring the floor (→ +Y up = the original ground behaviour), then walls,
-    /// then the ceiling. Returns a <see cref="ShapeCode"/> up-face index (0..5); no solid neighbour → +Y.</summary>
-    private int DeriveShapeUpFace(Vector3i pos)
-    {
-        bool Solid(int dx, int dy, int dz)
-        {
-            var p = WorldConstants.CanonicalBlock(new Vector3i(pos.X + dx, pos.Y + dy, pos.Z + dz), _world.Circumference);
-            var b = _world.GetBlock(p);
-            return !b.IsAir && !IsFluid(b.Value); // water/lava is no surface to build against (#851)
-        }
-
-        if (Solid(0, -1, 0)) return 0; // floor → +Y up (unchanged for ground placement)
-        if (Solid(-1, 0, 0)) return 2; // wall → +X up
-        if (Solid(1, 0, 0)) return 3;  // wall → -X up
-        if (Solid(0, 0, -1)) return 4; // wall → +Z up
-        if (Solid(0, 0, 1)) return 5;  // wall → -Z up
-        if (Solid(0, 1, 0)) return 1;  // ceiling → -Y up
-        return 0;
-    }
-
-    /// <summary>The packed shape descriptor a prop block is stamped with on placement (#909), or 0 when the
-    /// key is no prop. Each <see cref="PropOrientation"/> honours exactly as much of the intent's orientation
-    /// as its client-side rotate cycle offers — a pinned-back tip or an ignored quarter turn would make the
-    /// placement ghost a liar.</summary>
-    private int StampPropShape(PlayerSession session, PlaceBlockIntent place, string blockKey, Vector3i pos)
-    {
-        var cycle = PropShapes.OrientationOf(blockKey);
-        if (cycle == PropOrientation.None)
-        {
-            return 0;
-        }
-
-        if (cycle == PropOrientation.LightMount)
-        {
-            // #2683: a torch or lantern takes the face the client says was clicked (the intent's up-face) — on a wall,
-            // standing on the floor, or a lantern hanging from the ceiling — when the block there can hold it. An intent
-            // without a face (an old client, a test, an internal placement) or one whose block is gone keeps the
-            // unstamped light: upright, exactly as before. A torch under a real ceiling never gets here — HandlePlace
-            // refused it before anything was consumed.
-            return System.Math.Max(0, LightFormAt(blockKey, pos, place.UpFace));
-        }
-
-        int facing = place.Yaw >= 0 && place.Yaw <= 3
-            ? place.Yaw
-            : ((int)System.MathF.Round(session.State.Yaw / 90f)) & 3;
-
-        if (cycle == PropOrientation.LadderMount)
-        {
-            // The ladder's whole orientation IS its mount face, so the intent's up-face carries it: 2..5 hug
-            // that wall, anything else means free-standing (the client's fifth cycle state sends +Y). Yaw is
-            // dropped on purpose — both ladder forms are square about their own axis.
-            int mount = ShapeCode.IsValidUpFace(place.UpFace) ? place.UpFace : DeriveLadderMount(pos);
-            var (ladderShape, ladderUp) = PropShapes.LadderForm(mount);
-            return ShapeCode.Pack(ladderShape, 0, ladderUp);
-        }
-
-        if (cycle == PropOrientation.Full)
-        {
-            // The crafted staircase is a directional form like any shaped block: it may tip onto walls and
-            // ceilings, and auto-orients against the surface it was built on when nothing was chosen.
-            int upFace = ShapeCode.IsValidUpFace(place.UpFace) ? place.UpFace : DeriveShapeUpFace(pos);
-            return ShapeCode.Pack(PropShapes.DefaultPlaceShape(blockKey), facing, upFace);
-        }
-
-        // Furniture turns but never tips: a bed/campfire on a wall would break its sit/heal/warmth checks.
-        // A bed placed without an explicit turn (#1846) must put its foot in the cell the player FACES: the
-        // raw heading index is mirrored against the geometry yaw for ±X, so it is converted here — the client
-        // ghost does the same, an explicit rotate-key yaw is honoured as sent (foot = geometry direction).
-        if (blockKey == BedBlock && !(place.Yaw >= 0 && place.Yaw <= 3))
-        {
-            facing = ShapeCode.YawFacingForward(facing);
-        }
-
-        if (blockKey == "trapdoor")
-        {
-            return PropShapes.TrapdoorClosed(ShapeCode.YawFacingForward(facing)); // #2264: hinged on the far side, flush with the floor
-        }
-
-        return ShapeCode.Pack(PropShapes.DefaultPlaceShape(blockKey), facing, ShapeCode.UpPlusY);
-    }
-
-    /// <summary>
-    /// The cell a bed's foot half takes for a head placed at <paramref name="head"/> with the stamped
-    /// <paramref name="headDescriptor"/> (#1846), when it can take it: free (air, or a fluid the bed displaces
-    /// like the head does), inside reach, not the player's own head cell, and on none of the protected ground
-    /// the head itself is refused on. Same Y as the head, so the build band needs no second look. The seam
-    /// wrap is applied, so a bed across the world seam works like any other two-cell edit.
-    /// </summary>
-    private bool TryBedFootCell(PlayerSession session, Vector3i head, int headDescriptor, out Vector3i foot)
-    {
-        foot = head;
-        if (!FurnitureShapes.TryBedPartnerOffset(headDescriptor, out int dx, out int dz))
-        {
-            return false;
-        }
-
-        foot = WorldConstants.CanonicalBlock(new Vector3i(head.X + dx, head.Y, head.Z + dz), _world.Circumference);
-        return IsFreePartnerCell(session, foot); // the same checks a multi-cell form's sibling cells get (#1961)
-    }
-
     /// <summary>
     /// Takes the other half of a two-cell bed down with the half that was just mined (#1846), when the partner
     /// cell really holds it (same block, the complementary form, the same yaw — a stray bed half left by a
@@ -5802,497 +5463,6 @@ public sealed partial class GameServer
         }
 
         OnSupportRemoved(partner);
-    }
-
-    /// <summary>Which wall a ladder hugs when the client sent no choice — an old client, a test, or one of the
-    /// server's own internal placements. Mirrors the mesher heuristic #803 shipped with (first solid horizontal
-    /// neighbour, in <see cref="ShapeCode.WallFaces"/> order), so those placements keep landing where they
-    /// always did. The client normally decides this itself and sends the answer, because it can also honour
-    /// the wall the player actually aimed at.</summary>
-    private int DeriveLadderMount(Vector3i pos) => PropShapes.DeriveLadderMount(
-        face =>
-        {
-            // The up-face points AWAY from the plate's support, so the wall sits at the opposite offset.
-            var dir = ShapeCode.FaceDirection(face);
-            var p = WorldConstants.CanonicalBlock(
-                new Vector3i(pos.X - dir.X, pos.Y - dir.Y, pos.Z - dir.Z), _world.Circumference);
-            return IsLadderMountWall(_world.GetBlock(p));
-        },
-        clickedFace: -1);
-
-    /// <summary>A neighbour a ladder plate can hang on. The mesher additionally rules out see-through walls
-    /// (glass, force fields), which the server has no flag for — the divergence only shows for a client old
-    /// enough not to send its own mount face, and costs at most a plate where a pole was drawn before.</summary>
-    private bool IsLadderMountWall(BlockId id)
-    {
-        if (id.IsAir || IsFluid(id.Value) || IsFlora(id.Value))
-        {
-            return false;
-        }
-
-        var def = _content.BlockById(id);
-        return def is not null && def.Solid && def.Key != "ladder";
-    }
-
-    private void HandlePlace(PlayerSession session, PlaceBlockIntent place)
-    {
-        var item = _content.GetItem(place.ItemKey);
-        if (item is null || string.IsNullOrEmpty(item.PlacesBlock))
-        {
-            Reject(session, "place", "@srv.place.not_placeable");
-            return;
-        }
-
-        var blockDef = _content.GetBlock(item.PlacesBlock!);
-        if (blockDef is null)
-        {
-            Reject(session, "place", "@srv.place.unknown_block");
-            return;
-        }
-
-        var pos = WorldConstants.CanonicalBlock(new Vector3i(place.X, place.Y, place.Z), _world.Circumference); // wraps at THIS world's seam
-
-        // Reject before touching the world: a block edit outside the build band would generate + persist a
-        // chunk at an arbitrary height (unbounded RAM/disk DoS from a spoofed-position place spam). See MinBuildY.
-        if (!WithinBuildHeight(pos.Y))
-        {
-            Reject(session, "place", "@srv.place.height_limit");
-            return;
-        }
-
-        // A torch is an open flame: it needs air to burn. On an airless body (atmosphere "none" — asteroids and
-        // the like) there is nothing to sustain it, so it is refused with a reason the player can act on instead
-        // of being placed as a dud that mysteriously gives no light. A toxic atmosphere is fine — you need a
-        // suit, the flame does not. Checked HERE, before the item is consumed further down, so a refused torch
-        // stays in the pack. A sealed base room or station pocket holds air of its own (#1483): a torch burns
-        // there too — the old check asked only the WORLD and refused the lamp in an asteroid base that its own
-        // core reported as breathable.
-        if (blockDef.Key == "torch" && !AtmospherePresent && !BreathableAirAt(pos))
-        {
-            Reject(session, "place", "@no_air");
-            return;
-        }
-
-        // Building under water (#851): the target cell is free when it is air OR holds a fluid — a placed block
-        // DISPLACES water/lava, exactly like in every other voxel builder. Without this you can't build under
-        // water at all: the client's aim march passes THROUGH fluids (they have no collider — you swim into
-        // them), so the cell it offers while you're swimming always holds water, and water only yields to a
-        // tier-3 mining beam, so there was no way to clear it first either.
-        var existing = _world.GetBlock(pos);
-        bool intoFluid = IsFluid(existing.Value);
-        if (!existing.IsAir && !intoFluid)
-        {
-            Reject(session, "place", "@srv.place.not_empty");
-            return;
-        }
-
-        // A doorway is air to the voxel grid, but a door stands in it (#2145): no block and no second door goes
-        // in. A right-click aimed at a door used to drop the held block into the opening behind it — the door
-        // still swung, but a wall stood in the way — or stacked a second door that stayed shut. Refused before
-        // anything is consumed.
-        if (DoorFillsCell(pos))
-        {
-            Reject(session, "place", "@srv.place.door_here");
-            return;
-        }
-
-        if (intoFluid)
-        {
-            // Two placeables genuinely can't take a fluid cell, and both are refused before anything is
-            // consumed: a door is an ENTITY living in an air cell (the fluid would just flow back around it,
-            // leaving a door that holds nothing back), and a torch is an open flame — a submerged one would be
-            // the same mysterious dud the airless-body check above exists to prevent.
-            if (DoorBlocks.IsDoorBlock(blockDef.Key))
-            {
-                Reject(session, "place", "@srv.place.not_empty");
-                return;
-            }
-
-            if (blockDef.Key == "torch" && existing.Value == _waterId)
-            {
-                Reject(session, "place", "@no_air");
-                return;
-            }
-        }
-
-        // Don't let the player wall themselves in: refuse a block at HEAD height in their own column. The FEET
-        // cell is allowed so you can pillar-jump (place under yourself while jumping) — the client collider just
-        // lifts you onto the new block (B3); only the head cell would trap you.
-        var feet = session.State.Position;
-        int fx = (int)System.Math.Floor(feet.X), fy = (int)System.Math.Floor(feet.Y), fz = (int)System.Math.Floor(feet.Z);
-        if (pos.X == fx && pos.Z == fz && pos.Y == fy + 1)
-        {
-            Reject(session, "place", "@srv.place.above_head");
-            return;
-        }
-
-        if (!WithinReach(session.State, pos))
-        {
-            Reject(session, "place", "@out_of_reach");
-            return;
-        }
-
-        if (!session.State.IsAdmin && IsOnLandingPad(pos))
-        {
-            Reject(session, "place", "@srv.place.pad_reserved");
-            return;
-        }
-
-        if (IsStationBlock(pos))
-        {
-            Reject(session, "place", "@srv.protect.station");
-            return;
-        }
-
-        if (IsFactoryProtected(pos, session.State.PlayerId, session.State.IsAdmin))
-        {
-            Reject(session, "place", "@srv.protect.factory");
-            return;
-        }
-
-        if (IsBaseProtected(pos, session.State.PlayerId, session.State.IsAdmin))
-        {
-            Reject(session, "place", "@srv.protect.base");
-            return;
-        }
-
-        // No building inside the ship — the cabin is a fixed structure. The construction site (#948) is
-        // guarded the same way: its cells are structure cells, never world blocks.
-        if (ShipInteriorContains(new Vector3f(pos.X, pos.Y, pos.Z))
-            || ConstructionContains(new Vector3f(pos.X, pos.Y, pos.Z)))
-        {
-            Reject(session, "place", "@srv.place.no_ship_interior");
-            return;
-        }
-
-        // A ship keel founds a self-built ship (#948): it never becomes a world block — it seeds a new
-        // construction-site structure OBJECT anchored at the cell. Fully handled (incl. material cost).
-        if (blockDef.Key == ShipCoreBlock)
-        {
-            HandleShipCorePlace(session, pos, place.ItemKey);
-            return;
-        }
-
-        // Seeds / flora only take on a suitable host block (mud, grass, crystal, ...).
-        if (IsFlora(blockDef.NumericId.Value))
-        {
-            // #2209: a seedling has its own rules — any clean plant soil (or a hydro tray, a flower pot) and air.
-            if (IsBredPlant(blockDef.NumericId.Value))
-            {
-                if (BredPlantRefusal(place.ItemKey, pos) is { } refusal)
-                {
-                    Reject(session, "place", refusal);
-
-                    // VEGA's hint is about the place (clean soil, air, a tray or a pot inside a base), so it is
-                    // for a real seedling that found none — the soil, the air, the world's cap. A seedling that
-                    // carries no species, or a species that is no single plant, gets its own line and no hint:
-                    // no other place would take it, and the hint is said only once.
-                    if (refusal is "@srv.bio.plant_soil" or "@srv.bio.plant_air" or "@srv.bio.plant_cap")
-                    {
-                        ShipAiHintOnce(session, "plant_refused");
-                    }
-
-                    return;
-                }
-            }
-            else if (!IsValidFloraHost(blockDef.NumericId.Value, pos))
-            {
-                Reject(session, "place", "@srv.place.plant_ground");
-                return;
-            }
-
-            // On a space station (void world) a plant must sit fully inside the hull — solid block below and no
-            // side open to space — so it can't be seen or walked through into the void.
-            if (!IsFloraEnclosedForVoidWorld(pos))
-            {
-                Reject(session, "place", "@srv.place.plant_enclosed");
-                return;
-            }
-        }
-
-        // A base core founds a player base (Grundstein) — only on a real surface, and only one per body per player.
-        // Checked before any material is consumed so a refused founding costs nothing.
-        if (blockDef.Key == BaseCoreBlock)
-        {
-            var hereBody = _galaxy?.FindBody(_world.LocationId);
-            if (hereBody is null
-                || (hereBody.Kind != CelestialKind.Planet && hereBody.Kind != CelestialKind.Moon && hereBody.Kind != CelestialKind.AsteroidField))
-            {
-                Reject(session, "place", "@srv.base.surface_only");
-                return;
-            }
-
-            if (PlayerHasBaseOn(session.State.PlayerId, _world.LocationId))
-            {
-                Reject(session, "place", "@srv.base.already_here");
-                return;
-            }
-        }
-
-        // #2683: a torch can't hang from the ceiling (the lantern can) — refused with a hint before anything is consumed.
-        if (PropShapes.IsLightMountKey(blockDef.Key) && LightFormAt(blockDef.Key, pos, place.UpFace) == PropShapes.LightRefused)
-        {
-            Reject(session, "place", "@srv.place.torch_ceiling");
-            return;
-        }
-
-        // A bed is two cells long (#1846): the foot half lands on the cell the head's yaw points to. The foot
-        // cell is put through the same checks the head cell just passed — free, in reach, not the player's own
-        // head, no protected ground — BEFORE the item is consumed, so a bed jammed against a wall is refused
-        // with a reason instead of leaving a lone head half (or writing into someone else's base).
-        Vector3i? bedFoot = null;
-        if (blockDef.Key == BedBlock)
-        {
-            if (!TryBedFootCell(session, pos, StampPropShape(session, place, blockDef.Key, pos), out var foot))
-            {
-                Reject(session, "place", "@srv.place.bed_room");
-                return;
-            }
-
-            bedFoot = foot;
-        }
-
-        // A player form over several blocks (#1961): like the bed, every further cell must be free and allowed
-        // BEFORE the item is consumed — a wardrobe under a low ceiling is refused with a reason, not cut in half.
-        // Such a form turns but never tips, so its descriptor is settled here already (yaw from the rotate key
-        // or the player's facing, up-face +Y).
-        List<(Vector3i Pos, int Cell)>? formSiblings = null;
-        int multiCellDescriptor = 0;
-        if (blockDef.Shapeable && ShapeCode.IsCustomShape(ItemKey.Shape(place.ItemKey))
-            && MaterialUnitsOfShape(ItemKey.Shape(place.ItemKey)) > 1)
-        {
-            int formYaw = place.Yaw >= 0 && place.Yaw <= 3
-                ? place.Yaw
-                : ((int)System.MathF.Round(session.State.Yaw / 90f)) & 3;
-            multiCellDescriptor = ShapeCode.Pack(ItemKey.Shape(place.ItemKey), formYaw, ShapeCode.UpPlusY);
-            if (!TryMultiCellSiblings(session, pos, multiCellDescriptor, out formSiblings))
-            {
-                Reject(session, "place", "@srv.place.form_room");
-                return;
-            }
-        }
-
-        // Creative mode and admin instant-build place without consuming materials.
-        bool free = !Rules.CraftingCostsMaterialsFor(session.State.ModeOverride) || session.State.InstantBuild;
-        var pool = new MaterialPool(_content, session.State, _ship);
-        if (!free)
-        {
-            if (pool.Count(place.ItemKey) < 1)
-            {
-                Reject(session, "place", "@srv.place.no_block");
-                return;
-            }
-
-            pool.Remove(new[] { new ItemAmount(place.ItemKey, 1) });
-        }
-
-        // A door isn't a voxel block — it fills the (air) cell as a server door entity (Task 5 Stage 3c).
-        if (DoorBlocks.IsDoorBlock(blockDef.Key))
-        {
-            PlaceDoor(session, pos, DoorBlocks.KindForBlock(blockDef.Key));
-            SendInventory(session);
-            return;
-        }
-
-        // A dyed/glowing block carries its colour in the item key; stamp it on the placed cell. Only honour
-        // it for tintable building materials (the colour came from the always-available dye/glow action).
-        int placeTint = 0, placeGlow = 0;
-        if (blockDef.Tintable && ItemKey.HasModifier(place.ItemKey))
-        {
-            placeTint = ItemKey.Tint(place.ItemKey);
-            placeGlow = ItemKey.Glow(place.ItemKey);
-        }
-
-        // #2209: a bred plant's look rides on its voxel — its colour in the tint, its form in the glow channel.
-        uint plantedSeed = IsBredPlant(blockDef.NumericId.Value) ? ItemKey.Seed(place.ItemKey) : 0;
-        if (plantedSeed != 0)
-        {
-            (placeTint, placeGlow) = BredStamp(plantedSeed);
-        }
-
-        // A shaped block carries its FORM in the item key; the placement ORIENTATION is derived from the
-        // player's facing (yaw quantized to one of the four cardinal directions). Together they pack into the
-        // per-voxel shape descriptor. Only shapeable building materials honour a shape.
-        int placeShape = 0;
-        if (blockDef.Shapeable)
-        {
-            int shapeIndex = ItemKey.Shape(place.ItemKey);
-            // Built-in forms are always placeable; a player-designed form (#843) only if this save actually
-            // has it registered — an item carrying a wiped index falls back to a plain cube rather than
-            // stamping geometry nobody can mesh.
-            if (ShapeCode.IsPlaceableShape(shapeIndex, HasCustomShape))
-            {
-                // Yaw: the client may send an explicit quarter-turn (rotate key); otherwise it follows where the
-                // player is looking. An explicit turn is what lets you build stairs into a corner without having
-                // to stand in a particular direction to get the angle you want.
-                int facing = place.Yaw >= 0 && place.Yaw <= 3
-                    ? place.Yaw
-                    : ((int)System.MathF.Round(session.State.Yaw / 90f)) & 3;
-                // Orientation: the client may send an explicit rotation override (rotate key); otherwise the
-                // shape auto-orients so its base rests on the surface it was built against (floor → +Y, i.e.
-                // unchanged; walls/ceiling tilt it). up-face × yaw give the full 24 orientations.
-                int upFace = ShapeCode.IsValidUpFace(place.UpFace) ? place.UpFace : DeriveShapeUpFace(pos);
-                placeShape = multiCellDescriptor != 0
-                    ? multiCellDescriptor // the footprint was checked for exactly this yaw, upright
-                    : ShapeCode.Pack(shapeIndex, facing, upFace);
-            }
-        }
-
-        // Prop blocks (furniture #804/#807/#809, ladder + crafted staircase #909) read as their real
-        // silhouette out of the box: stamp their default form on placement — the same per-voxel shape channel
-        // the Shape action writes, so the mesher, save and wire all treat it like any player-shaped cell. The
-        // quarter-turn honours the rotate key like any shaped block (#863); without one it follows the
-        // player's facing. How far the orientation may travel is per prop (PropOrientation), because the
-        // cycle the client offers must promise exactly what is honoured here. BreakBlockAt strips the stamped
-        // form again so the drop stacks with freshly crafted items.
-        if (placeShape == 0)
-        {
-            placeShape = StampPropShape(session, place, blockDef.Key, pos);
-        }
-
-        // A block with a FRONT (#2124) — a vending machine, a forge, a watcher — stays a plain cube but remembers
-        // which side its front is on, in the descriptor's otherwise unused up-face field (CubeFacing). "toward" turns
-        // it to the player, "away" the way the player looks; an explicit quarter turn (the rotate key) stands in for the
-        // look heading — the Crystal Net's convention, so a gate's wire and its drawn front can never disagree. The mined
-        // drop keeps only the shape index (0), so the front never rides an item into a stack.
-        int crystalYaw = place.Yaw;
-        if (placeShape == 0 && blockDef.Facing != null && PropShapes.DefaultPlaceShape(blockDef.Key) == 0)
-        {
-            int front = CubeFacing.FrontForPlacement(blockDef.Facing, place.Yaw, session.State.Yaw);
-            placeShape = CubeFacing.Pack(front);
-            crystalYaw = CubeFacing.LookHeadingOf(blockDef.Facing, front); // a gate / watcher signals the way it looks
-        }
-
-        // A painted item carries its design id in the key; stamp it into the descriptor's design bits so the
-        // placed block shows the texture. Composes with any form above (built-in, custom or prop-stamped).
-        // Only a LIVE design is honoured — an item holding a wiped/foreign id places as the plain material,
-        // mirroring the custom-shape fallback. Tintable is the gate, like dye (paint is a surface cosmetic).
-        if (blockDef.Tintable)
-        {
-            int placeDesign = ItemKey.Design(place.ItemKey);
-            if (IsLivePaintDesign(placeDesign))
-            {
-                placeShape = ShapeCode.WithDesign(placeShape, placeDesign);
-            }
-        }
-
-        _world.SetBlock(pos, blockDef.NumericId, placeTint, placeGlow, placeShape, session.State.PlayerId);
-        WriteBackStationCell(pos, blockDef.NumericId, placeTint, placeGlow, placeShape); // #1481: an interior edit is part of the station's build from now on
-        if (formSiblings is { Count: > 0 })
-        {
-            StampMultiCellSiblings(session, blockDef.NumericId, placeTint, placeGlow, placeShape, formSiblings); // #1961
-        }
-
-        if (bedFoot is { } footCell)
-        {
-            // The foot half (#1846): the same block with the partner form and the head's yaw, written, mirrored
-            // and broadcast exactly like the head — the save, the wire, the station grid and the block-id based
-            // home-spawn/heal scans all see two bed cells. A fluid it displaces is dropped like the head's.
-            int footShape = FurnitureShapes.BedPartnerDescriptor(placeShape);
-            bool footIntoFluid = IsFluid(_world.GetBlock(footCell).Value);
-            _world.SetBlock(footCell, blockDef.NumericId, placeTint, placeGlow, footShape, session.State.PlayerId);
-            WriteBackStationCell(footCell, blockDef.NumericId, placeTint, placeGlow, footShape);
-            BroadcastToWorld(new BlockChanged { X = footCell.X, Y = footCell.Y, Z = footCell.Z, Block = blockDef.NumericId.Value, Tint = placeTint, Glow = placeGlow, Shape = footShape });
-            NudgeCreatureBodyChecks(footCell);
-            if (footIntoFluid)
-            {
-                UntrackFluid(footCell);
-                OnFluidRemoved(footCell);
-            }
-        }
-
-        if (IsSapling(blockDef.NumericId.Value))
-        {
-            ScheduleSaplingGrowth(pos); // #1774: a planted sapling starts its clock
-        }
-
-        if (IsFlora(blockDef.NumericId.Value))
-        {
-            RaiseGameEvent(session, GameEventKeys.PlantAny, blockDef.Key); // #2482: the gardener course
-        }
-
-        if (plantedSeed != 0)
-        {
-            RememberBredPlant(pos, plantedSeed); // #2209: which species stands here
-        }
-
-        if (IsContainerBlock(blockDef.Key))
-        {
-            PlaceCrate(pos); // a placed storage crate/wood box becomes a lootable/stash-able container (Task 5 Stage 3b)
-        }
-        else if (blockDef.Key == "radio_beacon")
-        {
-            PlaceBeacon(session, pos, place.Label); // a placed beacon becomes a labelled map/compass waypoint (item 37)
-        }
-        else if (blockDef.Key == BaseCoreBlock)
-        {
-            PlaceBase(session, pos); // a placed base core founds a named planet base (Grundstein)
-        }
-        else if (blockDef.Key == "beam_block")
-        {
-            PlaceBeam(session, pos, place.Label); // a placed beam block becomes a named teleporter pad
-        }
-        else if (blockDef.Key == SentryBlockKey)
-        {
-            WarnIfSentryOutsideBase(session, pos); // #1699: a post outside a base zone never fires — say so
-        }
-        else if (blockDef.Key is "station_vendor" or "mission_board" || NpcProfessions.ByPostBlock(blockDef.Key) != null)
-        {
-            OnBasePostChanged(session, pos, placed: true); // #1865: a post at home is staffed by a resident
-        }
-        else if (blockDef.Key == BedBlock)
-        {
-            OnBaseBedPlaced(session, pos); // #2679: a bed at the base says whether it counts (both halves stand by now)
-        }
-
-        if (place.DeviceDir is >= 0 and < CrystalNetRules.DirectionCount)
-        {
-            crystalYaw = place.DeviceDir; // #2267: the client's six-way choice (looking up / down, or the rotate cycle)
-        }
-
-        OnCrystalBlockPlaced(session, pos, blockDef, place.Label, crystalYaw); // #2046: a conduit or device joins the Crystal Net
-        OnRailBlockPlaced(session, pos, blockDef); // #2113: a pylon joins the rail graph (and auto-links), a stop joins its line
-        BroadcastToWorld(new BlockChanged { X = pos.X, Y = pos.Y, Z = pos.Z, Block = blockDef.NumericId.Value, Tint = placeTint, Glow = placeGlow, Shape = placeShape });
-        NudgeCreatureBodyChecks(pos); // #1357: an animal the block landed in steps aside on its next tick
-        if (IsFluid(blockDef.NumericId.Value))
-        {
-            RegisterFluidSource(pos); // placed water/lava starts flowing
-            QuenchPlacedFluid(session, pos, blockDef.NumericId.Value, existing.Value); // water on/beside lava → rock (#1284)
-        }
-        else if (intoFluid)
-        {
-            // The block displaced a fluid (#851): drop the cell's flowing state — memory AND the persisted level
-            // row — or a reload would resurrect the tongue on top of the new block, and wake the neighbours so a
-            // stream cut off here recedes (and the body around a new underwater wall settles again).
-            UntrackFluid(pos);
-            OnFluidRemoved(pos);
-        }
-
-        if (blockDef.Key == WaterSpoutBlockKey)
-        {
-            StartSpout(session, pos); // #1726: a waterfall block starts pouring the moment it is placed
-        }
-        else if (blockDef.Key == ThumperBlockKey)
-        {
-            StartThumper(session, pos); // #2002: a placed thumper starts thumping
-        }
-
-        ActivateGranular(pos); // #1319: placed sand with nothing under it drops; over lava it sinks
-
-        SendInventory(session);
-        OnAchievementBuild(session);
-        RaiseGameEvent(session, GameEventKeys.BuildAny, blockDef.Key); // #2465
-        if (blockDef.Key != BaseCoreBlock && HasGameEventListener(GameEventKeys.BaseBuilt) && InOwnOrAlliedBaseZone(session.State.PlayerId, pos))
-        {
-            RaiseGameEvent(session, GameEventKeys.BaseBuilt, blockDef.Key); // #2480: built at home (the homestead course)
-        }
-
-        if (ShapeCode.ShapeOf(placeShape) != 0 && (place.Yaw is >= 0 and <= 3 || ShapeCode.IsValidUpFace(place.UpFace)))
-        {
-            RaiseGameEvent(session, GameEventKeys.BuildRotated, blockDef.Key); // a form/prop turned with the rotate key
-        }
-
-        OnBlockPlaced(session, blockDef, pos); // #1116: advance any matching Build mission objectives
     }
 
     private void HandleCraft(PlayerSession session, CraftIntent craft)
@@ -6914,456 +6084,6 @@ public sealed partial class GameServer
         }
     }
 
-    private void HandleAdminCommand(PlayerSession session, AdminCommandIntent cmd)
-    {
-        var p = session.State;
-
-        // #1728: /basewalls is a read-only report about the caller's OWN walls, and the one question a builder
-        // cannot otherwise answer. A player whose ring keeps letting animals in has exactly two possible
-        // reasons — a gap somewhere, or a compound larger than the fill's 48-block reach — and no way to tell
-        // them apart. She had to guess, and guessed at both. The owner of a base on this body may ask about it.
-        bool ownsABaseHere = _bases.Any(b => b.Planet == _world.LocationId && b.OwnerId == p.PlayerId);
-        bool basewallsForOwner = ownsABaseHere
-            && string.Equals(cmd.Command, "basewalls", StringComparison.OrdinalIgnoreCase);
-
-        // A fleet admin is an admin everywhere by definition — they are the operator of the installation, not
-        // a guest on someone's world. Checked as a session flag rather than by writing PlayerRole.Admin into
-        // the save, so the elevation never travels with an exported world (see ServerConfig.FleetAdminPlayers).
-        if (!p.IsAdmin && !session.IsFleetAdmin && !basewallsForOwner)
-        {
-            Reject(session, "admin", "@srv.admin.not_admin");
-            return;
-        }
-
-        // Admin content tooling (not a cheat): AI mission generation.
-        if (string.Equals(cmd.Command, "ai_mission", StringComparison.OrdinalIgnoreCase))
-        {
-            // Generation runs off the tick thread (the LLM call blocks up to the backend timeout); the
-            // published/rejected result is pushed to the admin later by TickAiMissions. Acknowledge now.
-            string ack = RequestAiMission(session, cmd.StringArg ?? string.Empty);
-            Send(session, new ServerMessage { Text = ack });
-            CheatLog(p, "requested an AI mission");
-            return;
-        }
-
-        // Maintenance announcements (not cheats): the world admin may warn players before a restart even on
-        // servers that have cheats disabled.
-        if (string.Equals(cmd.Command, "announce", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!EnqueueMaintenance(MaintenanceNotice.KindInfo, cmd.StringArg, -1))
-            {
-                Reject(session, "admin", "@srv.admin.usage_announce");
-                return;
-            }
-
-            CheatLog(p, "posted a maintenance announcement");
-            return;
-        }
-
-        // Kicking (not a cheat either): the world admin ends a session right now. Deliberately momentary —
-        // a lasting block is the world owner's ban list on the portal, so there is exactly ONE ban store and
-        // it lives where the world's identity does. Kicking yourself is refused: it reads as a bug report.
-        if (string.Equals(cmd.Command, "kick", StringComparison.OrdinalIgnoreCase))
-        {
-            string target = (cmd.StringArg ?? string.Empty).Trim();
-            if (string.Equals(target, p.Name, StringComparison.OrdinalIgnoreCase))
-            {
-                Reject(session, "admin", "@srv.admin.kick_self");
-                return;
-            }
-
-            if (!EnqueueKick(target, "@ui.kick.by_admin"))
-            {
-                Reject(session, "admin", "@srv.admin.usage_kick");
-                return;
-            }
-
-            Send(session, new ServerMessage { Text = "@srv.admin.kick_sent:" + target });
-            CheatLog(p, $"kicked {target}");
-            return;
-        }
-
-        // Pausing someone's chat (#1223) — moderation, not a cheat, so the role is the gate like kick and
-        // announce. Deliberately NOT called "mute": that word already belongs to the player's own local mute
-        // list (#1209), which never reaches the server, and one word must not mean two different things
-        // depending on who typed it.
-        if (string.Equals(cmd.Command, "silence", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(cmd.Command, "unsilence", StringComparison.OrdinalIgnoreCase))
-        {
-            bool lift = string.Equals(cmd.Command, "unsilence", StringComparison.OrdinalIgnoreCase);
-            string target = (cmd.StringArg ?? string.Empty).Trim();
-            string answer = ApplyChatSilence(session, target, cmd.IntArg, lift);
-            if (answer.StartsWith("@srv.admin.usage", StringComparison.Ordinal)
-                || answer.StartsWith("@srv.admin.silence_", StringComparison.Ordinal))
-            {
-                Reject(session, "admin", answer);
-                return;
-            }
-
-            Send(session, new ServerMessage { Text = answer });
-            CheatLog(p, lift ? $"un-silenced {target}" : $"silenced {target}");
-            return;
-        }
-
-        if (string.Equals(cmd.Command, "schedule_restart", StringComparison.OrdinalIgnoreCase))
-        {
-            int minutes = cmd.IntArg;
-            if (!EnqueueMaintenance(MaintenanceNotice.KindRestartCountdown, cmd.StringArg, minutes * 60))
-            {
-                Reject(session, "admin", Localize(session.Locale, "srv.admin.usage_restart")
-                    .Replace("{max}", MaxMaintenanceRestartMinutes.ToString()));
-                return;
-            }
-
-            CheatLog(p, $"scheduled a restart in {minutes} min");
-            return;
-        }
-
-        if (string.Equals(cmd.Command, "cancel_restart", StringComparison.OrdinalIgnoreCase))
-        {
-            EnqueueMaintenance(MaintenanceNotice.KindCancelled, null, -1);
-            CheatLog(p, "cancelled the scheduled restart");
-            return;
-        }
-
-        // Inspection (issues #487/#488) — deliberately above the CheatsAllowed gate, like `announce`. That world
-        // option defaults to OFF and hosted worlds never enable it, so gating oversight on it would make these
-        // dead on arrival exactly where they matter. The role is the gate.
-        switch (cmd.Command?.ToLowerInvariant())
-        {
-            case "players":
-                AdminListPlayers(session);
-                return;
-
-            case "builds":
-                AdminListBuilds(session, cmd.StringArg);
-                return;
-
-            // Base-wall diagnostics (#1452) — a read-only report, not a cheat: the role is the gate.
-            case "basewalls":
-                AdminBaseWalls(session);
-                return;
-
-            // Creature-footing diagnostics (#1489) — feet vs real ground per animal nearby, same read-only idea.
-            case "creatures":
-                AdminCreatures(session);
-                return;
-
-            // Paint moderation (#821) — like kick/announce, moderation is not a cheat: the role is the gate.
-            case "shapewipe":
-                AdminCustomShapeWipe(session, cmd.StringArg);
-                return; // #2783: a `break` fell through into the cheat gate and answered a done wipe with a refusal
-
-            case "paintwipe":
-                AdminPaintWipe(session, cmd.StringArg);
-                return;
-
-            case "texturewipe": // #1958: world texture moderation — the role is the gate, like the two above
-                AdminWorldTextureWipe(session, cmd.StringArg);
-                return;
-
-            case "where":
-                AdminWhere(session, cmd.StringArg ?? cmd.TargetPlayer);
-                return;
-
-            // Per-player mode override (#1121) — world management, not a cheat: family worlds keep
-            // AdminCheats off, and exactly there a parent needs to hand the kid Creative. The role is the gate.
-            case "set_mode":
-                AdminSetPlayerMode(session, cmd.TargetPlayer, cmd.StringArg);
-                return;
-
-            // The whole world's mode (#1927) — the same kind of world management as set_mode above.
-            case "set_world_mode":
-                AdminSetWorldMode(session, cmd.StringArg);
-                return;
-
-            // Tutorial controls (#2466): skip / restart / a chapter for a player, the world's tutorial rule. Self-service
-            // world management, not a cheat (d3 §6.8) — family worlds keep cheats off. The role is the gate.
-            case "tutorial":
-                HandleTutorialAdmin(session, cmd);
-                return;
-
-            // The story report (#2466: now with the player packs) — read-only, like the reports above.
-            case "story_status":
-                AdminStoryStatus(session, cmd.TargetPlayer);
-                return;
-
-            // Cutscene preview (#2468): plays a scene for the asking admin only, changes nothing — the role is the gate.
-            case "cutscene":
-                AdminPreviewCutscene(session, cmd.StringArg);
-                return;
-
-            // Observer mode + its jump command are fleet-admin only: they reach into worlds other people own,
-            // so the owner of a single world must not be able to use them (issue #487).
-            case "spectate":
-            case "goto":
-                if (!session.IsFleetAdmin)
-                {
-                    Reject(session, "admin", "@srv.admin.observer_reserved");
-                    return;
-                }
-
-                if (string.Equals(cmd.Command, "spectate", StringComparison.OrdinalIgnoreCase))
-                {
-                    HandleSpectateCommand(session, cmd.StringArg);
-                }
-                else
-                {
-                    AdminGoto(session, cmd.StringArg);
-                }
-
-                return;
-        }
-
-        if (!Rules.CheatsAllowed)
-        {
-            Reject(session, "admin", "@srv.admin.cheats_disabled");
-            return;
-        }
-
-        switch (cmd.Command?.ToLowerInvariant())
-        {
-            case "give_item":
-                {
-                    if (_content.GetItem(cmd.StringArg ?? string.Empty) is null)
-                    {
-                        Reject(session, "admin", "@srv.admin.unknown_item");
-                        return;
-                    }
-
-                    // #2216: a sample, a seedling or a preparation is nothing without what its key carries (a
-                    // species, a compound) — the rule of the Sandbox catalog. A blank one is dead weight in the
-                    // pack, so it is not given; the same key with its payload is an item like any other.
-                    if (Shared.Bio.BioItems.NeedsPayload(cmd.StringArg))
-                    {
-                        Reject(session, "admin", "@srv.catalog.needs_content");
-                        return;
-                    }
-
-                    var target = FindSessionByName(cmd.TargetPlayer) ?? session;
-                    int amount = System.Math.Max(1, cmd.IntArg);
-                    // Resolve the TARGET's own ship, not the admin's cursor ship (`_ship`): a give to an
-                    // aboard-ship target must spill into that player's cargo, not the admin's.
-                    var targetShip = target.Ships.TryGetValue(target.ActiveShipId, out var ts) ? ts : _noShip;
-                    // #2220: Add returns what found no room. That used to be dropped without a word — and a give
-                    // that worked said nothing either. The admin is told what arrived and what did not fit.
-                    int given = amount - new MaterialPool(_content, target.State, targetShip).Add(cmd.StringArg!, amount);
-                    SendInventory(target);
-                    Send(session, new ServerMessage
-                    {
-                        Text = Localize(session.Locale, given == amount ? "srv.admin.gave" : "srv.admin.gave_partial")
-                            .Replace("{count}", amount.ToString())
-                            .Replace("{given}", given.ToString())
-                            .Replace("{item}", ItemDisplayName(session, cmd.StringArg!))
-                            .Replace("{player}", target.State.Name),
-                    });
-                    CheatLog(p, $"gave {given} of {amount} {cmd.StringArg} to {target.State.Name}");
-                    break;
-                }
-
-            case "teleport_to_location":
-                p.Position = new Vector3f(cmd.X, cmd.Y, cmd.Z);
-                // A plain PlayerStateUpdate position is ignored by the client and then reverted by its
-                // client-authoritative move stream — every server-side teleport must go through the
-                // RespawnNotice snap channel or it silently does nothing (#414 M7).
-                Send(session, new RespawnNotice { X = p.Position.X, Y = p.Position.Y, Z = p.Position.Z, Reason = "@srv.tp.done" });
-                SendPlayerState(session);
-                CheatLog(p, $"teleported to ({cmd.X:0.#}, {cmd.Y:0.#}, {cmd.Z:0.#})");
-                break;
-
-            // The named form of the same command ("/tp village2"). Same-body only and therefore the same
-            // gate as the coordinate teleport it extends — cross-body jumping stays fleet-admin `/goto`.
-            case "teleport_to_named":
-                AdminTeleportNamed(session, cmd.StringArg);
-                break;
-
-            case "teleport_to_player":
-                {
-                    var target = FindSessionByName(cmd.TargetPlayer);
-                    if (target is null)
-                    {
-                        Reject(session, "admin", "@srv.admin.no_target");
-                        return;
-                    }
-
-                    // A position is only meaningful inside its own scene: while flying a space instance the
-                    // snap channel would fight the flight scene (same guard as /tp), and a target who is in
-                    // space or on another body has coordinates that mean nothing on the admin's body — copying
-                    // them raw dropped the admin at a spot picked from the wrong scene (#1030).
-                    if (InSpace(p.PlayerId))
-                    {
-                        Reject(session, "admin", "@srv.tp.no_surface_targets");
-                        return;
-                    }
-
-                    if (InSpace(target.State.PlayerId)
-                        || !string.Equals(target.CurrentLocationId, session.CurrentLocationId, System.StringComparison.Ordinal))
-                    {
-                        Reject(session, "admin", "@srv.tpp.not_here:" + target.State.Name);
-                        return;
-                    }
-
-                    // Beside the target, not inside their capsule (#1055).
-                    p.Position = LandingSpotNear(target.State.Position, target.State.Yaw);
-                    // Same snap-channel rule as teleport_to_location (#414 M7).
-                    Send(session, new RespawnNotice { X = p.Position.X, Y = p.Position.Y, Z = p.Position.Z, Reason = "@srv.tp.to:" + target.State.Name });
-                    SendPlayerState(session);
-                    UpdateAboard(session); // jumping onto/off a ship must flip the aboard state now, not on the next move (parity with /tp)
-                    CheatLog(p, $"teleported to player {target.State.Name}");
-                    break;
-                }
-
-            case "set_time":
-                // #2220: the command used to write a field nothing read and still answered "time set". It sets this
-                // world's clock now (a word, a clock time, an hour or a day fraction — the local time where the admin
-                // stands) and refuses anything else. The clock is this world's alone, so the line goes to the players
-                // whose sky changed — not to those on another body. A refusal goes out as an admin rejection, like every
-                // other refused command: the client's chat puts those into the scrollback, where the command was typed,
-                // while an "@srv." token in a plain message only flashes past as a toast.
-                if (AdminSetTime(session, cmd.StringArg, out string timeLabel) is { } timeRefusal)
-                {
-                    Reject(session, "admin", timeRefusal);
-                }
-                else
-                {
-                    BroadcastToWorld(new ServerMessage { Text = "@srv.admin.time_set:" + timeLabel });
-                    CheatLog(p, $"set time to {timeLabel}");
-                }
-
-                break;
-
-            case "set_weather":
-                // #2065: the command used to write a field nothing read. It forces the simulation's state now (a ladder
-                // state or an event of the catalogue) and refuses anything the catalogue does not know. #2220: the name
-                // is read the way it is typed — any letter case, and "cloudy" for "clouds". The forced weather is
-                // this world's alone, so — like the clock above — the line goes to the players under this sky, not
-                // to those on another body.
-                if (WeatherCatalog.FindByName(cmd.StringArg) is { } weatherDef)
-                {
-                    _planetWeatherMode = "dynamic";
-                    _sim.Force(weatherDef.Key);
-                    BroadcastToWorld(new ServerMessage { Text = "@srv.admin.weather_set:" + weatherDef.Key });
-                    CheatLog(p, $"set weather to {weatherDef.Key}");
-                }
-                else
-                {
-                    // An admin rejection, so the answer stays readable in the chat: it is the line that names every
-                    // weather key, and the usage line points to it ("/setweather ?" lists all).
-                    Reject(session, "admin", "@srv.admin.weather_unknown");
-                }
-
-                break;
-
-            case "fly":
-                p.Fly = !p.Fly;
-                Send(session, new ServerMessage { Text = p.Fly ? "@srv.admin.fly_on" : "@srv.admin.fly_off" });
-                CheatLog(p, $"toggled fly to {p.Fly}");
-                break;
-
-            case "godmode":
-                p.GodMode = !p.GodMode;
-                Send(session, new ServerMessage { Text = p.GodMode ? "@srv.admin.god_on" : "@srv.admin.god_off" });
-                CheatLog(p, $"toggled god mode to {p.GodMode}");
-                break;
-
-            case "summon_giant":
-                AdminSummonGiant(session, cmd.StringArg); // #1998: /giant colossus|sandworm — for testing
-                break;
-
-            case "summon_arachnid":
-                AdminSummonArachnid(session); // #2009: /arachnid — for testing
-                break;
-
-            case "summon_biped":
-                AdminSummonBiped(session); // #2081: /biped — a begging herd of bipeds, for testing
-                break;
-
-            case "summon_wanderer":
-                AdminSummonWanderer(session); // #2646: /wanderer — a wanderer comes by right now, for testing
-                break;
-
-            case "instant_build":
-                p.InstantBuild = !p.InstantBuild;
-                Send(session, new ServerMessage { Text = p.InstantBuild ? "@srv.admin.build_on" : "@srv.admin.build_off" });
-                CheatLog(p, $"toggled instant build to {p.InstantBuild}");
-                break;
-
-            // ---- Story QA (P8 telemetry): jump around the arc for testing ----
-            case "advance_story":
-                {
-                    int beats = AdminAdvanceStory(cmd.IntArg);
-                    Send(session, new ServerMessage { Text = "@srv.admin.story_advanced:" + beats });
-                    CheatLog(p, $"advanced story by {System.Math.Max(1, cmd.IntArg)} (beats {beats})");
-                    break;
-                }
-
-            case "reveal_finale":
-                AdminRevealFinale();
-                Send(session, new ServerMessage
-                {
-                    Text = _storyState.GuardianSystemRevealed
-                        ? "@srv.admin.finale_revealed"
-                        : "@srv.admin.no_story_finale",
-                });
-                CheatLog(p, "revealed the Guardian finale system");
-                break;
-
-            // ---- Finale QA: fit a ship module (e.g. the jump generator), reveal all lore, or drop into the core ----
-            case "grant_module":
-                {
-                    var key = cmd.StringArg ?? string.Empty;
-                    if (_ship is null)
-                    {
-                        Reject(session, "admin", "@srv.admin.no_ship");
-                        return;
-                    }
-
-                    if (_content.GetShipModule(key) is null)
-                    {
-                        Reject(session, "admin", "@srv.module.unknown");
-                        return;
-                    }
-
-                    if (!_ship.HasModule(key))
-                    {
-                        _ship.Modules.Add(key);
-                        ResizeCargo(_ship);
-                        RecomputeShipCombatStats();
-                        SaveFleet(session); // through the fleet, so the per-ship row and the legacy key agree (#848)
-                        SendShipCombatStatus(session);
-                        SendPlayerState(session);
-                    }
-
-                    Send(session, new ServerMessage { Text = "@srv.admin.module_fitted:" + key });
-                    CheatLog(p, $"fitted ship module {key}");
-                    break;
-                }
-
-            case "reveal_lore":
-                {
-                    int n = AdminRevealAllLore(session);
-                    Send(session, new ServerMessage { Text = "@srv.admin.lore_revealed:" + n });
-                    CheatLog(p, "revealed all story lore");
-                    break;
-                }
-
-            case "goto_core":
-                AdminGotoCore(session);
-                Send(session, new ServerMessage
-                {
-                    Text = _storyState.GuardianSystemRevealed
-                        ? "@srv.admin.core_dropped"
-                        : "@srv.admin.no_story_core",
-                });
-                CheatLog(p, "teleported to the Guardian core chamber");
-                break;
-
-            default:
-                Reject(session, "admin", "@srv.admin.unknown_cmd");
-                break;
-        }
-    }
-
     /// <summary>The joined session playing under <paramref name="name"/>. Matched case-insensitively and
     /// with surrounding whitespace/quotes ignored, like every other admin-side player lookup
     /// (<c>/where</c>, <c>/builds</c>, <c>/goto</c>, <c>/kick</c>) — an exact-case compare made
@@ -7690,12 +6410,12 @@ public sealed partial class GameServer
         if (text.StartsWith("/bump", System.StringComparison.OrdinalIgnoreCase))
         {
             int bumpNow = System.Environment.TickCount;
-            if (bumpNow - session.LastChatTick < 700)
+            if (bumpNow - session.Chat.LastChatTick < 700)
             {
                 return; // rate limit
             }
 
-            session.LastChatTick = bumpNow;
+            session.Chat.LastChatTick = bumpNow;
             HandleBump(session, text.Length > 5 ? text.Substring(5).Trim() : string.Empty);
             return;
         }
@@ -7706,12 +6426,12 @@ public sealed partial class GameServer
         if (text.Equals("/reportpaint", System.StringComparison.OrdinalIgnoreCase))
         {
             int reportNow = System.Environment.TickCount;
-            if (reportNow - session.LastChatTick < 700)
+            if (reportNow - session.Chat.LastChatTick < 700)
             {
                 return; // rate limit
             }
 
-            session.LastChatTick = reportNow;
+            session.Chat.LastChatTick = reportNow;
             HandlePaintReport(session);
             return;
         }
@@ -7721,12 +6441,12 @@ public sealed partial class GameServer
             && (text.Length == 14 || text[14] == ' '))
         {
             int reportNow = System.Environment.TickCount;
-            if (reportNow - session.LastChatTick < 700)
+            if (reportNow - session.Chat.LastChatTick < 700)
             {
                 return; // rate limit
             }
 
-            session.LastChatTick = reportNow;
+            session.Chat.LastChatTick = reportNow;
             HandleWorldTextureReport(session, text.Length > 14 ? text.Substring(15) : string.Empty);
             return;
         }
@@ -7735,12 +6455,12 @@ public sealed partial class GameServer
         if (text.Equals("/reportshape", System.StringComparison.OrdinalIgnoreCase))
         {
             int reportNow = System.Environment.TickCount;
-            if (reportNow - session.LastChatTick < 700)
+            if (reportNow - session.Chat.LastChatTick < 700)
             {
                 return; // rate limit
             }
 
-            session.LastChatTick = reportNow;
+            session.Chat.LastChatTick = reportNow;
             HandleCustomShapeReport(session);
             return;
         }
@@ -7754,12 +6474,12 @@ public sealed partial class GameServer
             || text.StartsWith("/report ", System.StringComparison.OrdinalIgnoreCase))
         {
             int reportNow = System.Environment.TickCount;
-            if (reportNow - session.LastChatTick < 700)
+            if (reportNow - session.Chat.LastChatTick < 700)
             {
                 return; // rate limit
             }
 
-            session.LastChatTick = reportNow;
+            session.Chat.LastChatTick = reportNow;
             HandlePlayerReport(session, text.Substring("/report".Length).Trim());
             return;
         }
@@ -7813,12 +6533,12 @@ public sealed partial class GameServer
         }
 
         int now = System.Environment.TickCount;
-        if (now - session.LastChatTick < 700)
+        if (now - session.Chat.LastChatTick < 700)
         {
             return; // rate limit
         }
 
-        session.LastChatTick = now;
+        session.Chat.LastChatTick = now;
 
         // Anti-spam (#1208). The 700 ms limit above stops a held key; these two sliding windows stop a
         // burst of distinct lines and someone who keeps tripping the content filter. An auto-muted
@@ -7873,12 +6593,12 @@ public sealed partial class GameServer
         // Per-speaker frame-rate cap before the 1→N audience fan-out. Real voice is ~50 frames/s (20 ms
         // each); 60/s is generous. Without it a client could flood frames as fast as the socket allows,
         // each amplified to the whole radio audience (audit 2026-07-05).
-        if (_uptime < session.NextVoiceFrameAt)
+        if (_uptime < session.Throttles.NextVoiceFrameAt)
         {
             return;
         }
 
-        session.NextVoiceFrameAt = _uptime + (1.0 / 60.0);
+        session.Throttles.NextVoiceFrameAt = _uptime + (1.0 / 60.0);
         frame.FromPlayerId = session.State.PlayerId; // authoritative sender id (don't trust the client's field)
         SendToRadioAudienceExcept(session, frame, DeliveryMode.Unreliable);
     }
@@ -7898,12 +6618,12 @@ public sealed partial class GameServer
     /// </summary>
     private void WarnIfPoolOverflowed(PlayerSession session, MaterialPool pool)
     {
-        if (pool.Overflow <= 0 || _uptime < session.NextInventoryFullHintAt)
+        if (pool.Overflow <= 0 || _uptime < session.Throttles.NextInventoryFullHintAt)
         {
             return;
         }
 
-        session.NextInventoryFullHintAt = _uptime + InventoryFullHintCooldown;
+        session.Throttles.NextInventoryFullHintAt = _uptime + InventoryFullHintCooldown;
         Send(session, new ServerMessage { Text = "@inventory_full" });
     }
 
@@ -7930,9 +6650,9 @@ public sealed partial class GameServer
             AboveAtmosphere = p.AboveAtmosphere,
             SuitClimateActive = p.SuitClimateActive,
             Exposure = p.Exposure,
-            ExposureActive = session.ExposureActive,
-            ExposureHot = session.ExposureHot,
-            Uneasy = session.MoodUneasy,
+            ExposureActive = session.Hazards.ExposureActive,
+            ExposureHot = session.Hazards.ExposureHot,
+            Uneasy = session.Hazards.MoodUneasy,
             LifeSupportSource = p.LifeSupportSource,
             StationName = CurrentStationName(p.PlayerId),
             AiCoreTier = VegaCoreTier(session),
@@ -7949,11 +6669,11 @@ public sealed partial class GameServer
             Stealthed = p.Stealthed, // #2291: the own cloak (others see it through the presence)
             ReturnToShipCooldownSeconds = ReturnToShipCooldownLeft(session), // #2286: the pause menu greys its button
             ReturnToShipFightSeconds = (float)ReturnToShipFightLeft(session), // #2559: … and counts a fight down on it
-            LastHitFromX = session.LastHitFrom.X, // #2564: who hurt the player last — the HUD marker points at them
-            LastHitFromY = session.LastHitFrom.Y,
-            LastHitFromZ = session.LastHitFrom.Z,
-            LastHitEntityId = session.LastHitEntityId,
-            LastHitSeq = session.LastHitSeq,
+            LastHitFromX = session.Sync.LastHitFrom.X, // #2564: who hurt the player last — the HUD marker points at them
+            LastHitFromY = session.Sync.LastHitFrom.Y,
+            LastHitFromZ = session.Sync.LastHitFrom.Z,
+            LastHitEntityId = session.Sync.LastHitEntityId,
+            LastHitSeq = session.Sync.LastHitSeq,
         });
     }
 
@@ -8444,9 +7164,9 @@ public sealed partial class GameServer
             signature = unchecked(signature * 31 + StringComparer.Ordinal.GetHashCode(key));
         }
 
-        bool unchanged = session.SentBlueprintsOnce && session.SentBlueprintsSignature == signature;
-        session.SentBlueprintsOnce = true;
-        session.SentBlueprintsSignature = signature;
+        bool unchanged = session.Sync.SentBlueprintsOnce && session.Sync.SentBlueprintsSignature == signature;
+        session.Sync.SentBlueprintsOnce = true;
+        session.Sync.SentBlueprintsSignature = signature;
 
         // #2201: the sample case rides the same way — only when it changed since this session's last update.
         long sampleSignature = 17;
@@ -8456,9 +7176,9 @@ public sealed partial class GameServer
                 + (stack is { IsEmpty: false } ? StringComparer.Ordinal.GetHashCode(stack.Item) * 397 + stack.Count : 0));
         }
 
-        bool samplesUnchanged = session.SentSamplesOnce && session.SentSamplesSignature == sampleSignature;
-        session.SentSamplesOnce = true;
-        session.SentSamplesSignature = sampleSignature;
+        bool samplesUnchanged = session.Sync.SentSamplesOnce && session.Sync.SentSamplesSignature == sampleSignature;
+        session.Sync.SentSamplesOnce = true;
+        session.Sync.SentSamplesSignature = sampleSignature;
         Send(session, new InventoryUpdate
         {
             Samples = samplesUnchanged ? Array.Empty<NetItemStack>() : DumpInventory(session.State.SampleCase),
@@ -8522,7 +7242,7 @@ public sealed partial class GameServer
             case WorldReset reset:
                 reset.WorldId = WorldIdOf(session.CurrentLocationId); // the stream that follows is this world's
                 session.AnnouncedWorldId = reset.WorldId; // #2117: the world the client now accepts chunks for
-                session.FarInfoDue = true; // #1820: the far view needs the new world's generator settings
+                session.Streaming.FarInfoDue = true; // #1820: the far view needs the new world's generator settings
                 break;
             case BlockChanged change:
                 change.WorldId = WorldIdOf(session.CurrentLocationId);

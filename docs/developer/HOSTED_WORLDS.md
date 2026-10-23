@@ -101,8 +101,9 @@ through Caddy.
 ## Client integration (implemented for the native client)
 
 - **Native client (desktop):** the main menu offers BOTH worlds — self-hosting exactly as today
-  (Singleplayer / Host (LAN) / Join-by-address) AND **"Official Worlds"** (`UiMainMenu`, native-only
-  `#if` branch): sign in with the portal account (session stored in `ClientSettings.PortalSessionToken`,
+  (Singleplayer / Host (LAN) / Join-by-address) AND **"Official Worlds"** (the overlay class
+  `UiOfficialWorlds` that `UiMainMenu` builds, native-only `#if` branch): sign in with the portal account
+  (session stored in `ClientSettings.PortalSessionToken`,
   never the password; `PortalUrl` empty = the official portal, settable for self-hosted WorldHosts),
   list your worlds, one click joins — the join grant's `nativeHost:nativePort` + `joinToken` feed the
   existing connect path (`AppShell.HostedToken` → `GameBootstrap` → `JoinRequest.HostedToken`). The
@@ -247,6 +248,12 @@ The SP↔hosted round-trip. Instances bind-mount `<BBS_WH_WORLDS_DIR>/<worldId>/
   the control plane is built from `main`, so it is normally at least as new as the pinned server
   image; a save that the WorldHost knows but the lagging server image does not is caught at the wake
   (next section).
+  The cap is the only body limit on this route (#2922): the route sets Kestrel's request-body limit to
+  `BBS_WH_UPLOAD_MAX_BYTES` (Kestrel's own default, 30,000,000 bytes, used to cut every save between
+  the two with a bare 413), and a body over the cap — declared or streamed — gets the portal's JSON
+  error `upload_too_large`. A reverse proxy in front of the WorldHost must allow request bodies at
+  least that large: Caddy sets no limit unless `request_body { max_size }` is configured; nginx
+  refuses anything over 1 MB until `client_max_body_size` is raised.
 - `GET /api/worlds/{id}/save` (owner, world stopped): downloads the current `world.db` — the
   backup path the beta notice points players to, and the way back into singleplayer.
 
@@ -288,7 +295,9 @@ code. WorldHost treats it as its own state instead of a wake timeout:
   value** via `ProcessStartInfo.ArgumentList` (argv-level, no shell) — display names never become
   arguments. Keep it that way.
 - Sessions are stored hashed (SHA-256); passwords PBKDF2-SHA256/210k. Login failures are uniform
-  (no name-exists oracle). Lost password = lost account for now — recovery UX is a Phase-2 concern.
+  (no name-exists oracle). A forgotten password is recovered with one of the account's rescue codes
+  (`POST /api/recover`; issued at signup, re-issued via `POST /api/account/recovery-codes`, stored as PBKDF2
+  hashes, erased with the account — #559, #2920); there is no e-mail channel.
 - Join tokens live 120 s and name one world + one player; the per-world secret never leaves the
   host (it is injected into the instance's env).
 - Deleting a world stops the container, removes its container object and drops the registry row but
@@ -418,8 +427,9 @@ file — and it matches the repo's SQLite-first philosophy. Note the distinction
 already live in PostgreSQL today (`BBS_DATABASE_PROVIDER=postgresql`, one schema per world — the
 game supports it since PR #116); that is orthogonal to the registry. Move the REGISTRY to Postgres
 when one of these becomes true: a second control-plane node (HA), multi-host placement (Phase 3),
-or the wish to join registry + world data in one operational database. `HostRegistry` is a single
-class behind plain methods, so swapping the backend later is contained.
+or the wish to join registry + world data in one operational database. `HostRegistry` is a thin
+facade with plain methods over per-aggregate stores that share one `RegistryDb` (the connection, the
+schema and the one lock — see "Code map" below), so swapping the backend later is contained.
 
 ## Phase 3 hardening (implemented)
 
@@ -474,11 +484,17 @@ class behind plain methods, so swapping the backend later is contained.
 - **`/impressum` (§5 DDG) + `/datenschutz` (DSGVO)**, footer-linked from every portal page. Operator
   data is config-driven (`BBS_WH_LEGAL_NAME` / `_ADDRESS` / `_EMAIL`) so a SELF-HOSTED WorldHost
   serves ITS operator's details, never the project authors'; unset → an explicit "not configured"
-  notice, never wrong data. The privacy page states the data-minimal reality (name + PBKDF2 hash, no
-  email, no tracking, no third-party embeds/fonts; transient IPs for rate limits/logs only).
+  notice, never wrong data. The privacy page states the data-minimal reality (name + PBKDF2 hash; the
+  rescue codes as PBKDF2 hashes with their creation and use times, kept until re-issued or the account is
+  deleted; no email, no tracking, no third-party embeds/fonts; transient IPs for rate limits/logs only).
+  Whatever the registry starts keeping per account belongs on that page, in its German body and in the
+  `privacy.summary.text` portal key of all 14 languages.
 - **Account self-deletion (DSGVO Art. 17).** `DELETE /api/account` + a double-confirm portal button:
   stops + deletes all the account's worlds (registry rows + live and archived saves on disk), deletes
-  the reports it filed and its sessions, then the account. Available to banned accounts too.
+  every registry row keyed by the account — its sessions, rescue codes, the reports it filed, its notices,
+  and its visits to and bans on other worlds — then the account. What other players recorded about the
+  player (their reports, a world owner's ban by name) stays: it carries the in-game name, not the account
+  id, and is that other account's data. Available to banned accounts too.
 
 ## glitch.fun arcade channel (implemented; ships with v0.7.8)
 
@@ -557,6 +573,30 @@ message). Save-schema changes must remain load-compatible with saves one release
 validated but never migrated silently); document per release in the changelog. A save from a NEWER
 build than the pinned image is refused at upload (`save_too_new`) or at the wake (exit code 3 →
 `world_needs_newer_server`, no restart loop) — see "A save the server image cannot open" above.
+
+## Code map
+
+All under `src/BlocksBeyondTheStars.WorldHost/` unless noted.
+
+| Concern | File |
+|---|---|
+| Entry point (env → collaborators → background work → run) | `Program.cs` |
+| Shared collaborators, abuse limiters, cached stats snapshot | `WorldHostServices.cs` |
+| Wiring (builder, trusted-proxy headers, then the six route groups; the tests start the same app in-process) | `WorldHostApp.cs` (`Create(services, args)`) |
+| Gates and helpers the route groups share (bearer caller, error shape, admin token, admin-UI Basic Auth, portal language) | `WorldHostApi.cs` |
+| Root routes: health, metrics, public stats, portal pages, `/play`, the Caddy TLS ask | `PortalEndpoints.cs` |
+| Account routes: rules, signup/login, notices, password, rescue codes, self-deletion | `AccountEndpoints.cs` |
+| World routes under `/api/worlds`: lists, create, join grant, owner settings and moderation, save upload/export | `WorldEndpoints.cs` |
+| Player reports + the operator's `/api/admin` routes (X-Admin-Token) | `ModerationEndpoints.cs` |
+| Operator browser UI under `/admin` (Basic Auth) | `AdminUiEndpoints.cs` (pages: `WorldHostAdminPages.cs`) |
+| glitch.fun routes (`/api/glitch/*`) | `GlitchEndpoints.cs` (grant logic: `GlitchGateway.cs`) |
+| Registry facade (public surface, every signature) | `HostRegistry.cs` (records in `HostRegistryRecords.cs`) |
+| Registry storage core: connection, schema upgrades, the one lock | `RegistryDb.cs` |
+| Per-aggregate stores | `AccountStore.cs` (accounts, sessions, rescue codes) · `NoticeStore.cs` · `WorldStore.cs` · `WorldModerationStore.cs` (world bans, visitors) · `PlayerReportStore.cs` · `GlitchStore.cs` (guests, install bans) |
+| Name rules (reserved names, word screen) | `RegistryNameRules.cs` |
+| Allocation: route-or-wake, join grants, reaper | `WorldOrchestrator.cs` (containers: `InstanceLauncher.cs`) |
+| Operator config (`BBS_WH_*`) | `WorldHostConfig.cs` |
+| Tests | `tests/BlocksBeyondTheStars.Tests/WorldHostHttpTests.cs` (the real app over HTTP on a loopback port: the pinned route table, every route's gate, the owner's world routes) · `WorldHostTests.cs` and the other `WorldHost*Tests.cs` |
 
 ## Open (tracked in the plan)
 

@@ -8,7 +8,6 @@ using System.Linq;
 using BlocksBeyondTheStars.GameServer;
 using BlocksBeyondTheStars.Networking;
 using BlocksBeyondTheStars.Networking.Messages;
-using BlocksBeyondTheStars.Networking.Transport;
 using BlocksBeyondTheStars.Persistence;
 using BlocksBeyondTheStars.Shared.Configuration;
 using BlocksBeyondTheStars.Shared.Content;
@@ -51,36 +50,6 @@ public sealed class CutsceneLedgerTests : IDisposable
 
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         try { Directory.Delete(_root, recursive: true); } catch { /* best-effort temp cleanup */ }
-    }
-
-    /// <summary>Records every server send so a test can assert who was told what, in order.</summary>
-    private sealed class RecordingTransport : IServerTransport
-    {
-        public event Action<int>? ClientConnected;
-        public event Action<int>? ClientDisconnected;
-        public event Action<int, byte[]>? PayloadReceived;
-
-        public readonly List<(int Conn, object Msg)> Sent = new();
-
-        public void Start(int port) { }
-
-        public void Send(int connectionId, byte[] payload, DeliveryMode mode)
-        {
-            if (NetCodec.Decode(payload) is { } m) Sent.Add((connectionId, m));
-        }
-
-        public void Broadcast(byte[] payload, DeliveryMode mode)
-        {
-            if (NetCodec.Decode(payload) is { } m) Sent.Add((int.MinValue, m));
-        }
-
-        public void Poll() { _ = ClientConnected; _ = ClientDisconnected; _ = PayloadReceived; }
-        public void Stop() { }
-        public void Dispose() { }
-
-        public List<T> To<T>(PlayerSession who) => Sent.Where(x => x.Conn == who.ConnectionId).Select(x => x.Msg).OfType<T>().ToList();
-
-        public List<string> Plays(PlayerSession who) => To<CutscenePlay>(who).Select(p => p.CutsceneId).ToList();
     }
 
     private (SvGameServer Server, RecordingTransport Transport) World(string world, Action<ServerConfig>? configure = null,
@@ -265,12 +234,12 @@ public sealed class CutsceneLedgerTests : IDisposable
             "line:story.cutscene_test.two1.start", // big_moment (onStart, T3) waits for the cooldown
         }, order);
         Assert.Equal(ChapterArg("one"), transport.To<CutscenePlay>(p).Single(x => x.CutsceneId == "done@one").Arg);
-        Assert.Equal("big_moment", Assert.Single(p.CutsceneQueue).Id);
+        Assert.Equal("big_moment", Assert.Single(p.Story.CutsceneQueue).Id);
         Assert.True(Has(p, Sent("big_moment")));
 
         Wait(server, p, SvGameServer.CutsceneCooldownSeconds);
         Assert.Equal("big_moment", transport.Plays(p).Last());
-        Assert.Empty(p.CutsceneQueue);
+        Assert.Empty(p.Story.CutsceneQueue);
     }
 
     [Fact]
@@ -283,7 +252,7 @@ public sealed class CutsceneLedgerTests : IDisposable
 
         server.RaiseGameEventForTest(p, GameEventKeys.MineAny, "stone");
         Assert.Equal(new[] { "done@one" }, transport.Plays(p)); // the banner at once, the cards wait
-        Assert.Equal(new[] { "first_mine", "strip@two", "big_moment" }, p.CutsceneQueue.Select(q => q.Id));
+        Assert.Equal(new[] { "first_mine", "strip@two", "big_moment" }, p.Story.CutsceneQueue.Select(q => q.Id));
 
         Assert.True(server.PlayCutsceneForTest(p, C, "now"));
         Assert.Equal("now", transport.Plays(p).Last()); // "now or never" — and it restarts the cooldown
@@ -361,12 +330,12 @@ public sealed class CutsceneLedgerTests : IDisposable
         p.State.Milestones.Add(StoryPackKeys.OptOut(C));
 
         server.CutscenesOnJoinForTest(p);
-        Assert.Empty(p.CutsceneQueue);
+        Assert.Empty(p.Story.CutsceneQueue);
         Assert.False(Has(p, Seen("welcome"))); // still owed
 
         p.State.Milestones.Remove(StoryPackKeys.OptOut(C));
         server.CutscenesOnJoinForTest(p);
-        Assert.Equal(new[] { "welcome", "strip@one" }, p.CutsceneQueue.Select(q => q.Id));
+        Assert.Equal(new[] { "welcome", "strip@one" }, p.Story.CutsceneQueue.Select(q => q.Id));
     }
 
     [Fact]

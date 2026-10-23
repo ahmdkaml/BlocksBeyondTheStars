@@ -10,7 +10,6 @@ using BlocksBeyondTheStars.Networking.Messages;
 using BlocksBeyondTheStars.Shared.Configuration;
 using BlocksBeyondTheStars.Shared.Content;
 using BlocksBeyondTheStars.Shared.Definitions;
-using BlocksBeyondTheStars.Shared.Missions;
 using BlocksBeyondTheStars.Shared.Story;
 using Xunit;
 
@@ -114,7 +113,7 @@ public sealed class VegaChatterTests
         }
 
         using var muted = World("vega_praise_muted");
-        muted.Player.VegaHintsMuted = true;
+        muted.Player.Vega.VegaHintsMuted = true;
         muted.Server.AdvanceAchievementForTest(muted.Player, AchievementCounters.BuildAny);
         Settle(muted);
         Assert.Empty(Lines(muted, "vega.praise."));
@@ -182,7 +181,7 @@ public sealed class VegaChatterTests
     public void LoggingInAfterTwoDays_VegaWelcomesBack_Once()
     {
         using var w = World("vega_login");
-        w.Player.PreviousSeenUtc = T0.AddDays(-2).ToString("o", CultureInfo.InvariantCulture);
+        w.Player.Vega.PreviousSeenUtc = T0.AddDays(-2).ToString("o", CultureInfo.InvariantCulture);
         Settle(w, 0); // the join's first pass arms it
         Settle(w, 5);
         Assert.Empty(Lines(w, "vega.welcome.login.")); // a moment after the join, not on top of it
@@ -200,7 +199,7 @@ public sealed class VegaChatterTests
     public void LoggingInAfterAnHour_OrForTheFirstTime_IsNoWelcome()
     {
         using var w = World("vega_login_short");
-        w.Player.PreviousSeenUtc = T0.AddHours(-1).ToString("o", CultureInfo.InvariantCulture);
+        w.Player.Vega.PreviousSeenUtc = T0.AddHours(-1).ToString("o", CultureInfo.InvariantCulture);
         Settle(w, 0);
         Settle(w, 30);
         Assert.Empty(Lines(w, "vega.welcome.login."));
@@ -213,31 +212,10 @@ public sealed class VegaChatterTests
 
     // ---------------- AI (hosted worlds) ----------------
 
-    private sealed class LinesProvider : IAiMissionProvider
-    {
-        public List<NpcLinesRequest> Requests { get; } = new();
-
-        public MissionPlan? Generate(string context) => null;
-
-        public string? GenerateNpcLine(NpcLineRequest request) => null;
-
-        public MissionTextResult? GenerateMissionText(MissionTextRequest request) => null;
-
-        public string[]? GenerateNpcLines(NpcLinesRequest request)
-        {
-            lock (Requests)
-            {
-                Requests.Add(request);
-            }
-
-            return request.Purpose == NpcLinePurposes.VegaPraise ? new[] { "{0}? Not bad at all, {player}." } : null;
-        }
-    }
-
     [Fact]
     public void WithAi_ThePraiseUsesTheCachedLine_NextTime_NeverLate()
     {
-        var provider = new LinesProvider();
+        var provider = new FakeNpcLines(r => r.Purpose == NpcLinePurposes.VegaPraise ? new[] { "{0}? Not bad at all, {player}." } : null);
         using var w = World("vega_praise_ai", c => c.AiLevel = AiLevel.TextOnly);
         w.Server.SetAiProviderForTest(provider);
         w.Server.RunAiLinesSynchronouslyForTest();

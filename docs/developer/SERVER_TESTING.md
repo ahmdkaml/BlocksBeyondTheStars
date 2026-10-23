@@ -35,6 +35,13 @@ start there**. These three show the ladder, simplest first:
    Constructs a real `GameServer` with a loopback transport and a SQLite repo. Only needed
    when the behaviour under test *is* the server loop (ticks, intents, persistence).
 
+The two web services have their own top rung — **the real app over HTTP**:
+[`WorldHostHttpTests.cs`](../../tests/BlocksBeyondTheStars.Tests/WorldHostHttpTests.cs) and
+[`ReportHostHttpTests.cs`](../../tests/BlocksBeyondTheStars.Tests/ReportHostHttpTests.cs) start the app the container
+runs (`WorldHostApp.Create` / `ReportHostApp.Create`) in-process on a loopback port, once per class through an
+`IClassFixture`, and sit in `RealTimeSensitiveCollection` (see "CI rules" below). Both route tables are pinned
+(`WorldHostHttpTests`; `ReportHostRouteTableTests` for the ReportHost), so a new route also adds its line there.
+
 ## Fixtures & helpers you would otherwise not find
 
 - **`TestPaths.DataDir()`** ([TestPaths.cs](../../tests/BlocksBeyondTheStars.Tests/TestPaths.cs))
@@ -53,18 +60,47 @@ start there**. These three show the ladder, simplest first:
   (a missing key renders as literal `[some.key]` in game instead of failing loudly).
 - **Temp state**: `Path.Combine(Path.GetTempPath(), "bbts_<topic>_" + Guid.NewGuid().ToString("N"))`
   plus `IDisposable` cleanup — never share paths between tests; the suite runs 4-way parallel.
-- **`RecordingTransport`** ([RecordingTransport.cs](../../tests/BlocksBeyondTheStars.Tests/RecordingTransport.cs))
-  is the server-side transport fake: hand it to a `GameServer` and read `Sent` — every message the server
-  sent, decoded, with its connection (`int.MinValue` for a broadcast). Do not copy it into a test class;
-  if a test needs more, extend the shared one. `RecordingTransportGuardTests` fails on a new private copy
-  (#2792).
-  - **`DrivenTransport`** ([DrivenTransport.cs](../../tests/BlocksBeyondTheStars.Tests/DrivenTransport.cs))
-  is the shared server-side transport driver for protocol and server-hardening suites. It drives transport events (`Connect`, `Receive`, `ReceiveRaw`) into the server and records every decoded response message. Do not copy it into a test class; use this shared implementation instead.
+- **The shared fakes below live in [`tests/BlocksBeyondTheStars.Tests/Helpers/`](../../tests/BlocksBeyondTheStars.Tests/Helpers/)** —
+  [`RecordingTransport`](../../tests/BlocksBeyondTheStars.Tests/Helpers/RecordingTransport.cs) (the server-side
+  transport fake: hand it to a `GameServer` and read `Sent` — every message the server sent, decoded, with its
+  connection, `int.MinValue` for a broadcast; `OnSend` hooks a send mid-tick, `Disconnected` lists the connections
+  the server dropped) with its queries in
+  [`RecordingTransportExtensions`](../../tests/BlocksBeyondTheStars.Tests/Helpers/RecordingTransportExtensions.cs)
+  (`To<T>(player)`, `Messages()`, `Texts()`/`TextsTo(player)`, `LineKeys(player)`, `Lines(player[, key])`,
+  `PackLines(player, pack)`, `Plays(player[, pack])`, `PackPlays`, `Play`, `Offers`/`OfferArgs`, `FollowUps`, `Order`);
+  [`CapturingLogger`](../../tests/BlocksBeyondTheStars.Tests/Helpers/CapturingLogger.cs) (`Infos`/`Warnings`/`Errors`,
+  prefixed `Lines`, `Count(line)`); [`FakeLauncher`](../../tests/BlocksBeyondTheStars.Tests/Helpers/FakeLauncher.cs)
+  (the WorldHost's `IInstanceLauncher`: `StartCount`, `Running`, `Removed`, `FailStart`);
+  [`FakeNpcLines`](../../tests/BlocksBeyondTheStars.Tests/Helpers/FakeNpcLines.cs) (an `IAiMissionProvider` that
+  answers `GenerateNpcLines` from a lambda, counts `Calls`, keeps `Requests`, optionally blocks on a gate);
+  [`StubHttpHandler`](../../tests/BlocksBeyondTheStars.Tests/Helpers/StubHttpHandler.cs) (one canned HTTP answer,
+  records `Url` and `RequestBody`); [`WorldProbe`](../../tests/BlocksBeyondTheStars.Tests/Helpers/WorldProbe.cs)
+  (`At(x, y, z)` / `Surface(x, z)` over cached generated chunks);
+  [`DrivenTransport`](../../tests/BlocksBeyondTheStars.Tests/Helpers/DrivenTransport.cs) (the transport the protocol
+  and server-hardening suites drive by hand: `Connect`/`Disconnect`, `Receive(message)`, `ReceiveRaw(bytes)` for
+  malformed payloads, and `Sent` like `RecordingTransport` — #2781). **Rule:** a test class never declares its own
+  `RecordingTransport`, `CapturingLogger`, `FakeLauncher`, `FakeLines`/`LinesProvider`, `StubHandler`, `Probe` or
+  `DrivenTransport` — `SharedTestHelperGuardTests` fails on a class of those names in either test project (#2792,
+  #2885, #2781). Need more?
+  Add the member to the shared class when a second test could want it; put a one-off query into a
+  `file static class` of extension methods at the bottom of your test file (see `Leaks()` in `BaseAirLeakTests`).
+  `Helpers/` holds fakes only, never a test class (`scripts/partition-tests.py` and `scripts/locale-test-filter.py`
+  discover test classes in the project root only). Fixtures bound to one unit under test (the `Grid` builders of
+  the door, water and climb tests) stay nested — they are not copies.
 - **`SettlementTestWorlds`** ([SettlementTestWorlds.cs](../../tests/BlocksBeyondTheStars.Tests/SettlementTestWorlds.cs))
   boots settlement-only servers: settlements and landing pads exactly as on a full world, without the
   structures stamped after them (rail, ruins, camps, factories …), which only read the settlement list.
   Use it for sweeps over many seeds (#2456); a sweep of independent boots can also split its seeds over
   `Parallel.Invoke` workers, each with its own `GameContent` (see `SettlementRuinSkewTests`).
+- **`*ForTest` seams.** Tests reach server internals through members named `…ForTest` on `GameServer`
+  (`AdvanceUptimeForTest`, `BaseAirForTest`, …); the test project also sees `internal` members
+  (`InternalsVisibleTo`), so a seam may be `internal`. A feature that moved into a subsystem class
+  ([ADR 0019](adr/0019-gameserver-subsystems.md)) keeps its seams on `GameServer` as one-line facades that delegate
+  to the system — call `server.XForTest(…)` as before; there is no system instance to reach for. The table-driven parts
+  of the server have read-only seams their pinning tests use: `HandledIntentTypesForTest`
+  (`IntentDispatchRegistryTests`), `TickScheduleNamesForTest` (`TickScheduleTests`), `PlacementRuleNamesForTest`
+  (`PlacementRuleOrderTests`) and `AdminCommandTableForTest` (`AdminCommandGateTests`). Adding an intent, a placement
+  rule or an admin verb therefore also updates what that test pins (the intent count, the rule order, the verb's gate).
 
 ## What "meaningful" means here (the tautology trap)
 
@@ -124,6 +160,13 @@ first-PR traps:
   `DisableParallelization`, so its classes run in the runner's sequential phase where the queue is
   empty; it costs a few seconds of serial window. Marking such a test `Slow` instead would hide
   the symptom and drop the coverage from every PR.
+- **A test that sets or reads the `BBS_*` server variables belongs in
+  `[Collection(ServerConfigEnvironmentCollection.Name)]`.** Environment variables are process-wide: the config tests
+  set them for a moment, and anything that loads `ServerConfig` from the environment — `ApplyEnvironment`, every
+  `AdminService.LoadConfig` — reads them, so a reader in another collection picked up a value now and then (#2923).
+  The collection orders its members one after another; a guard test
+  ([ServerConfigEnvironmentCollection.cs](../../tests/BlocksBeyondTheStars.Tests/ServerConfigEnvironmentCollection.cs))
+  fails for a class that touches them from outside it.
 - **A test that is slow only next to other tests may be starving on a shared world-gen cache.**
   `WorldGenerator` keeps its per-world derived data (calibration, river field …) in process-wide
   caches. When such a cache builds — or merely looks up — under one static lock, a test that creates
@@ -156,6 +199,29 @@ first-PR traps:
   an air refill works a fixed minimum of it (an ordinary room is answered at once on any runner). To check a
   test against a busy runner, run it once more with a zero budget (`AirTickBudgetMsForTest = 0`) — the
   deterministic stand-in for a starved clock; that is how #2870's one stale tick was reproduced locally.
+- **Methods and files may not grow past the code-health baseline (#2896).**
+  [`CodeHealthRatchetTests`](../../tests/BlocksBeyondTheStars.Tests/CodeHealthRatchetTests.cs) parses every `*.cs`
+  under `src/` and `client/Assets/BlocksBeyondTheStars/Scripts/` with Roslyn (syntax only, a second or two) and
+  counts per file the methods, constructors and operators longer than **60 lines** and whether the file is longer
+  than **1000 lines**. The committed baseline
+  [`Fixtures/code_health_baseline.json`](../../tests/BlocksBeyondTheStars.Tests/Fixtures/code_health_baseline.json)
+  holds those counts, one line per file. The gate fails when a file's long-method count *grows* or a file newly
+  crosses 1000 lines — split the method or the file instead of growing it. A file that is already over 1000 lines
+  may keep growing (its `lines` value is informational). When counts *shrink*, the gate passes and prints the
+  rebase command, so the PR that split a method records it. Rebase (a shrink, or a reviewed exception such as a
+  refactor that moves a long method into a new file) with
+  `BBS_CODE_HEALTH_REBASE=1 dotnet test tests/BlocksBeyondTheStars.Tests/BlocksBeyondTheStars.Tests.csproj --filter FullyQualifiedName~CodeHealthRatchetTests.SourceTree_DoesNotGrowPastTheBaseline`
+  (PowerShell: `$env:BBS_CODE_HEALTH_REBASE=1; dotnet test …same arguments…; Remove-Item Env:BBS_CODE_HEALTH_REBASE`);
+  the run rewrites the file and fails once on purpose, the next run passes. Rebase from a clean tree (no untracked
+  `.cs` files under the scan roots — they would be baked in), never hand-edit the baseline, and resolve a merge
+  conflict in it by taking either side and rerunning the rebase. Blind spots: client scripts are parsed with the
+  desktop player's symbols (`UNITY_STANDALONE`, `UNITY_STANDALONE_WIN`, `UNITY_64`, `UNITY_2020_2_OR_NEWER`,
+  `BBS_VOICE`), so code behind `#if UNITY_EDITOR` or `#if UNITY_WEBGL && !UNITY_EDITOR` is not measured; `src/` is
+  parsed with no symbols (the `#if NET…` sites measure their netstandard branch); local functions, lambdas and
+  accessors count toward their method or not at all, so a top-level-statement `Program.cs` shows no long methods;
+  `client/Assets/BlocksBeyondTheStars/Editor`, `client/Assets/Tests` and the git-ignored `*.Generated.cs` files are
+  not scanned. A parse error fails the gate too: if the compiler accepts newer C# than the parser knows, raise
+  `Microsoft.CodeAnalysis.CSharp` in the test project to the SDK's Roslyn version.
 
 ## Joins built by hand need the content fingerprint (#2222)
 

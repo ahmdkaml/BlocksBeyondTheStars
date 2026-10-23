@@ -30,12 +30,12 @@ how controller support was built and how touch (tablet-web) will be.
 
 Replace the raw call with the `InputMap` verb, e.g. `Input.GetAxis("Horizontal")` → `InputMap.MoveX()`,
 `Input.GetMouseButtonDown(0)` → `InputMap.PrimaryDown()`, `Input.GetButton("Jump")` → `InputMap.JumpHeld()`.
-The migrated gameplay surface is `PlayerController` (on-foot + speeder), `SpaceView` (flight + EVA + turret),
-`PlayerInteractions` (trade / dock / undock), `WorldMap` (`PlanetMap`), `VegaPanel` (`VegaContinue`) and
-`FinaleView` (the breach hold is `PrimaryFire` held). Number-key picks keep a device-neutral fallback: the
-on-foot / EVA hotbar and the ship-systems quick-bar all also step on `InputMap.HotbarScroll()` (wheel, d-pad
-◄►, touch ◄►). Escape stays keyboard; every panel that a pad can reach also closes on **B**
-(`KeyCode.JoystickButton1`).
+The migrated gameplay surface is `PlayerController` (on-foot; the speeder in its `PlayerVehicleDrive` component),
+`SpaceView` (flight + EVA + turret), `PlayerInteractions` (trade / dock / undock), `WorldMap` (`PlanetMap`),
+`VegaPanel` (`VegaContinue`) and `FinaleView` (the breach hold is `PrimaryFire` held). Number-key picks keep a
+device-neutral fallback: the on-foot / EVA hotbar and the ship-systems quick-bar all also step on
+`InputMap.HotbarScroll()` (wheel, d-pad ◄►, touch ◄►). Escape stays keyboard; every panel that a pad can reach
+also closes on **B** (`KeyCode.JoystickButton1`).
 
 ### Context-actions list + injected edges (#1042/#1043)
 
@@ -53,7 +53,7 @@ calls **`InputMap.InjectNextFrame(action)`**, which makes `InputMap.Down(action)
 following frame — after the list has closed and gameplay polls again — so the existing poll sites fire
 unchanged; the list is a second *front-end*, not a second rule set. Probes live next to the handlers they
 mirror (`PlayerController.HeldRotatable / NearContainer / NearCrate / NearWreck / NearOwnParkedSpeeder /
-HoldsWeapon / BinocularsRaised`, `PlayerInteractions.CanRequestTradeOrDock / CanDisembark`,
+HoldsWeapon / BinocularsRaised`, `PlayerInteractions.CanRequestTrade / CanRequestDock / CanDisembark`,
 `VegaPanel.LineShowing`); add a probe + a `Table` row when a new verb lands, or it stays keyboard-only.
 `InputMap.LabelKey(action)` (`ui.key.*`) names entries and the settings rows from one table.
 
@@ -301,7 +301,8 @@ vendor trade, the Codex (Wiki), the Arcade, credits, the feedback dialog, the re
 pie, the context-actions list, the landing-pad chooser (land map), the trade / dock prompts + trade panel, the
 bandit demand, the planet map, the flight system chart (#1043), the blueprint tool, the beacon-label and
 beam-pad modals, and the ship / face editors (#1198). Add the same one-liner after `UiKit.CreateCanvas` for any
-new interactive screen, and let **B** close it (see `WorldMap.Update` for the pattern). Still pointer-only: the
+new interactive screen (a `UiPanel` gets it from `EnsureCanvas` / `CreateCanvasNow` — see
+[UI_PANELS.md](UI_PANELS.md)), and let **B** close it (see `WorldMap.Update` for the pattern). Still pointer-only: the
 map *markers* (waypoint by click) and the finale duel's IMGUI choices.
 
 ### Menu verbs: `UiCancel` / `UiMenu`

@@ -255,11 +255,27 @@ public sealed class NetCodecServerHardeningTests : IDisposable
 
     public void Dispose()
     {
+        // Close the repositories first so their files are no longer locked, then remove the folder. Cleanup must never
+        // hide the actual test result, so nothing here may throw.
         foreach (var repo in _repos)
         {
-            repo.Dispose();
+            try
+            {
+                repo.Dispose();
+            }
+            catch
+            {
+                // A failed dispose must not mask the test outcome.
+            }
         }
 
-        try { Directory.Delete(_root, recursive: true); } catch { }
+        try
+        {
+            Directory.Delete(_root, recursive: true);
+        }
+        catch
+        {
+            // Same: best-effort cleanup.
+        }
     }
 }

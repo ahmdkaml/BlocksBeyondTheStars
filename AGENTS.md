@@ -44,20 +44,24 @@ src/BlocksBeyondTheStars.Shared/          data models, data-driven definitions, 
 src/BlocksBeyondTheStars.WorldGeneration/ seed-based deterministic chunk generation
 src/BlocksBeyondTheStars.Persistence/     SQLite repository, savegame layout, autosave
 src/BlocksBeyondTheStars.Networking/      transport abstraction (LiteNetLib + loopback), messages
-src/BlocksBeyondTheStars.GameServer/      authoritative tick loop + console host
+src/BlocksBeyondTheStars.GameServer/      authoritative tick loop + console host: one GameServer core (GameServer*.cs partials)
+                                          + *System subsystem classes behind facade partials (ADR 0019)
 src/BlocksBeyondTheStars.Api/             admin web UI + API
 src/BlocksBeyondTheStars.Tools/           backup/export/debug CLI
+src/BlocksBeyondTheStars.WorldHost/       hosted-worlds control plane: accounts, world registry, portal — see docs/developer/HOSTED_WORLDS.md
+src/BlocksBeyondTheStars.ReportHost/      bug-report inbox for F1 feedback + crash reports — see docs/developer/REPORT_HOST.md
 src/BlocksBeyondTheStars.Client.Core/     Unity-free client logic (NetworkClient, ClientWorld), netstandard2.1
 src/BlocksBeyondTheStars.Launcher/        Windows-only WinForms loading-splash launcher (net10.0-windows)
 src/BlocksBeyondTheStars.Launcher.Console/Cross-platform console launcher for Linux (net10.0, SkiaSharp splash)
 tests/BlocksBeyondTheStars.Tests/         xUnit tests (server/shared)
 tests/BlocksBeyondTheStars.Client.Tests/  headless client<->server integration (real NetworkClient vs real GameServer)
-client/                         Unity project (incl. Assets/Tests EditMode/PlayMode suites)
+client/                         Unity project (incl. Assets/Tests EditMode/PlayMode suites); large classes are split
+                                into Class.Part.cs partial files (HudUi.Toasts.cs, SpaceView.Flight.cs, …)
 client/Music/                   background-music MP3s (outside Assets/ on purpose; synced to StreamingAssets/music and streamed on demand — #1167)
 ai-backend/                     optional Python LLM service (missions, NPC/ship-AI text); offline-safe
 tools/                          editor-export merge tools + AI asset generation (tools/ai-assets)
 data/                           data-driven JSON definitions (blocks, items, recipes, ...)
-data/locales/                   localization resource files (mandatory en.json + de.json, community locales fr/es/it)
+data/locales/                   localization resource files (mandatory en.json + de.json, twelve community locales)
 data-online/                    tracked content the client fetches on demand from the repository — never bundled
                                 (the "What's new?" release notes in the twelve community languages, #2227)
 docs/user/                      player-facing manual (USER_MANUAL.md)
@@ -152,7 +156,12 @@ After finishing a set of local changes — before reporting done and before comm
 problems are caught locally instead of at release time:
 
 1. **Tests** — `dotnet test` for the affected suite(s) (`BlocksBeyondTheStars.Tests` for server/shared,
-   `BlocksBeyondTheStars.Client.Tests` for client-core). They must be green.
+   `BlocksBeyondTheStars.Client.Tests` for client-core). They must be green. A red `CodeHealthRatchetTests` means a
+   method grew past 60 lines or a file past 1000: split it; only a reviewed exception rebases the baseline (command in
+   the failure message). A change that shrank the counts rebases too — the passing test prints the command. It
+   lives in `BlocksBeyondTheStars.Tests` but also measures `client/Assets/BlocksBeyondTheStars/Scripts`, so a
+   client-only change runs `dotnet test tests/BlocksBeyondTheStars.Tests --filter FullyQualifiedName~CodeHealthRatchetTests`
+   too.
 2. **Warning check** — a clean rebuild (`dotnet build --no-incremental`) and confirm **0 warnings / 0 errors**.
    The Roslyn analyzers are on and CI builds with `-warnaserror`, so a warning fails CI. Don't rely on the
    `dotnet test -v minimal` output — it hides warnings.

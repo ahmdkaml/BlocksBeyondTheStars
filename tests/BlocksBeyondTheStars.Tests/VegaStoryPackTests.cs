@@ -8,7 +8,6 @@ using System.Linq;
 using BlocksBeyondTheStars.GameServer;
 using BlocksBeyondTheStars.Networking;
 using BlocksBeyondTheStars.Networking.Messages;
-using BlocksBeyondTheStars.Networking.Transport;
 using BlocksBeyondTheStars.Persistence;
 using BlocksBeyondTheStars.Shared.Configuration;
 using BlocksBeyondTheStars.Shared.Content;
@@ -55,38 +54,6 @@ public sealed class VegaStoryPackTests : IDisposable
 
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         try { Directory.Delete(_root, recursive: true); } catch { /* best-effort temp cleanup */ }
-    }
-
-    /// <summary>Records every server send so a test can assert who was told what, in order.</summary>
-    private sealed class RecordingTransport : IServerTransport
-    {
-        public event Action<int>? ClientConnected;
-        public event Action<int>? ClientDisconnected;
-        public event Action<int, byte[]>? PayloadReceived;
-
-        public readonly List<(int Conn, object Msg)> Sent = new();
-
-        public void Start(int port) { }
-
-        public void Send(int connectionId, byte[] payload, DeliveryMode mode)
-        {
-            if (NetCodec.Decode(payload) is { } m) Sent.Add((connectionId, m));
-        }
-
-        public void Broadcast(byte[] payload, DeliveryMode mode)
-        {
-            if (NetCodec.Decode(payload) is { } m) Sent.Add((int.MinValue, m));
-        }
-
-        public void Poll() { _ = ClientConnected; _ = ClientDisconnected; _ = PayloadReceived; }
-        public void Stop() { }
-        public void Dispose() { }
-
-        public List<T> To<T>(PlayerSession who) => Sent.Where(x => x.Conn == who.ConnectionId).Select(x => x.Msg).OfType<T>().ToList();
-
-        public List<string> LineKeys(PlayerSession who) => To<ShipAiLine>(who).Where(l => l.LineKey.Length > 0).Select(l => l.LineKey).ToList();
-
-        public List<string> Plays(PlayerSession who) => To<CutscenePlay>(who).Select(c => c.CutsceneId).ToList();
     }
 
     private SqliteWorldRepository Repo(string world)
@@ -621,7 +588,7 @@ public sealed class VegaStoryPackTests : IDisposable
         server.SkipTutorialForTest(p);
 
         Assert.Equal("resolution", server.TrackChapterIdForTest(p));
-        Assert.Contains(p.CutsceneQueue, q => q.Id == StoryCutsceneIds.Recap
+        Assert.Contains(p.Story.CutsceneQueue, q => q.Id == StoryCutsceneIds.Recap
                                               && LineText.SplitArgs(q.Arg).Contains("story.vega.ch.core"));
 
         // #2478: the recap, then the stand-down and the ending on the director (chained, no 90 s gaps) — no StoryResolved.
@@ -663,7 +630,7 @@ public sealed class VegaStoryPackTests : IDisposable
         Assert.True(Has(p, Started));
         Assert.Equal("service", server.TrackChapterIdForTest(p));
         Assert.DoesNotContain(StoryCutsceneIds.Recap, transport.Plays(p)); // they lived through it
-        Assert.DoesNotContain(p.CutsceneQueue, q => q.Id == StoryCutsceneIds.Recap);
+        Assert.DoesNotContain(p.Story.CutsceneQueue, q => q.Id == StoryCutsceneIds.Recap);
     }
 
     [Fact]

@@ -29,11 +29,13 @@ server, unlock cursor).
 published `GameServer` exe is bundled under `StreamingAssets/server/` (`scripts/publish-local-server.ps1`)
 and `LocalServerLauncher` starts it bound to `127.0.0.1` on a free port, then the normal `NetworkClient`
 connects; it is stopped on quit. This uses the real server unchanged, identical to multiplayer.
-(Option B — a true in-process server retargeted to netstandard2.1 — was left as a later optimization.)
+(Option B — a true in-process server retargeted to netstandard2.1 — later shipped for the browser build only:
+`GameServer` and `Persistence` also build a `netstandard2.1` library, which the WebGL client runs in-process over the
+`LoopbackTransport` (`BrowserLocalServer`, with the managed `MemoryWorldRepository`); desktop keeps the child process.)
 "Host Game" (open-to-LAN of the existing saves) and "Join Server" use the same client.
 
 **Rendering.** `ChunkMesher` does per-face culling and UV-maps into the procedural `BlockTextureAtlas`
-(a 16×16 grid of 64×64-px tiles, generated in code, plus a Sobel-derived normal atlas); blocks render
+(a 32×32 grid of 64×64-px tiles, generated in code, plus a Sobel-derived normal atlas); blocks render
 through the dual-pipeline `BlockAtlas` shader under
 URP (see `URP_MIGRATION.md`). The player avatar, remote players, creatures, NPCs and enemies are
 code-built blocky models.
@@ -82,7 +84,10 @@ expandable interiors pending); hyperspace system-to-system travel (planned).
 ## Key files
 
 - `client/Assets/BlocksBeyondTheStars/Scripts/WorldRig.cs` — builds the in-game rig in code.
-- `client/Assets/BlocksBeyondTheStars/Scripts/SpaceView.cs` — space scene, flight, launch/landing.
+- `client/Assets/BlocksBeyondTheStars/Scripts/SpaceView.cs` — space scene, flight, launch/landing: the shell
+  (enter/exit, the frame loop) plus one `SpaceView.<Concern>.cs` partial per concern (`Flight` with launch and
+  landing, `Scene`, `Models`, `Structures`, `Entities`, `Combat`, `Targeting`, `Scanner`, `Eva`, `Docking`,
+  `Encounters`, `Debris`, `ShipFx`, `Hud`, `LandMap`, `Capture`).
 - `client/Assets/BlocksBeyondTheStars/Scripts/ClientSettings.cs` — settings + per-preset graphics.
 - `client/Assets/BlocksBeyondTheStars/Editor/BuildScript.cs` — `BuildWindows` player build + always-included shaders.
 - `scripts/build-client.ps1` — one-command build (sync libs + publish server + headless Unity batch build).

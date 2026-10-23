@@ -19,10 +19,8 @@ namespace BlocksBeyondTheStars.Client
     {
         public GameBootstrap Game;
 
-        public static VendorChoicePrompt Instance { get; private set; }
-
         /// <summary>True while the question is on screen — PlayerController leaves E to it then.</summary>
-        public static bool IsOpen => Instance != null && Instance._shown;
+        public bool IsOpen => _shown;
 
         /// <summary>The E press that opened the prompt must not also answer it.</summary>
         private const float KeyGraceSeconds = 0.25f;
@@ -36,16 +34,6 @@ namespace BlocksBeyondTheStars.Client
         private float _openedAt;
         private Action _onFirst;
         private Action _onSecond;
-
-        private void Awake() => Instance = this;
-
-        private void OnDestroy()
-        {
-            if (Instance == this)
-            {
-                Instance = null;
-            }
-        }
 
         /// <summary>Shows the question for one vendor. Returns false (and shows nothing) when it cannot, so the caller
         /// falls back to opening the market directly.</summary>
@@ -151,21 +139,15 @@ namespace BlocksBeyondTheStars.Client
             _overlay.SetActive(false);
         }
 
-        private string Tr(string key)
-        {
-            string s = Game?.Localizer?.Get(key);
-            if (!string.IsNullOrEmpty(s) && s != key)
-            {
-                return s;
-            }
+        private string Tr(string key) => UiKit.Tr(Game?.Localizer, key, Fallback);
 
-            return key switch
-            {
-                "ui.vendor.choice_title" => "Trade or talk?",
-                "ui.vendor.trade_choice" => "Trade ({key:Interact})",
-                "ui.vendor.talk" => "Talk",
-                _ => key,
-            };
-        }
+        /// <summary>English text while the localizer is not ready. A cached delegate, so a lookup allocates nothing.</summary>
+        private static readonly System.Func<string, string> Fallback = key => key switch
+        {
+            "ui.vendor.choice_title" => "Trade or talk?",
+            "ui.vendor.trade_choice" => "Trade ({key:Interact})",
+            "ui.vendor.talk" => "Talk",
+            _ => key,
+        };
     }
 }

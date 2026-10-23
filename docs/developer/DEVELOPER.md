@@ -119,6 +119,10 @@ These are the same two suites `run-tests.ps1` / `run-tests.sh` run by default. T
   ([Directory.Build.props](../../Directory.Build.props)) for a friction-free dev loop. The tree currently
   builds clean (0 warnings), so this only guards against regressions. The `.trx` results are uploaded as a
   run artifact for inspection.
+- **Methods and files may not grow.** `CodeHealthRatchetTests` (in the server suite, so it also runs for
+  client-only changes) fails when a file under `src/` or `client/Assets/BlocksBeyondTheStars/Scripts/` gains a
+  method over 60 lines or newly crosses 1000 lines beyond its committed baseline — split instead of growing; the
+  rebase command and the rules are in [SERVER_TESTING.md](SERVER_TESTING.md) § "CI rules that will bite you".
 - **Docs-only changes skip the build — without blocking the PR.** A small `changes` job lists the PR's
   changed files (via the GitHub API) and sets `nondocs=true` if any file is not documentation (Markdown,
   `docs/**`, licences, issue/PR templates). If it is docs-only, the heavy `build-test` and `format` jobs are
@@ -527,18 +531,23 @@ silently misbehaves*. Check them in this order:
    via `Register(<next free id>, typeof(NewMessage))` — ids are append-only, never reuse one.
    Forgetting this makes `NetCodec.Encode` throw at send time: the action simply "does
    nothing" in-game while unit tests (which call methods directly) still pass. New *fields*
-   on registered classes and nested types need no registration.
+   on registered classes and nested types need no registration. The message class itself lives
+   in `src/BlocksBeyondTheStars.Networking/Messages/<Domain>Messages.cs` — one file per feature;
+   there is no root `Messages.cs` any more.
 4. **Unity layer used by name.** `LayerMask.NameToLayer("X")` returns **-1 in the batch
    build** for freshly added layers even though `TagManager.asset` has the name. Use the
    fixed layer **index** (`gameObject.layer = idx`, cull mask `1 << idx`), optionally trying
    the name first and falling back to the index.
-5. **Block id beyond the texture atlas.** `BlockTextureAtlas` (client) has `Cols × Rows`
-   tile slots (currently 16×16 = 256). A block id beyond that renders as an untextured grey
-   tile with no error. When adding many blocks, raise `Cols`/`Rows`. The slots above the real
-   block ids are handed out **downward** — first the ground/flora variants (`BuildVariants`),
-   then the per-face cap tiles (`BuildCapTiles`, e.g. the log's end grain). Each of those
-   passes stops rather than overwriting a real id, so a full atlas degrades to "no variants /
-   one tile on all faces", never to a corrupted block.
+5. **Block id beyond the atlas's block band.** `BlockTextureAtlas` (client) has `Cols × Rows`
+   tile slots (32×32 = 1024, from `AtlasBands` in `Client.Core`), shared out in bands (#1952):
+   one slot per block id below `AtlasBands.BlockEnd` (400), then the official extra tiles, the
+   animation strips and the derived tiles. A block id at or above `GameContent.AtlasTileCapacity`
+   (= `BlockEnd`, held equal by `AtlasSlotAllocatorTests`) fails content validation, so the content
+   is refused instead of drawing a grey tile; when adding many blocks, move the band boundaries. The
+   derived tiles are handed out **downward** from the top slot — first the ground/flora variants
+   (`BuildVariants`), then the per-face cap tiles (`BuildCapTiles`, e.g. the log's end grain). Each
+   of those passes stops at the band's start rather than overwriting a slot below it, so a full
+   band degrades to "no variants / one tile on all faces", never to a corrupted block.
 6. **Duplicate `System.*` assemblies.** If Unity complains about a duplicate assembly after
    a lib sync, delete that DLL from `client/Assets/Plugins/` — Unity already ships its own
    copy.
@@ -645,7 +654,8 @@ mechanisms keep that safe; a change to the block set has to feed them:
    (`backups/pre-remap_…`) is written first. Anything new that persists a *numeric* block id must join that remap —
    prefer block keys in new persisted data. Before v2026.10.4 (#2221) the hull was left out, so a hull built before a
    block-adding update kept the ids of its release and was later read with the wrong palette; a one-time pass
-   (`GameServerHullRepair`, #2751, marker `save|hull_repair_2751` in `StampedFeatures`) decodes such hulls through the
+   (`HullRepairSystem`, run from `Start` via `GameServerHullRepair.cs`, #2751, marker `save|hull_repair_2751` in
+   `StampedFeatures`) decodes such hulls through the
    frozen per-release block sets in `HistoricalBlockSets` and rewrites one only when every reading agrees (backup
    `backups/pre-hull-repair_…` first; an ambiguous hull is left alone and named in the log). On SQLite the
    palette that misread the hull is pinned when possible: a `pre-remap_…` copy whose save version is below 2 was last
@@ -670,3 +680,87 @@ mechanisms keep that safe; a change to the block set has to feed them:
 
 Do not open a save a development build touched with an older released build, and do not join release-hosted worlds
 with a development build that has another block set: released builds before v9 of the protocol have neither check.
+
+One Unity-only check moves as well: the EditMode test `BlockAtlasLooksGoldenEditModeTests` (suite `UnityEdit`, which PR
+CI does not run) pins checksums of the code-painted block tiles, and its "all blocks" checksum covers every block in the
+content — so adding, removing, renaming or recolouring a block changes it. When the per-block pins still pass, that is
+the cause: re-pin "all blocks" with the value the failure message prints.
+
+## Adding a server option
+
+Every `--switch` and `BBS_*` environment variable `ServerConfig` accepts is one row of `ServerConfigOptions.All` in
+[`ServerConfigOptions.cs`](../../src/BlocksBeyondTheStars.Shared/Configuration/ServerConfigOptions.cs) (#2889): the
+canonical switch and its aliases, the canonical variable and its fallbacks, one parser that sets the value (`Text`,
+`Int`, `Bool`, `Flag`, … over a `ServerConfig` setter) and a one-line English help text. `ServerConfig.ApplyCommandLine`
+and `ServerConfig.ApplyEnvironment` both walk that table, so a new option is one row — `Both(…)`, `Switch(…)` or
+`Variable(…)` — plus the `ServerConfig` property it sets; there is no second switch or `if` chain to extend. The row
+order is the order the variables are applied and logged: the rows with a variable come first, then the
+command-line-only rows. `ServerConfigOptionsTests` pins the whole set (the row count, every switch spelling and the
+variable order), so a new option also extends its pinned lists. Document an option operators need in
+[SELF_HOSTING.md](SELF_HOSTING.md).
+
+## Extracting a GameServer subsystem
+
+`GameServer` is one partial class over `GameServer.cs` and more than 200 `GameServer*.cs` feature files. Since the
+2026-10 code-health pass a feature slice with state of its own moves out into a top-level subsystem class; the shape and
+the reasons are in [ADR 0019](adr/0019-gameserver-subsystems.md), and `CrewSystem.cs` / `GameServerCrews.cs` are the
+worked example (a narrow host); `BioLabSystem.cs` and `ObserverSystem.cs` show wide ones. The steps for a partial
+`GameServerX.cs`:
+
+1. **Create `src/BlocksBeyondTheStars.GameServer/XSystem.cs` from `GameServerX.cs`:** same licence header and `using`s,
+   and `internal sealed class XSystem` instead of `public sealed partial class GameServer`. Keep the member order and
+   the 4-space member indentation, so `git blame -C` follows the lines. The system owns the partial's constants,
+   fields, nested types and method bodies, verbatim.
+2. **Let the compiler list the host.** Build. For every CS0103/CS0120 on a `GameServer` member, write the use as
+   `_host.X` and add one line to `internal interface IXHost : IServerHost` at the top of `XSystem.cs`, plus one explicit
+   one-line implementation on `GameServer` (`string IXHost.NameOf(string playerId) => NameOf(playerId);`). Members
+   `IServerHost` already has (`Send`, `Reject`, `RaiseGameEvent`, `FindSessionByPlayerId`, `World`, `Uptime`, `Worlds`,
+   `SendPlayerState`, `SendInventory`) need no line. Fields become host properties (`_world` → `_host.World`). A static
+   method that now calls `_host` loses `static`; a private static `GameServer` helper becomes `internal static` and is
+   called as `GameServer.X`; a private nested type or constant becomes `internal` and is written `GameServer.X` (e.g.
+   `EquipmentSystem` reads `GameServer.HotbarSlots`, `NpcWorkSystem` the nested `GameServer.ServerNpc`). An
+   optional parameter the system never passes is left out of the host line; the implementation forwards to the server
+   member, which supplies its own default.
+3. **Constructor:** `(IXHost host[, GameContent content][, IWorldRepository repo][, IGameLogger log][, ServerConfig
+   config])`, storing references only. Never call the host from the constructor and never cache what it returns — the
+   worlds, the active world and the ship cursor do not exist yet when it runs, or change per call.
+4. **Rewrite `GameServerX.cs` as the facade:** `public sealed partial class GameServer : IXHost` with a one-line facade
+   (same name, signature and visibility) for every member that sibling partials, `GameServerDispatch.cs`, the tick
+   schedule or the tests call, every `*ForTest` seam unchanged and delegating, and the explicit `IXHost`
+   implementations. A seam whose body reads the system's private state moves into the system as an `internal` method
+   and the public seam delegates to it. Inside an explicit implementation, call the server's member by its simple name;
+   `((IXHost)this).X` would recurse.
+5. **Register it in `GameServer.Systems.cs`:** add `private XSystem _xSystem = null!;` to the field block and
+   `_xSystem = new XSystem(this, …);` to `ConstructSystems()`, each in alphabetical order (the pre-seeded `// slot:`
+   lines of the 2026-10 pass are all filled now). Touch no other line there, and do not edit the `GameServer`
+   constructor — it already calls `ConstructSystems()`, right before it builds the tick schedules, which must stay its
+   last statements because a schedule entry may capture a system field. Two variants need no field: a one-shot pass
+   without state is built where it runs (`HullRepairSystem`, built by `RepairLegacyShipHulls` in
+   `GameServerHullRepair.cs`), and pure geometry without state becomes a static class (`ShipExtensionGeometry`, the
+   server-side glue stays in `GameServerShipExtension.cs`); leave a comment line in both blocks so the next reader
+   finds it.
+6. **Check it is a pure move:** reject and log strings, tick `Guard` names, defaults and RNG seeds are unchanged; a field
+   initializer that moved into the system now runs when `ConstructSystems` builds it, near the end of the constructor
+   (name it in the change if it seeds an RNG or a cache); no test file changed, and the public `*ForTest` count is the
+   same. Then run the feature's test classes, `dotnet build BlocksBeyondTheStars.sln --no-incremental -warnaserror`
+   (0 warnings),
+   `dotnet format BlocksBeyondTheStars.CI.slnf --verify-no-changes` and the code-health ratchet
+   (`--filter FullyQualifiedName~CodeHealthRatchetTests`). A long method that moved into `XSystem.cs` is reported as
+   growth there; when it is only the move, refresh the baseline with the rebase command the test prints.
+
+A host with more than 20 members is allowed ("wide, shrink later" in ADR 0019) — list it in the change, and do not widen
+`IServerHost` for one system: a member joins it only when at least three systems need it.
+
+## Adding an in-world panel
+
+A modal panel that opens next to the player in a world (a device's dialog, a picker, a list) derives from `UiPanel`
+([`UiPanel.cs`](../../client/Assets/BlocksBeyondTheStars/Scripts/UiPanel.cs), #2913) instead of hand-rolling the canvas,
+the modal overlay, the menu-owner arbiter, the Esc guard and `L(key)`: give it a `CanvasName` and a
+`CanvasSortingOrder`, pick one of the three shapes in [UI_PANELS.md](UI_PANELS.md) (build once and toggle; canvas once
+with an overlay per open; build on open and destroy on close), and add it in `WorldRig.Build` with `x.Game = boot;`
+right after its `AddComponent` — setting `Game` registers it in `GameBootstrap.Context`. Callers reach it as
+`Game?.Context.Panel<XxxUi>()`; do not add a `static Instance`. A view of the rig that is not such a panel (an FX or
+world-object view, a prompt) gets a typed entry in `RigViews.cs` instead, set in `WorldRig.Build` right after its
+`AddComponent` (`boot.Views.X = x;`) and read as `Game.Views.X` (#2914). `UiPanelEditModeTests` and
+`RigViewsEditModeTests` (suite `UnityEdit`) pin the base and both registries; as for every `client/Assets` change, build
+the client locally, because PR CI never compiles it.

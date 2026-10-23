@@ -22,7 +22,7 @@ namespace BlocksBeyondTheStars.GameServer;
 /// </summary>
 public sealed partial class GameServer
 {
-    private const float ShipStationReach = 3f;
+    internal const float ShipStationReach = 3f;
     private const int PadGroundProtectDepth = 9; // pad ground under a parked ship is not mineable
 
     /// <summary>The landed-ship record of the player currently being served (the ship cursor). Each player
@@ -302,7 +302,7 @@ public sealed partial class GameServer
         {
             foreach (var coord in seen)
             {
-                session.SentChunks.Remove(coord);
+                session.Streaming.SentChunks.Remove(coord);
             }
         }
     }
@@ -531,7 +531,7 @@ public sealed partial class GameServer
     /// their own ship at their own landing pad.</summary>
     public Vector3i ShipAnchorOf(string playerId) => AnchorOf(_worlds.Active.LandedFor(playerId));
 
-    private static Vector3i AnchorOf(LandedShip rec) => rec.Placed
+    internal static Vector3i AnchorOf(LandedShip rec) => rec.Placed
         ? new Vector3i(rec.Origin.X + rec.Structure.Width / 2, rec.Origin.Y - 1, rec.Origin.Z + rec.Structure.Length / 2)
         : default;
 

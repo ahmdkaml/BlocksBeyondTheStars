@@ -32,6 +32,10 @@ namespace BlocksBeyondTheStars.Client
 
         public ShellPhase Phase { get; private set; } = ShellPhase.Studio; // studio splash → title splash → menu
         public ClientSettings Settings { get; private set; }
+
+        /// <summary>EditMode-test seam: an AppShell that never ran Awake has no settings; the menu builders read them. Never called by game code.</summary>
+        public void SetSettingsForTest(ClientSettings settings) => Settings = settings;
+
         public GameContent Content { get; private set; }
 
         /// <summary>The data directory <see cref="Content"/> was parsed from — GameBootstrap reuses the
@@ -1956,7 +1960,7 @@ namespace BlocksBeyondTheStars.Client
                     }
                     else if (boot != null && (boot.MenuOpen || boot.MenuInputHandledThisFrame || boot.AwaitingRespawnConfirm || boot.VegaPrologueActive
                         || GameBootstrap.CutsceneActive
-                        || (ResolutionCinematic.Instance != null && ResolutionCinematic.Instance.Playing)))
+                        || (boot.Views.Resolution != null && boot.Views.Resolution.Playing)))
                     {
                         // The in-game menu / a modal owns this Esc press — or the death prompt is up
                         // (#413: the quit dialog would open invisibly BEHIND its backdrop, sortingOrder

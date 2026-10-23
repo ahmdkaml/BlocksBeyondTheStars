@@ -55,7 +55,7 @@ public sealed class NpcVoiceWiringTests
 
     [Fact]
     public void TheDialogPanel_LetsTheNpcSpeakEachLine()
-        => Assert.Contains("NpcView.Instance.DialogLine(m.NpcId, m.Text, opening)", Script("NpcDialogUi.cs"));
+        => Assert.Contains("Game.Views.Npcs.DialogLine(m.NpcId, m.Text, opening)", Script("NpcDialogUi.cs"));
 
     [Fact]
     public void VegasVoice_TellsTheNpcsToHush()
@@ -79,7 +79,7 @@ public sealed class NpcVoiceWiringTests
     [Fact]
     public void TheHud_CelebratesAchievements_AfterResearch_NotInACutscene()
     {
-        string hud = Script("HudUi.cs");
+        string hud = ClientTestPaths.ScriptPartsText("HudUi"); // HudUi.cs + its widget parts (#2909)
         Assert.Contains("Game.AchievementsUnlocked.Dequeue()", hud);
         Assert.Contains("\"ui.achv.banner\"", hud);
         Assert.Contains("Cue(\"ui_success\"", hud);
@@ -88,7 +88,7 @@ public sealed class NpcVoiceWiringTests
         Assert.True(research > 0 && achievement > research, "research drains first");
 
         // The unlock handler only queues — no status line, no sound at the unlock any more.
-        string boot = Script("GameBootstrap.cs");
+        string boot = Script("GameBootstrap.PlayerState.cs"); // the achievement handlers' GameBootstrap part (#2912)
         int handler = boot.IndexOf("AchievementUnlockedReceived += m =>", StringComparison.Ordinal);
         Assert.True(handler > 0);
         string body = boot.Substring(handler, boot.IndexOf("};", handler, StringComparison.Ordinal) - handler);

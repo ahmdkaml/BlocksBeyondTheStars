@@ -23,16 +23,23 @@ public sealed class SeamWiringTests
         return end < 0 ? src.Substring(start) : src.Substring(start, end - start);
     }
 
+    /// <summary>The HUD's source: <c>HudUi.cs</c> and its <c>HudUi.*.cs</c> widget parts (#2909).</summary>
+    private static string Hud() => ClientTestPaths.ScriptPartsText("HudUi");
+
+    /// <summary><see cref="Body"/> inside the HUD part that declares <paramref name="signature"/>.</summary>
+    private static string HudBody(string signature)
+        => Body(ClientTestPaths.ScriptParts("HudUi").FirstOrDefault(p => p.Contains(signature, StringComparison.Ordinal)) ?? string.Empty, signature);
+
     [Fact]
     public void TheEKey_AndTheTalkPrompt_AskTheSamePicker()
     {
-        string boot = Script("GameBootstrap.cs");
+        string boot = Script("GameBootstrap.Entities.cs"); // the NPC pickers' GameBootstrap part (#2912)
         Assert.Contains("InteractReach.NearestTalkableNpc(Npcs, PlayerPosition.x, PlayerPosition.y, PlayerPosition.z, Circumference)", boot);
 
-        string player = Script("PlayerController.cs");
-        string hud = Script("HudUi.cs");
+        string player = ClientTestPaths.PlayerControllerSources();
+        string hud = Hud();
         Assert.Contains("Game.NearestTalkableNpc()", player);
-        Assert.Contains("Game.NearestTalkableNpc()", Body(hud, "private string NearestTalkableNpc()"));
+        Assert.Contains("Game.NearestTalkableNpc()", HudBody("private string NearestTalkableNpc()"));
 
         // Neither measures on its own any more — the raw, seam-blind distance is gone from both.
         Assert.DoesNotContain("new Vector3(npcs[i].X, npcs[i].Y, npcs[i].Z)", player);
@@ -42,7 +49,7 @@ public sealed class SeamWiringTests
     [Fact]
     public void TheCrate_BaseCore_AndBeacon_InTheCrosshair_MatchAcrossTheSeam()
     {
-        string player = Script("PlayerController.cs");
+        string player = ClientTestPaths.PlayerControllerSources();
         Assert.Contains("InteractReach.CrateAtCell(Game.Containers, crateHit.x, crateHit.y, crateHit.z, Game.Circumference)", player);
         Assert.DoesNotContain("(int)c.X == crateHit.x", player);
 
@@ -54,14 +61,14 @@ public sealed class SeamWiringTests
     [Fact]
     public void TheCrateLine_AndTheLootKeys_AskTheSamePicker()
     {
-        Assert.Contains("InteractReach.NearestContainer(", Body(Script("HudUi.cs"), "private string LootText("));
-        Assert.Contains("InteractReach.NearestContainer(", Body(Script("PlayerController.cs"), "private string NearestContainerId("));
+        Assert.Contains("InteractReach.NearestContainer(", HudBody("private string LootText("));
+        Assert.Contains("InteractReach.NearestContainer(", Body(ClientTestPaths.PlayerControllerSources(), "private string NearestContainerId("));
     }
 
     [Fact]
     public void TheBaseZone_TheAirDome_AndTheBeamList_MeasureTheShortWay()
     {
-        Assert.Contains("InteractReach.InBaseZone(", Body(Script("HudUi.cs"), "private NetBase FindBaseZone()"));
+        Assert.Contains("InteractReach.InBaseZone(", HudBody("private NetBase FindBaseZone()"));
         Assert.Contains("dome.Transform.position = Game.ScenePos(b.X, b.Y + 0.5f, b.Z);", Script("BaseShieldView.cs"));
         Assert.Contains("InteractReach.SeamDistanceSquared(", Script("BeamPadUi.cs"));
     }
@@ -83,11 +90,11 @@ public sealed class SeamWiringTests
     [Fact]
     public void TheF1Screenshot_IsTaken_BeforeTheDialogHidesTheHud()
     {
-        string hud = Script("HudUi.cs");
+        string hud = Hud();
         Assert.Contains("private void LateUpdate()", hud);
         Assert.Contains("bool show = !Game.ScreenMenuOpen", hud);
 
-        string boot = Script("GameBootstrap.cs");
+        string boot = Script("GameBootstrap.Menus.cs"); // the menu owners' GameBootstrap part (#2912)
         Assert.Contains("if (!_hudMenuOwners.Contains(owner))", Body(boot, "public bool ScreenMenuOpen"));
 
         string feedback = Script("FeedbackUi.cs");

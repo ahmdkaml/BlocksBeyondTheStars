@@ -9,7 +9,6 @@ using System.Text.Json;
 using BlocksBeyondTheStars.GameServer;
 using BlocksBeyondTheStars.Networking;
 using BlocksBeyondTheStars.Networking.Messages;
-using BlocksBeyondTheStars.Networking.Transport;
 using BlocksBeyondTheStars.Persistence;
 using BlocksBeyondTheStars.Shared.Configuration;
 using BlocksBeyondTheStars.Shared.Content;
@@ -68,41 +67,6 @@ public sealed class StoryGapClosureTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* best-effort temp cleanup */ }
     }
 
-    /// <summary>Records every server send so a test can assert who was told what, in order.</summary>
-    private sealed class RecordingTransport : IServerTransport
-    {
-        public event Action<int>? ClientConnected;
-        public event Action<int>? ClientDisconnected;
-        public event Action<int, byte[]>? PayloadReceived;
-
-        public readonly List<(int Conn, object Msg)> Sent = new();
-
-        public void Start(int port) { }
-
-        public void Send(int connectionId, byte[] payload, DeliveryMode mode)
-        {
-            if (NetCodec.Decode(payload) is { } m) Sent.Add((connectionId, m));
-        }
-
-        public void Broadcast(byte[] payload, DeliveryMode mode)
-        {
-            if (NetCodec.Decode(payload) is { } m) Sent.Add((int.MinValue, m));
-        }
-
-        public void Poll() { _ = ClientConnected; _ = ClientDisconnected; _ = PayloadReceived; }
-        public void Stop() { }
-        public void Dispose() { }
-
-        public List<TMsg> To<TMsg>(PlayerSession who) => Sent.Where(x => x.Conn == who.ConnectionId).Select(x => x.Msg).OfType<TMsg>().ToList();
-
-        public List<string> LineKeys(PlayerSession who) => To<ShipAiLine>(who).Where(l => l.LineKey.Length > 0).Select(l => l.LineKey).ToList();
-
-        public List<string> Plays(PlayerSession who) => To<CutscenePlay>(who).Select(c => c.CutsceneId).ToList();
-
-        public List<string> Offers(PlayerSession who)
-            => To<ShipAiLine>(who).Where(l => l.LineKey == SvGameServer.ChapterOfferLine).Select(l => l.LineArg).ToList();
-    }
-
     /// <summary>A world without a world story (unless <paramref name="configure"/> sets one) and without a starter ship, its
     /// settlements, wrecks and factories — research is open everywhere, nothing else talks.</summary>
     private (SvGameServer Server, RecordingTransport Transport) World(string world, Action<ServerConfig>? configure = null, GameContent? content = null)
@@ -152,7 +116,7 @@ public sealed class StoryGapClosureTests : IDisposable
         server.TickStoryPacksForTest(p);
         server.SkipTutorialForTest(p);
         Assert.Contains(StoryPackKeys.Done(T), p.State.Milestones);
-        p.StoryPackPlaySeconds += 90; // #2498: the skip suggests the flight courses silently — an offer; the next waits the gap
+        p.Story.StoryPackPlaySeconds += 90; // #2498: the skip suggests the flight courses silently — an offer; the next waits the gap
         p.State.Milestones.Add(StoryPackKeys.ChapterOffered(T, "c15"));
         return p;
     }
@@ -244,7 +208,7 @@ public sealed class StoryGapClosureTests : IDisposable
         server.DisconnectLocalPlayerForTest("Pilot");
         transport.Sent.Clear();
         var back = Join(server, 2, "Pilot");
-        Assert.Equal(spot, back.CutsceneQueue.Single(q => q.Id == "anchored").Anchor);
+        Assert.Equal(spot, back.Story.CutsceneQueue.Single(q => q.Id == "anchored").Anchor);
         server.AdvanceUptimeForTest(SvGameServer.CutsceneJoinSettleSeconds);
         for (int i = 0; i < 6 && !transport.Plays(back).Contains("anchored"); i++)
         {
@@ -258,10 +222,10 @@ public sealed class StoryGapClosureTests : IDisposable
 
         // Elsewhere the place means nothing — the scene comes without it (the client frames the player).
         string home = back.CurrentLocationId;
-        back.CutsceneQueue.Clear();
+        back.Story.CutsceneQueue.Clear();
         back.CurrentLocationId = "elsewhere";
         server.CutscenesOnJoinForTest(back);
-        Assert.Null(back.CutsceneQueue.Single(q => q.Id == "anchored").Anchor);
+        Assert.Null(back.Story.CutsceneQueue.Single(q => q.Id == "anchored").Anchor);
         back.CurrentLocationId = home;
 
         // The receipt forgets it.
@@ -300,11 +264,11 @@ public sealed class StoryGapClosureTests : IDisposable
         var rest = p.State.Milestones.Where(m => !m.Contains(":cut:", StringComparison.Ordinal)).ToList();
         p.State.Milestones = new HashSet<string>(
             new[] { StoryPackKeys.CutsceneSent(T, "tut.welcome"), StoryPackKeys.CutsceneSent(V, StoryCutsceneIds.Prologue) }.Concat(rest));
-        p.CutsceneQueue.Clear();
+        p.Story.CutsceneQueue.Clear();
 
         server.CutscenesOnJoinForTest(p);
-        Assert.Equal(new[] { StoryCutsceneIds.Prologue, "tut.welcome" }, p.CutsceneQueue.Select(q => q.Id));
-        Assert.Equal(new[] { V, T }, p.CutsceneQueue.Select(q => q.PackId));
+        Assert.Equal(new[] { StoryCutsceneIds.Prologue, "tut.welcome" }, p.Story.CutsceneQueue.Select(q => q.Id));
+        Assert.Equal(new[] { V, T }, p.Story.CutsceneQueue.Select(q => q.PackId));
     }
 
     // ---------------- Events from their real handlers ----------------
@@ -455,10 +419,10 @@ public sealed class StoryGapClosureTests : IDisposable
 
         // Without a course to offer, VEGA explains the wall as before.
         Assert.Contains("vega.hint.tier_gate", transport.LineKeys(veteran));
-        Assert.DoesNotContain("Workshop and titanium", transport.Offers(veteran));
+        Assert.DoesNotContain("Workshop and titanium", transport.OfferArgs(veteran));
 
         // With one, the offer is the telling: no tip after it, and the tip counts as told (it does not come later either).
-        Assert.Equal("Workshop and titanium", Assert.Single(transport.Offers(rookie)));
+        Assert.Equal("Workshop and titanium", Assert.Single(transport.OfferArgs(rookie)));
         Assert.DoesNotContain("vega.hint.tier_gate", transport.LineKeys(rookie));
         var tip = server.VegaTipStateForTest(rookie.State.PlayerId, "tier_gate");
         Assert.Equal(1, tip.Count);
@@ -483,7 +447,7 @@ public sealed class StoryGapClosureTests : IDisposable
             var at = StandAlone(server, p, 0, keep: "data_cache_near");
             server.World.SetBlock(new Vector3i(at.X + 2, at.Y + 1, at.Z), dataCache);
             Ticks(server, 8, 1.1);
-            Assert.Equal(courseThrough ? 0 : 1, transport.Offers(p).Count(o => o == "Knowledge and research"));
+            Assert.Equal(courseThrough ? 0 : 1, transport.OfferArgs(p).Count(o => o == "Knowledge and research"));
             return transport.LineKeys(p).ToArray();
         }
 
@@ -505,7 +469,7 @@ public sealed class StoryGapClosureTests : IDisposable
         var later = LocalPastTraining(server, "Later");
         later.State.Milestones.Add(StoryPackKeys.ChapterDeclined(T, "c8")); // put off: nothing to offer, the line stays
         server.TickStoryPacksForTest(newcomer);
-        Assert.Empty(transport.Offers(newcomer)); // no other course is due — the radio is the moment
+        Assert.Empty(transport.OfferArgs(newcomer)); // no other course is due — the radio is the moment
         foreach (var p in new[] { newcomer, later })
         {
             p.State.KnowledgePoints = 100;
@@ -523,7 +487,7 @@ public sealed class StoryGapClosureTests : IDisposable
         Assert.DoesNotContain("vega.hint.crystal_researchable", transport.LineKeys(newcomer));
         Assert.Contains("vega:hint:crystal_researchable", newcomer.State.Milestones); // told by the offer
         server.TickStoryPacksForTest(newcomer);
-        Assert.Equal("Crystal workshop", Assert.Single(transport.Offers(newcomer)));
+        Assert.Equal("Crystal workshop", Assert.Single(transport.OfferArgs(newcomer)));
         Assert.Contains("crystal_researchable", Pack.Chapters.Single(c => c.Id == "c8").Steps.Single(s => s.Id == "c8.0").HintRefs);
     }
 
@@ -535,7 +499,7 @@ public sealed class StoryGapClosureTests : IDisposable
         var p = LocalPastTraining(server, "Scout");
         Assert.False(server.OfferAbsorbsHintForTest(p, "data_cache_near")); // no moment, no offer due
 
-        p.VegaTipLive = new[] { "data_cache_near" }; // the research course's moment
+        p.Vega.VegaTipLive = new[] { "data_cache_near" }; // the research course's moment
         Assert.True(server.OfferAbsorbsHintForTest(p, "data_cache_near"));
         Assert.True(server.OfferAbsorbsHintForTest(p, "blueprint_affordable")); // the course teaches it too (c2.3)
         Assert.False(server.OfferAbsorbsHintForTest(p, "settlement_near"));     // another course's tip

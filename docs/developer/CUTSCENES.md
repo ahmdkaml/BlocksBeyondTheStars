@@ -318,7 +318,7 @@ The finale's set pieces (synthesis §6.5), bound in `story.json`'s `finale.cutsc
 |---|---|
 | pack `introCutscene` | a **player** pack starts for the player — not on "I know the game" (`skipPack`), and not when the pack would complete silently for this player (every mandatory chapter through, by `autoCompleteIf` or by every step done / `alreadyDoneIf` — a veteran). The **world story's** intro (#2470) plays for a player who arrives with no key of the story (VEGA's prologue, above) |
 | chapter `openCutscene` | a player pack: the chapter's first step is **presented** (activates with its line) — not during a replay, not for a chapter that completes silently. The world story (#2470): at the beat that starts the chapter (before its line), and once for the current chapter at the player's story-track start (never the intro) |
-| chapter `closeCutscene` | a chapter the player **was shown** this session is done (`PlayerSession.PresentedPackChapters`) — not when skipped, replayed or completed silently by evidence |
+| chapter `closeCutscene` | a chapter the player **was shown** this session is done (`PlayerSession.Story.PresentedPackChapters`) — not when skipped, replayed or completed silently by evidence |
 | step `onStart.cutscene` | the step activates with its line (before the line; not in a replay) |
 | step `onComplete.cutscene` | the step completes **non-silently** (it was the chip step, or a react step) — before the done line; not in a replay |
 | beat `cutscene` | the beat reaches a player whose story track has started (#2470: `RevealBeatTo`, after the chapter opening, before the line) |
@@ -429,7 +429,7 @@ template. Rules:
 
 ### Pacing (per player, RAM)
 
-`PlayerSession.CutsceneQueue` holds committed scenes not sent yet; `TickCutscenes` (every server tick, outside the
+`PlayerSession.Story.CutsceneQueue` holds committed scenes not sent yet; `TickCutscenes` (every server tick, outside the
 per-world loop, for every joined non-observing player — a pilot on a body whose world is not loaded, e.g. after an
 in-flight hyperjump, included; #2468 moved it out of `TickShipAi`, which only reaches loaded worlds) and every new commit
 flush it:
@@ -561,7 +561,7 @@ skips a card is marked handled before the pause menu sees it), with `CutsceneScr
 - **Tiers on screen** (one `CinematicFrame` per scene at sorting order 67 — above the prologue 65 and intro 66, below the
   ending 68, the warp 70 and the veil 75): T1 a top banner with the narrator's icon, no letterbox, no input; T2 a thin
   letterbox (45 %), a light dim, the captions, **free input** (the HUD stays; VEGA's panel, the memory flashback and the
-  ending wait while it shows — `CutsceneDirector.HoldsScreen`); while the Tab menu is open over a card the card pauses
+  ending wait while it shows — `Game.Views.Director?.HoldsScreen`); while the Tab menu is open over a card the card pauses
   hidden. T3/T4: full letterbox, a fade out of black, the camera staged per shot.
 - **Dims** (#2497, `CutsceneRules.Dims`): a card or an overlay dims **only the world** — 0.18 on the screen's own tiny
   world-dim canvas at sorting order **9** (`CutsceneScreen.WorldDimSortingOrder`: above the name tags 8, below the HUD 10,
@@ -570,7 +570,7 @@ skips a card is marked handled before the pause menu sees it), with `CutsceneScr
   with the screen and eased out with it. HUD, crosshair and VEGA's
   objective chip stay bright — the player keeps playing under a card. The frame's own cover (order 67, over everything)
   stays for the black-outs of staged scenes, the 0.55 behind a reading frame and the credits' 0.85. Under a T2 card VEGA's
-  panel hides only her speech panel, its folded tab and the prologue dim (`CutsceneDirector.ShowsCard`, a `CanvasGroup`), and
+  panel hides only her speech panel, its folded tab and the prologue dim (`Game.Views.Director?.ShowsCard`, a `CanvasGroup`), and
   keeps the objective chip; every other scene still takes the whole panel away.
 - **Caption styles** (`CutsceneScreen`): `subtitle` (the frame's lower-third caption), `title_card` (kicker + big title,
   centred), `speaker` (box above the lower bar with the narrator's icon, name and colour from the pack's `narrator` — VEGA's

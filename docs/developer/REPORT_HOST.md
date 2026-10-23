@@ -22,7 +22,7 @@ game server (crash flush) ──┘    (x-bugreport-key)    + files    └──
 |---|---|---|
 | `POST /api/bugreport` | header `x-bugreport-key` | Ingest — same JSON body the game sends to Wix; responds `{ ok, bugReportId }` |
 | `GET /api/reports?since=&status=&category=&source=&limit=&cursor=` | header `x-report-read-key` | Delta-sync list: `{ items, nextCursor, hasMore }`, ascending `createdAt` |
-| `GET /api/reports/{id}` | read key | One report (full, incl. parsed `reportJson`) |
+| `GET /api/reports/{id}` | read key | One report (full, incl. parsed `reportJson` without the reply key) |
 | `GET /api/reports/{id}/screenshot` | read key | The screenshot image |
 | `GET /api/reports/{id}/attachment/{index}` | read key | One file of a texture submission, as a named download (see *Texture submissions*) |
 | `PATCH /api/reports/{id}` `{"status":"new\|triaged\|waiting_for_player\|player_replied\|done"}` | admin Basic Auth, JSON content type | Triage from scripts/CI — covers the whole report pair (#1380); the answer lists the rows changed as `reportIds` |
@@ -34,12 +34,13 @@ game server (crash flush) ──┘    (x-bugreport-key)    + files    └──
 | `GET /admin`, `/admin/report/{id}` | admin Basic Auth | Server-rendered admin UI: list, filters, detail, screenshot, status buttons, reply thread + form, delete |
 | `POST /admin/report/{id}/reply`, `/status`, `/delete` | admin Basic Auth + `csrf` form field | The detail page's forms (see *Admin CSRF guard* below) |
 | `GET /admin/report/{id}/attachment/{index}`, `…/{index}/view` | admin Basic Auth | The same file for the operator; `/view` serves a PNG inline for the detail page's preview |
-| `GET /admin/export?status=&category=` | admin Basic Auth | One-click JSON file download of everything matching the filters (the UI's "Download JSON" button) |
+| `GET /admin/export?status=&category=` | admin Basic Auth | One-click JSON file download of everything matching the filters (the UI's "Download JSON" button): every stored column except the reporter's reply key, which is also stripped from the exported copy of the payload (`ReportJson`; the database keeps it), so the file carries no reply key (#2921). Caveat: `PlayerId` is still exported, and for client-direct reports (desktop, play.\*) that is the install's player token, from which the reply key can be re-derived (`FeedbackReplyKey.Derive`) |
 | `GET /healthz` | none | Liveness |
 
 List items are camelCase (`id`, `title`, `description`, `email`, `gameVersion`, …, `status`,
 `createdAt` ISO-8601 UTC, `screenshotUrl` or null, `attachments` — `[{ index, fileName, mimeType, bytes, url }]`,
-empty for everything but a texture submission —, `reportJson` as a parsed object). `since` and the
+empty for everything but a texture submission —, `reportJson` as a parsed object: the stored payload minus the
+client's top-level `replyKey`, so neither the list nor the single report ever carries a reply key, #2921). `since` and the
 keyset `cursor` (`<createdUnix>:<id>`, returned as `nextCursor`) are both exclusive, so a puller that
 stores the last `createdAt`/cursor never re-fetches or skips rows.
 
@@ -273,14 +274,18 @@ names.
 | Concern | File |
 |---|---|
 | Entry point (env → store → run) | `src/BlocksBeyondTheStars.ReportHost/Program.cs` |
-| Wiring / endpoints | `src/BlocksBeyondTheStars.ReportHost/ReportHostApp.cs` (`Create(config, store, notifier, args)` — the tests start the same app in-process) |
+| Wiring | `src/BlocksBeyondTheStars.ReportHost/ReportHostApp.cs` (`Create(config, store, notifier, args)` — limiters, CSRF token, start-up store maintenance, the player-route CORS, `/healthz` and `/`, then the three route groups below; the tests start the same app in-process) |
+| Shared per-process state + gates of the routes | `src/BlocksBeyondTheStars.ReportHost/ReportHostRuntime.cs` |
+| Player routes (report submission, reply threads) | `src/BlocksBeyondTheStars.ReportHost/ReportHostPlayerEndpoints.cs` |
+| Operator API (`/api/reports*`: keyed read API, scriptable admin mutations) | `src/BlocksBeyondTheStars.ReportHost/ReportHostApiEndpoints.cs` (JSON shapes in `ReportApiJson.cs`) |
+| Admin UI routes (Basic Auth, CSRF forms, file views) | `src/BlocksBeyondTheStars.ReportHost/ReportHostAdminEndpoints.cs` |
 | Config (env) | `src/BlocksBeyondTheStars.ReportHost/ReportHostConfig.cs` |
 | Payload parsing/validation | `src/BlocksBeyondTheStars.ReportHost/ReportIngest.cs` |
 | SQLite + screenshot store | `src/BlocksBeyondTheStars.ReportHost/ReportStore.cs` |
 | Admin pages (server-rendered) | `src/BlocksBeyondTheStars.ReportHost/ReportHostPages.cs` |
-| Rate limiter / Basic Auth / admin CSRF token | `IngestRateLimiter.cs` / `BasicAuth.cs` / `AdminCsrf.cs` |
+| Rate limiter / Basic Auth / admin CSRF token | `IngestRateLimiter.cs` / `src/BlocksBeyondTheStars.Shared/Security/BasicAuth.cs` (one implementation shared with the WorldHost admin UI) / `AdminCsrf.cs` |
 | Texture submissions: pull + adopt | `tools/pull_texture_submissions.py` → `tools/merge_texture.py` |
-| Tests | `tests/BlocksBeyondTheStars.Tests/ReportHostTests.cs` (store, parsing, pages) · `ReportHostTextureSubmissionTests.cs` (category, attachments, retention, download routes) · `ReportHostHttpTests.cs` (the real app over HTTP on a loopback port: reply routes, limiter split) · `ReportHostReplyLifecycleTests.cs` (`gone` marker; admin CSRF + JSON gate on a second host with the admin UI on) |
+| Tests | `tests/BlocksBeyondTheStars.Tests/ReportHostTests.cs` (store, parsing, pages) · `ReportHostTextureSubmissionTests.cs` (category, attachments, retention, download routes) · `ReportHostHttpTests.cs` (the real app over HTTP on a loopback port: reply routes, limiter split) · `ReportHostReplyLifecycleTests.cs` (`gone` marker; admin CSRF + JSON gate on a second host with the admin UI on) · `ReportHostRouteTableTests.cs` (the complete route table, pinned) · `ReportHostReadApiHttpTests.cs` (read API, `/healthz`, `/`, admin list, export, screenshots, operator reply and DELETE over HTTP: status codes, headers and JSON shapes) |
 | Image / compose | `Dockerfile.reports` / `docker-compose.reports.yml` |
 
 The admin pages HTML-encode every stored string — report content is hostile input rendered in the

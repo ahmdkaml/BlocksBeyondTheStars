@@ -86,18 +86,18 @@ UWP/Xbox-store warnings do not apply.
 | Per-planet color grading (§5.2) | Per-biome tint/saturation/contrast grades blended with system sun color; neutral grade in space | `Scripts/Sky.cs` (`GradeFor`, `SetGrade`) |
 | PBR-ish block materials (§6.2) | Per-block gloss/metal, tangent-space normal mapping (Sobel atlas), per-block emission → bloom | `Shaders/BlockAtlas.shader`, `BlockTextureAtlas.cs`, `ChunkMesher.cs` |
 | Emissive blocks (§12.1/B) | 19+ emissive types: lights, lava veins, glow flora, ore sheen, force fields, data consoles | `ChunkMesher.BlockEmission()`, `data/blocks.json` |
-| Milky glass (project rule) | Frosted pale-blue glass, deliberately not clear | `BlockAtlasTransparent.shader`, `BlockTextureAtlas.cs` |
-| Surface variation (§7.1, partial) | Per-pixel grain, procedural block decoration (rivets, ore speckles, lava cracks), flora hue per planet | `BlockTextureAtlas.PaintTile()`, `_Sc_FloraTint` path |
+| Milky glass (project rule) | Frosted pale-blue glass, deliberately not clear | `BlockAtlasTransparent.shader`, `BlockTextureAtlas.CodeTiles.cs` (`BaseColor`) |
+| Surface variation (§7.1, partial) | Per-pixel grain, procedural block decoration (rivets, ore speckles, lava cracks), flora hue per planet | `BlockTextureAtlas.PaintTile()` + the `CodeTiles` look table (`BlockTextureAtlas.CodeTiles.cs`), `_Sc_FloraTint` path |
 | Sky & atmosphere (§8) | Dynamic procedural sky, 1500-star twinkling starfield, sun disc, **other system bodies visible in the sky**, day/night with local-time terminator, distance + storm fog, 18-billboard cloud layer with per-planet color/density | `Sky.cs`, `Starfield.cs`, `SkyBodiesView.cs`, `Clouds.cs` |
 | Weather (§14 Phase 2.8) | Snow/hail/ash/sandstorm/rain (3D particles + overlay), lightning, storm fog, per-biome ambient beds | `WeatherFx.cs`, `WeatherFx3D.cs`, `ClientAudio.cs` |
-| Space & orbit (§14 Phase 3.3) | Data-driven orbit planets with atmosphere shells, seamless surface↔orbit transitions, voxel ships rendered 1:1 in flight, hyperspace warp overlay | `SpaceView.cs`, `PlanetOrbitLook.cs`, `ShipTransitView.cs`, `HyperspaceWarp.cs` |
+| Space & orbit (§14 Phase 3.3) | Data-driven orbit planets with atmosphere shells, seamless surface↔orbit transitions, voxel ships rendered 1:1 in flight, hyperspace warp overlay | `SpaceView*.cs`, `PlanetOrbitLook.cs`, `ShipTransitView.cs`, `HyperspaceWarp.cs` |
 | UI design system (§10.1) | Central UiKit (cyan/dark navy palette, rounded holo panels, themed buttons, DPI scaling), code-built, no prefabs | `Scripts/UiKit.cs` |
-| HUD (§10.2) | Health/O₂/energy/hunger (+hull/shield aboard), hotbar, compass radar, mission prompt, scan/wreck panels, damage flash with cause label; contextual hiding | `Scripts/HudUi.cs`, `SpaceRadar.cs` |
+| HUD (§10.2) | Health/O₂/energy/hunger (+hull/shield aboard), hotbar, compass radar, mission prompt, scan/wreck panels, damage flash with cause label; contextual hiding | `Scripts/HudUi*.cs`, `SpaceRadar.cs` |
 | Diegetic UI (§10.3, partial) | Visor pipeline: HUD rendered through curved visor shader (fresnel rim, scanlines), VEGA AI companion panel, menus framed as "Ship Interface" | `VisorHud.cs`, `Visor.shader`, `VegaPanel.cs` |
 | Localization | Full DE+EN with central Localizer and DE-length-aware text sizing | `src/.../Localization/`, `StreamingAssets/data/locales/` |
 | Doors (§12 partial) | Animated hinge/slide doors with trim glow, passable energy-field door, open/close SFX | `DoorView.cs` |
 | Mining feedback (§12.2, most) | Wireframe outline, crack-progress tint, debris burst, drill sparks, 4 per-material mining sounds | `MiningFx.cs`, `ClientAudio.cs` |
-| Camera feel (§11.1, most) | Head bob, +4° FOV kick while moving, landing shake scaled by impact, zero-g inertia | `PlayerController.cs` |
+| Camera feel (§11.1, most) | Head bob, +4° FOV kick while moving, landing shake scaled by impact, zero-g inertia | `PlayerController*.cs` (`.View`, `.Movement`) |
 | Audio (§12) | 142 bundled ElevenLabs SFX + ~30 procedural fallbacks, audio manager with buses, 3D spatialization, underwater low-pass, cave reverb | `ClientAudio.cs`, `Resources/audio/` |
 
 Intentionally **not applicable** (no action needed): baked GI/lightmapping and Light Probes (the

@@ -150,13 +150,13 @@ missions): `fragments_left` (the world story has an unfound net fragment), `obse
 (the unique site exists in this save and the player can reach it), `settlements`, `vaults`, `space_wrecks` (the world
 options are not off). Since #2479 (the deep dives): `data_cache_near` and `scanner_unknown` (VEGA's once-a-second tip pass
 found that situation for the player — a data cache in reach, digging a lot without the terrain scanner; read from
-`PlayerSession.VegaTipLive`, no extra probe — the "moment of need" a course is offered at), `jump_ready` (the active ship
-has a jump generator fitted), `arcade_ready` (the player owns a DataQube game, or a data cube waits on their world),
+`PlayerSession.Vega.VegaTipLive`, no extra probe — the "moment of need" a course is offered at), `jump_ready` (the active
+ship has a jump generator fitted), `arcade_ready` (the player owns a DataQube game, or a data cube waits on their world),
 `monument_unread` (a rune monument on the player's world they have not read), `asteroid_mining` (the Asteroid destruction
 rule is not Off), `docked` (aboard a station), `job_active` (a board or settlement-chain job in progress), `forge_ready`
 (a forge crafted before or carried, or a refinery fitted), `wormhole_known` (a wormhole opens in a system the player
 knows), `debris_fields` (the world option is not off). Since #2480 (ship and base building): `tier_gate` (a tool-tier gate
-turned one of the player's swings away within the last minute — `PlayerSession.TierGateRefusedAt`, stamped by
+turned one of the player's swings away within the last minute — `PlayerSession.Tutorial.TierGateRefusedAt`, stamped by
 `NoteTierGate`, whatever the tip's pacing or the hints switch say), `module_affordable` (a ship module the active ship lacks,
 its blueprint owned, its materials in the backpack or the hold — the free starter modules never count), `hull_damaged` (the
 active ship has lost hull points), `keel_laid` (a self-built ship exists in the fleet, finished or not), `ship_built` (a
@@ -164,18 +164,18 @@ self-built ship is commissioned), `base_here` (a base on the player's body that 
 owns** — E32), `base_core_ready` (a base core carried or crafted before), `night_outside` (on foot on a world while the
 local sun is down there), `station_core_ready` (a station core carried, or its materials), `station_owned` (a commissioned
 station of the player's). Since #2481 (the crystal net): `factory_near` (VEGA's tip pass found a factory terminal close to
-the player — `VegaTipLive`, like `data_cache_near`), `factory_here` (a spawned factory stands on the player's world),
-`access_code` (an SPS code in the backpack), `factory_owned` (the player has claimed a factory, anywhere in the save),
-`machine_circuit` (a machine of the player's finished a job a signal started — the achievement counter
+the player — `PlayerSession.Vega.VegaTipLive`, like `data_cache_near`), `factory_here` (a spawned factory stands on
+the player's world), `access_code` (an SPS code in the backpack), `factory_owned` (the player has claimed a factory,
+anywhere in the save), `machine_circuit` (a machine of the player's finished a job a signal started — the achievement counter
 `crystal:machine_job`), `machine_catchup` (the world rule *Machines catch up* is not 0). Since #2482 (More to discover):
 `creatures` (the Creature abundance rule is not Off), `tameable_near`, `settlement_near`, `ruin_near`, `treasure_near`,
 `wreck_signal` (VEGA's tip pass found that situation — `VegaTipLive`, like `data_cache_near`; `wreck_signal` takes the
 manual-steering tip too), `herd_begging` (an animal came to beg the player within the last minute —
-`PlayerSession.HerdBeggedAt`), `companion_owned` (a tamed animal of the player's), `seed_carried` (a sapling or a seed in
-the backpack — an item whose block is a plant), `hostile_near` (a machine, a hostile animal or a hostile robber within 40
-blocks on the player's world), `bandit_hail` (a robber's demand waits for an answer), `climbing` (the climbing pose now),
-`train_here` (a train the player may board runs on their world), `multiplayer` (the world is hosted for more than one
-player), `radio_worn`, `planet_wrecks` (the world option is not off). `ui:` is never a condition.
+`PlayerSession.Tutorial.HerdBeggedAt`), `companion_owned` (a tamed animal of the player's), `seed_carried` (a sapling or a
+seed in the backpack — an item whose block is a plant), `hostile_near` (a machine, a hostile animal or a hostile robber
+within 40 blocks on the player's world), `bandit_hail` (a robber's demand waits for an answer), `climbing` (the climbing
+pose now), `train_here` (a train the player may board runs on their world), `multiplayer` (the world is hosted for more
+than one player), `radio_worn`, `planet_wrecks` (the world option is not off). `ui:` is never a condition.
 
 ## Per-player state
 
@@ -323,10 +323,10 @@ A VEGA line can carry **buttons** (`ShipAiLine.Choices`, see STORY_IMPLEMENTATIO
   training"), on `Courses` (it skips by itself) or `Off`. The training does not wait for the answer: b1.1 is active and
   counts from the start — **doing nothing means the training runs**, and a later "Skip all" still works.
 - **The answer.** The skip arrives as the ordinary `StoryPackIntent` (pause-whitelisted, validated like the Journal's).
-  While the question is open for the session (`PlayerSession.AskSkipOpenPack`) and the training still had something to
-  skip, `SkipPack` sends `story.tutorial.skipped_hint` ("All right, no training. If you ever want it, it waits in your
-  Journal.") before `AdvancePlayer`, so it comes ahead of the VEGA story's lines. The client drops the training's lines
-  still waiting in the panel (`PackId == tutorial`). A Journal skip without the question gets no hint.
+  While the question is open for the session (`PlayerSession.Story.AskSkipOpenPack`) and the training still had
+  something to skip, `SkipPack` sends `story.tutorial.skipped_hint` ("All right, no training. If you ever want it, it
+  waits in your Journal.") before `AdvancePlayer`, so it comes ahead of the VEGA story's lines. The client drops the
+  training's lines still waiting in the panel (`PackId == tutorial`). A Journal skip without the question gets no hint.
 - **Course offers.** A client with `choices1` hears `vega.chapter.offer_choice` ("New short course: {0}. Want to try it
   now? It also waits in your Journal.") with **[Later]** (the continue control → `declineChapter`, the Journal's Later)
   and **[Start now]** (deliberate → `startChapter`). "Later" is the default on purpose: a player tapping through VEGA's
@@ -736,7 +736,7 @@ onboarding reads finished), the story starts at the join, and it hears neither t
 ### The Journal, settings, skip, replay (#2471)
 
 The player controls the tutorial in the **Journal** (the Tab menu's Story tab grew into it; client rules in
-`Client.Core/Journal/JournalView.cs`, server view in `GameServerJournal.cs` — see STORY_IMPLEMENTATION "The Journal and
+`Client.Core/Journal/JournalView.cs`, server view in `JournalSystem.cs` — see STORY_IMPLEMENTATION "The Journal and
 the objective tracker"):
 - **The tutorial's page:** its status (running, off, blocked by the world rule, not started, finished — a ★ badge only when
   every mandatory part was played, not skipped); **What to do now** — the running part's tasks as "Step i of n: …" (live
