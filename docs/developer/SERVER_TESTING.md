@@ -75,9 +75,13 @@ runs (`WorldHostApp.Create` / `ReportHostApp.Create`) in-process on a loopback p
   answers `GenerateNpcLines` from a lambda, counts `Calls`, keeps `Requests`, optionally blocks on a gate);
   [`StubHttpHandler`](../../tests/BlocksBeyondTheStars.Tests/Helpers/StubHttpHandler.cs) (one canned HTTP answer,
   records `Url` and `RequestBody`); [`WorldProbe`](../../tests/BlocksBeyondTheStars.Tests/Helpers/WorldProbe.cs)
-  (`At(x, y, z)` / `Surface(x, z)` over cached generated chunks). **Rule:** a test class never declares its own
-  `RecordingTransport`, `CapturingLogger`, `FakeLauncher`, `FakeLines`/`LinesProvider`, `StubHandler` or `Probe` —
-  `SharedTestHelperGuardTests` fails on a class of those names in either test project (#2792, #2885). Need more?
+  (`At(x, y, z)` / `Surface(x, z)` over cached generated chunks);
+  [`DrivenTransport`](../../tests/BlocksBeyondTheStars.Tests/Helpers/DrivenTransport.cs) (the transport the protocol
+  and server-hardening suites drive by hand: `Connect`/`Disconnect`, `Receive(message)`, `ReceiveRaw(bytes)` for
+  malformed payloads, and `Sent` like `RecordingTransport` — #2781). **Rule:** a test class never declares its own
+  `RecordingTransport`, `CapturingLogger`, `FakeLauncher`, `FakeLines`/`LinesProvider`, `StubHandler`, `Probe` or
+  `DrivenTransport` — `SharedTestHelperGuardTests` fails on a class of those names in either test project (#2792,
+  #2885, #2781). Need more?
   Add the member to the shared class when a second test could want it; put a one-off query into a
   `file static class` of extension methods at the bottom of your test file (see `Leaks()` in `BaseAirLeakTests`).
   `Helpers/` holds fakes only, never a test class (`scripts/partition-tests.py` and `scripts/locale-test-filter.py`

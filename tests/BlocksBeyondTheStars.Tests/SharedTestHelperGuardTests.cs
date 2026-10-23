@@ -10,7 +10,8 @@ namespace BlocksBeyondTheStars.Tests;
 /// A test class uses the shared fakes in <c>tests/&lt;project&gt;/Helpers/</c> instead of a private copy of one. #2792
 /// (PR #2795) found 79 server test files carrying their own copy of the transport fake and shared it; #2885 folded the 42
 /// copies that had grown extras, and the other fakes copied from file to file (the logger, the WorldHost launcher, the
-/// scripted AI backend, the HTTP stub, the world-gen probe, the client transport), into <c>Helpers/</c>. This guard scans
+/// scripted AI backend, the HTTP stub, the world-gen probe, the client transport), into <c>Helpers/</c>; #2781 added the
+/// transport the protocol and hardening suites drive by hand. This guard scans
 /// the top level of both test projects for a class declared under one of those names (old names included) and names the
 /// shared file to use instead. <c>Helpers/</c> itself is not scanned — it is the one place such a class belongs.
 /// </summary>
@@ -32,6 +33,7 @@ public sealed class SharedTestHelperGuardTests
         ["Probe"] = "BlocksBeyondTheStars.Tests/Helpers/WorldProbe.cs",
         ["WorldProbe"] = "BlocksBeyondTheStars.Tests/Helpers/WorldProbe.cs",
         ["RecordingClientTransport"] = "BlocksBeyondTheStars.Client.Tests/Helpers/RecordingClientTransport.cs",
+        ["DrivenTransport"] = "BlocksBeyondTheStars.Tests/Helpers/DrivenTransport.cs",
     };
 
     /// <summary>The shared helper files: one per fake, plus the transport's queries.</summary>

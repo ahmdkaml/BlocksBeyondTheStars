@@ -367,6 +367,11 @@ subsystems + WorldHost/ReportHost, stage 3 Unity client splits, Messages.cs last
   - #2927 Server quirks: multi-cell partner-cell checks, `above_head` across the seam, story-validator quirks.
   - #2928 Code-health cleanups (dead code, stale crefs and docs, copied helpers, a missing gate test).
   - #2929 The class extractions deferred from this refactoring (a stage of its own, each needs a design decision).
+- **Contributor follow-ups by ahmdkaml (#2781, #2782):** the protocol and server-hardening suites share one
+  `Helpers/DrivenTransport` instead of two private copies, and `NetCodecServerHardeningTests` closes its repositories
+  before deleting the temp folder (PR #2917; guarded by `SharedTestHelperGuardTests`); the palette-remap `UPDATE` is
+  built once by `BlockPaletteMigration.BuildBlockColumnRemapSql` for SQLite and PostgreSQL, keys sorted, with its own
+  tests (PR #2918).
 
 ### 📬 Player reports 2026-10-21, second batch (Lyxette, v2026.10.23) — power to the rim of a 95 × 95 spaceport, torch light in tiles — #2879–#2881, branch fix/relay-cap-light-tiles — ✅ done 2026-10-21 (⚠ playtest open; no generation, save or protocol change)
 
